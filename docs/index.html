@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BFS — Distributed Backup CLI</title>
+  <meta name="description" content="Distributed backup CLI with Reed-Solomon erasure coding, AES-256-GCM encryption, and multi-provider storage. Lose up to K drives — data survives." />
+  <meta property="og:title" content="BFS — Distributed Backup CLI" />
+  <meta property="og:description" content="Reed-Solomon erasure coding + AES-256-GCM. No cloud lock-in. No single point of failure." />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .code-comment { color: #6b7280; }
+    .code-cmd     { color: #86efac; }
+    .code-flag    { color: #93c5fd; }
+    .code-string  { color: #fcd34d; }
+  </style>
+</head>
+<body class="bg-slate-950 text-gray-100 font-sans antialiased">
+
+  <!-- ─── LANG TOGGLE ───────────────────────────────────────────────────── -->
+  <div class="fixed top-4 right-4 z-50">
+    <button
+      type="button"
+      onclick="toggleLang()"
+      class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-600 bg-slate-900/90 backdrop-blur text-xs font-semibold text-slate-300 hover:text-white hover:border-slate-400 transition-colors"
+    >
+      <span id="lang-label">EN</span>
+    </button>
+  </div>
+
+  <!-- ─── HERO ─────────────────────────────────────────────────────────── -->
+  <section class="min-h-screen flex flex-col items-center justify-center px-6 text-center">
+    <div class="max-w-3xl">
+      <div class="inline-block mb-6 px-3 py-1 rounded-full border border-slate-700 text-xs text-slate-400 tracking-widest uppercase">
+        v0.1.0 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 23
+      </div>
+
+      <h1 class="text-7xl font-black tracking-tight mb-4 bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
+        BFS
+      </h1>
+
+      <p class="text-xl sm:text-2xl font-semibold text-slate-200 mb-3" data-i18n="hero_subtitle">
+        Distributed Backup CLI with Reed-Solomon Erasure Coding
+      </p>
+      <p class="text-slate-400 text-base sm:text-lg mb-10 max-w-xl mx-auto" data-i18n="hero_desc">
+        Encrypt, split, distribute — reconstruct from any <span class="text-white font-mono">N</span> of
+        <span class="text-white font-mono">N+K</span> shards.
+        No cloud lock-in. No single point of failure.
+      </p>
+
+      <!-- Install command -->
+      <div class="flex flex-col sm:flex-row items-center justify-center gap-3 mb-6">
+        <div class="flex items-center bg-slate-900 border border-slate-700 rounded-xl px-5 py-3 gap-4">
+          <span class="font-mono text-green-400 text-sm sm:text-base select-all">npm install -g bfs-vault</span>
+          <button
+            type="button"
+            id="copy-btn"
+            onclick="navigator.clipboard.writeText('npm install -g bfs-vault'); this.textContent='✓'; setTimeout(()=>this.setAttribute('data-i18n','copy_btn'),1500); setTimeout(()=>applyLang(currentLang),1500)"
+            class="text-xs text-slate-400 hover:text-white transition-colors border border-slate-600 rounded px-2 py-1"
+            data-i18n="copy_btn"
+          >copy</button>
+        </div>
+        <a
+          href="https://github.com/pfranczyk/BFS"
+          target="_blank"
+          class="flex items-center gap-2 px-5 py-3 rounded-xl border border-slate-700 text-slate-300 hover:text-white hover:border-slate-500 transition-colors text-sm"
+        >
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" role="img" aria-label="GitHub">
+            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+          </svg>
+          GitHub
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── FEATURES ─────────────────────────────────────────────────────── -->
+  <section class="py-24 px-6">
+    <div class="max-w-4xl mx-auto">
+      <h2 class="text-3xl font-bold text-center mb-14 text-white" data-i18n="why_title">Why BFS?</h2>
+      <div class="grid sm:grid-cols-2 gap-5">
+
+        <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6">
+          <div class="text-3xl mb-3">🔐</div>
+          <h3 class="text-lg font-semibold mb-2" data-i18n="feat1_title">AES-256-GCM Encryption</h3>
+          <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat1_desc">
+            Optional, per-vault encryption with Argon2id key derivation.
+            No password — no data. Shards are opaque binary blobs.
+          </p>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6">
+          <div class="text-3xl mb-3">🧩</div>
+          <h3 class="text-lg font-semibold mb-2" data-i18n="feat2_title">Reed-Solomon N+K</h3>
+          <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat2_desc">
+            Configurable erasure coding. Set your own <span class="text-white font-mono">N</span> data shards
+            and <span class="text-white font-mono">K</span> parity shards.
+            Lose up to K providers — data still reconstructs from any N.
+          </p>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6">
+          <div class="text-3xl mb-3">🌐</div>
+          <h3 class="text-lg font-semibold mb-2" data-i18n="feat3_title">Multi-provider</h3>
+          <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat3_desc">
+            Local disk, USB drives, network-mounted folders.
+            Google Drive, FTP, SSH/SFTP — coming soon.
+            Each provider holds exactly one shard per version.
+          </p>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6">
+          <div class="text-3xl mb-3">🗂️</div>
+          <h3 class="text-lg font-semibold mb-2" data-i18n="feat4_title">Versioned Snapshots</h3>
+          <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat4_desc">
+            Every push creates a new version. Verify shard health, prune old versions,
+            or recover everything from a single found shard — no config needed.
+          </p>
+        </div>
+
+        <!-- Full-width 5th card -->
+        <div class="sm:col-span-2 bg-gradient-to-r from-slate-900 to-slate-800 border border-indigo-500/40 rounded-2xl p-6 flex gap-5 items-start">
+          <div class="text-4xl mt-0.5 shrink-0">🕸️</div>
+          <div>
+            <h3 class="text-lg font-semibold mb-2" data-i18n="feat5_title">No Central Authority</h3>
+            <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat5_desc">
+              Every shard carries an encrypted map of all other shards' locations.
+              One shard is enough to discover and reconstruct the rest —
+              no master index, no coordination server, no single point of control.
+            </p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── QUICK START ───────────────────────────────────────────────────── -->
+  <section class="py-24 px-6 bg-slate-900/50">
+    <div class="max-w-3xl mx-auto">
+      <h2 class="text-3xl font-bold text-center mb-14 text-white" data-i18n="qs_title">Quick Start</h2>
+
+      <div class="space-y-8">
+
+        <!-- Step 1 -->
+        <div>
+          <div class="flex items-center gap-3 mb-3">
+            <span class="w-7 h-7 rounded-full bg-slate-700 text-sm font-bold flex items-center justify-center text-white">1</span>
+            <span class="text-slate-300 font-medium" data-i18n="step1_label">Initialize a vault</span>
+          </div>
+          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step1_comment"># 3 data shards + 1 parity = 4 providers total</span>
+<span class="code-cmd">bfs</span> init <span class="code-flag">--name</span> <span class="code-string">mybackup</span> <span class="code-flag">--data-shards</span> 3 <span class="code-flag">--parity-shards</span> 1</code></pre>
+        </div>
+
+        <!-- Step 2 -->
+        <div>
+          <div class="flex items-center gap-3 mb-3">
+            <span class="w-7 h-7 rounded-full bg-slate-700 text-sm font-bold flex items-center justify-center text-white">2</span>
+            <span class="text-slate-300 font-medium" data-i18n="step2_label">Add storage providers</span>
+          </div>
+          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step2_comment"># One provider per shard (local disk, USB, NAS…)</span>
+<span class="code-cmd">bfs</span> provider add <span class="code-flag">--type</span> local <span class="code-flag">--path</span> <span class="code-string">/mnt/disk1</span>
+<span class="code-cmd">bfs</span> provider add <span class="code-flag">--type</span> local <span class="code-flag">--path</span> <span class="code-string">/mnt/disk2</span>
+<span class="code-cmd">bfs</span> provider add <span class="code-flag">--type</span> local <span class="code-flag">--path</span> <span class="code-string">/mnt/disk3</span>
+<span class="code-cmd">bfs</span> provider add <span class="code-flag">--type</span> local <span class="code-flag">--path</span> <span class="code-string">/mnt/disk4</span></code></pre>
+        </div>
+
+        <!-- Step 3 -->
+        <div>
+          <div class="flex items-center gap-3 mb-3">
+            <span class="w-7 h-7 rounded-full bg-slate-700 text-sm font-bold flex items-center justify-center text-white">3</span>
+            <span class="text-slate-300 font-medium" data-i18n="step3_label">Push &amp; restore</span>
+          </div>
+          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-cmd">bfs</span> push  <span class="code-comment" data-i18n="step3_c1"># backup → new version</span>
+<span class="code-cmd">bfs</span> pull  <span class="code-comment" data-i18n="step3_c2"># restore files</span>
+
+<span class="code-comment" data-i18n="step3_c3"># Disaster recovery — no .bfs/ config needed</span>
+<span class="code-cmd">bfs</span> recovery <span class="code-flag">--provider</span> local <span class="code-flag">--path</span> <span class="code-string">/mnt/disk1</span></code></pre>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── COMMANDS ─────────────────────────────────────────────────────── -->
+  <section class="py-24 px-6">
+    <div class="max-w-3xl mx-auto">
+      <h2 class="text-3xl font-bold text-center mb-14 text-white" data-i18n="cmd_title">Commands</h2>
+      <div class="border border-slate-700 rounded-2xl overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-800 text-slate-400 text-xs uppercase tracking-wider">
+            <tr>
+              <th class="text-left px-6 py-3" data-i18n="cmd_th_cmd">Command</th>
+              <th class="text-left px-6 py-3" data-i18n="cmd_th_desc">Description</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800">
+            <tr class="hover:bg-slate-900/50 transition-colors">
+              <td class="px-6 py-4 font-mono text-green-400">bfs init</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_init">Initialize vault in current directory</td>
+            </tr>
+            <tr class="hover:bg-slate-900/50 transition-colors">
+              <td class="px-6 py-4 font-mono text-green-400">bfs push</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_push">Backup current directory → new version</td>
+            </tr>
+            <tr class="hover:bg-slate-900/50 transition-colors">
+              <td class="px-6 py-4 font-mono text-green-400">bfs pull</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_pull">Restore files from backup</td>
+            </tr>
+            <tr class="hover:bg-slate-900/50 transition-colors">
+              <td class="px-6 py-4 font-mono text-green-400">bfs status</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_status">Show vault health and version info</td>
+            </tr>
+            <tr class="hover:bg-slate-900/50 transition-colors">
+              <td class="px-6 py-4 font-mono text-green-400">bfs verify</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_verify">Check shard availability across providers</td>
+            </tr>
+            <tr class="hover:bg-slate-900/50 transition-colors">
+              <td class="px-6 py-4 font-mono text-green-400">bfs recovery</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_recovery">Rebuild vault config from provider shards</td>
+            </tr>
+            <tr class="hover:bg-slate-900/50 transition-colors">
+              <td class="px-6 py-4 font-mono text-green-400">bfs prune</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_prune">Delete old backup versions</td>
+            </tr>
+            <tr class="hover:bg-slate-900/50 transition-colors">
+              <td class="px-6 py-4 font-mono text-green-400">bfs versions</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_versions">List all versions with health status</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── FOOTER ────────────────────────────────────────────────────────── -->
+  <footer class="border-t border-slate-800 py-10 px-6 text-center text-slate-500 text-sm">
+    <p class="mb-2">
+      <span class="text-white font-semibold">BFS</span>
+      &nbsp;v0.1.0
+      &nbsp;·&nbsp;
+      <a href="https://github.com/pfranczyk/BFS/blob/master/LICENSE" class="hover:text-white transition-colors">AGPL-3.0</a>
+      &nbsp;·&nbsp;
+      Node.js &gt;= 23
+    </p>
+    <p>
+      <a href="https://github.com/pfranczyk/BFS" class="hover:text-white transition-colors">github.com/pfranczyk/BFS</a>
+      &nbsp;·&nbsp;
+      <span class="font-mono">npm install -g bfs-vault</span>
+    </p>
+  </footer>
+
+  <!-- ─── I18N ──────────────────────────────────────────────────────────── -->
+  <script>
+    const translations = {
+      en: {
+        hero_subtitle: 'Distributed Backup CLI with Reed-Solomon Erasure Coding',
+        hero_desc:     'Encrypt, split, distribute — reconstruct from any <span class="text-white font-mono">N</span> of <span class="text-white font-mono">N+K</span> shards. No cloud lock-in. No single point of failure.',
+        copy_btn:      'copy',
+        why_title:     'Why BFS?',
+        feat1_title:   'AES-256-GCM Encryption',
+        feat1_desc:    'Optional, per-vault encryption with Argon2id key derivation. No password — no data. Shards are opaque binary blobs.',
+        feat2_title:   'Reed-Solomon N+K',
+        feat2_desc:    'Configurable erasure coding. Set your own <span class="text-white font-mono">N</span> data shards and <span class="text-white font-mono">K</span> parity shards. Lose up to K providers — data still reconstructs from any N.',
+        feat3_title:   'Multi-provider',
+        feat3_desc:    'Local disk, USB drives, network-mounted folders. Google Drive, FTP, SSH/SFTP — coming soon. Each provider holds exactly one shard per version.',
+        feat4_title:   'Versioned Snapshots',
+        feat4_desc:    'Every push creates a new version. Verify shard health, prune old versions, or recover everything from a single found shard — no config needed.',
+        qs_title:      'Quick Start',
+        step1_label:   'Initialize a vault',
+        step1_comment: '# 3 data shards + 1 parity = 4 providers total',
+        step2_label:   'Add storage providers',
+        step2_comment: '# One provider per shard (local disk, USB, NAS…)',
+        step3_label:   'Push &amp; restore',
+        step3_c1:      '# backup → new version',
+        step3_c2:      '# restore files',
+        step3_c3:      '# Disaster recovery — no .bfs/ config needed',
+        cmd_title:     'Commands',
+        cmd_th_cmd:    'Command',
+        cmd_th_desc:   'Description',
+        cmd_init:      'Initialize vault in current directory',
+        cmd_push:      'Backup current directory → new version',
+        cmd_pull:      'Restore files from backup',
+        cmd_status:    'Show vault health and version info',
+        cmd_verify:    'Check shard availability across providers',
+        cmd_recovery:  'Rebuild vault config from provider shards',
+        cmd_prune:     'Delete old backup versions',
+        cmd_versions:  'List all versions with health status',
+        feat5_title:   'No Central Authority',
+        feat5_desc:    'Every shard carries an encrypted map of all other shards\' locations. One shard is enough to discover and reconstruct the rest — no master index, no coordination server, no single point of control.',
+      },
+      pl: {
+        hero_subtitle: 'Rozproszony CLI do kopii zapasowych z kodowaniem Reed-Solomona',
+        hero_desc:     'Szyfruj, dziel, rozpraszaj — odtwórz z dowolnych <span class="text-white font-mono">N</span> z <span class="text-white font-mono">N+K</span> shardów. Żadnych ograniczeń chmury. Żadnego jednego punktu awarii.',
+        copy_btn:      'kopiuj',
+        why_title:     'Dlaczego BFS?',
+        feat1_title:   'Szyfrowanie AES-256-GCM',
+        feat1_desc:    'Opcjonalne szyfrowanie per-vault z wyprowadzaniem klucza Argon2id. Brak hasła — brak danych. Shardy to nieprzejrzyste bloki binarne.',
+        feat2_title:   'Reed-Solomon N+K',
+        feat2_desc:    'Konfigurowalne kodowanie erasure. Ustaw własne <span class="text-white font-mono">N</span> shardów danych i <span class="text-white font-mono">K</span> shardów parzystości. Utrata do K providerów — dane i tak odtworzysz z dowolnych N.',
+        feat3_title:   'Wielu providerów',
+        feat3_desc:    'Dysk lokalny, pendrive, foldery sieciowe. Google Drive, FTP, SSH/SFTP — wkrótce. Każdy provider przechowuje dokładnie jeden shard na wersję.',
+        feat4_title:   'Wersjonowane snapshoty',
+        feat4_desc:    'Każdy push tworzy nową wersję. Weryfikuj stan shardów, usuwaj stare wersje lub odtwórz wszystko z jednego znalezionego sharda — bez konfiguracji.',
+        qs_title:      'Szybki start',
+        step1_label:   'Utwórz vault',
+        step1_comment: '# 3 shardy danych + 1 parzystości = 4 providery łącznie',
+        step2_label:   'Dodaj providery',
+        step2_comment: '# Jeden provider na shard (dysk, pendrive, NAS…)',
+        step3_label:   'Push i odtworzenie',
+        step3_c1:      '# backup → nowa wersja',
+        step3_c2:      '# odtworzenie plików',
+        step3_c3:      '# Disaster recovery — nie potrzeba pliku .bfs/',
+        cmd_title:     'Komendy',
+        cmd_th_cmd:    'Komenda',
+        cmd_th_desc:   'Opis',
+        cmd_init:      'Inicjalizacja vaulta w bieżącym katalogu',
+        cmd_push:      'Backup bieżącego katalogu → nowa wersja',
+        cmd_pull:      'Odtworzenie plików z backupu',
+        cmd_status:    'Pokaż stan vaulta i informacje o wersjach',
+        cmd_verify:    'Sprawdź dostępność shardów u providerów',
+        cmd_recovery:  'Odbuduj konfigurację vaulta z shardów',
+        cmd_prune:     'Usuń stare wersje backupu',
+        cmd_versions:  'Wylistuj wszystkie wersje ze stanem zdrowia',
+        feat5_title:   'Brak centralnego nadzorcy',
+        feat5_desc:    'Każdy shard zawiera zaszyfrowaną mapę lokalizacji wszystkich pozostałych shardów. Jeden shard wystarczy, by odnaleźć i odbudować resztę — bez głównego indeksu, bez serwera koordynującego, bez centralnego punktu kontroli.',
+      },
+    };
+
+    let currentLang = localStorage.getItem('bfs-lang')
+      || (navigator.language.startsWith('pl') ? 'pl' : 'en');
+
+    function applyLang(lang) {
+      currentLang = lang;
+      document.documentElement.lang = lang;
+      document.getElementById('lang-label').textContent = lang.toUpperCase();
+      const dict = translations[lang];
+      document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        if (dict[key] !== undefined) el.innerHTML = dict[key];
+      });
+      localStorage.setItem('bfs-lang', lang);
+    }
+
+    // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick attribute
+    function toggleLang() {
+      applyLang(currentLang === 'en' ? 'pl' : 'en');
+    }
+
+    applyLang(currentLang);
+  </script>
+
+</body>
+</html>

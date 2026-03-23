@@ -1,0 +1,290 @@
+import { en } from './en.js';
+import { pl } from './pl.js';
+
+/** All translatable strings used by the BFS CLI. */
+export interface Strings {
+  // ─── REPL ────────────────────────────────────────────────────────────────
+  repl_banner_title: string;
+  repl_no_config: string;
+  repl_banner_hint: string;
+  repl_help_header: string;
+  repl_help_cmd_init: string;
+  repl_help_cmd_push: string;
+  repl_help_cmd_pull: string;
+  repl_help_cmd_status: string;
+  repl_help_cmd_versions: string;
+  repl_help_cmd_prune: string;
+  repl_help_cmd_verify: string;
+  repl_help_cmd_recovery: string;
+  repl_help_cmd_provider_add: string;
+  repl_help_cmd_provider_list: string;
+  repl_help_cmd_provider_remove: string;
+  repl_help_cmd_scheme_set: string;
+  repl_help_cmd_help: string;
+  repl_help_cmd_exit: string;
+  repl_goodbye: string;
+  repl_cancelled: string;
+
+  // ─── Health ──────────────────────────────────────────────────────────────
+  health_healthy: string;
+  health_degraded: string;
+  health_damaged: string;
+  health_unknown: string;
+
+  // ─── Command descriptions (bfs --help) ───────────────────────────────────
+  cmd_bfs_desc: string;
+  cmd_version_flag: string;
+  cmd_help_flag: string;
+  cmd_help_cmd: string;
+  cmd_cwd_desc: string;
+  cmd_lang_desc: string;
+  cmd_init_desc: string;
+  cmd_push_desc: string;
+  cmd_pull_desc: string;
+  cmd_status_desc: string;
+  cmd_versions_desc: string;
+  cmd_prune_desc: string;
+  cmd_verify_desc: string;
+  cmd_recovery_desc: string;
+  cmd_scheme_desc: string;
+  cmd_scheme_set_desc: string;
+  cmd_provider_desc: string;
+  cmd_provider_add_desc: string;
+  cmd_provider_list_desc: string;
+  cmd_provider_remove_desc: string;
+
+  // ─── Global / shared ─────────────────────────────────────────────────────
+  global_settings_group: string;
+  lang_set: string;
+  no_config: string;
+  cancelled: string;
+  required: string;
+  path_required: string;
+  path_not_dir: string;
+  /** %s = path */
+  dir_not_exist: string;
+
+  // ─── init ─────────────────────────────────────────────────────────────────
+  init_header: string;
+  /** %s = provider number */
+  init_provider_header: string;
+  init_provider_name_prompt: string;
+  init_provider_name_required: string;
+  init_provider_type_prompt: string;
+  init_dir_path_prompt: string;
+  init_vault_name_prompt: string;
+  init_vault_name_required: string;
+  init_scanning: string;
+  /** %s = count, %s = size */
+  init_found_files: string;
+  init_enc_prompt: string;
+  init_data_shards_prompt: string;
+  init_data_shards_min: string;
+  init_parity_shards_prompt: string;
+  init_parity_shard_min: string;
+  /** %s = total, %s = data, %s = parity */
+  init_providers_needed: string;
+  init_push_mode_prompt: string;
+  init_push_mode_new: string;
+  init_push_mode_overwrite: string;
+  init_push_mode_ask: string;
+  /** %s = mode */
+  init_push_mode_invalid: string;
+  /** %s = spec */
+  init_provider_format_invalid: string;
+  /** %s = vaultName */
+  init_success: string;
+
+  // ─── push ─────────────────────────────────────────────────────────────────
+  push_preparing: string;
+  push_completed: string;
+  push_success: string;
+  push_failed: string;
+
+  // ─── pull ─────────────────────────────────────────────────────────────────
+  pull_preparing: string;
+  pull_completed: string;
+  pull_success: string;
+  pull_failed: string;
+
+  // ─── status ───────────────────────────────────────────────────────────────
+  status_header: string;
+  status_name: string;
+  status_latest: string;
+  status_on_disk: string;
+  status_scheme: string;
+  status_encryption: string;
+  status_providers: string;
+  status_enc_enabled: string;
+  status_enc_disabled: string;
+
+  // ─── versions ─────────────────────────────────────────────────────────────
+  versions_empty: string;
+  versions_col_version: string;
+  versions_col_status: string;
+  versions_col_scheme: string;
+  versions_col_shards: string;
+  versions_col_files: string;
+  versions_col_size: string;
+  versions_col_pushed_at: string;
+
+  // ─── prune ────────────────────────────────────────────────────────────────
+  prune_no_versions: string;
+  prune_keep_last_invalid: string;
+  prune_range_manual: string;
+  prune_select_prompt: string;
+  prune_range_prompt: string;
+  prune_no_selected: string;
+  prune_no_in_range: string;
+  /** %s = versions list */
+  prune_versions_to_delete: string;
+  /** %s = count */
+  prune_confirm: string;
+  /** %s = versions list */
+  prune_deleted: string;
+
+  // ─── verify ───────────────────────────────────────────────────────────────
+  verify_spinner: string;
+  verify_no_versions: string;
+  verify_failed: string;
+  verify_col_version: string;
+  verify_col_status: string;
+  verify_col_available: string;
+  verify_col_scheme: string;
+  verify_col_tolerance: string;
+
+  // ─── recovery ─────────────────────────────────────────────────────────────
+  recovery_provider_type_prompt: string;
+  recovery_path_prompt: string;
+  recovery_vault_name_prompt: string;
+  recovery_connecting: string;
+  recovery_scanning: string;
+  /** %s = count */
+  recovery_rebuilt: string;
+  recovery_col_version: string;
+  recovery_col_status: string;
+  recovery_col_consensus: string;
+  recovery_success: string;
+  recovery_failed: string;
+
+  // ─── scheme ───────────────────────────────────────────────────────────────
+  scheme_data_shards_invalid: string;
+  scheme_parity_shards_invalid: string;
+  /** %s = N, %s = K, %s = required, %s = current */
+  scheme_requires: string;
+  /** %s = count */
+  scheme_add_providers: string;
+  /** %s = count */
+  scheme_remove_providers: string;
+  /** %s = old, %s = N, %s = K */
+  scheme_changed: string;
+  scheme_apply_push: string;
+
+  // ─── provider add ─────────────────────────────────────────────────────────
+  /** %s = count */
+  provider_add_current: string;
+  provider_add_warn: string;
+  provider_add_id_required: string;
+  provider_add_path_required: string;
+  provider_add_name_prompt: string;
+  provider_add_name_required: string;
+  /** %s = name */
+  provider_add_exists: string;
+  provider_add_type_prompt: string;
+  provider_add_dir_prompt: string;
+  /** %s = id, %s = data, %s = parity */
+  provider_add_success: string;
+
+  // ─── provider list ────────────────────────────────────────────────────────
+  provider_list_empty: string;
+  /** %s = vault_name, %s = data, %s = parity */
+  provider_list_header: string;
+  provider_list_col_num: string;
+  provider_list_col_id: string;
+  provider_list_col_type: string;
+  provider_list_col_config: string;
+
+  // ─── provider remove ──────────────────────────────────────────────────────
+  provider_remove_no_providers: string;
+  provider_remove_prompt: string;
+  /** %s = id */
+  provider_remove_not_found: string;
+  /** %s = id, %s = count */
+  provider_remove_impact: string;
+  provider_remove_impact_warn: string;
+  provider_remove_strategy_prompt: string;
+  provider_remove_strategy_relocate: string;
+  provider_remove_strategy_rebuild: string;
+  provider_remove_strategy_remove: string;
+  provider_remove_strategy_cancel: string;
+  provider_remove_new_path_required: string;
+  provider_remove_new_path_prompt: string;
+  provider_remove_enc_password_relocate: string;
+  provider_remove_enc_password_rebuild: string;
+  provider_remove_rebuild_scope_prompt: string;
+  provider_remove_rebuild_all: string;
+  provider_remove_rebuild_latest: string;
+  provider_remove_no_other_providers: string;
+  provider_remove_target_prompt: string;
+  provider_remove_yes_required: string;
+  /** %s = id */
+  provider_remove_confirm: string;
+  /** %s = scope */
+  provider_remove_scope_invalid: string;
+  provider_remove_target_required: string;
+  /** %s = target */
+  provider_remove_target_invalid: string;
+  /** %s = id */
+  provider_remove_success: string;
+  provider_remove_next_steps: string;
+  provider_remove_next_step_1: string;
+  provider_remove_next_step_2: string;
+  provider_remove_next_step_3: string;
+  /** %s = id */
+  provider_relocate_success: string;
+  /** %s = id */
+  provider_rebuild_success: string;
+}
+
+const translations: Record<string, Strings> = { en, pl };
+
+let currentLang = 'en';
+
+/**
+ * Sets the active language for all subsequent t() calls.
+ * Falls back to 'en' if the language is not available.
+ * @param lang - BCP 47 language tag (e.g. 'en', 'pl')
+ */
+export function setLang(lang: string): void {
+  if (translations[lang]) {
+    currentLang = lang;
+  } else {
+    currentLang = 'en';
+  }
+}
+
+/** Returns the currently active language tag. */
+export function getLang(): string {
+  return currentLang;
+}
+
+/**
+ * Returns the translation for the given key in the active language.
+ * @param key - Key from the Strings interface
+ */
+export function t(key: keyof Strings): string {
+  return (translations[currentLang] ?? translations.en)[key];
+}
+
+/**
+ * Returns a translated string with %s placeholders replaced by the given args.
+ * @param key  - Key from the Strings interface
+ * @param args - Values to substitute for each %s in order
+ */
+export function fmt(key: keyof Strings, ...args: string[]): string {
+  let s = t(key);
+  for (const arg of args) {
+    s = s.replace('%s', arg);
+  }
+  return s;
+}
