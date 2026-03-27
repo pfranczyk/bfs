@@ -8,7 +8,9 @@ import type { VaultConfig } from '../types/index.js';
  * @returns VaultConfig or null if the file does not exist.
  * @throws on read/parse errors other than ENOENT.
  */
-export async function readConfig(rootDir: string): Promise<VaultConfig | null> {
+export async function readConfig(
+  rootDir: string,
+): Promise<Nullable<VaultConfig>> {
   const filePath = path.join(rootDir, '.bfs', 'config.json');
   try {
     const content = await fs.readFile(filePath, 'utf-8');

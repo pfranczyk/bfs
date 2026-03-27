@@ -45,16 +45,10 @@ export function registerRecovery(program: Command): void {
   program
     .command('recovery')
     .description(t('cmd_recovery_desc'))
-    .option(
-      '--provider <type>',
-      'Bootstrap provider type (e.g. local, ssh, ftp)',
-    )
-    .option(
-      '--path <path>',
-      'Provider base path; for remote: user@host/basePath',
-    )
-    .option('--name <vaultName>', 'Vault name (subfolder on providers)')
-    .option('--password <password>', 'Password (for encrypted vault)')
+    .option('--provider <type>', t('recovery_opt_provider'))
+    .option('--path <path>', t('recovery_opt_path'))
+    .option('--name <vaultName>', t('recovery_opt_name'))
+    .option('--password <password>', t('recovery_opt_password'))
     .action(
       async (
         opts: {
@@ -118,7 +112,7 @@ export function registerRecovery(program: Command): void {
             spinner.text = chalk.dim(msg);
           },
           progress(label: string, percent: number): void {
-            spinner.text = `${label} ${chalk.dim(`${percent}%`)}`;
+            spinner.text = `${label} ${chalk.dim(`${Math.round(percent)}%`)}`;
           },
         };
 

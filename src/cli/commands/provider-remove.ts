@@ -29,29 +29,13 @@ export function registerProviderRemove(providerCmd: Command): void {
   providerCmd
     .command('remove [id]')
     .description(t('cmd_provider_remove_desc'))
-    .option(
-      '--password <password>',
-      'Encryption password (for rebuild/relocate strategy)',
-    )
-    .option(
-      '--strategy <strategy>',
-      'CI strategy: relocate|rebuild|remove (skip prompt)',
-    )
-    .option(
-      '--new-path <path>',
-      'New provider path for relocate strategy; optionally with type prefix: local:/path (CI mode)',
-    )
-    .option(
-      '--new-type <type>',
-      'New provider type for relocate strategy (when current type is unknown)',
-    )
-    .option('--target <id>', 'Target provider for rebuild strategy (CI mode)')
-    .option(
-      '--scope <scope>',
-      'Rebuild scope: all|latest (default: all)',
-      'all',
-    )
-    .option('--yes', 'Skip confirmation for remove strategy (CI mode)')
+    .option('--password <password>', t('provider_remove_opt_password'))
+    .option('--strategy <strategy>', t('provider_remove_opt_strategy'))
+    .option('--new-path <path>', t('provider_remove_opt_new_path'))
+    .option('--new-type <type>', t('provider_remove_opt_new_type'))
+    .option('--target <id>', t('provider_remove_opt_target'))
+    .option('--scope <scope>', t('provider_remove_opt_scope'), 'all')
+    .option('--yes', t('provider_remove_opt_yes'))
     .action(
       async (
         providerId: string | undefined,
@@ -144,9 +128,7 @@ export function registerProviderRemove(providerCmd: Command): void {
             s !== 'remove' &&
             s !== 'cancel'
           ) {
-            error(
-              `Invalid strategy: "${s}". Allowed: relocate|rebuild|remove|cancel`,
-            );
+            error(fmt('provider_remove_strategy_invalid', s));
             throw new CommandAbort();
           }
           strategy = s;

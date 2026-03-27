@@ -23,12 +23,12 @@ function parseVersionRange(rangeStr: string, allVersions: number[]): number[] {
     if (rangeMatch) {
       const from = parseInt(rangeMatch[1], 10);
       const to = parseInt(rangeMatch[2], 10);
-      if (from > to) throw new Error(`Invalid range: ${trimmed}`);
+      if (from > to) throw new Error(fmt('prune_range_invalid', trimmed));
       for (let v = from; v <= to; v++) versions.add(v);
     } else if (/^\d+$/.test(trimmed)) {
       versions.add(parseInt(trimmed, 10));
     } else {
-      throw new Error(`Invalid version format: "${trimmed}"`);
+      throw new Error(fmt('prune_version_format_invalid', trimmed));
     }
   }
 
@@ -53,11 +53,8 @@ export function registerPrune(program: Command): void {
   program
     .command('prune [range]')
     .description(t('cmd_prune_desc'))
-    .option(
-      '--keep-last <n>',
-      'Keep the N most recent versions, delete the rest',
-    )
-    .option('--yes', 'Skip confirmation prompt')
+    .option('--keep-last <n>', t('prune_opt_keep_last'))
+    .option('--yes', t('prune_opt_yes'))
     .action(
       async (
         range: string | undefined,

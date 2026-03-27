@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PullSkippedError } from '../../src/core/errors.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
 vi.mock('../../src/vault/vault-manager.js', () => ({
@@ -50,7 +51,7 @@ describe('pull', () => {
 
   beforeEach(() => {
     capture = captureConsole();
-    mockPull.mockResolvedValue(undefined);
+    mockPull.mockResolvedValue({ version: 1, extracted: 3, skipped: [] });
   });
 
   afterEach(() => {
@@ -115,6 +116,7 @@ describe('pull', () => {
         'Na dysku: wersja 1. Przywrócenie wersji 2 nadpisze katalog. Kontynuować?',
       );
       expect(cont).toBe(true);
+      return { version: 1, extracted: 0, skipped: [] };
     });
 
     const result = await runCmd(['pull']);
@@ -125,6 +127,7 @@ describe('pull', () => {
     mockPull.mockImplementation(async (_dir, opts) => {
       const cont = await opts.io.confirm('Kontynuować?');
       if (!cont) throw new Error('Pull cancelled.');
+      return { version: 1, extracted: 0, skipped: [] };
     });
 
     // Override createCliProviderIO mock to return false for confirm
@@ -152,6 +155,7 @@ describe('pull', () => {
     mockPull.mockImplementation(async (_dir, opts) => {
       const pw = await opts.io.askSecret('Podaj hasło deszyfrowania:');
       expect(pw).toBe('');
+      return { version: 1, extracted: 0, skipped: [] };
     });
 
     const result = await runCmd(['pull']);
@@ -177,6 +181,7 @@ describe('pull', () => {
 
     mockPull.mockImplementation(async (_dir, opts) => {
       opts.io.warn('Shard 2 unavailable — skipping');
+      return { version: 1, extracted: 0, skipped: [] };
     });
 
     const result = await runCmd(['pull']);
@@ -195,6 +200,35 @@ describe('pull', () => {
   it('should reject unknown --user option', async () => {
     const result = await runCmd(['pull', '--user', 'alice']);
     expect(result).toBe('commander');
+  });
+
+  // ─── PullSkippedError + --cache ───────────────────────────────────────────
+
+  it('should show skipped file list and cache hint when PullSkippedError is thrown', async () => {
+    const cachePath = '/vault/.bfs/cache/pull.blob.pending';
+    mockPull.mockRejectedValue(
+      new PullSkippedError(
+        [{ path: 'protected.cfg', reason: 'EACCES: permission denied' }],
+        cachePath,
+      ),
+    );
+
+    const result = await runCmd(['pull']);
+
+    expect(result).toBe('abort');
+    expect(capture.errors.some((e) => e.includes('could not be written'))).toBe(
+      true,
+    );
+    expect(capture.logs.some((l) => l.includes('pull --cache'))).toBe(true);
+  });
+
+  it('should pass fromCache=true when --cache flag given', async () => {
+    await runCmd(['pull', '--cache']);
+
+    expect(mockPull).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ fromCache: true }),
+    );
   });
 
   // ─── Błąd pull ────────────────────────────────────────────────────────────

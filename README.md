@@ -55,12 +55,13 @@ bfs pull
 |---|---|
 | `bfs init [--name <name>]` | Initialize a new vault in the current directory |
 | `bfs push` | Back up (new version or overwrite, based on config) |
-| `bfs pull [--version N]` | Restore files from backup (default: latest version) |
+| `bfs pull [--version N] [-y]` | Restore files from backup (default: latest version); `-y/--yes` auto-confirms overwrite |
 | `bfs status` | Show vault status |
 | `bfs versions` | List all backup versions with health status |
 | `bfs verify` | Check shard availability and health across providers |
 | `bfs prune [--keep-last N]` | Delete old backup versions from providers |
 | `bfs recovery` | Rebuild `.bfs/` from providers (disaster recovery) |
+| `bfs clear` | Delete pending cache from an interrupted push or pull |
 | `bfs scheme set <N> <K>` | Change the Reed-Solomon N/K scheme |
 | `bfs provider add` | Add a new provider to the vault |
 | `bfs provider list` | List configured providers |

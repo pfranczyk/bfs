@@ -14,6 +14,7 @@ import type {
   VaultConfig,
   VersionManifest,
 } from '../types/index.js';
+import { VersionHealth } from '../types/index.js';
 import { readConfig, writeConfig } from './config.js';
 import { listManifests, readManifest, writeManifest } from './manifest.js';
 import { readState } from './state.js';
@@ -54,12 +55,12 @@ async function downloadAvailableShards(
   removedProviderId: string,
   io: ProviderIO,
 ): Promise<{
-  shardSlots: (Buffer | null)[];
+  shardSlots: Nullable<Buffer>[];
   shardDataMap: Map<number, Buffer>;
 }> {
   const { data_shards: N, parity_shards: K } = manifest.scheme;
   const version = manifest.version;
-  const shardSlots: (Buffer | null)[] = new Array(N + K).fill(null);
+  const shardSlots: Nullable<Buffer>[] = new Array(N + K).fill(null);
   const shardDataMap = new Map<number, Buffer>();
 
   for (const ms of manifest.shards) {
@@ -94,7 +95,7 @@ async function extractShardMeta(
   password: string | undefined,
 ): Promise<{
   encKey: Buffer | undefined;
-  kdf_salt: Buffer | null;
+  kdf_salt: Nullable<Buffer>;
   blobSize: bigint;
   blobHash: string;
   formatVersion: number;
@@ -102,7 +103,7 @@ async function extractShardMeta(
   vaultName: string;
 }> {
   let encKey: Buffer | undefined;
-  let kdf_salt: Buffer | null = null;
+  let kdf_salt: Nullable<Buffer> = null;
   let blobSize = BigInt(0);
   let blobHash = '';
   let formatVersion = 1;
@@ -417,7 +418,7 @@ export async function rebuildVersion(
   await writeManifest(rootDir, {
     ...manifest,
     shards: updatedShards,
-    health: 'healthy',
+    health: VersionHealth.Healthy,
   });
 }
 
@@ -481,8 +482,8 @@ export async function rebuildAllVersions(
     } catch {
       // Mark as degraded
       const manifest = await readManifest(rootDir, version);
-      if (manifest && manifest.health !== 'degraded') {
-        manifest.health = 'degraded';
+      if (manifest && manifest.health !== VersionHealth.Degraded) {
+        manifest.health = VersionHealth.Degraded;
         await writeManifest(rootDir, manifest);
       }
       report.degraded++;

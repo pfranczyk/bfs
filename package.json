@@ -1,8 +1,9 @@
 {
   "name": "bfs-vault",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Backup File System — distributed backup with Reed-Solomon erasure coding",
   "type": "module",
+  "preferGlobal": true,
   "bin": {
     "bfs": "./dist/index.js"
   },
@@ -20,10 +21,7 @@
     "lint": "biome check .",
     "dev": "tsx src/index.ts",
     "build": "tsup",
-    "prepare": "npm run build",
-    "smoke": "tsx scripts/smoke.ts",
-    "smoke:dist": "tsx scripts/smoke.ts --bin=dist/index.js",
-    "sync": "tsx scripts/sync-public.ts"
+    "prepare": "npm run build"
   },
   "keywords": [
     "backup",
@@ -40,7 +38,7 @@
     "type": "git",
     "url": "https://github.com/pfranczyk/bfs.git"
   },
-  "homepage": "https://github.com/pfranczyk/bfs#readme",
+  "homepage": "https://pfranczyk.github.io/bfs/",
   "bugs": {
     "url": "https://github.com/pfranczyk/bfs/issues"
   },
@@ -60,6 +58,6 @@
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.1"
   }
 }

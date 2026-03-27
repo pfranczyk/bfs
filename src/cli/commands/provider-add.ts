@@ -26,13 +26,10 @@ export function registerProviderAdd(providerCmd: Command): void {
   providerCmd
     .command('add')
     .description(t('cmd_provider_add_desc'))
-    .option('--ci', 'Non-interactive mode (CI/scripts): skip Inquirer prompts')
-    .option('--id <id>', 'New provider ID (CI mode)')
-    .option('--type <type>', 'Provider type: local (CI mode)', 'local')
-    .option(
-      '--path <path>',
-      'Provider directory path (CI mode, for type=local)',
-    )
+    .option('--ci', t('provider_add_opt_ci'))
+    .option('--id <id>', t('provider_add_opt_id'))
+    .option('--type <type>', t('provider_add_opt_type'), 'local')
+    .option('--path <path>', t('provider_add_opt_path'))
     .action(async (opts: ProviderAddOpts, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
       const isCi = opts.ci === true;

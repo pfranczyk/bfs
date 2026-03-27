@@ -4,6 +4,7 @@ import path from 'node:path';
 import { Command } from 'commander';
 // Side-effect import: registers 'local' provider in the registry
 import './providers/local-fs.js';
+import { registerClear } from './cli/commands/clear.js';
 import { registerInit } from './cli/commands/init.js';
 import { registerProviderAdd } from './cli/commands/provider-add.js';
 import { registerProviderList } from './cli/commands/provider-list.js';
@@ -50,6 +51,7 @@ function buildProgram(): Command {
 
   // Register all commands
   registerInit(program);
+  registerClear(program);
   registerPush(program);
   registerPull(program);
   registerStatus(program);

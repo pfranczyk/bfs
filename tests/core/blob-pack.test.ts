@@ -54,7 +54,7 @@ describe('blob-pack / blob-unpack', () => {
   it('should pack and unpack a single file byte-for-byte', async () => {
     await writeFile(srcDir, 'hello.txt', 'Hello, BFS!');
     const filter = await createIgnoreFilter(srcDir);
-    const blob = await packBlob(srcDir, filter);
+    const { blob } = await packBlob(srcDir, filter);
     await unpackBlob(blob, outDir);
     const out = await fs.readFile(path.join(outDir, 'hello.txt'));
     expect(out.toString()).toBe('Hello, BFS!');
@@ -66,7 +66,7 @@ describe('blob-pack / blob-unpack', () => {
     await writeFile(srcDir, 'c.bin', Buffer.from([0x00, 0x01, 0x02, 0xff]));
 
     const filter = await createIgnoreFilter(srcDir);
-    const blob = await packBlob(srcDir, filter);
+    const { blob } = await packBlob(srcDir, filter);
     await unpackBlob(blob, outDir);
 
     const srcFiles = await readAllFiles(srcDir);
@@ -82,9 +82,9 @@ describe('blob-pack / blob-unpack', () => {
 
   it('should handle an empty directory', async () => {
     const filter = await createIgnoreFilter(srcDir);
-    const blob = await packBlob(srcDir, filter);
-    const entries = await unpackBlob(blob, outDir);
-    expect(entries).toHaveLength(0);
+    const { blob } = await packBlob(srcDir, filter);
+    const { extracted } = await unpackBlob(blob, outDir);
+    expect(extracted).toHaveLength(0);
   });
 
   it('should handle nested directories', async () => {
@@ -93,7 +93,7 @@ describe('blob-pack / blob-unpack', () => {
     await writeFile(srcDir, 'top.txt', 'top');
 
     const filter = await createIgnoreFilter(srcDir);
-    const blob = await packBlob(srcDir, filter);
+    const { blob } = await packBlob(srcDir, filter);
     await unpackBlob(blob, outDir);
 
     const srcFiles = await readAllFiles(srcDir);
@@ -110,7 +110,7 @@ describe('blob-pack / blob-unpack', () => {
     await writeFile(srcDir, 'katalog_ąćęłńóśźż/plik.txt', 'nested Polish');
 
     const filter = await createIgnoreFilter(srcDir);
-    const blob = await packBlob(srcDir, filter);
+    const { blob } = await packBlob(srcDir, filter);
     await unpackBlob(blob, outDir);
 
     const srcFiles = await readAllFiles(srcDir);
@@ -130,7 +130,7 @@ describe('blob-pack / blob-unpack', () => {
     await writeFile(srcDir, 'large.bin', large);
 
     const filter = await createIgnoreFilter(srcDir);
-    const blob = await packBlob(srcDir, filter);
+    const { blob } = await packBlob(srcDir, filter);
     await unpackBlob(blob, outDir);
 
     const out = await fs.readFile(path.join(outDir, 'large.bin'));
@@ -144,8 +144,8 @@ describe('blob-pack / blob-unpack', () => {
     const filter = await createIgnoreFilter(srcDir);
 
     // Pack twice; timestamps differ, so we compare file table entries
-    const blob1 = await packBlob(srcDir, filter);
-    const blob2 = await packBlob(srcDir, filter);
+    const { blob: blob1 } = await packBlob(srcDir, filter);
+    const { blob: blob2 } = await packBlob(srcDir, filter);
 
     const table1 = parseBlobFileTable(blob1);
     const table2 = parseBlobFileTable(blob2);
@@ -163,7 +163,7 @@ describe('blob-pack / blob-unpack', () => {
     await writeFile(srcDir, '.bfsignore', 'Thumbs.db\n');
 
     const filter = await createIgnoreFilter(srcDir);
-    const blob = await packBlob(srcDir, filter);
+    const { blob } = await packBlob(srcDir, filter);
     const entries = parseBlobFileTable(blob);
 
     expect(entries.map((e) => e.path)).toContain('keep.txt');
@@ -173,7 +173,7 @@ describe('blob-pack / blob-unpack', () => {
   it('should throw on corrupted blob checksum', async () => {
     await writeFile(srcDir, 'file.txt', 'data');
     const filter = await createIgnoreFilter(srcDir);
-    const blob = await packBlob(srcDir, filter);
+    const { blob } = await packBlob(srcDir, filter);
 
     // Corrupt a byte in the middle
     blob[100] ^= 0xff;
@@ -186,9 +186,9 @@ describe('blob-pack / blob-unpack', () => {
     await writeFile(srcDir, 'exclude.txt', 'no');
 
     const filter = await createIgnoreFilter(srcDir);
-    const blob = await packBlob(srcDir, filter);
+    const { blob } = await packBlob(srcDir, filter);
 
-    const extracted = await unpackBlob(
+    const { extracted } = await unpackBlob(
       blob,
       outDir,
       (e) => e.path === 'include.txt',

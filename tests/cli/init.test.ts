@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PushMode } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
 vi.mock('../../src/vault/vault-manager.js', () => ({
@@ -141,7 +142,7 @@ describe('init', () => {
 
     expect(mockInit).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ push_mode: 'new_version' }),
+      expect.objectContaining({ push_mode: PushMode.NewVersion }),
     );
   });
 
@@ -150,7 +151,7 @@ describe('init', () => {
 
     expect(mockInit).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ push_mode: 'ask' }),
+      expect.objectContaining({ push_mode: PushMode.Ask }),
     );
   });
 
@@ -159,7 +160,7 @@ describe('init', () => {
 
     expect(mockInit).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ push_mode: 'overwrite' }),
+      expect.objectContaining({ push_mode: PushMode.Overwrite }),
     );
   });
 
@@ -219,7 +220,7 @@ describe('init', () => {
       .mockResolvedValueOnce({ id: 'p3' } as never) // provider 3 id
       .mockResolvedValueOnce({ type: 'local' } as never) // provider 3 type
       .mockResolvedValueOnce({ dirPath: '/mnt/d3' } as never) // provider 3 path
-      .mockResolvedValueOnce({ pushMode: 'new_version' } as never); // push_mode
+      .mockResolvedValueOnce({ pushMode: PushMode.NewVersion } as never); // push_mode
 
     await runCmd(['init']);
 
@@ -245,7 +246,7 @@ describe('init', () => {
       .mockResolvedValueOnce({ id: 'p3' } as never)
       .mockResolvedValueOnce({ type: 'local' } as never)
       .mockResolvedValueOnce({ dirPath: '/mnt/d3' } as never)
-      .mockResolvedValueOnce({ pushMode: 'new_version' } as never);
+      .mockResolvedValueOnce({ pushMode: PushMode.NewVersion } as never);
 
     await runCmd(['init', 'myvault']);
 

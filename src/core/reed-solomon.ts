@@ -119,7 +119,7 @@ export function rsEncode(
  * @throws BfsError when fewer than N shards are available or RS fails
  */
 export function rsDecode(
-  shards: (Buffer | null)[],
+  shards: Nullable<Buffer>[],
   dataShards: number,
   parityShards: number,
   originalSize: number,
@@ -163,7 +163,7 @@ export function rsDecode(
  * @throws BfsError when fewer than N shards are available or RS fails
  */
 export function rsRepair(
-  shards: (Buffer | null)[],
+  shards: Nullable<Buffer>[],
   dataShards: number,
   parityShards: number,
 ): Buffer[] {
@@ -213,7 +213,7 @@ export function rsRepair(
  * Builds a flat Uint8Array from a shard slot array.
  * Missing (null) slots are left as zeros.
  */
-function buildFlat(shards: (Buffer | null)[], shardSize: number): Uint8Array {
+function buildFlat(shards: Nullable<Buffer>[], shardSize: number): Uint8Array {
   const flat = new Uint8Array(shards.length * shardSize);
   for (let i = 0; i < shards.length; i++) {
     const s = shards[i];

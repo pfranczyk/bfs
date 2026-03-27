@@ -17,7 +17,7 @@ function manifestFilePath(rootDir: string, version: number): string {
 export async function readManifest(
   rootDir: string,
   version: number,
-): Promise<VersionManifest | null> {
+): Promise<Nullable<VersionManifest>> {
   try {
     const content = await fs.readFile(
       manifestFilePath(rootDir, version),

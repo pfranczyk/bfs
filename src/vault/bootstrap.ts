@@ -20,9 +20,9 @@ export interface BootstrapResult {
   location_map: ShardLocation[];
   scheme: { data_shards: number; parity_shards: number };
   encrypted: boolean;
-  kdf_salt: Buffer | null;
+  kdf_salt: Nullable<Buffer>;
   /** Encryption key derived from password + kdf_salt (only set when encrypted=true and password provided) */
-  encKey: Buffer | null;
+  encKey: Nullable<Buffer>;
   /** Providers discovered and connected from the location map */
   providers: StorageProvider[];
 }
@@ -36,7 +36,7 @@ export interface BootstrapResult {
  */
 export function parseVersionFromFilename(
   filename: string,
-): { shardIndex: number; version: number } | null {
+): Nullable<{ shardIndex: number; version: number }> {
   const match = /^shard_(\d+)\.bfs\.(\d+)$/.exec(filename);
   if (!match) return null;
   return { shardIndex: Number(match[1]), version: Number(match[2]) };
@@ -205,7 +205,7 @@ export async function bootstrapFromProvider(
   }
 
   // Derive key and parse the location map (decrypt if encrypted)
-  let encKey: Buffer | null = null;
+  let encKey: Nullable<Buffer> = null;
   let location_map: ShardLocation[];
   if (meta.encrypted) {
     if (!password)

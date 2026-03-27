@@ -1,6 +1,7 @@
 import { BfsError } from '../core/errors.js';
 import { createProvider } from '../providers/provider.js';
-import type { ProviderIO, VersionHealth } from '../types/index.js';
+import type { ProviderIO } from '../types/index.js';
+import { VersionHealth } from '../types/index.js';
 import { readConfig } from './config.js';
 import { listManifests, readManifest, writeManifest } from './manifest.js';
 
@@ -98,11 +99,11 @@ export async function verifyVersion(
 
   let health: VersionHealth;
   if (available < N) {
-    health = 'damaged';
+    health = VersionHealth.Damaged;
   } else if (available < total) {
-    health = 'degraded';
+    health = VersionHealth.Degraded;
   } else {
-    health = 'healthy';
+    health = VersionHealth.Healthy;
   }
 
   // Update manifest health on disk

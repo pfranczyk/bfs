@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { VersionHealth } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
 vi.mock('../../src/vault/vault-manager.js', () => ({
@@ -42,7 +43,7 @@ const mockVerifyAll = vi.mocked(verifyAll);
 function makeReport(
   versions: Array<{
     version: number;
-    health: 'healthy' | 'degraded' | 'damaged';
+    health: VersionHealth;
     available_shards: number;
     total_shards: number;
     tolerance: number;
@@ -54,7 +55,7 @@ function makeReport(
 function makeManifest(version: number, dataN = 2, parityK = 1) {
   return {
     version,
-    health: 'healthy' as const,
+    health: VersionHealth.Healthy,
     shards: [],
     scheme: { data_shards: dataN, parity_shards: parityK },
     file_count: null,
@@ -93,7 +94,7 @@ describe('verify', () => {
       makeReport([
         {
           version: 1,
-          health: 'healthy',
+          health: VersionHealth.Healthy,
           available_shards: 3,
           total_shards: 3,
           tolerance: 1,
@@ -116,7 +117,7 @@ describe('verify', () => {
       makeReport([
         {
           version: 7,
-          health: 'healthy',
+          health: VersionHealth.Healthy,
           available_shards: 3,
           total_shards: 3,
           tolerance: 1,
@@ -138,7 +139,7 @@ describe('verify', () => {
       makeReport([
         {
           version: 1,
-          health: 'healthy',
+          health: VersionHealth.Healthy,
           available_shards: 3,
           total_shards: 3,
           tolerance: 1,
@@ -159,7 +160,7 @@ describe('verify', () => {
       makeReport([
         {
           version: 1,
-          health: 'degraded',
+          health: VersionHealth.Degraded,
           available_shards: 2,
           total_shards: 3,
           tolerance: 0,
@@ -181,7 +182,7 @@ describe('verify', () => {
       makeReport([
         {
           version: 1,
-          health: 'damaged',
+          health: VersionHealth.Damaged,
           available_shards: 1,
           total_shards: 3,
           tolerance: 0,
@@ -202,7 +203,7 @@ describe('verify', () => {
       makeReport([
         {
           version: 1,
-          health: 'healthy',
+          health: VersionHealth.Healthy,
           available_shards: 7,
           total_shards: 7,
           tolerance: 2,
@@ -222,7 +223,7 @@ describe('verify', () => {
       makeReport([
         {
           version: 99,
-          health: 'healthy',
+          health: VersionHealth.Healthy,
           available_shards: 3,
           total_shards: 3,
           tolerance: 1,

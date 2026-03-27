@@ -5,6 +5,7 @@ import { dbg, stdinState } from '../debug.js';
 import { t } from '../i18n/index.js';
 import { readConfig } from '../vault/config.js';
 import { readState } from '../vault/state.js';
+import { setReplMode } from './repl-context.js';
 import { CommandAbort } from './ui.js';
 
 const COMMANDS = [
@@ -20,6 +21,7 @@ const COMMANDS = [
   'provider list',
   'provider remove',
   'scheme set',
+  'clear',
   'help',
   'exit',
   'quit',
@@ -79,6 +81,7 @@ function printHelp(): void {
     ['provider list', t('repl_help_cmd_provider_list')],
     ['provider remove <id>', t('repl_help_cmd_provider_remove')],
     ['scheme set <N> <K>', t('repl_help_cmd_scheme_set')],
+    ['clear', t('repl_help_cmd_clear')],
     ['help', t('repl_help_cmd_help')],
     ['exit / quit', t('repl_help_cmd_exit')],
   ];
@@ -126,6 +129,7 @@ export async function startRepl(
   rootDir: string,
   runCommand: (args: string[]) => Promise<void>,
 ): Promise<void> {
+  setReplMode();
   await printBanner(rootDir);
 
   // Inquirer v13 calls process.stdout.end() via its internal MuteStream pipe cleanup.

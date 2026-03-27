@@ -20,6 +20,7 @@ export interface Strings {
   repl_help_cmd_provider_list: string;
   repl_help_cmd_provider_remove: string;
   repl_help_cmd_scheme_set: string;
+  repl_help_cmd_clear: string;
   repl_help_cmd_help: string;
   repl_help_cmd_exit: string;
   repl_goodbye: string;
@@ -72,6 +73,13 @@ export interface Strings {
   init_provider_name_required: string;
   init_provider_type_prompt: string;
   init_dir_path_prompt: string;
+  init_opt_ci: string;
+  init_opt_enc: string;
+  init_opt_data_shards: string;
+  init_opt_parity_shards: string;
+  init_opt_provider: string;
+  init_opt_push_mode: string;
+  init_vault_name_arg: string;
   init_vault_name_prompt: string;
   init_vault_name_required: string;
   init_scanning: string;
@@ -95,17 +103,39 @@ export interface Strings {
   /** %s = vaultName */
   init_success: string;
 
+  // ─── clear ────────────────────────────────────────────────────────────────
+  cmd_clear_desc: string;
+  clear_done: string;
+
   // ─── push ─────────────────────────────────────────────────────────────────
   push_preparing: string;
   push_completed: string;
   push_success: string;
   push_failed: string;
+  /** %s = count */
+  push_skipped_header: string;
+  push_cache_hint: string;
+  push_opt_new: string;
+  push_opt_overwrite: string;
+  push_opt_password: string;
+  push_opt_cache: string;
 
   // ─── pull ─────────────────────────────────────────────────────────────────
   pull_preparing: string;
   pull_completed: string;
   pull_success: string;
   pull_failed: string;
+  /** %s = count */
+  pull_skipped_header: string;
+  pull_cache_hint: string;
+  pull_opt_version: string;
+  pull_opt_force: string;
+  pull_opt_yes: string;
+  pull_opt_password: string;
+  pull_opt_provider: string;
+  pull_opt_path: string;
+  pull_opt_name: string;
+  pull_opt_cache: string;
 
   // ─── status ───────────────────────────────────────────────────────────────
   status_header: string;
@@ -129,6 +159,12 @@ export interface Strings {
   versions_col_pushed_at: string;
 
   // ─── prune ────────────────────────────────────────────────────────────────
+  prune_opt_keep_last: string;
+  prune_opt_yes: string;
+  /** %s = range string */
+  prune_range_invalid: string;
+  /** %s = version string */
+  prune_version_format_invalid: string;
   prune_no_versions: string;
   prune_keep_last_invalid: string;
   prune_range_manual: string;
@@ -156,7 +192,11 @@ export interface Strings {
   // ─── recovery ─────────────────────────────────────────────────────────────
   recovery_provider_type_prompt: string;
   recovery_path_prompt: string;
+  recovery_opt_provider: string;
+  recovery_opt_path: string;
   recovery_vault_name_prompt: string;
+  recovery_opt_name: string;
+  recovery_opt_password: string;
   recovery_connecting: string;
   recovery_scanning: string;
   /** %s = count */
@@ -182,6 +222,11 @@ export interface Strings {
 
   // ─── provider add ─────────────────────────────────────────────────────────
   /** %s = count */
+  provider_add_opt_ci: string;
+  provider_add_opt_id: string;
+  provider_add_opt_type: string;
+  provider_add_opt_path: string;
+  /** %s = count */
   provider_add_current: string;
   provider_add_warn: string;
   provider_add_id_required: string;
@@ -205,6 +250,15 @@ export interface Strings {
   provider_list_col_config: string;
 
   // ─── provider remove ──────────────────────────────────────────────────────
+  provider_remove_opt_password: string;
+  provider_remove_opt_strategy: string;
+  provider_remove_opt_new_path: string;
+  provider_remove_opt_new_type: string;
+  provider_remove_opt_target: string;
+  provider_remove_opt_scope: string;
+  provider_remove_opt_yes: string;
+  /** %s = strategy string */
+  provider_remove_strategy_invalid: string;
   provider_remove_no_providers: string;
   provider_remove_prompt: string;
   /** %s = id */

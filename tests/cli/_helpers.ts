@@ -20,6 +20,7 @@ import { registerStatus } from '../../src/cli/commands/status.js';
 import { registerVerify } from '../../src/cli/commands/verify.js';
 import { registerVersions } from '../../src/cli/commands/versions.js';
 import { CommandAbort } from '../../src/cli/ui.js';
+import { PushMode } from '../../src/types/index.js';
 
 /** Applies exitOverride recursively so no sub-command calls process.exit(). */
 function applyExitOverride(cmd: Command): void {
@@ -126,7 +127,7 @@ export function makeConfig(overrides: object = {}) {
     vault_name: 'test-vault',
     scheme: { data_shards: 2, parity_shards: 1 },
     encryption: { enabled: false, kdf: 'argon2id' as const },
-    push_mode: 'new' as const,
+    push_mode: PushMode.NewVersion,
     providers: [
       { id: 'dysk-1', type: 'local', config: { path: '/tmp/d1' } },
       { id: 'dysk-2', type: 'local', config: { path: '/tmp/d2' } },

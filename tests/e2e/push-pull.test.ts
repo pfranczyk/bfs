@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
 import type { ProviderConfig, ProviderIO } from '../../src/types/index.js';
+import { PushMode } from '../../src/types/index.js';
 import { readConfig, writeConfig } from '../../src/vault/config.js';
 import { listManifests, readManifest } from '../../src/vault/manifest.js';
 import { recover } from '../../src/vault/recovery.js';
@@ -157,7 +158,7 @@ describe('Scenariusz 1: brak szyfrowania, schemat 3/1, RS repair z 3 z 4 shardó
       scheme: { data_shards: 3, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
 
@@ -175,7 +176,7 @@ describe('Scenariusz 1: brak szyfrowania, schemat 3/1, RS repair z 3 z 4 shardó
       scheme: { data_shards: 3, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
 
@@ -223,7 +224,7 @@ describe('Scenariusz 2: szyfrowanie, schemat 5/2, RS repair z 5 z 7 shardów', (
       scheme: { data_shards: 5, parity_shards: 2 },
       encryption: { enabled: true, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
 
@@ -241,7 +242,7 @@ describe('Scenariusz 2: szyfrowanie, schemat 5/2, RS repair z 5 z 7 shardów', (
       scheme: { data_shards: 5, parity_shards: 2 },
       encryption: { enabled: true, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
 
@@ -287,7 +288,7 @@ describe('Scenariusz 3: wersjonowanie i przywracanie wersji', () => {
       scheme: { data_shards: 3, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
 
@@ -382,7 +383,7 @@ describe('Scenariusz 4: pull z istniejącym .bfs/ — providery z config, bez py
       scheme: { data_shards: 3, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
 
@@ -429,7 +430,7 @@ describe('Scenariusz 5: duży plik 50 MB', () => {
       scheme: { data_shards: 2, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
 
@@ -471,7 +472,7 @@ describe('Scenariusz 6: verify i health check', () => {
       scheme: { data_shards: 3, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
 
@@ -526,7 +527,7 @@ describe('Scenariusz 7: provider remove + heal — verify healthy, pull poprawny
       scheme: { data_shards: 3, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
 
@@ -588,7 +589,7 @@ describe('Scenariusz 8: różne schematy N/K per wersja', () => {
       scheme: { data_shards: 3, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.slice(0, 4).map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
 
@@ -657,7 +658,7 @@ describe('Scenariusz 9: full disaster recovery', () => {
       scheme: { data_shards: 3, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
 

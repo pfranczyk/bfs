@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { VersionHealth } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
 vi.mock('../../src/vault/recovery.js', () => ({
@@ -56,9 +57,9 @@ const mockCreateProvider = vi.mocked(createProvider);
 const recoveryReport = {
   manifests_rebuilt: 3,
   versions: [
-    { version: 1, health: 'healthy' as const, consensus: true },
-    { version: 2, health: 'healthy' as const, consensus: true },
-    { version: 3, health: 'degraded' as const, consensus: true },
+    { version: 1, health: VersionHealth.Healthy, consensus: true },
+    { version: 2, health: VersionHealth.Healthy, consensus: true },
+    { version: 3, health: VersionHealth.Degraded, consensus: true },
   ],
 };
 

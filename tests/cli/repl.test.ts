@@ -24,7 +24,7 @@ vi.mock('../../src/vault/state.js', () => ({
 type QuestionCb = (input: string) => void;
 
 function createFakeRl(lines: string[]) {
-  let closeCallback: (() => void) | null = null;
+  let closeCallback: Nullable<() => void> = null;
   let idx = 0;
   const instance = {
     closed: false,

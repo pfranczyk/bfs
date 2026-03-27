@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PushSkippedError } from '../../src/core/errors.js';
+import { PushMode } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
 vi.mock('../../src/vault/vault-manager.js', () => ({
@@ -37,7 +39,12 @@ describe('push', () => {
   // ─── Sukces ───────────────────────────────────────────────────────────────
 
   it('should call push and print success message', async () => {
-    mockPush.mockResolvedValue(undefined);
+    mockPush.mockResolvedValue({
+      version: 1,
+      file_count: 2,
+      total_size: 100,
+      skipped: [],
+    });
 
     const result = await runCmd(['push']);
 
@@ -51,29 +58,44 @@ describe('push', () => {
   });
 
   it('should pass mode=new_version when --new flag used', async () => {
-    mockPush.mockResolvedValue(undefined);
+    mockPush.mockResolvedValue({
+      version: 1,
+      file_count: 2,
+      total_size: 100,
+      skipped: [],
+    });
 
     await runCmd(['push', '--new']);
 
     expect(mockPush).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ mode: 'new_version' }),
+      expect.objectContaining({ mode: PushMode.NewVersion }),
     );
   });
 
   it('should pass mode=overwrite when --overwrite flag used', async () => {
-    mockPush.mockResolvedValue(undefined);
+    mockPush.mockResolvedValue({
+      version: 1,
+      file_count: 2,
+      total_size: 100,
+      skipped: [],
+    });
 
     await runCmd(['push', '--overwrite']);
 
     expect(mockPush).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ mode: 'overwrite' }),
+      expect.objectContaining({ mode: PushMode.Overwrite }),
     );
   });
 
   it('should pass password option when --password flag used', async () => {
-    mockPush.mockResolvedValue(undefined);
+    mockPush.mockResolvedValue({
+      version: 1,
+      file_count: 2,
+      total_size: 100,
+      skipped: [],
+    });
 
     await runCmd(['push', '--password', 'secret123']);
 
@@ -84,7 +106,12 @@ describe('push', () => {
   });
 
   it('should not set mode when no flags given', async () => {
-    mockPush.mockResolvedValue(undefined);
+    mockPush.mockResolvedValue({
+      version: 1,
+      file_count: 2,
+      total_size: 100,
+      skipped: [],
+    });
 
     await runCmd(['push']);
 
@@ -115,6 +142,43 @@ describe('push', () => {
     expect(result).toBe('abort');
   });
 
+  it('should show skipped file list and cache hint when PushSkippedError is thrown', async () => {
+    const cachePath = '/vault/.bfs/cache/push.blob.pending';
+    mockPush.mockRejectedValue(
+      new PushSkippedError(
+        [
+          { path: 'secret.key', reason: 'EACCES: permission denied' },
+          { path: 'locked.db', reason: 'EACCES: permission denied' },
+        ],
+        cachePath,
+      ),
+    );
+
+    const result = await runCmd(['push']);
+
+    expect(result).toBe('abort');
+    expect(capture.errors.some((e) => e.includes('could not be read'))).toBe(
+      true,
+    );
+    expect(capture.logs.some((l) => l.includes('push --cache'))).toBe(true);
+  });
+
+  it('should pass fromCache=true when --cache flag given', async () => {
+    mockPush.mockResolvedValue({
+      version: 1,
+      file_count: 2,
+      total_size: 100,
+      skipped: [],
+    });
+
+    await runCmd(['push', '--cache']);
+
+    expect(mockPush).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ fromCache: true }),
+    );
+  });
+
   // ─── Prompt ask (push_mode=ask) ───────────────────────────────────────────
 
   it('should call io.choose when push_mode=ask and pass user answer to push', async () => {
@@ -128,6 +192,7 @@ describe('push', () => {
         ['New version (v1)', 'Overwrite (v0)'],
       );
       expect(choice).toBe('New version (v1)');
+      return { version: 1, file_count: 0, total_size: 0, skipped: [] };
     });
 
     const result = await runCmd(['push']);
@@ -148,6 +213,7 @@ describe('push', () => {
         ['New version (v1)', 'Overwrite (v0)'],
       );
       expect(choice).toBe('Overwrite (v0)');
+      return { version: 1, file_count: 0, total_size: 0, skipped: [] };
     });
 
     const result = await runCmd(['push']);
@@ -159,6 +225,7 @@ describe('push', () => {
     mockPush.mockImplementation(async (_dir, opts) => {
       const pw = await opts.io.askSecret('Podaj hasło szyfrowania:');
       expect(pw).toBe('mypassword');
+      return { version: 1, file_count: 0, total_size: 0, skipped: [] };
     });
 
     const result = await runCmd(['push']);

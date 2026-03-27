@@ -1,11 +1,13 @@
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import ora from 'ora';
-import { t } from '../../i18n/index.js';
+import { PullSkippedError } from '../../core/errors.js';
+import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO } from '../../providers/provider.js';
 import { pull } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
-import { CommandAbort, error, success } from '../ui.js';
+import { isReplMode } from '../repl-context.js';
+import { CommandAbort, error, info, success, warn } from '../ui.js';
 
 /**
  * Registers the `bfs pull` command on the given Commander program.
@@ -26,27 +28,25 @@ export function registerPull(program: Command): void {
   program
     .command('pull')
     .description(t('cmd_pull_desc'))
-    .option('--version <n>', 'Version number to restore (default: latest)')
-    .option('--force', 'Overwrite directory without confirmation')
-    .option(
-      '--password <password>',
-      'Decryption password (skips interactive prompt)',
-    )
-    .option('--provider <type>', 'Provider type (e.g. local, ssh, ftp)')
-    .option(
-      '--path <path>',
-      'Provider base path; for remote: user@host/basePath',
-    )
-    .option('--name <vaultName>', 'Vault name (subfolder on the provider)')
+    .option('--version <n>', t('pull_opt_version'))
+    .option('--force', t('pull_opt_force'))
+    .option('-y, --yes', t('pull_opt_yes'))
+    .option('--password <password>', t('pull_opt_password'))
+    .option('--provider <type>', t('pull_opt_provider'))
+    .option('--path <path>', t('pull_opt_path'))
+    .option('--name <vaultName>', t('pull_opt_name'))
+    .option('--cache', t('pull_opt_cache'))
     .action(
       async (
         opts: {
           version?: string;
           force?: boolean;
+          yes?: boolean;
           password?: string;
           provider?: string;
           path?: string;
           name?: string;
+          cache?: boolean;
         },
         cmd: Command,
       ) => {
@@ -110,12 +110,24 @@ export function registerPull(program: Command): void {
           await pull(rootDir, {
             ...(version !== undefined ? { version } : {}),
             ...(opts.force !== undefined ? { force: opts.force } : {}),
+            ...(opts.yes ? { yes: true } : {}),
             ...(opts.password !== undefined ? { password: opts.password } : {}),
+            fromCache: opts.cache ?? false,
+            interactive: isReplMode(),
             io: wrappedIo,
           });
           spinner.succeed(t('pull_completed'));
           success(t('pull_success'));
         } catch (err) {
+          if (err instanceof PullSkippedError) {
+            spinner.fail(t('pull_failed'));
+            warn(fmt('pull_skipped_header', String(err.skipped.length)));
+            for (const s of err.skipped) {
+              console.log(chalk.yellow(`  - ${s.path}: ${s.reason}`));
+            }
+            info(t('pull_cache_hint'));
+            throw new CommandAbort();
+          }
           spinner.fail(t('pull_failed'));
           error(err instanceof Error ? err.message : String(err));
           throw new CommandAbort();

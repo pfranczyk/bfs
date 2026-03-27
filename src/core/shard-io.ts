@@ -235,7 +235,7 @@ function parseCommonHeaderFields(data: Buffer, startPos: number) {
   const encrypted = data.readUInt8(pos) !== 0;
   pos += 1;
 
-  let kdf_salt: Buffer | null = null;
+  let kdf_salt: Nullable<Buffer> = null;
   if (encrypted) {
     kdf_salt = Buffer.from(data.subarray(pos, pos + SALT_SIZE));
     pos += SALT_SIZE;

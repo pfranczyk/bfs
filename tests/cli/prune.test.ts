@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { VersionHealth } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
 vi.mock('../../src/vault/vault-manager.js', () => ({
@@ -27,7 +28,7 @@ const mockPrompt = vi.mocked(inquirer.prompt);
 function makeManifests(versions: number[]) {
   return versions.map((v) => ({
     version: v,
-    health: 'healthy' as const,
+    health: VersionHealth.Healthy,
     shards: [],
     created_at: new Date().toISOString(),
     source_hash: '',

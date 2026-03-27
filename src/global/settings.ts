@@ -6,7 +6,7 @@ import { isEnoent } from '../core/fs-utils.js';
 /** User-level global preferences for BFS (stored outside any vault). */
 export interface GlobalSettings {
   /** BCP 47 language tag. null = use built-in default ('en'). */
-  language: string | null;
+  language: Nullable<string>;
 }
 
 /** Returned when no settings file exists yet. */

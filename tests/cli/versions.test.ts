@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { VersionHealth } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
 vi.mock('../../src/vault/vault-manager.js', () => ({
@@ -12,7 +13,7 @@ const mockListVersions = vi.mocked(listVersions);
 function makeManifest(version: number, overrides: object = {}) {
   return {
     version,
-    health: 'healthy' as const,
+    health: VersionHealth.Healthy,
     shards: [],
     scheme: { data_shards: 2, parity_shards: 1 },
     file_count: 10,

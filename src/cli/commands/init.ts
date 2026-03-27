@@ -5,6 +5,7 @@ import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO } from '../../providers/provider.js';
 import type { ProviderConfig } from '../../types/index.js';
+import { PushMode } from '../../types/index.js';
 import { init } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { promptWithRawMode } from '../prompt.js';
@@ -136,25 +137,18 @@ export function registerInit(program: Command): void {
   program
     .command('init')
     .description(t('cmd_init_desc'))
-    .argument('[vault_name]', 'Vault name (= subfolder on providers)')
-    .option('--ci', 'Non-interactive mode (CI/scripts): skip Inquirer prompts')
-    .option(
-      '--enc',
-      'Enable AES-256-GCM encryption (only with --ci, disabled by default)',
-    )
-    .option('--data-shards <n>', 'Number of data shards N (CI mode)')
-    .option('--parity-shards <n>', 'Number of parity shards K (CI mode)')
+    .argument('[vault_name]', t('init_vault_name_arg'))
+    .option('--ci', t('init_opt_ci'))
+    .option('--enc', t('init_opt_enc'))
+    .option('--data-shards <n>', t('init_opt_data_shards'))
+    .option('--parity-shards <n>', t('init_opt_parity_shards'))
     .option(
       '--provider <spec>',
-      'Provider in format type:id:path, e.g. local:usb1:/mnt/usb (repeatable)',
+      t('init_opt_provider'),
       (v: string, prev: string[]) => [...prev, v],
       [] as string[],
     )
-    .option(
-      '--push-mode <mode>',
-      'Push mode: new_version|overwrite|ask (CI mode)',
-      'new_version',
-    )
+    .option('--push-mode <mode>', t('init_opt_push_mode'), 'new_version')
     .action(
       async (argName: string | undefined, ciOpts: InitCiOpts, cmd: Command) => {
         const rootDir = resolveCwd(cmd);
@@ -270,17 +264,21 @@ export function registerInit(program: Command): void {
         }
 
         // ── Push mode ─────────────────────────────────────────────────────────
-        let pushMode: 'new_version' | 'overwrite' | 'ask';
+        let pushMode: PushMode;
         if (isCi) {
-          const m = ciOpts.pushMode ?? 'new_version';
-          if (m !== 'new_version' && m !== 'overwrite' && m !== 'ask') {
+          const m = ciOpts.pushMode ?? PushMode.NewVersion;
+          if (
+            m !== PushMode.NewVersion &&
+            m !== PushMode.Overwrite &&
+            m !== PushMode.Ask
+          ) {
             error(fmt('init_push_mode_invalid', m));
             throw new CommandAbort();
           }
           pushMode = m;
         } else {
           const ans = await promptWithRawMode<{
-            pushMode: 'new_version' | 'overwrite' | 'ask';
+            pushMode: PushMode;
           }>([
             {
               type: 'rawlist',
@@ -289,15 +287,15 @@ export function registerInit(program: Command): void {
               choices: [
                 {
                   name: t('init_push_mode_new'),
-                  value: 'new_version',
+                  value: PushMode.NewVersion,
                 },
                 {
                   name: t('init_push_mode_overwrite'),
-                  value: 'overwrite',
+                  value: PushMode.Overwrite,
                 },
-                { name: t('init_push_mode_ask'), value: 'ask' },
+                { name: t('init_push_mode_ask'), value: PushMode.Ask },
               ],
-              default: 'new_version',
+              default: PushMode.NewVersion,
             },
           ]);
           pushMode = ans.pushMode;

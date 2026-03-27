@@ -2,9 +2,11 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { DEFAULT_BFSIGNORE_CONTENT } from '../../src/core/ignore-defaults.js';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
 import type { ProviderConfig, ProviderIO } from '../../src/types/index.js';
+import { PushMode } from '../../src/types/index.js';
 import { readConfig, writeConfig } from '../../src/vault/config.js';
 import { listManifests, readManifest } from '../../src/vault/manifest.js';
 import { recover } from '../../src/vault/recovery.js';
@@ -80,7 +82,7 @@ describe('init', () => {
       scheme: { data_shards: 2, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: dirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
     await expect(fs.access(path.join(root, '.bfs'))).resolves.toBeUndefined();
@@ -95,7 +97,7 @@ describe('init', () => {
       scheme: { data_shards: 2, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: dirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
     const config = await readConfig(root);
@@ -120,7 +122,7 @@ describe('init', () => {
           localProvider('p0', dirs[0] ?? ''),
           localProvider('p1', dirs[1] ?? ''),
         ], // 2, needs 3
-        push_mode: 'new_version',
+        push_mode: PushMode.NewVersion,
         io: mockIO(),
       }),
     ).rejects.toThrow();
@@ -142,7 +144,7 @@ describe('init', () => {
           kdf: 'argon2id',
         },
         providers: [badProvider, badProvider, badProvider],
-        push_mode: 'new_version',
+        push_mode: PushMode.NewVersion,
         io: mockIO(),
       }),
     ).rejects.toThrow(/Unknown provider type/);
@@ -150,6 +152,34 @@ describe('init', () => {
     // Config must NOT have been written — the fix ensures validation precedes writeConfig
     const config = await readConfig(root);
     expect(config).toBeNull();
+  });
+
+  it('should create .bfsignore with default content when file does not exist', async () => {
+    await init(root, {
+      vault_name: 'v',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: dirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+    const content = await fs.readFile(path.join(root, '.bfsignore'), 'utf-8');
+    expect(content).toBe(DEFAULT_BFSIGNORE_CONTENT);
+  });
+
+  it('should NOT overwrite .bfsignore if it already exists', async () => {
+    const bfsignorePath = path.join(root, '.bfsignore');
+    await fs.writeFile(bfsignorePath, 'custom content', 'utf-8');
+    await init(root, {
+      vault_name: 'v',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: dirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+    const content = await fs.readFile(bfsignorePath, 'utf-8');
+    expect(content).toBe('custom content');
   });
 });
 
@@ -167,7 +197,7 @@ describe('push', () => {
       scheme: { data_shards: 2, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
   });
@@ -238,7 +268,7 @@ describe('pull (roundtrip)', () => {
       scheme: { data_shards: 2, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
   });
@@ -332,7 +362,7 @@ describe('removeProvider — strategy: remove', () => {
       scheme: { data_shards: 3, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
     await createTestFiles(root);
@@ -367,7 +397,7 @@ describe('removeProvider — strategy: remove', () => {
           kdf: 'argon2id',
         },
         providers: p3dirs.map((d, i) => localProvider(`pp${i}`, d)),
-        push_mode: 'new_version',
+        push_mode: PushMode.NewVersion,
         io: mockIO(),
       });
       await createTestFiles(root3);
@@ -398,7 +428,7 @@ describe('removeProvider — strategy: rebuild', () => {
       scheme: { data_shards: 3, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
     await createTestFiles(root);
@@ -452,7 +482,7 @@ describe('removeProvider — strategy: relocate', () => {
       scheme: { data_shards: 3, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
     await createTestFiles(root);
@@ -552,7 +582,7 @@ describe('scheme — manifests preserve original per-version scheme', () => {
       scheme: { data_shards: 3, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
     await createTestFiles(root);
@@ -594,7 +624,7 @@ describe('recovery', () => {
       scheme: { data_shards: 2, parity_shards: 1 },
       encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
       providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-      push_mode: 'new_version',
+      push_mode: PushMode.NewVersion,
       io: mockIO(),
     });
     await createTestFiles(root);

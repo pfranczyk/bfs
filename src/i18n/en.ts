@@ -6,10 +6,10 @@ export const en: Strings = {
   repl_no_config: '  No configuration. Use `init` to get started.',
   repl_banner_hint: '\n  Type `help` to see available commands.\n',
   repl_help_header: '\n  Available commands:\n',
-  repl_help_cmd_init: 'Initialize a new vault',
+  repl_help_cmd_init: 'Set up a new backup',
   repl_help_cmd_push: 'Back up the current directory',
   repl_help_cmd_pull: 'Restore files from backup',
-  repl_help_cmd_status: 'Show vault status',
+  repl_help_cmd_status: 'Show backup status',
   repl_help_cmd_versions: 'List backup versions',
   repl_help_cmd_prune: 'Delete old versions (e.g. 1-5, --keep-last 3)',
   repl_help_cmd_verify: 'Check shard availability and health',
@@ -18,6 +18,7 @@ export const en: Strings = {
   repl_help_cmd_provider_list: 'List providers',
   repl_help_cmd_provider_remove: 'Remove a provider',
   repl_help_cmd_scheme_set: 'Change Reed-Solomon scheme (N data + K parity)',
+  repl_help_cmd_clear: 'Delete cached data from interrupted push/pull',
   repl_help_cmd_help: 'Show this help',
   repl_help_cmd_exit: 'Exit',
   repl_goodbye: 'Goodbye!',
@@ -35,28 +36,28 @@ export const en: Strings = {
   cmd_version_flag: 'Show program version',
   cmd_help_flag: 'Display help for command',
   cmd_help_cmd: 'Display help for command',
-  cmd_cwd_desc: 'Vault working directory (overrides current directory)',
+  cmd_cwd_desc: 'Backup working directory (overrides current directory)',
   cmd_lang_desc: 'Set UI language permanently (e.g. en, pl)',
-  cmd_init_desc: 'Initialize a new vault in the current directory',
+  cmd_init_desc: 'Set up a new backup in the current directory',
   cmd_push_desc: 'Back up the current directory (new version or overwrite)',
   cmd_pull_desc: 'Restore files from backup',
-  cmd_status_desc: 'Show vault status',
+  cmd_status_desc: 'Show backup status',
   cmd_versions_desc: 'List all backup versions',
   cmd_prune_desc: 'Delete old backup versions from providers',
   cmd_verify_desc: 'Check shard availability and health for all versions',
   cmd_recovery_desc: 'Rebuild .bfs/ from providers (disaster recovery)',
-  cmd_scheme_desc: 'Manage the vault Reed-Solomon scheme',
+  cmd_scheme_desc: 'Manage the Reed-Solomon scheme',
   cmd_scheme_set_desc:
     'Change the N/K scheme (provider count must equal data+parity)',
   cmd_provider_desc: 'Manage providers',
-  cmd_provider_add_desc: 'Add a new provider to the vault configuration',
+  cmd_provider_add_desc: 'Add a new provider to the backup configuration',
   cmd_provider_list_desc: 'List configured providers',
   cmd_provider_remove_desc: 'Remove or replace a provider (with heal option)',
 
   // ─── Global / shared ─────────────────────────────────────────────────────
   global_settings_group: 'BFS Settings (global)',
   lang_set: 'Language set to: %s',
-  no_config: 'No vault configuration found. Run `bfs init` first.',
+  no_config: 'No backup found in this directory. Run `bfs init` first.',
   cancelled: 'Cancelled.',
   required: 'Required',
   path_required: 'Path is required',
@@ -64,13 +65,22 @@ export const en: Strings = {
   dir_not_exist: 'Directory does not exist: %s',
 
   // ─── init ─────────────────────────────────────────────────────────────────
-  init_header: '\n  BFS — vault initialization\n',
+  init_header: '\n  BFS — backup setup\n',
   init_provider_header: '\nProvider %s:',
   init_provider_name_prompt: 'Provider name (e.g. usb-drive, local-nas):',
   init_provider_name_required: 'Name is required',
   init_provider_type_prompt: 'Provider type:',
   init_dir_path_prompt: 'Directory path:',
-  init_vault_name_prompt: 'Vault name (= subfolder on providers):',
+  init_opt_ci: 'Non-interactive mode (CI/scripts): skip prompts',
+  init_opt_enc:
+    'Enable AES-256-GCM encryption (only with --ci, disabled by default)',
+  init_opt_data_shards: 'Number of data shards N (CI mode)',
+  init_opt_parity_shards: 'Number of parity shards K (CI mode)',
+  init_opt_provider:
+    'Provider in format type:id:path, e.g. local:usb1:/mnt/usb (repeatable)',
+  init_opt_push_mode: 'Push mode: new_version|overwrite|ask (CI mode)',
+  init_vault_name_arg: 'Backup name (subfolder on providers)',
+  init_vault_name_prompt: 'Backup name (subfolder on providers):',
   init_vault_name_required: 'Name is required',
   init_scanning: 'Scanning directory…',
   init_found_files: 'Found %s file(s) (%s)',
@@ -88,22 +98,46 @@ export const en: Strings = {
     'Invalid --push-mode: "%s". Allowed: new_version|overwrite|ask',
   init_provider_format_invalid:
     'Invalid --provider format: "%s". Expected: type:id:path (e.g. local:myusb:/mnt/usb)',
-  init_success: 'Vault "%s" initialized. Use `bfs push` to back up.',
+  init_success: 'Backup "%s" is ready. Use `bfs push` to back up.',
+
+  // ─── clear ────────────────────────────────────────────────────────────────
+  cmd_clear_desc: 'Clear pending backup data cache',
+  clear_done: 'Cache cleared.',
 
   // ─── push ─────────────────────────────────────────────────────────────────
   push_preparing: 'Preparing push…',
   push_completed: 'Push completed',
   push_success: 'Backup uploaded to all providers.',
   push_failed: 'Push failed',
+  push_skipped_header: '%s file(s) could not be read and were excluded:',
+  push_cache_hint:
+    'Backup data cached. Use `bfs push --cache` to upload without re-packing.',
+  push_opt_new: 'Force a new version',
+  push_opt_overwrite: 'Overwrite the current version',
+  push_opt_password: 'Encryption password (skips interactive prompt)',
+  push_opt_cache: 'Upload cached backup data from a previous interrupted push',
 
   // ─── pull ─────────────────────────────────────────────────────────────────
   pull_preparing: 'Preparing pull…',
   pull_completed: 'Pull completed',
   pull_success: 'Files restored.',
   pull_failed: 'Pull failed',
+  pull_skipped_header: '%s file(s) could not be written to disk:',
+  pull_cache_hint:
+    'Backup data cached. Fix permissions, then use `bfs pull --cache` to retry.',
+  pull_opt_version: 'Version number to restore (default: latest)',
+  pull_opt_force: 'Overwrite directory without confirmation',
+  pull_opt_yes:
+    'Auto-confirm overwrite prompt (keeps existing files, unlike --force)',
+  pull_opt_password: 'Decryption password (skips interactive prompt)',
+  pull_opt_provider: 'Provider type (e.g. local, ssh, ftp)',
+  pull_opt_path: 'Provider base path; for remote: user@host/basePath',
+  pull_opt_name: 'Backup name (subfolder on the provider)',
+  pull_opt_cache:
+    'Retry using cached backup data from a previous interrupted pull',
 
   // ─── status ───────────────────────────────────────────────────────────────
-  status_header: '\n  Vault status\n',
+  status_header: '\n  Backup status\n',
   status_name: 'Name:',
   status_latest: 'Latest:',
   status_on_disk: 'On disk:',
@@ -125,6 +159,10 @@ export const en: Strings = {
   versions_col_pushed_at: 'Pushed at',
 
   // ─── prune ────────────────────────────────────────────────────────────────
+  prune_opt_keep_last: 'Keep the N most recent versions, delete the rest',
+  prune_opt_yes: 'Skip confirmation prompt',
+  prune_range_invalid: 'Invalid range: %s',
+  prune_version_format_invalid: 'Invalid version format: "%s"',
   prune_no_versions: 'No versions to delete.',
   prune_keep_last_invalid: '--keep-last must be a number >= 1',
   prune_range_manual: 'Enter range manually (e.g. 1-5, 1,3,5)',
@@ -148,8 +186,12 @@ export const en: Strings = {
 
   // ─── recovery ─────────────────────────────────────────────────────────────
   recovery_provider_type_prompt: 'Bootstrap provider type:',
-  recovery_path_prompt: 'Provider base path (not the vault subfolder):',
-  recovery_vault_name_prompt: 'Vault name (subfolder on providers):',
+  recovery_opt_provider: 'Bootstrap provider type (e.g. local, ssh, ftp)',
+  recovery_opt_path: 'Provider base path; for remote: user@host/basePath',
+  recovery_path_prompt: 'Provider base path (not the backup subfolder):',
+  recovery_vault_name_prompt: 'Backup name (subfolder on providers):',
+  recovery_opt_name: 'Backup name (subfolder on providers)',
+  recovery_opt_password: 'Password (for encrypted backup)',
   recovery_connecting: 'Connecting to provider…',
   recovery_scanning: 'Scanning providers…',
   recovery_rebuilt: '\n  Rebuilt .bfs/ — %s version(s)\n',
@@ -173,6 +215,10 @@ export const en: Strings = {
   scheme_apply_push: 'Run `bfs push` to apply the new scheme.',
 
   // ─── provider add ─────────────────────────────────────────────────────────
+  provider_add_opt_ci: 'Non-interactive mode (CI/scripts): skip prompts',
+  provider_add_opt_id: 'New provider ID (CI mode)',
+  provider_add_opt_type: 'Provider type: local (CI mode)',
+  provider_add_opt_path: 'Provider directory path (CI mode, for type=local)',
   provider_add_current: '\nCurrent providers (%s):',
   provider_add_warn:
     'Adding a provider changes the N+K scheme. Run `bfs push` after adding to update sharding.',
@@ -188,13 +234,26 @@ export const en: Strings = {
 
   // ─── provider list ────────────────────────────────────────────────────────
   provider_list_empty: 'No providers configured.',
-  provider_list_header: '\nProviders for vault "%s" (scheme %s/%s):\n',
+  provider_list_header: '\nProviders for backup "%s" (scheme %s/%s):\n',
   provider_list_col_num: '#',
   provider_list_col_id: 'ID',
   provider_list_col_type: 'Type',
   provider_list_col_config: 'Configuration',
 
   // ─── provider remove ──────────────────────────────────────────────────────
+  provider_remove_opt_password:
+    'Encryption password (for rebuild/relocate strategy)',
+  provider_remove_opt_strategy:
+    'CI strategy: relocate|rebuild|remove (skip prompt)',
+  provider_remove_opt_new_path:
+    'New provider path for relocate strategy; optionally with type prefix: local:/path (CI mode)',
+  provider_remove_opt_new_type:
+    'New provider type for relocate strategy (when current type is unknown)',
+  provider_remove_opt_target: 'Target provider for rebuild strategy (CI mode)',
+  provider_remove_opt_scope: 'Rebuild scope: all|latest (default: all)',
+  provider_remove_opt_yes: 'Skip confirmation for remove strategy (CI mode)',
+  provider_remove_strategy_invalid:
+    'Invalid strategy: "%s". Allowed: relocate|rebuild|remove|cancel',
   provider_remove_no_providers: 'No providers in configuration.',
   provider_remove_prompt: 'Which provider to remove?',
   provider_remove_not_found:

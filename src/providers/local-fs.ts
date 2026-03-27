@@ -30,7 +30,7 @@ export class LocalFsProvider implements StorageProvider {
 
   private readonly basePath: string;
   private readonly io: ProviderIO;
-  private vaultName: string | null = null;
+  private vaultName: Nullable<string> = null;
 
   constructor(config: ProviderConfig, io: ProviderIO) {
     this.id = config.id;

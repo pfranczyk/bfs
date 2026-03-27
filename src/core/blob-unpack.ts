@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { FileEntry } from '../types/index.js';
+import type { SkippedFile } from './errors.js';
 import { BfsError } from './errors.js';
 import { hashBuffer } from './hash.js';
 
@@ -63,16 +64,20 @@ export function parseBlobFileTable(blob: Buffer): FileEntry[] {
 
 /**
  * Unpacks a BFS blob to targetDir, verifying checksums.
+ * Files that cannot be written (e.g. permission denied, disk full) are skipped and
+ * listed in the returned `skipped` array instead of aborting the entire operation.
+ * Data-corruption errors (checksum/hash mismatch) still throw.
+ *
  * @param blob      - Full BFS blob buffer (including trailing SHA-256)
  * @param targetDir - Directory to write files into
  * @param filter    - Optional: unpack only entries where filter returns true
- * @returns         - List of extracted FileEntry objects
+ * @returns         - `{ extracted, skipped }` — written entries and any that could not be written
  */
 export async function unpackBlob(
   blob: Buffer,
   targetDir: string,
   filter?: (entry: FileEntry) => boolean,
-): Promise<FileEntry[]> {
+): Promise<{ extracted: FileEntry[]; skipped: SkippedFile[] }> {
   if (blob.length < HEADER_SIZE + CHECKSUM_SIZE) {
     throw new BfsError('Blob too short to be valid');
   }
@@ -96,6 +101,7 @@ export async function unpackBlob(
 
   // 4. Extract files
   const extracted: FileEntry[] = [];
+  const skipped: SkippedFile[] = [];
 
   for (const entry of entries) {
     if (filter !== undefined && !filter(entry)) continue;
@@ -103,29 +109,37 @@ export async function unpackBlob(
     const start = Number(dataSectionOffset) + Number(entry.data_offset);
     const end = start + Number(entry.size);
 
+    // Data-corruption checks still throw — these are not permission issues
     if (end > blob.length - CHECKSUM_SIZE) {
       throw new BfsError(`Data section out of bounds for file: ${entry.path}`);
     }
 
     const data = blob.subarray(start, end);
 
-    // 5. Verify per-file hash
+    // 5. Verify per-file hash (throws on corruption)
     const computedFileHash = hashBuffer(data);
     if (computedFileHash !== entry.hash) {
       throw new BfsError(`File hash mismatch for: ${entry.path}`);
     }
 
-    // 6. Write file to disk
+    // 6. Write file to disk — skip on I/O failure (permission, disk full, etc.)
     const targetPath = path.join(targetDir, entry.path);
-    await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    await fs.writeFile(targetPath, data);
+    try {
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.writeFile(targetPath, data);
 
-    // 7. Restore mtime
-    const mtimeSec = Number(entry.modified_at) / 1000;
-    await fs.utimes(targetPath, mtimeSec, mtimeSec);
+      // 7. Restore mtime — best-effort, does not block success
+      const mtimeSec = Number(entry.modified_at) / 1000;
+      await fs.utimes(targetPath, mtimeSec, mtimeSec).catch(() => {});
 
-    extracted.push(entry);
+      extracted.push(entry);
+    } catch (e: unknown) {
+      skipped.push({
+        path: entry.path,
+        reason: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
 
-  return extracted;
+  return { extracted, skipped };
 }

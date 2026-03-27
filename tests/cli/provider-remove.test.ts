@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { VersionHealth } from '../../src/types/index.js';
 import { captureConsole, makeConfig, runCmd } from './_helpers.js';
 
 vi.mock('../../src/vault/config.js', () => ({
@@ -376,7 +377,7 @@ describe('provider remove', () => {
     mockListVersions.mockResolvedValue([
       {
         version: 1,
-        health: 'healthy',
+        health: VersionHealth.Healthy,
         shards: [{ provider_id: 'dysk-1', shard_index: 0, path: '' }],
       },
     ] as never);

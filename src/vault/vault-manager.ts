@@ -1,13 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { packBlob } from '../core/blob-pack.js';
 import { parseBlobFileTable, unpackBlob } from '../core/blob-unpack.js';
 import { decryptBlob, encryptBlob } from '../core/crypto.js';
-import { BfsError } from '../core/errors.js';
+import type { SkippedFile } from '../core/errors.js';
+import {
+  BfsError,
+  PullSkippedError,
+  PushSkippedError,
+} from '../core/errors.js';
 import { hashBuffer } from '../core/hash.js';
 import { createIgnoreFilter } from '../core/ignore.js';
+import { DEFAULT_BFSIGNORE_CONTENT } from '../core/ignore-defaults.js';
 import { rsDecode, rsEncode, rsRepair } from '../core/reed-solomon.js';
 import {
   buildShard,
@@ -20,6 +25,8 @@ import type {
   ManifestShard,
   ProviderConfig,
   ProviderIO,
+  PullResult,
+  PushResult,
   RemoteRef,
   ShardHeader,
   ShardLocation,
@@ -27,6 +34,7 @@ import type {
   VaultConfig,
   VersionManifest,
 } from '../types/index.js';
+import { PushMode, VersionHealth } from '../types/index.js';
 import { readConfig, writeConfig } from './config.js';
 import {
   deleteManifest,
@@ -43,15 +51,25 @@ export interface InitOptions {
   scheme: { data_shards: number; parity_shards: number };
   encryption: { enabled: boolean; algorithm: 'aes-256-gcm'; kdf: 'argon2id' };
   providers: ProviderConfig[];
-  push_mode: 'new_version' | 'overwrite' | 'ask';
+  push_mode: PushMode;
   io: ProviderIO;
 }
 
 export interface PushOptions {
   /** Overrides config.push_mode. If absent, config.push_mode is used. */
-  mode?: 'new_version' | 'overwrite';
+  mode?: PushMode.NewVersion | PushMode.Overwrite;
   /** Pre-provided encryption password (skips interactive prompt). */
   password?: string;
+  /**
+   * When true, loads the blob from `.bfs/cache/push.blob.pending` instead of re-packing.
+   * Falls back to a fresh pack if the cache file does not exist.
+   */
+  fromCache?: boolean;
+  /**
+   * When true (REPL mode), prompts the user on skipped files instead of aborting.
+   * Defaults to false (standalone CLI: abort with PushSkippedError).
+   */
+  interactive?: boolean;
   io: ProviderIO;
 }
 
@@ -60,8 +78,20 @@ export interface PullOptions {
   version?: number;
   /** If true, skip confirmation prompts. */
   force?: boolean;
+  /** If true, auto-confirm the overwrite prompt without clearing the directory (unlike force). */
+  yes?: boolean;
   /** Pre-provided decryption password (skips interactive prompt). */
   password?: string;
+  /**
+   * When true, loads the blob from `.bfs/cache/pull.blob.pending` instead of downloading shards.
+   * Falls back to a fresh pull if the cache file does not exist.
+   */
+  fromCache?: boolean;
+  /**
+   * When true (REPL mode), prompts the user on skipped files and allows retry instead of aborting.
+   * Defaults to false (standalone CLI: abort with PullSkippedError).
+   */
+  interactive?: boolean;
   io: ProviderIO;
 }
 
@@ -150,7 +180,7 @@ export function extractShardPayload(data: Buffer): Buffer {
  * Prompts for a password if the vault is encrypted and none was provided.
  * On first push (no existing manifests) also asks for a confirmation of the password.
  *
- * @returns rsInput (encrypted blob or plain blob), blob, blob_hash, file_count, total_size, kdf_salt, encKey
+ * @returns rsInput, blob, blob_hash, file_count, total_size, kdf_salt, encKey, skipped
  * @throws BfsError if a password is required but not provided, or if passwords don't match
  */
 async function packAndEncrypt(
@@ -163,12 +193,17 @@ async function packAndEncrypt(
   blob_hash: string;
   file_count: number;
   total_size: number;
-  kdf_salt: Buffer | null;
+  kdf_salt: Nullable<Buffer>;
   encKey: Buffer | undefined;
+  skipped: SkippedFile[];
 }> {
   options.io.info('Scanning directory…');
   const filter = createIgnoreFilter(rootDir);
-  const blob = await packBlob(rootDir, filter, uuidToBuffer(config.vault_id));
+  const { blob, skipped } = await packBlob(
+    rootDir,
+    filter,
+    uuidToBuffer(config.vault_id),
+  );
   const entries = parseBlobFileTable(blob);
   const file_count = entries.length;
   const total_size = entries.reduce((s, e) => s + Number(e.size), 0);
@@ -183,10 +218,11 @@ async function packAndEncrypt(
       total_size,
       kdf_salt: null,
       encKey: undefined,
+      skipped,
     };
   }
 
-  let password = options.password ?? null;
+  let password: Nullable<string> = options.password ?? null;
   if (!password) {
     const existingManifests = await listManifests(rootDir);
     password = await options.io.askSecret('Enter encryption password:');
@@ -206,6 +242,7 @@ async function packAndEncrypt(
     total_size,
     kdf_salt: result.salt,
     encKey: result.key,
+    skipped,
   };
 }
 
@@ -221,7 +258,7 @@ function buildShardBuffers(
   targetVersion: number,
   blobSize: bigint,
   blobHash: string,
-  kdf_salt: Buffer | null,
+  kdf_salt: Nullable<Buffer>,
   encKey: Buffer | undefined,
   locationMap: ShardLocation[],
 ): Buffer[] {
@@ -308,7 +345,7 @@ async function uploadShardsOverwrite(
     targetVersion,
     io,
   } = ctx;
-  const tmpRefs: (RemoteRef | null)[] = new Array(N + K).fill(null);
+  const tmpRefs: Nullable<RemoteRef>[] = new Array(N + K).fill(null);
 
   try {
     for (let i = 0; i < N + K; i++) {
@@ -376,16 +413,16 @@ async function downloadShardSlots(
   rootDir: string,
   io: ProviderIO,
 ): Promise<{
-  shardSlots: (Buffer | null)[];
+  shardSlots: Nullable<Buffer>[];
   blobSize: number;
-  kdf_salt: Buffer | null;
+  kdf_salt: Nullable<Buffer>;
 }> {
   const { data_shards: N, parity_shards: K } = manifest.scheme;
   const targetVersion = manifest.version;
   const cacheDir = path.join(rootDir, '.bfs', 'cache');
-  const shardSlots: (Buffer | null)[] = new Array(N + K).fill(null);
+  const shardSlots: Nullable<Buffer>[] = new Array(N + K).fill(null);
   let blobSize = 0;
-  let kdf_salt: Buffer | null = null;
+  let kdf_salt: Nullable<Buffer> = null;
 
   for (const ms of manifest.shards) {
     const pc = config.providers.find((p) => p.id === ms.provider_id);
@@ -439,7 +476,7 @@ async function fetchShard(
   cacheDir: string,
   targetVersion: number,
   io: ProviderIO,
-): Promise<Buffer | null> {
+): Promise<Nullable<Buffer>> {
   const filename = `shard_${ms.shard_index}.bfs.${targetVersion}`;
   const cacheFile = path.join(cacheDir, filename);
 
@@ -475,9 +512,9 @@ async function fetchShard(
  * @throws BfsError if fewer than N shards are available, password is missing, or kdf_salt not found
  */
 async function decodeAndDecrypt(
-  shardSlots: (Buffer | null)[],
+  shardSlots: Nullable<Buffer>[],
   manifest: VersionManifest,
-  kdf_salt: Buffer | null,
+  kdf_salt: Nullable<Buffer>,
   blobSize: number,
   targetVersion: number,
   cacheDir: string,
@@ -504,7 +541,7 @@ async function decodeAndDecrypt(
       }
     }
     rsOutput = rsDecode(
-      repaired.map((b) => b as Buffer | null),
+      repaired.map((b) => b as Nullable<Buffer>),
       N,
       K,
       blobSize,
@@ -515,7 +552,7 @@ async function decodeAndDecrypt(
 
   if (!manifest.encrypted) return { plainBlob: rsOutput, isDegraded };
 
-  let password = options.password ?? null;
+  let password: Nullable<string> = options.password ?? null;
   if (!password)
     password = await options.io.askSecret('Enter decryption password:');
   if (!password) throw new BfsError('Password required for encrypted vault.');
@@ -527,17 +564,12 @@ async function decodeAndDecrypt(
   };
 }
 
-/** Path to .bfsignore.default shipped alongside the source tree. */
-const DEFAULT_BFSIGNORE_PATH = fileURLToPath(
-  new URL('../../.bfsignore.default', import.meta.url),
-);
-
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
  * Initialises a new vault in rootDir.
  * Creates .bfs/, .bfs/manifests/, config.json, state.json.
- * Copies .bfsignore.default → .bfsignore if missing.
+ * Writes default .bfsignore if missing.
  * Authenticates each provider to surface configuration errors early.
  *
  * @throws BfsError if providers.length !== data_shards + parity_shards.
@@ -561,12 +593,7 @@ export async function init(
     .then(() => true)
     .catch(() => false);
   if (!bfsignoreExists) {
-    try {
-      const content = await fs.readFile(DEFAULT_BFSIGNORE_PATH, 'utf-8');
-      await fs.writeFile(bfsignorePath, content, 'utf-8');
-    } catch {
-      // .bfsignore.default not found — skip
-    }
+    await fs.writeFile(bfsignorePath, DEFAULT_BFSIGNORE_CONTENT, 'utf-8');
   }
 
   // Validate and authenticate all providers BEFORE writing config.
@@ -594,13 +621,18 @@ export async function init(
 
 /**
  * Full push pipeline: pack → [encrypt] → RS-encode → upload → write manifest → update state.
+ * If any files could not be read, the blob is cached and PushSkippedError is thrown (non-interactive),
+ * or the user is prompted to continue (interactive/REPL mode).
+ * With `fromCache: true`, loads the cached blob instead of re-packing.
  *
- * @throws BfsError if config missing, provider count invalid, or password missing for encrypted vault.
+ * @returns PushResult with version, file_count, total_size, and any skipped files accepted by user
+ * @throws BfsError if config missing, provider count invalid, or password missing for encrypted vault
+ * @throws PushSkippedError (non-interactive) if any files could not be read
  */
 export async function push(
   rootDir: string,
   options: PushOptions,
-): Promise<void> {
+): Promise<PushResult> {
   const config = await readConfig(rootDir);
   if (!config)
     throw new BfsError('No vault config found. Run `bfs init` first.');
@@ -618,9 +650,9 @@ export async function push(
   const effectiveMode = options.mode ?? config.push_mode;
   let targetVersion: number;
 
-  if (effectiveMode === 'overwrite' && state.working_version > 0) {
+  if (effectiveMode === PushMode.Overwrite && state.working_version > 0) {
     targetVersion = state.working_version;
-  } else if (effectiveMode === 'ask') {
+  } else if (effectiveMode === PushMode.Ask) {
     const choice = await options.io.choose(
       `Create new version v${state.latest_version + 1} or overwrite v${state.working_version}?`,
       [
@@ -646,14 +678,123 @@ export async function push(
     if (!cont) throw new BfsError('Push cancelled.');
   }
 
-  // ── Pack blob + optional encryption ───────────────────────────────────────
-  const packed = await packAndEncrypt(rootDir, config, options);
-  const { rsInput, blob_hash, file_count, total_size, kdf_salt, encKey } =
-    packed;
-  const blob_size = BigInt(rsInput.length);
+  // ── Pack blob (or load from cache) ────────────────────────────────────────
+  const cachePath = path.join(rootDir, '.bfs', 'cache', 'push.blob.pending');
+
+  type PackData = {
+    blob: Buffer;
+    rsInput: Buffer;
+    blob_hash: string;
+    file_count: number;
+    total_size: number;
+    kdf_salt: Nullable<Buffer>;
+    encKey: Buffer | undefined;
+    skipped: SkippedFile[];
+  };
+
+  let packData: PackData;
+
+  if (options.fromCache) {
+    let cachedBlob: Nullable<Buffer> = null;
+    try {
+      cachedBlob = await fs.readFile(cachePath);
+      options.io.info('Using cached blob…');
+    } catch {
+      options.io.info('No cached blob found — running full pack…');
+    }
+
+    if (cachedBlob !== null) {
+      // Derive metadata from cached blob and re-encrypt if needed
+      const entries = parseBlobFileTable(cachedBlob);
+      const cachedFileCount = entries.length;
+      const cachedTotalSize = entries.reduce((s, e) => s + Number(e.size), 0);
+      const cachedBlobHash = hashBuffer(
+        cachedBlob.subarray(0, cachedBlob.length - 32),
+      );
+      let cachedRsInput: Buffer;
+      let cachedKdfSalt: Nullable<Buffer>;
+      let cachedEncKey: Buffer | undefined;
+      if (config.encryption.enabled) {
+        let password: Nullable<string> = options.password ?? null;
+        if (!password) {
+          password = await options.io.askSecret('Enter encryption password:');
+          if (!password)
+            throw new BfsError('Password required for encrypted vault.');
+        }
+        options.io.info('Encrypting…');
+        const result = await encryptBlob(cachedBlob, password);
+        cachedRsInput = result.encrypted;
+        cachedKdfSalt = result.salt;
+        cachedEncKey = result.key;
+      } else {
+        cachedRsInput = cachedBlob;
+        cachedKdfSalt = null;
+        cachedEncKey = undefined;
+      }
+      packData = {
+        blob: cachedBlob,
+        rsInput: cachedRsInput,
+        blob_hash: cachedBlobHash,
+        file_count: cachedFileCount,
+        total_size: cachedTotalSize,
+        kdf_salt: cachedKdfSalt,
+        encKey: cachedEncKey,
+        skipped: [],
+      };
+    } else {
+      // Cache missing — fall back to fresh pack
+      await fs.unlink(cachePath).catch(() => {});
+      const packed = await packAndEncrypt(rootDir, config, options);
+      packData = packed;
+    }
+  } else {
+    // Fresh pack — delete any stale cache first
+    await fs.unlink(cachePath).catch(() => {});
+    const packed = await packAndEncrypt(rootDir, config, options);
+    packData = packed;
+  }
+
+  const {
+    blob,
+    rsInput,
+    blob_hash,
+    file_count,
+    total_size,
+    kdf_salt,
+    encKey,
+    skipped,
+  } = packData;
+
+  // ── Handle skipped files ───────────────────────────────────────────────────
+  if (skipped.length > 0) {
+    // Always cache the blob so the user can resume with --cache
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.writeFile(cachePath, blob);
+
+    if (options.interactive) {
+      // REPL: show up to 10 files and ask to continue
+      const shown = skipped.slice(0, 10);
+      const rest = skipped.length - shown.length;
+      const fileList =
+        shown.map((s) => `  - ${s.path}: ${s.reason}`).join('\n') +
+        (rest > 0 ? `\n  ... and ${rest} more` : '');
+      const cont = await options.io.confirm(
+        `${skipped.length} file(s) could not be read:\n${fileList}\nContinue without them?`,
+      );
+      if (!cont) {
+        await fs.unlink(cachePath).catch(() => {});
+        throw new BfsError('Push cancelled.');
+      }
+      // User accepted — continue with the blob as-is
+    } else {
+      // Standalone mode: abort before upload
+      throw new PushSkippedError(skipped, cachePath);
+    }
+  }
 
   // ── Reed-Solomon encode ────────────────────────────────────────────────────
   options.io.info('Encoding with Reed-Solomon…');
+  const blobSize = BigInt(rsInput.length);
   const shardPayloads = rsEncode(rsInput, N, K);
 
   // ── Build location map ─────────────────────────────────────────────────────
@@ -680,7 +821,7 @@ export async function push(
     config,
     shardPayloads,
     targetVersion,
-    blob_size,
+    blobSize,
     blob_hash,
     kdf_salt,
     encKey,
@@ -691,7 +832,7 @@ export async function push(
   options.io.info('Uploading shards…');
   const providers = await openProviders(config, options.io);
   const isOverwrite =
-    effectiveMode === 'overwrite' &&
+    effectiveMode === PushMode.Overwrite &&
     state.working_version > 0 &&
     targetVersion === state.working_version;
   const uploadCtx: UploadContext = {
@@ -718,7 +859,7 @@ export async function push(
     scheme: config.scheme,
     encrypted: config.encryption.enabled,
     shards: manifestShards,
-    health: 'healthy',
+    health: VersionHealth.Healthy,
   };
   await writeManifest(rootDir, manifest);
 
@@ -728,23 +869,29 @@ export async function push(
     working_version: targetVersion,
   });
 
-  options.io.info(
-    `✓ Pushed version ${targetVersion} (${file_count} files, ${total_size} bytes)`,
-  );
+  // ── Clean up cache on success ──────────────────────────────────────────────
+  await fs.unlink(cachePath).catch(() => {});
+
+  return { version: targetVersion, file_count, total_size, skipped };
 }
 
 /**
  * Pull Mode A: restores a specific version to rootDir using the current config.
  * Reads shards from providers listed in the version manifest.
  * Tolerates up to K missing/unreachable providers (RS repair).
+ * If files cannot be written, the decoded blob is cached and PullSkippedError is thrown
+ * (non-interactive), or the user is prompted to retry (interactive/REPL mode).
+ * With `fromCache: true`, loads the cached blob instead of downloading shards.
  *
+ * @returns PullResult with version, extracted count, and any skipped files
  * @throws BfsError if config is missing, target version manifest is missing,
- *   or fewer than N shards can be downloaded.
+ *   or fewer than N shards can be downloaded
+ * @throws PullSkippedError (non-interactive) if any files could not be written
  */
 export async function pull(
   rootDir: string,
   options: PullOptions,
-): Promise<void> {
+): Promise<PullResult> {
   const config = await readConfig(rootDir);
   if (!config)
     throw new BfsError(
@@ -756,57 +903,89 @@ export async function pull(
   if (targetVersion === 0)
     throw new BfsError('No versions available. Run `bfs push` first.');
 
-  const manifest = await readManifest(rootDir, targetVersion);
-  if (!manifest)
-    throw new BfsError(`Manifest for version ${targetVersion} not found.`);
-
-  const { data_shards: N } = manifest.scheme;
-
-  // Confirm overwrite
-  if (!options.force && state.working_version !== 0) {
-    const cont = await options.io.confirm(
-      `On disk: version ${state.working_version}. ` +
-        `Restoring version ${targetVersion} will overwrite directory. Continue?`,
-    );
-    if (!cont) throw new BfsError('Pull cancelled.');
-  }
-
-  // ── Download shards ────────────────────────────────────────────────────────
-  options.io.info(`Downloading shards for version ${targetVersion}…`);
-  const cacheDir = path.join(rootDir, '.bfs', 'cache');
-  const { shardSlots, blobSize, kdf_salt } = await downloadShardSlots(
-    config,
-    manifest,
+  const blobCachePath = path.join(
     rootDir,
-    options.io,
+    '.bfs',
+    'cache',
+    'pull.blob.pending',
   );
+  const cacheDir = path.join(rootDir, '.bfs', 'cache');
 
-  const available = shardSlots.filter((s) => s !== null).length;
-  if (available < N) {
-    throw new BfsError(
-      `Not enough shards: need ${N}, got ${available}. Some providers may be offline.`,
-    );
+  // Initialized to an empty sentinel; always overwritten before use in the branches below.
+  let plainBlob: Buffer = Buffer.alloc(0);
+  let isDegraded = false;
+  let manifest = await readManifest(rootDir, targetVersion);
+
+  // ── Obtain blob (from cache or by downloading+decoding) ───────────────────
+  let loadedFromCache = false;
+  if (options.fromCache) {
+    try {
+      plainBlob = await fs.readFile(blobCachePath);
+      options.io.info('Using cached blob…');
+      loadedFromCache = true;
+    } catch {
+      options.io.info('No cached blob found — running full pull…');
+    }
   }
 
-  // ── RS decode + optional decrypt ──────────────────────────────────────────
-  options.io.info('Decoding Reed-Solomon…');
-  const { plainBlob, isDegraded } = await decodeAndDecrypt(
-    shardSlots,
-    manifest,
-    kdf_salt,
-    blobSize,
-    targetVersion,
-    cacheDir,
-    options,
-  );
+  if (!loadedFromCache) {
+    if (!manifest)
+      throw new BfsError(`Manifest for version ${targetVersion} not found.`);
 
-  // ── Verify blob hash ───────────────────────────────────────────────────────
-  const computedHash = hashBuffer(plainBlob.subarray(0, plainBlob.length - 32));
-  if (computedHash !== manifest.blob_hash) {
-    throw new BfsError(
-      'Blob hash mismatch — data corrupted or wrong password.',
+    const { data_shards: N } = manifest.scheme;
+
+    // Confirm overwrite
+    if (!options.force && !options.yes && state.working_version !== 0) {
+      const cont = await options.io.confirm(
+        `On disk: version ${state.working_version}. ` +
+          `Restoring version ${targetVersion} will overwrite directory. Continue?`,
+      );
+      if (!cont) throw new BfsError('Pull cancelled.');
+    }
+
+    // ── Download shards ──────────────────────────────────────────────────────
+    options.io.info(`Downloading shards for version ${targetVersion}…`);
+    const { shardSlots, blobSize, kdf_salt } = await downloadShardSlots(
+      config,
+      manifest,
+      rootDir,
+      options.io,
     );
+
+    const available = shardSlots.filter((s) => s !== null).length;
+    if (available < N) {
+      throw new BfsError(
+        `Not enough shards: need ${N}, got ${available}. Some providers may be offline.`,
+      );
+    }
+
+    // ── RS decode + optional decrypt ────────────────────────────────────────
+    options.io.info('Decoding Reed-Solomon…');
+    const decoded = await decodeAndDecrypt(
+      shardSlots,
+      manifest,
+      kdf_salt,
+      blobSize,
+      targetVersion,
+      cacheDir,
+      options,
+    );
+    plainBlob = decoded.plainBlob;
+    isDegraded = decoded.isDegraded;
+
+    // ── Verify blob hash ─────────────────────────────────────────────────────
+    const computedHash = hashBuffer(
+      plainBlob.subarray(0, plainBlob.length - 32),
+    );
+    if (computedHash !== manifest.blob_hash) {
+      throw new BfsError(
+        'Blob hash mismatch — data corrupted or wrong password.',
+      );
+    }
   }
+
+  // plainBlob is definitely assigned at this point — both branches above assign it
+  // (loadedFromCache path reads from file; !loadedFromCache path reads from decoded)
 
   // ── Unpack files ───────────────────────────────────────────────────────────
   options.io.info('Unpacking files…');
@@ -823,10 +1002,47 @@ export async function pull(
     }
   }
 
-  await unpackBlob(plainBlob, rootDir);
+  // ── Handle skipped files ───────────────────────────────────────────────────
+  let { extracted, skipped } = await unpackBlob(plainBlob, rootDir);
+
+  if (skipped.length > 0) {
+    // Always cache the decoded blob so the user can resume with --cache
+    await fs.mkdir(path.dirname(blobCachePath), { recursive: true });
+    await fs.writeFile(blobCachePath, plainBlob);
+
+    if (options.interactive) {
+      // REPL: retry loop — user can fix permissions and press Y to retry
+      while (skipped.length > 0) {
+        const shown = skipped.slice(0, 10);
+        const rest = skipped.length - shown.length;
+        const fileList =
+          shown.map((s) => `  - ${s.path}: ${s.reason}`).join('\n') +
+          (rest > 0 ? `\n  ... and ${rest} more` : '');
+        const retry = await options.io.confirm(
+          `${skipped.length} file(s) could not be written:\n${fileList}\n` +
+            `Fix permissions, then press Y to retry or N to cancel.`,
+        );
+        if (!retry) {
+          await fs.unlink(blobCachePath).catch(() => {});
+          throw new BfsError('Pull cancelled.');
+        }
+        const result = await unpackBlob(plainBlob, rootDir);
+        extracted = result.extracted;
+        skipped = result.skipped;
+      }
+      await fs.unlink(blobCachePath).catch(() => {});
+    } else {
+      // Standalone mode: abort, keep cache for --cache retry
+      throw new PullSkippedError(skipped, blobCachePath);
+    }
+  }
 
   // ── Update manifest metadata if incomplete (recovery case) ─────────────────
-  if (manifest.file_count === null || manifest.total_size === null) {
+  manifest = manifest ?? (await readManifest(rootDir, targetVersion));
+  if (
+    manifest &&
+    (manifest.file_count === null || manifest.total_size === null)
+  ) {
     const fileEntries = parseBlobFileTable(plainBlob);
     manifest.file_count = fileEntries.length;
     manifest.total_size = fileEntries.reduce((s, e) => s + Number(e.size), 0);
@@ -839,11 +1055,13 @@ export async function pull(
     working_version: targetVersion,
   });
 
-  // ── Cache management ───────────────────────────────────────────────────────
+  // ── Cache management (shard cache for degraded pool) ───────────────────────
   if (!isDegraded) {
     try {
       const cacheEntries = await fs.readdir(cacheDir);
       for (const entry of cacheEntries) {
+        // Preserve pull.blob.pending if it exists (already cleaned up above on success)
+        if (entry === 'pull.blob.pending') continue;
         await fs.unlink(path.join(cacheDir, entry)).catch(() => {});
       }
     } catch {
@@ -856,7 +1074,10 @@ export async function pull(
     );
   }
 
-  options.io.info(`✓ Restored version ${targetVersion}`);
+  // ── Clean up blob cache on success ─────────────────────────────────────────
+  await fs.unlink(blobCachePath).catch(() => {});
+
+  return { version: targetVersion, extracted: extracted.length, skipped };
 }
 
 /**
@@ -955,9 +1176,9 @@ export async function removeProvider(
     for (const manifest of manifests) {
       if (
         manifest.shards.some((s) => s.provider_id === providerId) &&
-        manifest.health === 'healthy'
+        manifest.health === VersionHealth.Healthy
       ) {
-        manifest.health = 'degraded';
+        manifest.health = VersionHealth.Degraded;
         await writeManifest(rootDir, manifest);
       }
     }

@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { FileEntry, IgnoreFilter } from '../types/index.js';
+import type { SkippedFile } from './errors.js';
 import { hashBuffer } from './hash.js';
 
 // BFS Blob header: 70 bytes
@@ -71,15 +72,19 @@ function buildFileTableEntry(entry: FileEntry, hashBytes: Buffer): Buffer {
 
 /**
  * Packs a directory into a BFS blob (custom binary format).
- * @param rootDir   - Directory to pack
+ * Files that cannot be read (e.g. permission denied) are skipped and listed in the
+ * returned `skipped` array instead of aborting the entire operation.
+ *
+ * @param rootDir      - Directory to pack
  * @param ignoreFilter - Filter function (returns true = ignore the file)
- * @param vaultId   - Optional 16-byte vault UUID to embed in blob header (defaults to zeros)
+ * @param vaultId      - Optional 16-byte vault UUID to embed in blob header (defaults to zeros)
+ * @returns            - `{ blob, skipped }` — the packed buffer and any files that could not be read
  */
 export async function packBlob(
   rootDir: string,
   ignoreFilter: IgnoreFilter,
   vaultId?: Buffer,
-): Promise<Buffer> {
+): Promise<{ blob: Buffer; skipped: SkippedFile[] }> {
   // 1. Scan directory recursively
   const metas = await scanDir(rootDir, ignoreFilter);
 
@@ -90,28 +95,36 @@ export async function packBlob(
   const fileDataList: Buffer[] = [];
   const fileEntries: FileEntry[] = [];
   const hashBuffers: Buffer[] = [];
+  const skipped: SkippedFile[] = [];
   let currentDataOffset = 0n;
 
   for (const meta of metas) {
     const absPath = path.join(rootDir, meta.relativePath);
-    const [data, stat] = await Promise.all([
-      fs.readFile(absPath),
-      fs.stat(absPath),
-    ]);
-    const hashHex = hashBuffer(data);
-    const hashBytes = Buffer.from(hashHex, 'hex');
+    try {
+      const [data, stat] = await Promise.all([
+        fs.readFile(absPath),
+        fs.stat(absPath),
+      ]);
+      const hashHex = hashBuffer(data);
+      const hashBytes = Buffer.from(hashHex, 'hex');
 
-    fileEntries.push({
-      path: meta.relativePath,
-      size: BigInt(data.length),
-      data_offset: currentDataOffset,
-      hash: hashHex,
-      mode: stat.mode,
-      modified_at: BigInt(Math.round(stat.mtimeMs)),
-    });
-    hashBuffers.push(hashBytes);
-    fileDataList.push(data);
-    currentDataOffset += BigInt(data.length);
+      fileEntries.push({
+        path: meta.relativePath,
+        size: BigInt(data.length),
+        data_offset: currentDataOffset,
+        hash: hashHex,
+        mode: stat.mode,
+        modified_at: BigInt(Math.round(stat.mtimeMs)),
+      });
+      hashBuffers.push(hashBytes);
+      fileDataList.push(data);
+      currentDataOffset += BigInt(data.length);
+    } catch (e: unknown) {
+      skipped.push({
+        path: meta.relativePath,
+        reason: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
 
   // 4. Build file table
@@ -173,5 +186,5 @@ export async function packBlob(
 
   // 9. Append SHA-256 checksum (32 bytes)
   const checksum = Buffer.from(hashBuffer(blobBody), 'hex');
-  return Buffer.concat([blobBody, checksum]);
+  return { blob: Buffer.concat([blobBody, checksum]), skipped };
 }

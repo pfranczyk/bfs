@@ -6,10 +6,10 @@ export const pl: Strings = {
   repl_no_config: '  Brak konfiguracji. Użyj `init`, aby zacząć.',
   repl_banner_hint: '\n  Wpisz `help`, aby zobaczyć dostępne polecenia.\n',
   repl_help_header: '\n  Dostępne polecenia:\n',
-  repl_help_cmd_init: 'Utwórz nowy vault',
+  repl_help_cmd_init: 'Utwórz nową kopię zapasową',
   repl_help_cmd_push: 'Utwórz kopię zapasową bieżącego katalogu',
   repl_help_cmd_pull: 'Przywróć pliki z kopii zapasowej',
-  repl_help_cmd_status: 'Pokaż status vaulta',
+  repl_help_cmd_status: 'Pokaż status kopii zapasowej',
   repl_help_cmd_versions: 'Wylistuj wersje kopii zapasowych',
   repl_help_cmd_prune: 'Usuń stare wersje (np. 1-5, --keep-last 3)',
   repl_help_cmd_verify: 'Sprawdź dostępność i stan shardów',
@@ -19,6 +19,7 @@ export const pl: Strings = {
   repl_help_cmd_provider_remove: 'Usuń provider',
   repl_help_cmd_scheme_set:
     'Zmień schemat Reed-Solomon (N danych + K parzystości)',
+  repl_help_cmd_clear: 'Usuń zbuforowane dane po przerwanym push/pull',
   repl_help_cmd_help: 'Pokaż tę pomoc',
   repl_help_cmd_exit: 'Wyjdź',
   repl_goodbye: 'Do widzenia!',
@@ -36,29 +37,30 @@ export const pl: Strings = {
   cmd_version_flag: 'Pokaż wersję programu',
   cmd_help_flag: 'Wyświetl pomoc dla komendy',
   cmd_help_cmd: 'Wyświetl pomoc dla komendy',
-  cmd_cwd_desc: 'Katalog roboczy vaulta (nadpisuje bieżący katalog)',
+  cmd_cwd_desc: 'Katalog roboczy kopii zapasowej (nadpisuje bieżący katalog)',
   cmd_lang_desc: 'Ustaw język UI na stałe (np. en, pl)',
-  cmd_init_desc: 'Zainicjalizuj nowy vault w bieżącym katalogu',
+  cmd_init_desc: 'Skonfiguruj nową kopię zapasową w bieżącym katalogu',
   cmd_push_desc:
     'Utwórz kopię zapasową bieżącego katalogu (nowa wersja lub nadpisanie)',
   cmd_pull_desc: 'Przywróć pliki z kopii zapasowej',
-  cmd_status_desc: 'Pokaż status vaulta',
+  cmd_status_desc: 'Pokaż status kopii zapasowej',
   cmd_versions_desc: 'Wylistuj wszystkie wersje kopii zapasowych',
   cmd_prune_desc: 'Usuń stare wersje kopii zapasowych z providerów',
   cmd_verify_desc: 'Sprawdź dostępność i stan shardów dla wszystkich wersji',
   cmd_recovery_desc: 'Odbuduj .bfs/ z providerów (odtwarzanie po awarii)',
-  cmd_scheme_desc: 'Zarządzaj schematem Reed-Solomon vaulta',
+  cmd_scheme_desc: 'Zarządzaj schematem Reed-Solomon',
   cmd_scheme_set_desc:
     'Zmień schemat N/K (liczba providerów musi być równa data+parity)',
   cmd_provider_desc: 'Zarządzaj providerami',
-  cmd_provider_add_desc: 'Dodaj nowy provider do konfiguracji vaulta',
+  cmd_provider_add_desc: 'Dodaj nowy nośnik do konfiguracji kopii zapasowej',
   cmd_provider_list_desc: 'Wylistuj skonfigurowane providery',
   cmd_provider_remove_desc: 'Usuń lub zastąp provider (z opcją naprawy)',
 
   // ─── Global / shared ─────────────────────────────────────────────────────
   global_settings_group: 'Ustawienia BFS (globalne)',
   lang_set: 'Język ustawiony na: %s',
-  no_config: 'Brak konfiguracji vaulta. Uruchom najpierw `bfs init`.',
+  no_config:
+    'Brak kopii zapasowej w tym katalogu. Uruchom najpierw `bfs init`.',
   cancelled: 'Anulowano.',
   required: 'Wymagane',
   path_required: 'Ścieżka jest wymagana',
@@ -66,13 +68,22 @@ export const pl: Strings = {
   dir_not_exist: 'Katalog nie istnieje: %s',
 
   // ─── init ─────────────────────────────────────────────────────────────────
-  init_header: '\n  BFS — inicjalizacja vaulta\n',
+  init_header: '\n  BFS — konfiguracja kopii zapasowej\n',
   init_provider_header: '\nProvider %s:',
   init_provider_name_prompt: 'Nazwa providera (np. dysk-usb, nas-lokalny):',
   init_provider_name_required: 'Nazwa jest wymagana',
   init_provider_type_prompt: 'Typ providera:',
   init_dir_path_prompt: 'Ścieżka do katalogu:',
-  init_vault_name_prompt: 'Nazwa vaulta (= podfolder na providerach):',
+  init_opt_ci: 'Tryb nieinteraktywny (CI/skrypty): pomija prompty',
+  init_opt_enc:
+    'Włącz szyfrowanie AES-256-GCM (tylko z --ci, domyślnie wyłączone)',
+  init_opt_data_shards: 'Liczba shardów danych N (tryb CI)',
+  init_opt_parity_shards: 'Liczba shardów parzystości K (tryb CI)',
+  init_opt_provider:
+    'Provider w formacie typ:id:ścieżka, np. local:usb1:/mnt/usb (wielokrotny)',
+  init_opt_push_mode: 'Tryb push: new_version|overwrite|ask (tryb CI)',
+  init_vault_name_arg: 'Nazwa kopii zapasowej (podfolder na nośnikach)',
+  init_vault_name_prompt: 'Nazwa kopii zapasowej (= podfolder na nośnikach):',
   init_vault_name_required: 'Nazwa jest wymagana',
   init_scanning: 'Skanowanie katalogu…',
   init_found_files: 'Znaleziono %s plik(ów) (%s)',
@@ -92,22 +103,49 @@ export const pl: Strings = {
   init_provider_format_invalid:
     'Nieprawidłowy format --provider: "%s". Oczekiwany: typ:id:ścieżka (np. local:dysk1:/mnt/usb)',
   init_success:
-    'Vault "%s" zainicjalizowany. Użyj `bfs push`, aby wykonać kopię.',
+    'Kopia zapasowa "%s" gotowa. Użyj `bfs push`, aby wykonać pierwszą kopię.',
+
+  // ─── clear ────────────────────────────────────────────────────────────────
+  cmd_clear_desc:
+    'Wyczyść tymczasowe dane kopii zapasowej z przerwanego push/pull',
+  clear_done: 'Cache wyczyszczony.',
 
   // ─── push ─────────────────────────────────────────────────────────────────
   push_preparing: 'Przygotowanie push…',
   push_completed: 'Push zakończony',
   push_success: 'Kopia zapasowa przesłana na wszystkie providery.',
   push_failed: 'Push nieudany',
+  push_skipped_header:
+    '%s plik(ów) nie można było odczytać i zostało pominięte:',
+  push_cache_hint:
+    'Dane kopii zapisane w cache. Użyj `bfs push --cache` aby wysłać bez ponownego pakowania.',
+  push_opt_new: 'Wymuś nową wersję',
+  push_opt_overwrite: 'Nadpisz bieżącą wersję',
+  push_opt_password: 'Hasło szyfrowania (pomija interaktywny prompt)',
+  push_opt_cache:
+    'Wyślij zbuforowane dane kopii z poprzedniej przerwanej operacji',
 
   // ─── pull ─────────────────────────────────────────────────────────────────
   pull_preparing: 'Przygotowanie pull…',
   pull_completed: 'Pull zakończony',
   pull_success: 'Pliki przywrócone.',
   pull_failed: 'Pull nieudany',
+  pull_skipped_header: '%s plik(ów) nie można było zapisać na dysku:',
+  pull_cache_hint:
+    'Dane kopii zapisane w cache. Napraw uprawnienia i użyj `bfs pull --cache` aby ponowić.',
+  pull_opt_version: 'Numer wersji do przywrócenia (domyślnie: najnowsza)',
+  pull_opt_force: 'Nadpisz katalog bez potwierdzenia',
+  pull_opt_yes:
+    'Automatycznie potwierdź nadpisanie (zachowuje pliki, w przeciwieństwie do --force)',
+  pull_opt_password: 'Hasło deszyfrowania (pomija interaktywny prompt)',
+  pull_opt_provider: 'Typ nośnika (np. local, ssh, ftp)',
+  pull_opt_path: 'Ścieżka bazowa nośnika; dla zdalnych: user@host/ścieżka',
+  pull_opt_name: 'Nazwa kopii zapasowej (podfolder na nośniku)',
+  pull_opt_cache:
+    'Ponów przy użyciu zbuforowanych danych kopii z poprzedniej przerwanej operacji',
 
   // ─── status ───────────────────────────────────────────────────────────────
-  status_header: '\n  Status vaulta\n',
+  status_header: '\n  Status kopii zapasowej\n',
   status_name: 'Nazwa:',
   status_latest: 'Najnowsza:',
   status_on_disk: 'Na dysku:',
@@ -129,6 +167,10 @@ export const pl: Strings = {
   versions_col_pushed_at: 'Data push',
 
   // ─── prune ────────────────────────────────────────────────────────────────
+  prune_opt_keep_last: 'Zachowaj N najnowszych wersji, usuń pozostałe',
+  prune_opt_yes: 'Pomiń prompt potwierdzenia',
+  prune_range_invalid: 'Nieprawidłowy zakres: %s',
+  prune_version_format_invalid: 'Nieprawidłowy format wersji: "%s"',
   prune_no_versions: 'Brak wersji do usunięcia.',
   prune_keep_last_invalid: '--keep-last musi być liczbą >= 1',
   prune_range_manual: 'Wpisz zakres ręcznie (np. 1-5, 1,3,5)',
@@ -152,8 +194,13 @@ export const pl: Strings = {
 
   // ─── recovery ─────────────────────────────────────────────────────────────
   recovery_provider_type_prompt: 'Typ bootstrapowego providera:',
-  recovery_path_prompt: 'Ścieżka bazowa providera (nie podfolder vaulta):',
-  recovery_vault_name_prompt: 'Nazwa vaulta (podfolder na providerach):',
+  recovery_opt_provider: 'Typ bootstrapowego nośnika (np. local, ssh, ftp)',
+  recovery_opt_path: 'Ścieżka bazowa nośnika; dla zdalnych: user@host/ścieżka',
+  recovery_path_prompt:
+    'Ścieżka bazowa nośnika (nie podfolder kopii zapasowej):',
+  recovery_vault_name_prompt: 'Nazwa kopii zapasowej (podfolder na nośnikach):',
+  recovery_opt_name: 'Nazwa kopii zapasowej (podfolder na nośnikach)',
+  recovery_opt_password: 'Hasło (dla zaszyfrowanej kopii zapasowej)',
   recovery_connecting: 'Łączenie z providerem…',
   recovery_scanning: 'Skanowanie providerów…',
   recovery_rebuilt: '\n  Odbudowano .bfs/ — %s wersja/wersji\n',
@@ -178,6 +225,11 @@ export const pl: Strings = {
   scheme_apply_push: 'Uruchom `bfs push`, aby zastosować nowy schemat.',
 
   // ─── provider add ─────────────────────────────────────────────────────────
+  provider_add_opt_ci: 'Tryb nieinteraktywny (CI/skrypty): pomija prompty',
+  provider_add_opt_id: 'ID nowego nośnika (tryb CI)',
+  provider_add_opt_type: 'Typ nośnika: local (tryb CI)',
+  provider_add_opt_path:
+    'Ścieżka do katalogu nośnika (tryb CI, dla type=local)',
   provider_add_current: '\nAktualne providery (%s):',
   provider_add_warn:
     'Dodanie providera zmienia schemat N+K. Uruchom `bfs push` po dodaniu, aby zaktualizować sharding.',
@@ -193,13 +245,26 @@ export const pl: Strings = {
 
   // ─── provider list ────────────────────────────────────────────────────────
   provider_list_empty: 'Brak skonfigurowanych providerów.',
-  provider_list_header: '\nProvidrzy dla vaulta "%s" (schemat %s/%s):\n',
+  provider_list_header: '\nNośniki dla kopii "%s" (schemat %s/%s):\n',
   provider_list_col_num: '#',
   provider_list_col_id: 'ID',
   provider_list_col_type: 'Typ',
   provider_list_col_config: 'Konfiguracja',
 
   // ─── provider remove ──────────────────────────────────────────────────────
+  provider_remove_opt_password:
+    'Hasło szyfrowania (dla strategii rebuild/relocate)',
+  provider_remove_opt_strategy:
+    'Strategia CI: relocate|rebuild|remove (pomija prompt)',
+  provider_remove_opt_new_path:
+    'Nowa ścieżka nośnika dla strategii relocate; opcjonalnie z prefiksem typu: local:/ścieżka (tryb CI)',
+  provider_remove_opt_new_type:
+    'Nowy typ nośnika dla strategii relocate (gdy obecny typ jest nieznany)',
+  provider_remove_opt_target: 'Docelowy nośnik dla strategii rebuild (tryb CI)',
+  provider_remove_opt_scope: 'Zakres odbudowy: all|latest (domyślnie: all)',
+  provider_remove_opt_yes: 'Pomiń potwierdzenie dla strategii remove (tryb CI)',
+  provider_remove_strategy_invalid:
+    'Nieprawidłowa strategia: "%s". Dozwolone: relocate|rebuild|remove|cancel',
   provider_remove_no_providers: 'Brak providerów w konfiguracji.',
   provider_remove_prompt: 'Który provider usunąć?',
   provider_remove_not_found:

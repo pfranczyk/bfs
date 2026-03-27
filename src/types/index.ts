@@ -1,3 +1,22 @@
+import type { SkippedFile } from '../core/errors.js';
+
+// ─── Enums ────────────────────────────────────────────────────
+
+/** Tryb zachowania przy push — co robić z istniejącą wersją. */
+export enum PushMode {
+  NewVersion = 'new_version',
+  Overwrite = 'overwrite',
+  Ask = 'ask',
+}
+
+/** Stan zdrowia wersji backupu, ustalany przez verify. */
+export enum VersionHealth {
+  Healthy = 'healthy',
+  Degraded = 'degraded',
+  Damaged = 'damaged',
+  Unknown = 'unknown',
+}
+
 // ─── Konfiguracja vaulta (.bfs/config.json) ──────────────────
 
 export interface VaultConfig {
@@ -16,7 +35,7 @@ export interface VaultConfig {
     algorithm: 'aes-256-gcm';
     kdf: 'argon2id';
   };
-  push_mode: 'new_version' | 'overwrite' | 'ask';
+  push_mode: PushMode;
   providers: ProviderConfig[];
 }
 
@@ -40,9 +59,9 @@ export interface VaultState {
 
 export interface VersionManifest {
   version: number;
-  pushed_at: string | null; // ISO 8601; null po recovery (uzupełniane po pull)
-  file_count: number | null; // null po recovery (uzupełniane po pull)
-  total_size: number | null; // bajty (rozmiar katalogu); null po recovery (uzupełniane po pull)
+  pushed_at: Nullable<string>; // ISO 8601; null po recovery (uzupełniane po pull)
+  file_count: Nullable<number>; // null po recovery (uzupełniane po pull)
+  total_size: Nullable<number>; // bajty (rozmiar katalogu); null po recovery (uzupełniane po pull)
   blob_hash: string; // SHA-256 bloba przed RS
   scheme: {
     data_shards: number; // N
@@ -63,7 +82,26 @@ export interface ManifestShard {
   // ale dane RS nie. Dlatego hash dotyczy tylko payloadu.
 }
 
-export type VersionHealth = 'healthy' | 'degraded' | 'damaged' | 'unknown';
+// ─── Skip results ─────────────────────────────────────────────
+
+export type { SkippedFile };
+
+/** Result returned by push() on success. */
+export interface PushResult {
+  version: number;
+  file_count: number;
+  total_size: number;
+  /** Files skipped due to read errors (non-empty only in REPL interactive mode when user accepted). */
+  skipped: SkippedFile[];
+}
+
+/** Result returned by pull() on success. */
+export interface PullResult {
+  version: number;
+  extracted: number;
+  /** Files skipped due to write errors (non-empty only in REPL interactive mode when user accepted). */
+  skipped: SkippedFile[];
+}
 
 // ─── Ignore filter ────────────────────────────────────────────
 
@@ -111,7 +149,7 @@ export interface ShardHeader {
   shard_index: number; // 2 bajty (uint16)
   version: number; // 4 bajty (uint32) — numer wersji snapshota
   encrypted: boolean; // 1 bajt
-  kdf_salt: Buffer | null; // 16 bajtów jeśli encrypted=true, brak jeśli false
+  kdf_salt: Nullable<Buffer>; // 16 bajtów jeśli encrypted=true, brak jeśli false
   map_length: number; // 4 bajty (uint32)
   location_map: ShardLocation[]; // JSON (opcjonalnie AES-GCM encrypted)
 }

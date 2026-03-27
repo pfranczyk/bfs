@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { t } from '../i18n/index.js';
-import type { VersionHealth } from '../types/index.js';
+import { VersionHealth } from '../types/index.js';
 
 // ─── Color helpers ────────────────────────────────────────────────────────────
 
@@ -105,13 +105,13 @@ export function table(headers: string[], rows: string[][]): void {
 /** Returns a colored health string with icon. */
 export function formatHealth(health: VersionHealth): string {
   switch (health) {
-    case 'healthy':
+    case VersionHealth.Healthy:
       return chalk.green(t('health_healthy'));
-    case 'degraded':
+    case VersionHealth.Degraded:
       return chalk.yellow(t('health_degraded'));
-    case 'damaged':
+    case VersionHealth.Damaged:
       return chalk.red(t('health_damaged'));
-    case 'unknown':
+    case VersionHealth.Unknown:
       return chalk.gray(t('health_unknown'));
   }
 }

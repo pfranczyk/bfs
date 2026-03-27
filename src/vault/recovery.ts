@@ -10,9 +10,9 @@ import type {
   ShardLocation,
   StorageProvider,
   VaultConfig,
-  VersionHealth,
   VersionManifest,
 } from '../types/index.js';
+import { PushMode, VersionHealth } from '../types/index.js';
 import {
   type BootstrapResult,
   bootstrapFromProvider,
@@ -62,7 +62,7 @@ async function tryDecryptLocationMap(
   shardData: Buffer,
   passwordPool: string[],
   io: ProviderIO,
-): Promise<{ location_map: ShardLocation[]; encKey: Buffer } | null> {
+): Promise<Nullable<{ location_map: ShardLocation[]; encKey: Buffer }>> {
   const meta = parseShardHeaderOnly(shardData);
   if (!meta.encrypted || !meta.kdf_salt) return null;
 
@@ -79,7 +79,7 @@ async function tryDecryptLocationMap(
   }
 
   // No password in pool worked — ask user for a new one
-  let newPassword: string | null = null;
+  let newPassword: Nullable<string> = null;
   try {
     newPassword = await io.askSecret(
       'Enter password for this version (or leave blank to skip):',
@@ -147,7 +147,7 @@ async function processVersion(
   version: number,
   entries: Array<{ shardIndex: number; provider: StorageProvider }>,
   ctx: ProcessVersionContext,
-): Promise<{ manifest: VersionManifest; consensusOk: boolean } | null> {
+): Promise<Nullable<{ manifest: VersionManifest; consensusOk: boolean }>> {
   const { vaultName, cacheDir, bootstrapVaultId, passwordPool, io } = ctx;
 
   // Download up to 2 shards from different providers for consensus
@@ -213,7 +213,7 @@ async function processVersion(
   }
 
   // Resolve location map (decrypt if needed)
-  let location_map: ShardLocation[] | null = null;
+  let location_map: Nullable<ShardLocation[]> = null;
   if (primaryMeta.encrypted) {
     const result = await tryDecryptLocationMap(
       primaryData.data,
@@ -250,7 +250,7 @@ async function processVersion(
     },
     encrypted: primaryMeta.encrypted,
     shards: manifestShards,
-    health: 'degraded',
+    health: VersionHealth.Degraded,
   };
   return { manifest, consensusOk };
 }
@@ -283,7 +283,7 @@ function reconstructConfig(
       algorithm: 'aes-256-gcm',
       kdf: 'argon2id',
     },
-    push_mode: 'new_version',
+    push_mode: PushMode.NewVersion,
     providers: providerConfigs,
   };
 }
@@ -377,7 +377,7 @@ export async function recover(
     latestVerified = Math.max(latestVerified, version);
     reportVersions.push({
       version,
-      health: 'degraded',
+      health: VersionHealth.Degraded,
       consensus: result.consensusOk,
     });
   }

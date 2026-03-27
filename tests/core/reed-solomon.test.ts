@@ -18,7 +18,7 @@ function makeData(size: number): Buffer {
 }
 
 /** Drops shard slots by index, replacing them with null. */
-function dropShards(shards: Buffer[], indices: number[]): (Buffer | null)[] {
+function dropShards(shards: Buffer[], indices: number[]): Nullable<Buffer>[] {
   return shards.map((s, i) => (indices.includes(i) ? null : s));
 }
 
