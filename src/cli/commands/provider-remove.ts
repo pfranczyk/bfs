@@ -1,8 +1,11 @@
+import fs from 'node:fs/promises';
+import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO } from '../../providers/provider.js';
-import { readConfig } from '../../vault/config.js';
+import type { ProviderConfig, VaultConfig } from '../../types/index.js';
+import { readConfig, writeConfig } from '../../vault/config.js';
 import { listVersions, removeProvider } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { promptWithRawMode } from '../prompt.js';
@@ -61,12 +64,19 @@ export function registerProviderRemove(providerCmd: Command): void {
               type: 'rawlist',
               name: 'chosen',
               message: t('provider_remove_prompt'),
-              choices: config.providers.map((p, i) => ({
-                name: `[${i}] ${p.id}  (${p.type || '?'})`,
-                value: p.id,
-              })),
+              choices: [
+                ...config.providers.map((p, i) => ({
+                  name: `[${i}] ${p.id}  (${p.type || '?'})`,
+                  value: p.id,
+                })),
+                { name: t('cancel'), value: '__cancel__' },
+              ],
             },
           ]);
+          if (chosen === '__cancel__') {
+            console.log(t('cancelled'));
+            return;
+          }
           providerId = chosen;
         }
 
@@ -234,14 +244,34 @@ export function registerProviderRemove(providerCmd: Command): void {
               error(t('provider_remove_target_required'));
               throw new CommandAbort();
             }
-            const otherProviders = config.providers.filter(
-              (p) => p.id !== providerId,
-            );
-            if (!otherProviders.some((p) => p.id === opts.target?.trim())) {
-              error(fmt('provider_remove_target_invalid', opts.target ?? ''));
-              throw new CommandAbort();
+
+            if (opts.newPath?.trim()) {
+              // New provider: --target is ID, --new-path is path
+              const newId = opts.target.trim();
+              if (config.providers.some((p) => p.id === newId)) {
+                error(fmt('provider_add_exists', newId));
+                throw new CommandAbort();
+              }
+              const parsed = parseNewPath(opts.newPath.trim());
+              const newType = opts.newType?.trim() ?? parsed.type ?? 'local';
+              const np: ProviderConfig = {
+                id: newId,
+                type: newType,
+                config: { path: parsed.path },
+              };
+              config.providers.push(np);
+              await writeConfig(rootDir, config);
+              targetProviderId = newId;
+            } else {
+              const otherProviders = config.providers.filter(
+                (p) => p.id !== providerId,
+              );
+              if (!otherProviders.some((p) => p.id === opts.target?.trim())) {
+                error(fmt('provider_remove_target_invalid', opts.target ?? ''));
+                throw new CommandAbort();
+              }
+              targetProviderId = opts.target.trim();
             }
-            targetProviderId = opts.target.trim();
           } else {
             const { scope } = await promptWithRawMode<{
               scope: 'all' | 'latest';
@@ -264,24 +294,35 @@ export function registerProviderRemove(providerCmd: Command): void {
             ]);
             rebuildScope = scope;
 
+            const NEW_LOC = '__new_location__';
             const otherProviders = config.providers
               .filter((p) => p.id !== providerId)
               .map((p) => p.id);
 
-            if (otherProviders.length === 0) {
-              error(t('provider_remove_no_other_providers'));
-              throw new CommandAbort();
-            }
+            const targetChoices: Array<
+              string | { name: string; value: string }
+            > = [
+              ...otherProviders,
+              {
+                name: t('provider_remove_rebuild_new_location'),
+                value: NEW_LOC,
+              },
+            ];
 
             const { targetId } = await promptWithRawMode<{ targetId: string }>([
               {
                 type: 'rawlist',
                 name: 'targetId',
                 message: t('provider_remove_target_prompt'),
-                choices: otherProviders,
+                choices: targetChoices,
               },
             ]);
-            targetProviderId = targetId;
+
+            if (targetId === NEW_LOC) {
+              targetProviderId = await promptNewProvider(config, rootDir);
+            } else {
+              targetProviderId = targetId;
+            }
           }
         } else if (strategy === 'remove') {
           if (isCi) {
@@ -336,9 +377,78 @@ export function registerProviderRemove(providerCmd: Command): void {
             success(fmt('provider_rebuild_success', providerId));
           }
         } catch (err) {
+          if (err instanceof AbortPromptError) throw err;
+          if (err instanceof ExitPromptError) throw err;
           error(err instanceof Error ? err.message : String(err));
           throw new CommandAbort();
         }
       },
     );
+}
+
+/**
+ * Prompts for new provider details (name, type, path), adds it to config,
+ * and returns the new provider's ID.
+ *
+ * @param config - Current vault config (mutated: new provider is pushed)
+ * @param rootDir - Vault root directory (for writing updated config)
+ * @returns The new provider's ID
+ */
+async function promptNewProvider(
+  config: VaultConfig,
+  rootDir: string,
+): Promise<string> {
+  const { newId } = await promptWithRawMode<{ newId: string }>([
+    {
+      type: 'input',
+      name: 'newId',
+      message: t('provider_add_name_prompt'),
+      validate: (v: string) => {
+        if (!v.trim()) return t('provider_add_name_required');
+        if (config.providers.some((p) => p.id === v.trim()))
+          return fmt('provider_add_exists', v);
+        return true;
+      },
+    },
+  ]);
+
+  const typeAns = await promptWithRawMode<{ type: string }>([
+    {
+      type: 'rawlist',
+      name: 'type',
+      message: t('provider_add_type_prompt'),
+      choices: ['local'],
+    },
+  ]);
+
+  let providerConfig: Record<string, unknown> = {};
+  if (typeAns.type === 'local') {
+    const { dirPath } = await promptWithRawMode<{ dirPath: string }>([
+      {
+        type: 'input',
+        name: 'dirPath',
+        message: t('provider_add_dir_prompt'),
+        validate: async (v: string) => {
+          if (!v.trim()) return t('path_required');
+          try {
+            const stat = await fs.stat(v.trim());
+            if (!stat.isDirectory()) return t('path_not_dir');
+            return true;
+          } catch {
+            return fmt('dir_not_exist', v);
+          }
+        },
+      },
+    ]);
+    providerConfig = { path: dirPath.trim() };
+  }
+
+  const np: ProviderConfig = {
+    id: newId.trim(),
+    type: typeAns.type,
+    config: providerConfig,
+  };
+  config.providers.push(np);
+  await writeConfig(rootDir, config);
+  return newId.trim();
 }

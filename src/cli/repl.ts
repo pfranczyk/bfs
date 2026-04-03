@@ -1,5 +1,5 @@
 import readline from 'node:readline';
-import { ExitPromptError } from '@inquirer/core';
+import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import chalk from 'chalk';
 import { dbg, stdinState } from '../debug.js';
 import { t } from '../i18n/index.js';
@@ -100,7 +100,18 @@ function printHelp(): void {
  */
 function handleReplError(err: unknown): void {
   if (err instanceof CommandAbort) return;
-  if (err instanceof ExitPromptError) {
+  if (err instanceof AbortPromptError || err instanceof ExitPromptError) {
+    console.log(chalk.dim(t('repl_cancelled')));
+    return;
+  }
+  // Fallback: check constructor name for Inquirer errors — the old inquirer
+  // compat layer (inquirer/dist/ui/prompt.js) can throw ExitPromptError from
+  // a different code path (process.kill SIGINT), and instanceof may fail.
+  if (
+    err instanceof Error &&
+    (err.constructor.name === 'AbortPromptError' ||
+      err.constructor.name === 'ExitPromptError')
+  ) {
     console.log(chalk.dim(t('repl_cancelled')));
     return;
   }
@@ -186,6 +197,12 @@ export async function startRepl(
       }
 
       const tokens = splitArgs(trimmed);
+
+      // Strip leading 'bfs' prefix — users naturally type "bfs push" in the REPL
+      if (tokens.length > 1 && tokens[0] === 'bfs') {
+        tokens.shift();
+      }
+
       dbg('dispatch:start', { cmd: tokens[0], ...stdinState() });
 
       // Detach readline's 'keypress' listener before dispatching so that
@@ -210,6 +227,13 @@ export async function startRepl(
       process.stdin.resume();
       dbg('stdin keypress detached', stdinState());
 
+      // Absorb OS-level SIGINT during command dispatch.  The old inquirer
+      // compat layer (inquirer/dist/ui/prompt.js) calls process.kill(pid, 'SIGINT')
+      // on Ctrl+C, which would otherwise close the REPL's readline (setting
+      // closed=true) and freeze the session.
+      const sigintGuard = () => {};
+      process.on('SIGINT', sigintGuard);
+
       let caughtErr: unknown;
       try {
         await runCommand(tokens);
@@ -221,6 +245,7 @@ export async function startRepl(
         });
       }
 
+      process.removeListener('SIGINT', sigintGuard);
       dbg('dispatch:done', { cmd: tokens[0], ...stdinState() });
 
       // Restore readline's 'keypress' listener and resume stdin.

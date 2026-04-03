@@ -1,3 +1,4 @@
+import { ExitPromptError } from '@inquirer/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VersionHealth } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
@@ -179,6 +180,31 @@ describe('recovery', () => {
     ]);
 
     expect(mockPrompt).not.toHaveBeenCalled();
+  });
+
+  // ─── Anulowanie ───────────────────────────────────────────────────────────
+
+  it('should cancel when __cancel__ selected in provider type prompt', async () => {
+    mockPrompt.mockResolvedValueOnce({ providerType: '__cancel__' } as never);
+
+    const result = await runCmd(['recovery']);
+
+    expect(result).toBe('ok');
+    expect(mockRecover).not.toHaveBeenCalled();
+    expect(
+      capture.logs.some(
+        (l) => l.includes('Cancelled') || l.includes('Anulowano'),
+      ),
+    ).toBe(true);
+  });
+
+  it('should propagate ExitPromptError on Ctrl+C during recovery prompt', async () => {
+    mockPrompt.mockRejectedValueOnce(new ExitPromptError() as never);
+
+    const result = await runCmd(['recovery']);
+
+    expect(result).toBe('cancelled');
+    expect(mockRecover).not.toHaveBeenCalled();
   });
 
   // ─── Błąd recover ────────────────────────────────────────────────────────

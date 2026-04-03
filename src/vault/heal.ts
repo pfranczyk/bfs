@@ -1,8 +1,9 @@
+import { Readable } from 'node:stream';
 import { deriveKey } from '../core/crypto.js';
 import { BfsError } from '../core/errors.js';
-import { hashBuffer } from '../core/hash.js';
+import { hashBuffer, streamToBuffer } from '../core/hash.js';
 import { rsRepair } from '../core/reed-solomon.js';
-import { buildShard, parseShardHeaderOnly } from '../core/shard-io.js';
+import { buildShard, parseShardHeaderFromStream } from '../core/shard-io.js';
 import { createProvider } from '../providers/provider.js';
 import type {
   ManifestShard,
@@ -71,10 +72,11 @@ async function downloadAvailableShards(
       const provider = createProvider(pc, io);
       await provider.authenticate();
       provider.setVaultName(config.vault_name);
-      const data = await provider.download({
+      const stream = await provider.download({
         provider_id: ms.provider_id,
         path: `shard_${ms.shard_index}.bfs.${version}`,
       });
+      const data = await streamToBuffer(stream);
       shardSlots[ms.shard_index] = extractShardPayload(data);
       shardDataMap.set(ms.shard_index, data);
     } catch {
@@ -101,6 +103,7 @@ async function extractShardMeta(
   formatVersion: number;
   vaultId: string;
   vaultName: string;
+  rsStripeSize: Nullable<number>;
 }> {
   let encKey: Buffer | undefined;
   let kdf_salt: Nullable<Buffer> = null;
@@ -109,14 +112,18 @@ async function extractShardMeta(
   let formatVersion = 1;
   let vaultId = '';
   let vaultName = '';
+  let rsStripeSize: Nullable<number> = null;
 
   for (const [, rawData] of shardDataMap) {
-    const meta = parseShardHeaderOnly(rawData);
+    const { header: meta } = await parseShardHeaderFromStream(
+      Readable.from(rawData),
+    );
     blobSize = meta.blob_size;
     blobHash = meta.blob_hash;
     formatVersion = meta.format_version;
     vaultId = meta.vault_id;
     vaultName = meta.vault_name;
+    rsStripeSize = meta.rs_stripe_size;
     if (meta.kdf_salt) {
       kdf_salt = meta.kdf_salt;
       if (manifest.encrypted && password) {
@@ -136,6 +143,7 @@ async function extractShardMeta(
     formatVersion,
     vaultId,
     vaultName,
+    rsStripeSize,
   };
 }
 
@@ -156,7 +164,11 @@ async function uploadRepairedShard(
   await targetProvider.authenticate();
   targetProvider.setVaultName(vaultName);
   const shardBuffer = buildShard(header, payload, encKey);
-  await targetProvider.upload(filename, shardBuffer);
+  await targetProvider.upload(
+    filename,
+    Readable.from(shardBuffer),
+    shardBuffer.length,
+  );
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -206,8 +218,11 @@ export async function updateLocationMaps(
       const ref: RemoteRef = { provider_id: ms.provider_id, path: filename };
 
       // Download existing shard to read its header metadata
-      const shardData = await provider.download(ref);
-      const meta = parseShardHeaderOnly(shardData);
+      const shardStream = await provider.download(ref);
+      const shardData = await streamToBuffer(shardStream);
+      const { header: meta } = await parseShardHeaderFromStream(
+        Readable.from(shardData),
+      );
 
       // Derive encryption key if needed
       let encKey: Buffer | undefined;
@@ -229,6 +244,7 @@ export async function updateLocationMaps(
         version: meta.version,
         encrypted: meta.encrypted,
         kdf_salt: meta.kdf_salt,
+        rs_stripe_size: meta.rs_stripe_size,
         map_length: 0,
         location_map: newLocationMap,
       };
@@ -380,6 +396,7 @@ export async function rebuildVersion(
     version,
     encrypted: manifest.encrypted,
     kdf_salt,
+    rs_stripe_size: shardMeta.rsStripeSize ?? null,
     map_length: 0,
     location_map: newLocationMap,
   };

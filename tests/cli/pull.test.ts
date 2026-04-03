@@ -190,6 +190,15 @@ describe('pull', () => {
     expect(warnMock).toHaveBeenCalledWith('Shard 2 unavailable — skipping');
   });
 
+  it('should pass cacheDir when --cache-dir flag given', async () => {
+    await runCmd(['pull', '--cache-dir', '/custom/cache']);
+
+    expect(mockPull).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ cacheDir: '/custom/cache' }),
+    );
+  });
+
   // ─── Odrzucenie usuniętych opcji ──────────────────────────────────────────
 
   it('should reject unknown --host option', async () => {

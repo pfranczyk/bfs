@@ -58,6 +58,7 @@ export const en: Strings = {
   global_settings_group: 'BFS Settings (global)',
   lang_set: 'Language set to: %s',
   no_config: 'No backup found in this directory. Run `bfs init` first.',
+  cancel: 'Cancel',
   cancelled: 'Cancelled.',
   required: 'Required',
   path_required: 'Path is required',
@@ -98,11 +99,28 @@ export const en: Strings = {
     'Invalid --push-mode: "%s". Allowed: new_version|overwrite|ask',
   init_provider_format_invalid:
     'Invalid --provider format: "%s". Expected: type:id:path (e.g. local:myusb:/mnt/usb)',
+  init_max_ram_prompt:
+    'RAM limit for encoding (MB, detected: %sMB, 4096MB is enough):',
+  init_opt_max_ram: 'RAM limit for encoding in MB (CI mode)',
   init_success: 'Backup "%s" is ready. Use `bfs push` to back up.',
 
   // ─── clear ────────────────────────────────────────────────────────────────
   cmd_clear_desc: 'Clear pending backup data cache',
   clear_done: 'Cache cleared.',
+
+  // ─── config ───────────────────────────────────────────────────────────────
+  cmd_config_desc: 'View or update backup settings',
+  config_current_settings: 'Current settings:',
+  config_updated: 'Settings updated.',
+  config_reset: 'Setting reset to default.',
+  config_reset_no_field:
+    'Specify --cache-dir or --temp-dir together with --reset.',
+  config_dir_hint:
+    'Update with `bfs config --%s <path>` or `bfs config --%s --reset`',
+  config_opt_cache_dir: 'Set cache directory (overrides .bfs/cache)',
+  config_opt_temp_dir: 'Set temporary files directory (overrides system temp)',
+  config_opt_max_ram: 'Set RAM limit for encoding (MB, 0 = auto)',
+  config_opt_reset: 'Reset setting to default value',
 
   // ─── push ─────────────────────────────────────────────────────────────────
   push_preparing: 'Preparing push…',
@@ -116,6 +134,9 @@ export const en: Strings = {
   push_opt_overwrite: 'Overwrite the current version',
   push_opt_password: 'Encryption password (skips interactive prompt)',
   push_opt_cache: 'Upload cached backup data from a previous interrupted push',
+  push_opt_max_ram: 'Override RAM limit for this push (MB)',
+  opt_temp_dir_desc: 'Directory for temporary files during push/pull',
+  opt_cache_dir_desc: 'Directory for cached backup data (overrides .bfs/cache)',
 
   // ─── pull ─────────────────────────────────────────────────────────────────
   pull_preparing: 'Preparing pull…',
@@ -214,6 +235,12 @@ export const en: Strings = {
   scheme_changed: 'Scheme changed: %s → %s/%s.',
   scheme_apply_push: 'Run `bfs push` to apply the new scheme.',
 
+  // ─── provider: local-fs ──────────────────────────────────────────────────
+  provider_local_path_not_exist_confirm: 'Path "%s" does not exist. Create it?',
+  provider_local_path_not_exist_error:
+    'Path "%s" does not exist and creation was refused.',
+  provider_local_path_not_writable: 'Path "%s" is not writable.',
+
   // ─── provider add ─────────────────────────────────────────────────────────
   provider_add_opt_ci: 'Non-interactive mode (CI/scripts): skip prompts',
   provider_add_opt_id: 'New provider ID (CI mode)',
@@ -281,6 +308,8 @@ export const en: Strings = {
   provider_remove_rebuild_latest: '[L]atest version only',
   provider_remove_no_other_providers:
     'No other providers available for rebuild.',
+  provider_remove_rebuild_new_location:
+    '[N]ew location — add a new provider for the rebuilt backup',
   provider_remove_target_prompt:
     'Which provider to upload the rebuilt shard to?',
   provider_remove_yes_required:
@@ -301,4 +330,48 @@ export const en: Strings = {
   provider_relocate_success: 'Provider "%s" relocated.',
   provider_rebuild_success:
     'Provider "%s" replaced. Run `bfs push` to update the scheme.',
+
+  // ─── vault operations ────────────────────────────────────────────────────
+  vault_download_shards: 'Downloading shards for version %s…',
+  vault_provider_not_found:
+    'Provider "%s" not found in config — skipping shard %s',
+  vault_download_shard_progress: 'Downloading shard %s/%s',
+  vault_provider_unreachable: 'Storage "%s" is not accessible — skipping.',
+  vault_file_missing_on_provider:
+    'Backup data missing on storage "%s" — skipping.',
+  vault_decoding_rs: 'Decoding Reed-Solomon…',
+  vault_ask_decrypt_password: 'Enter decryption password:',
+  vault_decrypting: 'Decrypting…',
+  vault_push_version_confirm:
+    'On disk: version %s. Latest: %s. Push will create version %s. Continue?',
+  vault_using_cached_blob: 'Using cached blob…',
+  vault_no_cached_blob_push: 'No cached blob found — running full pack…',
+  vault_push_skipped_confirm:
+    '%s file(s) could not be read:\n%s\nContinue without them?',
+  vault_ask_encrypt_password: 'Enter encryption password:',
+  vault_ask_confirm_password: 'Confirm password:',
+  vault_encrypting: 'Encrypting per shard…',
+  vault_password_overrides_config:
+    'Encryption enabled by --password (config has encryption disabled).',
+  vault_encoding_rs: 'Encoding with Reed-Solomon…',
+  vault_uploading_shards: 'Uploading shards…',
+  vault_upload_shard_progress: 'Uploading shard %s/%s',
+  vault_no_cached_blob_pull: 'No cached blob found — running full pull…',
+  vault_pull_overwrite_confirm:
+    'On disk: version %s. Restoring version %s will overwrite directory. Continue?',
+  vault_unpacking_files: 'Unpacking files…',
+  vault_pull_write_error_confirm:
+    '%s file(s) could not be written:\n%s\nFix permissions, then press Y to retry or N to cancel.',
+  vault_degraded_provider_unreachable:
+    'Pool degraded: one or more providers are unreachable. Use `bfs provider remove` to replace the provider, then `bfs push` to restore redundancy.',
+  vault_degraded_file_missing:
+    'Pool degraded: backup data was deleted from a healthy provider. Run `bfs push` to re-create the backup.',
+
+  // ─── recovery operations (vault layer) ──────────────────────────────────
+  recovery_ask_version_password:
+    'Enter password for this version (or leave blank to skip):',
+
+  // ─── bootstrap operations ────────────────────────────────────────────────
+  bootstrap_single_provider_warn:
+    'Only 1 provider available — cannot verify consensus. Data may be compromised. Proceeding anyway.',
 };

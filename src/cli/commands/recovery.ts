@@ -1,3 +1,4 @@
+import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import ora from 'ora';
@@ -71,9 +72,13 @@ export function registerRecovery(program: Command): void {
               type: 'rawlist',
               name: 'providerType',
               message: t('recovery_provider_type_prompt'),
-              choices: ['local', 'ftp', 'ssh'],
+              choices: ['local', { name: t('cancel'), value: '__cancel__' }],
             },
           ]);
+          if (providerType === '__cancel__') {
+            console.log(t('cancelled'));
+            return;
+          }
           opts.provider = providerType;
         }
         if (!opts.path) {
@@ -166,6 +171,8 @@ export function registerRecovery(program: Command): void {
           console.log();
           success(t('recovery_success'));
         } catch (err) {
+          if (err instanceof AbortPromptError) throw err;
+          if (err instanceof ExitPromptError) throw err;
           spinner.fail(t('recovery_failed'));
           error(err instanceof Error ? err.message : String(err));
           throw new CommandAbort();

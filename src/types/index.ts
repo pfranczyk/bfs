@@ -1,3 +1,5 @@
+import type { Readable } from 'node:stream';
+
 import type { SkippedFile } from '../core/errors.js';
 
 // ─── Enums ────────────────────────────────────────────────────
@@ -37,6 +39,12 @@ export interface VaultConfig {
   };
   push_mode: PushMode;
   providers: ProviderConfig[];
+  /** Overrides default .bfs/cache directory. Defaults to {rootDir}/.bfs/cache when null/absent. */
+  cache_dir?: string | null;
+  /** Overrides default os.tmpdir() for temporary files. Defaults to os.tmpdir() when null/absent. */
+  temp_dir?: string | null;
+  /** RAM limit for RS encoding (MB). null/undefined = auto (25% os.totalmem()). */
+  max_ram_mb?: Nullable<number>;
 }
 
 export interface ProviderConfig {
@@ -70,6 +78,10 @@ export interface VersionManifest {
   encrypted: boolean;
   shards: ManifestShard[]; // N+K wpisów
   health: VersionHealth; // push: "healthy" (po weryfikacji uploadu); recovery: "degraded" (przed verify)
+  // Pola streamingowego pipeline (FORMAT_VERSION=2 shards). Brak = stary format.
+  rs_striped?: boolean; // true = striped RS encoding (zawsze przy nowym push)
+  rs_stripe_size?: number; // rozmiar stripe w bajtach (tylko gdy rs_striped=true)
+  encrypted_per_shard?: boolean; // true = szyfrowanie per shard (zamiast per blob)
 }
 
 export interface ManifestShard {
@@ -150,6 +162,7 @@ export interface ShardHeader {
   version: number; // 4 bajty (uint32) — numer wersji snapshota
   encrypted: boolean; // 1 bajt
   kdf_salt: Nullable<Buffer>; // 16 bajtów jeśli encrypted=true, brak jeśli false
+  rs_stripe_size: Nullable<number>; // 4 bajty (uint32) — present when format_version >= 2; null for v1
   map_length: number; // 4 bajty (uint32)
   location_map: ShardLocation[]; // JSON (opcjonalnie AES-GCM encrypted)
 }
@@ -201,8 +214,22 @@ export interface StorageProvider {
 
   authenticate(): Promise<void>;
   setVaultName(name: string): void;
-  upload(shardFilename: string, data: Buffer): Promise<RemoteRef>;
-  download(ref: RemoteRef): Promise<Buffer>;
+  /**
+   * Przesyła shard na nośnik jako strumień.
+   * @param shardFilename nazwa pliku na nośniku
+   * @param data strumień danych sharda (nagłówek + payload + checksum)
+   * @param size całkowity rozmiar strumienia w bajtach (do Content-Length / pre-alokacji)
+   */
+  upload(
+    shardFilename: string,
+    data: Readable,
+    size: number,
+  ): Promise<RemoteRef>;
+  /**
+   * Pobiera shard z nośnika jako strumień.
+   * Caller odczytuje go porcjami (nagłówek, payload, checksum).
+   */
+  download(ref: RemoteRef): Promise<Readable>;
   delete(ref: RemoteRef): Promise<void>;
   // rename — używane w overwrite mode (push --overwrite):
   //   Upload nowego sharda jako .tmp → delete starego → rename .tmp na finalną nazwę.

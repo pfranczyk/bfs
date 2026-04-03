@@ -5,8 +5,11 @@
  * capture stdout/stderr via vi.spyOn(console, ...).
  */
 
+import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import { Command } from 'commander';
 import { vi } from 'vitest';
+import { registerClear } from '../../src/cli/commands/clear.js';
+import { registerConfig } from '../../src/cli/commands/config.js';
 import { registerInit } from '../../src/cli/commands/init.js';
 import { registerProviderAdd } from '../../src/cli/commands/provider-add.js';
 import { registerProviderList } from '../../src/cli/commands/provider-list.js';
@@ -34,6 +37,8 @@ export function buildTestProgram(): Command {
   program.name('bfs').allowUnknownOption(false);
 
   registerInit(program);
+  registerClear(program);
+  registerConfig(program);
   registerPush(program);
   registerPull(program);
   registerStatus(program);
@@ -58,17 +63,19 @@ export function buildTestProgram(): Command {
  * Runs a CLI command string and returns whether it threw CommandAbort.
  * Logs and errors are captured via spies — assert on them in tests.
  *
- * @returns 'abort' | 'ok' | 'commander' (for CommanderError e.g. help)
+ * @returns 'abort' | 'ok' | 'commander' | 'cancelled'
  */
 export async function runCmd(
   tokens: string[],
-): Promise<'abort' | 'ok' | 'commander'> {
+): Promise<'abort' | 'ok' | 'commander' | 'cancelled'> {
   const program = buildTestProgram();
   try {
     await program.parseAsync(['node', 'bfs', ...tokens]);
     return 'ok';
   } catch (err) {
     if (err instanceof CommandAbort) return 'abort';
+    if (err instanceof AbortPromptError || err instanceof ExitPromptError)
+      return 'cancelled';
     if (
       err instanceof Error &&
       'code' in err &&

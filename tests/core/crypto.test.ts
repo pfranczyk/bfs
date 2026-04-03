@@ -1,14 +1,19 @@
+import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import {
   decryptBlob,
   decryptBlobWithKey,
   decryptLocationMap,
+  decryptStream,
   deriveKey,
+  deriveShardNonce,
   encryptBlob,
   encryptLocationMap,
+  encryptStream,
   generateSalt,
 } from '../../src/core/crypto.js';
 import { DecryptionError } from '../../src/core/errors.js';
+import { streamToBuffer } from '../../src/core/hash.js';
 import type { ShardLocation } from '../../src/types/index.js';
 
 // Argon2id z parametrami produkcyjnymi (64 MiB) jest wolny — wyższy timeout.
@@ -253,5 +258,118 @@ describe('crypto', () => {
       },
       TIMEOUT,
     );
+  });
+
+  describe('deriveShardNonce', () => {
+    it('should return a 12-byte Buffer', () => {
+      const key = Buffer.alloc(32, 0x01);
+      const nonce = deriveShardNonce(key, 1, 0);
+      expect(nonce).toBeInstanceOf(Buffer);
+      expect(nonce.length).toBe(12);
+    });
+
+    it('should produce different nonces for different shard indices', () => {
+      const key = Buffer.alloc(32, 0x01);
+      const n0 = deriveShardNonce(key, 1, 0);
+      const n1 = deriveShardNonce(key, 1, 1);
+      expect(n0.equals(n1)).toBe(false);
+    });
+
+    it('should produce different nonces for different versions', () => {
+      const key = Buffer.alloc(32, 0x01);
+      const nA = deriveShardNonce(key, 1, 0);
+      const nB = deriveShardNonce(key, 2, 0);
+      expect(nA.equals(nB)).toBe(false);
+    });
+
+    it('should be deterministic — same inputs yield same nonce', () => {
+      const key = Buffer.alloc(32, 0xab);
+      const n1 = deriveShardNonce(key, 7, 3);
+      const n2 = deriveShardNonce(key, 7, 3);
+      expect(n1.equals(n2)).toBe(true);
+    });
+  });
+
+  describe('encryptStream / decryptStream', () => {
+    const TEST_KEY = Buffer.alloc(32, 0x42);
+    const TEST_NONCE = Buffer.alloc(12, 0x11);
+
+    it('should roundtrip arbitrary plaintext', async () => {
+      const plaintext = Buffer.from(
+        'Hello, streaming AES-256-GCM!'.repeat(100),
+      );
+
+      const encrypted = await streamToBuffer(
+        encryptStream(Readable.from(plaintext), TEST_KEY, TEST_NONCE),
+      );
+      const decrypted = await streamToBuffer(
+        decryptStream(Readable.from(encrypted), TEST_KEY, TEST_NONCE),
+      );
+
+      expect(decrypted).toEqual(plaintext);
+    });
+
+    it('should roundtrip empty plaintext', async () => {
+      const plaintext = Buffer.alloc(0);
+
+      const encrypted = await streamToBuffer(
+        encryptStream(Readable.from(plaintext), TEST_KEY, TEST_NONCE),
+      );
+      const decrypted = await streamToBuffer(
+        decryptStream(Readable.from(encrypted), TEST_KEY, TEST_NONCE),
+      );
+
+      expect(decrypted).toEqual(plaintext);
+    });
+
+    it('should produce ciphertext longer than plaintext (auth tag appended)', async () => {
+      const plaintext = Buffer.from('test data');
+      const encrypted = await streamToBuffer(
+        encryptStream(Readable.from(plaintext), TEST_KEY, TEST_NONCE),
+      );
+      // Output = ciphertext (same length as plaintext) + 16B tag
+      expect(encrypted.length).toBe(plaintext.length + 16);
+    });
+
+    it('should throw DecryptionError when auth tag is tampered', async () => {
+      const plaintext = Buffer.from('sensitive data');
+      const encrypted = await streamToBuffer(
+        encryptStream(Readable.from(plaintext), TEST_KEY, TEST_NONCE),
+      );
+
+      // Corrupt the auth tag (last 16 bytes)
+      const tampered = Buffer.from(encrypted);
+      tampered[tampered.length - 1] ^= 0xff;
+
+      await expect(
+        streamToBuffer(
+          decryptStream(Readable.from(tampered), TEST_KEY, TEST_NONCE),
+        ),
+      ).rejects.toThrow(DecryptionError);
+    });
+
+    it('should throw DecryptionError when stream is too short (missing tag)', async () => {
+      const tooShort = Buffer.alloc(10); // less than 16-byte tag
+
+      await expect(
+        streamToBuffer(
+          decryptStream(Readable.from(tooShort), TEST_KEY, TEST_NONCE),
+        ),
+      ).rejects.toThrow(DecryptionError);
+    });
+
+    it('should throw DecryptionError when wrong key is used', async () => {
+      const plaintext = Buffer.from('secret data');
+      const encrypted = await streamToBuffer(
+        encryptStream(Readable.from(plaintext), TEST_KEY, TEST_NONCE),
+      );
+
+      const wrongKey = Buffer.alloc(32, 0x99);
+      await expect(
+        streamToBuffer(
+          decryptStream(Readable.from(encrypted), wrongKey, TEST_NONCE),
+        ),
+      ).rejects.toThrow(DecryptionError);
+    });
   });
 });

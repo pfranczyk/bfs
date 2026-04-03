@@ -1,12 +1,16 @@
+import { createReadStream, createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { deriveKey } from '../core/crypto.js';
 import { BfsError } from '../core/errors.js';
-import { parseShard, parseShardHeaderOnly } from '../core/shard-io.js';
+import { parseShardHeaderFromStream } from '../core/shard-io.js';
+import { t } from '../i18n/index.js';
 import type {
   ManifestShard,
   ProviderConfig,
   ProviderIO,
+  ShardHeader,
   ShardLocation,
   StorageProvider,
   VaultConfig,
@@ -34,6 +38,8 @@ export interface RecoveryOptions {
   io: ProviderIO;
   /** Starting password for encrypted vaults (added to the password pool) */
   password?: string;
+  /** Overrides cache directory for recovered shards. Defaults to {rootDir}/.bfs/cache. */
+  cacheDir?: string;
 }
 
 export interface RecoveryReport {
@@ -59,20 +65,23 @@ interface ProcessVersionContext {
 
 /** Attempts to decrypt a location map from a shard using the provided password pool (MRU order). */
 async function tryDecryptLocationMap(
-  shardData: Buffer,
+  header: ShardHeader,
+  filePath: string,
   passwordPool: string[],
   io: ProviderIO,
 ): Promise<Nullable<{ location_map: ShardLocation[]; encKey: Buffer }>> {
-  const meta = parseShardHeaderOnly(shardData);
-  if (!meta.encrypted || !meta.kdf_salt) return null;
+  if (!header.encrypted || !header.kdf_salt) return null;
 
   for (let i = passwordPool.length - 1; i >= 0; i--) {
     const pwd = passwordPool[i];
     if (pwd === undefined) continue;
     try {
-      const key = await deriveKey(pwd, meta.kdf_salt);
-      const { header } = parseShard(shardData, key);
-      return { location_map: header.location_map, encKey: key };
+      const key = await deriveKey(pwd, header.kdf_salt);
+      const fs1 = createReadStream(filePath);
+      const { header: h1, payloadStream: ps1 } =
+        await parseShardHeaderFromStream(fs1, key);
+      ps1.on('error', () => {}).destroy();
+      return { location_map: h1.location_map, encKey: key };
     } catch {
       // wrong password — try next
     }
@@ -81,19 +90,22 @@ async function tryDecryptLocationMap(
   // No password in pool worked — ask user for a new one
   let newPassword: Nullable<string> = null;
   try {
-    newPassword = await io.askSecret(
-      'Enter password for this version (or leave blank to skip):',
-    );
+    newPassword = await io.askSecret(t('recovery_ask_version_password'));
   } catch {
     return null;
   }
   if (!newPassword) return null;
 
   try {
-    const key = await deriveKey(newPassword, meta.kdf_salt);
-    const { header } = parseShard(shardData, key);
+    const key = await deriveKey(newPassword, header.kdf_salt);
+    const fs2 = createReadStream(filePath);
+    const { header: h2, payloadStream: ps2 } = await parseShardHeaderFromStream(
+      fs2,
+      key,
+    );
+    ps2.on('error', () => {}).destroy();
     passwordPool.push(newPassword); // add to pool for future versions
-    return { location_map: header.location_map, encKey: key };
+    return { location_map: h2.location_map, encKey: key };
   } catch {
     return null;
   }
@@ -150,19 +162,36 @@ async function processVersion(
 ): Promise<Nullable<{ manifest: VersionManifest; consensusOk: boolean }>> {
   const { vaultName, cacheDir, bootstrapVaultId, passwordPool, io } = ctx;
 
-  // Download up to 2 shards from different providers for consensus
-  const shardDataList: Array<{ data: Buffer; providerId: string }> = [];
+  // Download up to 2 shards from different providers for consensus.
+  // Each shard streamed to cache file; header parsed from full file stream.
+  const shardDataList: Array<{
+    header: ShardHeader;
+    filePath: string;
+    providerId: string;
+  }> = [];
   for (const entry of entries) {
     if (shardDataList.length >= 2) break;
     try {
       const filename = `shard_${entry.shardIndex}.bfs.${version}`;
       entry.provider.setVaultName(vaultName);
-      const data = await entry.provider.download({
+      const stream = await entry.provider.download({
         provider_id: entry.provider.id,
         path: filename,
       });
-      await fs.writeFile(path.join(cacheDir, filename), data).catch(() => {});
-      shardDataList.push({ data, providerId: entry.provider.id });
+      // Stream shard directly to cache file — no full-shard buffering
+      const cachedPath = path.join(cacheDir, filename);
+      await pipeline(stream, createWriteStream(cachedPath));
+
+      // Parse header from full file stream; destroy payload to avoid background SHA-256 read
+      const fileStream = createReadStream(cachedPath);
+      const { header: shardHeader, payloadStream } =
+        await parseShardHeaderFromStream(fileStream);
+      payloadStream.on('error', () => {}).destroy();
+      shardDataList.push({
+        header: shardHeader,
+        filePath: cachedPath,
+        providerId: entry.provider.id,
+      });
     } catch {
       /* skip */
     }
@@ -171,7 +200,7 @@ async function processVersion(
 
   const primaryData = shardDataList[0];
   if (!primaryData) return null;
-  const primaryMeta = parseShardHeaderOnly(primaryData.data);
+  const primaryMeta = primaryData.header;
 
   if (primaryMeta.vault_id !== bootstrapVaultId) {
     io.warn(`Version ${version}: vault_id mismatch — skipping`);
@@ -193,7 +222,7 @@ async function processVersion(
   // Consensus check (if we have 2 shards from different providers)
   let consensusOk = true;
   if (shardDataList.length >= 2) {
-    const secondaryMeta = parseShardHeaderOnly(shardDataList[1]?.data);
+    const secondaryMeta = shardDataList[1]?.header ?? primaryMeta;
     const mismatch: string[] = [];
     if (secondaryMeta.vault_id !== primaryMeta.vault_id)
       mismatch.push('vault_id');
@@ -216,14 +245,14 @@ async function processVersion(
   let location_map: Nullable<ShardLocation[]> = null;
   if (primaryMeta.encrypted) {
     const result = await tryDecryptLocationMap(
-      primaryData.data,
+      primaryData.header,
+      primaryData.filePath,
       passwordPool,
       io,
     );
     if (result) location_map = result.location_map;
   } else {
-    const { header } = parseShard(primaryData.data);
-    location_map = header.location_map;
+    location_map = primaryData.header.location_map;
   }
   if (!location_map) {
     io.warn(`Version ${version}: could not decrypt location map — skipping`);
@@ -252,6 +281,16 @@ async function processVersion(
     shards: manifestShards,
     health: VersionHealth.Degraded,
   };
+  // Detect FORMAT_VERSION >= 2 (always rs_striped + per-shard encryption).
+  // These flags are NOT stored in ShardHeader — they live only in VersionManifest.
+  // format_version >= 2 unambiguously identifies the streaming push pipeline.
+  if (primaryMeta.format_version >= 2) {
+    manifest.rs_striped = true;
+    if (primaryMeta.rs_stripe_size !== null) {
+      manifest.rs_stripe_size = primaryMeta.rs_stripe_size;
+    }
+    if (primaryMeta.encrypted) manifest.encrypted_per_shard = true;
+  }
   return { manifest, consensusOk };
 }
 

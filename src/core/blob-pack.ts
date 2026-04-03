@@ -1,8 +1,11 @@
+import { createHash, type Hash } from 'node:crypto';
+import type { FileHandle } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+
 import type { FileEntry, IgnoreFilter } from '../types/index.js';
 import type { SkippedFile } from './errors.js';
-import { hashBuffer } from './hash.js';
+import { hashBuffer, hashStream } from './hash.js';
 
 // BFS Blob header: 70 bytes
 // 0x00  4  Magic: "BFS\0"
@@ -187,4 +190,205 @@ export async function packBlob(
   // 9. Append SHA-256 checksum (32 bytes)
   const checksum = Buffer.from(hashBuffer(blobBody), 'hex');
   return { blob: Buffer.concat([blobBody, checksum]), skipped };
+}
+
+/**
+ * Estimates the total byte size of a BFS blob for the given directory.
+ * Scans recursively and stats each file — does NOT read file contents.
+ * Used to decide between RAM path (packBlob) and disk path (packBlobToFile).
+ * @returns Estimated blob size in bytes (exact: based on paths + stat sizes)
+ */
+export async function estimateBlobSize(
+  rootDir: string,
+  ignoreFilter: IgnoreFilter,
+): Promise<number> {
+  const metas = await scanDir(rootDir, ignoreFilter);
+  let total = HEADER_SIZE + 32; // header + trailing SHA-256 checksum
+  for (const meta of metas) {
+    const absPath = path.join(rootDir, meta.relativePath);
+    try {
+      const stat = await fs.stat(absPath);
+      const pathLen = Buffer.byteLength(meta.relativePath, 'utf8');
+      // File table entry: 2 (path_len) + path bytes + 8 (size) + 8 (offset) + 32 (hash) + 4 (mode) + 8 (mtime)
+      total += 2 + pathLen + 60;
+      total += stat.size;
+    } catch {
+      // Unreadable files are skipped — they won't appear in the blob
+    }
+  }
+  return total;
+}
+
+/**
+ * Packs a directory into a BFS blob written directly to a file on disk.
+ * Unlike packBlob(), the blob is never fully loaded into RAM: files are read twice
+ * (hash pass, then write pass), one chunk at a time.
+ * Peak RAM: approximately one read-chunk per file (4 MiB).
+ * @param rootDir      - Directory to pack
+ * @param outputPath   - Destination file (e.g. .bfs/cache/push.blob.pending)
+ * @param ignoreFilter - Filter: returns true = ignore path
+ * @param vaultId      - Optional 16-byte vault UUID (defaults to zeros)
+ * @returns blobSize in bytes, fileCount of included files, and any skipped entries
+ */
+export async function packBlobToFile(
+  rootDir: string,
+  outputPath: string,
+  ignoreFilter: IgnoreFilter,
+  vaultId?: Buffer,
+): Promise<{
+  blobSize: number;
+  fileCount: number;
+  totalSize: number;
+  skipped: SkippedFile[];
+}> {
+  // ── Pass 1: scan + stat + compute per-file SHA-256 hashes ──────────────
+  const metas = await scanDir(rootDir, ignoreFilter);
+  metas.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+
+  const skipped: SkippedFile[] = [];
+  const entries: Array<{
+    relativePath: string;
+    size: bigint;
+    mode: number;
+    modifiedAt: bigint;
+    hashHex: string;
+  }> = [];
+
+  for (const meta of metas) {
+    const absPath = path.join(rootDir, meta.relativePath);
+    try {
+      const [stat, hashHex] = await Promise.all([
+        fs.stat(absPath),
+        _hashFileByStream(absPath),
+      ]);
+      entries.push({
+        relativePath: meta.relativePath,
+        size: BigInt(stat.size),
+        mode: stat.mode,
+        modifiedAt: BigInt(Math.round(stat.mtimeMs)),
+        hashHex,
+      });
+    } catch (e: unknown) {
+      skipped.push({
+        path: meta.relativePath,
+        reason: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  // ── Build file table (all metadata now available) ──────────────────────
+  const fileTableParts: Buffer[] = [];
+  let currentDataOffset = 0n;
+  for (const entry of entries) {
+    const hashBytes = Buffer.from(entry.hashHex, 'hex');
+    const fe: FileEntry = {
+      path: entry.relativePath,
+      size: entry.size,
+      data_offset: currentDataOffset,
+      hash: entry.hashHex,
+      mode: entry.mode,
+      modified_at: entry.modifiedAt,
+    };
+    fileTableParts.push(buildFileTableEntry(fe, hashBytes));
+    currentDataOffset += entry.size;
+  }
+  const fileTable =
+    fileTableParts.length > 0 ? Buffer.concat(fileTableParts) : Buffer.alloc(0);
+
+  const fileTableOffset = BigInt(HEADER_SIZE);
+  const dataSectionOffset = fileTableOffset + BigInt(fileTable.length);
+  const dataSectionLength = currentDataOffset;
+
+  // ── Build header ───────────────────────────────────────────────────────
+  const header = Buffer.alloc(HEADER_SIZE);
+  let pos = 0;
+  header.write('BFS', pos, 'ascii');
+  pos += 3;
+  header.writeUInt8(0, pos);
+  pos += 1;
+  header.writeUInt16LE(1, pos);
+  pos += 2;
+  const vaultIdBuf = vaultId ?? Buffer.alloc(16);
+  vaultIdBuf.copy(header, pos);
+  pos += 16;
+  header.writeUInt32LE(0, pos);
+  pos += 4;
+  header.writeBigUInt64LE(BigInt(Date.now()), pos);
+  pos += 8;
+  header.writeUInt32LE(entries.length, pos);
+  pos += 4;
+  header.writeBigUInt64LE(fileTableOffset, pos);
+  pos += 8;
+  header.writeBigUInt64LE(BigInt(fileTable.length), pos);
+  pos += 8;
+  header.writeBigUInt64LE(dataSectionOffset, pos);
+  pos += 8;
+  header.writeBigUInt64LE(dataSectionLength, pos);
+  pos += 8;
+
+  // ── Pass 2: write header + file table + data section + checksum ────────
+  const hasher = createHash('sha256');
+  const outputHandle = await fs.open(outputPath, 'w');
+  try {
+    await _writeAndHash(outputHandle, hasher, header);
+    await _writeAndHash(outputHandle, hasher, fileTable);
+    for (const entry of entries) {
+      const absPath = path.join(rootDir, entry.relativePath);
+      await _streamFileToHandle(absPath, outputHandle, hasher);
+    }
+    const checksum = hasher.digest();
+    await outputHandle.write(checksum);
+  } finally {
+    await outputHandle.close();
+  }
+
+  const blobSize =
+    HEADER_SIZE + fileTable.length + Number(dataSectionLength) + 32;
+  return {
+    blobSize,
+    fileCount: entries.length,
+    totalSize: Number(dataSectionLength),
+    skipped,
+  };
+}
+
+// ─── Private helpers for packBlobToFile ───────────────────────────────────
+
+/** Hashes a file by streaming it through SHA-256 without loading it fully into RAM. */
+async function _hashFileByStream(absPath: string): Promise<string> {
+  const handle = await fs.open(absPath, 'r');
+  try {
+    return await hashStream(handle.createReadStream());
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Writes a buffer to a file handle and updates the running SHA-256 hasher. */
+async function _writeAndHash(
+  handle: FileHandle,
+  hasher: Hash,
+  data: Buffer,
+): Promise<void> {
+  await handle.write(data);
+  hasher.update(data);
+}
+
+/** Streams a source file to an output handle while updating the running hasher. */
+async function _streamFileToHandle(
+  absPath: string,
+  outHandle: FileHandle,
+  hasher: Hash,
+): Promise<void> {
+  const inHandle = await fs.open(absPath, 'r');
+  try {
+    for await (const chunk of inHandle.createReadStream()) {
+      const buf = Buffer.isBuffer(chunk)
+        ? chunk
+        : Buffer.from(chunk as Uint8Array);
+      await _writeAndHash(outHandle, hasher, buf);
+    }
+  } finally {
+    await inHandle.close();
+  }
 }

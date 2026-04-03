@@ -725,3 +725,67 @@ describe('Scenariusz 9: full disaster recovery', () => {
     expect(state.latest_version).toBe(3);
   });
 });
+
+// ─── Scenariusz 8: --password override przy encryption.enabled=false ────────
+
+describe('Scenariusz 8: --password override przy encryption.enabled=false', () => {
+  const PASSWORD = 'override-pass-456';
+  let root: string;
+  let pdirs: string[];
+
+  beforeEach(async () => {
+    root = await tmp();
+    pdirs = [await tmp(), await tmp(), await tmp()]; // 2/1
+  });
+
+  afterEach(async () => {
+    for (const d of [root, ...pdirs])
+      await fs.rm(d, { recursive: true, force: true });
+  });
+
+  it('should encrypt when --password provided despite config encryption disabled', async () => {
+    await init(root, {
+      vault_name: 'pw-override',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    await createTestFiles(root);
+    await push(root, { io: mockIO(), password: PASSWORD });
+
+    const manifests = await listManifests(root);
+    expect(manifests).toHaveLength(1);
+    const manifest = await readManifest(root, 1);
+    expect(manifest).not.toBeNull();
+    expect(manifest?.encrypted).toBe(true);
+    expect(manifest?.encrypted_per_shard).toBe(true);
+  });
+
+  it('should roundtrip correctly: push --password (enc disabled) → pull --password', async () => {
+    await init(root, {
+      vault_name: 'pw-override',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    const originalHashes = await createTestFiles(root);
+    await push(root, { io: mockIO(), password: PASSWORD });
+
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
+        recursive: true,
+      });
+      await pull(dest, { io: mockIO(), force: true, password: PASSWORD });
+      await assertFilesMatch(dest, originalHashes);
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+});

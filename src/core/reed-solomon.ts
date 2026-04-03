@@ -1,5 +1,12 @@
+import type { Hash } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import type { Readable } from 'node:stream';
+import { PassThrough } from 'node:stream';
+
 import type { ReedSolomonErasure } from '@subspace/reed-solomon-erasure.wasm';
 import { BfsError } from './errors.js';
 
@@ -207,6 +214,142 @@ export function rsRepair(
   return repaired;
 }
 
+// ─── Striped RS (FORMAT_VERSION=2 pipeline) ────────────────────────────────
+
+/** Result of striped RS encoding with inline SHA-256 hashing. */
+export interface RsEncodeStripedResult {
+  /** SHA-256 hex hashes for N data shards. */
+  dataShardHashes: string[];
+  /** SHA-256 hex hashes for K parity shards. */
+  parityShardHashes: string[];
+}
+
+/**
+ * Encodes a blob stream into K parity shard files using striped Reed-Solomon,
+ * computing SHA-256 hashes for all N+K shards inline (no extra I/O passes).
+ * Data shards are slices of the original blob — not written by this function.
+ * Parity shards are written stripe-by-stripe to `parityPaths` temp files.
+ * Peak RAM: (N+K) × stripeSize bytes (e.g. 192 MiB for N=2, K=1, stripe=64 MiB).
+ *
+ * @param source      - Readable stream of the full blob
+ * @param parityPaths - K output file paths for parity shards
+ * @param N           - number of data shards
+ * @param K           - number of parity shards
+ * @param stripeSize  - bytes per shard per stripe (e.g. 64 MiB)
+ * @returns SHA-256 hashes for all N data + K parity shards
+ */
+export async function rsEncodeStriped(
+  source: Readable,
+  parityPaths: string[],
+  N: number,
+  K: number,
+  stripeSize: number,
+): Promise<RsEncodeStripedResult> {
+  validateParams(N, K);
+  if (parityPaths.length !== K) {
+    throw new BfsError(
+      `parityPaths must have K=${K} entries, got ${parityPaths.length}`,
+    );
+  }
+  const flat = new Uint8Array((N + K) * stripeSize); // reused per stripe
+  const inputBlock = Buffer.alloc(N * stripeSize); // preallocated input buffer
+  let inputFilled = 0;
+
+  // N+K hash contexts — mutation OK for performance (streaming hash)
+  const hashers: Hash[] = Array.from({ length: N + K }, () =>
+    createHash('sha256'),
+  );
+
+  const parityHandles = await Promise.all(parityPaths.map((p) => open(p, 'w')));
+  try {
+    for await (const rawChunk of source) {
+      const chunk = Buffer.isBuffer(rawChunk)
+        ? rawChunk
+        : Buffer.from(rawChunk as Uint8Array);
+      let off = 0;
+      while (off < chunk.length) {
+        const space = inputBlock.length - inputFilled;
+        const toCopy = Math.min(space, chunk.length - off);
+        chunk.copy(inputBlock, inputFilled, off, off + toCopy);
+        inputFilled += toCopy;
+        off += toCopy;
+        if (inputFilled === inputBlock.length) {
+          await _encodeStripeWithHash({
+            inputBlock,
+            flat,
+            N,
+            K,
+            stripeSize,
+            parityHandles,
+            hashers,
+          });
+          inputFilled = 0;
+        }
+      }
+    }
+    if (inputFilled > 0) {
+      // Zero-pad the last partial stripe before encoding
+      inputBlock.fill(0, inputFilled);
+      await _encodeStripeWithHash({
+        inputBlock,
+        flat,
+        N,
+        K,
+        stripeSize,
+        parityHandles,
+        hashers,
+      });
+    }
+  } finally {
+    await Promise.all(parityHandles.map((h) => h.close()));
+  }
+
+  return {
+    dataShardHashes: hashers.slice(0, N).map((h) => h.digest('hex')),
+    parityShardHashes: hashers.slice(N).map((h) => h.digest('hex')),
+  };
+}
+
+/**
+ * Decodes a blob from N+K striped shard streams.
+ * Missing shards (null) are recovered by Reed-Solomon reconstruction.
+ * Returns a Readable of the reconstructed blob, trimmed to `blobSize`.
+ *
+ * @param shardStreams - N+K decrypted shard payload streams (null = missing)
+ * @param N           - number of data shards
+ * @param K           - number of parity shards
+ * @param stripeSize  - bytes per shard per stripe (must match encode)
+ * @param blobSize    - exact blob size before RS encode (for padding removal)
+ * @returns Readable stream of the reconstructed blob
+ */
+export function rsDecodeStriped(
+  shardStreams: Nullable<Readable>[],
+  N: number,
+  K: number,
+  stripeSize: number,
+  blobSize: number,
+  debugLog?: (msg: string) => void,
+): Readable {
+  validateParams(N, K);
+  const totalShards = N + K;
+  const shardSize = calcShardPayloadSize(blobSize, N);
+  const numStripes = Math.ceil(shardSize / stripeSize);
+  const output = new PassThrough();
+
+  void _runStripedDecode(
+    shardStreams,
+    N,
+    K,
+    totalShards,
+    stripeSize,
+    numStripes,
+    blobSize,
+    output,
+    debugLog,
+  );
+  return output;
+}
+
 // ─── Internal helper ───────────────────────────────────────────────────────
 
 /**
@@ -222,4 +365,186 @@ function buildFlat(shards: Nullable<Buffer>[], shardSize: number): Uint8Array {
     }
   }
   return flat;
+}
+
+interface EncodeStripeCtx {
+  inputBlock: Buffer;
+  flat: Uint8Array;
+  N: number;
+  K: number;
+  stripeSize: number;
+  parityHandles: FileHandle[];
+  hashers: Hash[];
+}
+
+/** Encodes one stripe: copies input into flat, RS-encodes, hashes, writes K parity slices. */
+async function _encodeStripeWithHash(ctx: EncodeStripeCtx): Promise<void> {
+  const { inputBlock, flat, N, K, stripeSize, parityHandles, hashers } = ctx;
+  // Copy data into flat; zero parity portion before encode
+  flat.set(
+    new Uint8Array(inputBlock.buffer, inputBlock.byteOffset, N * stripeSize),
+    0,
+  );
+  flat.fill(0, N * stripeSize); // zero parity region
+  const rs = newRs();
+  const result = rs.encode(flat, N, K);
+  if (result !== 0) {
+    throw new BfsError(`Reed-Solomon stripe encode failed with code ${result}`);
+  }
+
+  // Feed data shard slices to hashers (from inputBlock — original data incl. zero-padding)
+  for (let i = 0; i < N; i++) {
+    hashers[i].update(
+      Buffer.from(
+        inputBlock.buffer,
+        inputBlock.byteOffset + i * stripeSize,
+        stripeSize,
+      ),
+    );
+  }
+
+  // Write parity and feed parity shard slices to hashers
+  for (let j = 0; j < K; j++) {
+    const paritySlice = Buffer.from(
+      flat.buffer,
+      flat.byteOffset + (N + j) * stripeSize,
+      stripeSize,
+    );
+    await parityHandles[j].write(paritySlice);
+    hashers[N + j].update(paritySlice);
+  }
+}
+
+/**
+ * Async driver for rsDecodeStriped.
+ * Runs in background; errors are forwarded to the output PassThrough.
+ */
+async function _runStripedDecode(
+  shardStreams: Nullable<Readable>[],
+  N: number,
+  K: number,
+  totalShards: number,
+  stripeSize: number,
+  numStripes: number,
+  blobSize: number,
+  output: PassThrough,
+  debugLog: ((msg: string) => void) | undefined,
+): Promise<void> {
+  const readers = shardStreams.map((s) =>
+    s !== null ? new _ShardReader(s) : null,
+  );
+  const flat = new Uint8Array(totalShards * stripeSize);
+  let bytesEmitted = 0;
+
+  if (debugLog) {
+    const readerInfo = readers
+      .map((r, i) => `[${i}]=${r !== null ? 'active' : 'null'}`)
+      .join(' ');
+    debugLog(
+      `_runStripedDecode: blobSize=${blobSize} N=${N} K=${K}` +
+        ` stripeSize=${stripeSize} numStripes=${numStripes} readers: ${readerInfo}`,
+    );
+  }
+
+  try {
+    for (let stripe = 0; stripe < numStripes; stripe++) {
+      flat.fill(0);
+      const available: boolean[] = [];
+      const gotValues: number[] = [];
+      for (let i = 0; i < totalShards; i++) {
+        const reader = readers[i];
+        if (reader !== null) {
+          const got = await reader.readInto(flat, i * stripeSize, stripeSize);
+          gotValues.push(got);
+          // got=0 means shard returned no data — always mark unavailable so RS
+          // can reconstruct. The old `|| stripe < numStripes - 1` masked this
+          // on non-last stripes, causing silent data corruption (zeros).
+          available.push(got > 0);
+        } else {
+          gotValues.push(-1);
+          available.push(false);
+        }
+      }
+      const present = available.filter(Boolean).length;
+      // Log last 3 stripes, any stripe with a missing/empty reader, or any
+      // stripe where a shard returned 0 bytes (helps diagnose stream issues)
+      const anyZero = gotValues.some((g) => g === 0);
+      if (
+        debugLog &&
+        (stripe >= numStripes - 3 || present < totalShards || anyZero)
+      ) {
+        const isLast = stripe === numStripes - 1;
+        debugLog(
+          `stripe ${stripe}/${numStripes - 1}${isLast ? ' (LAST)' : ''}:` +
+            ` got=[${gotValues.join(',')}]` +
+            ` avail=[${available.map((a) => (a ? 'T' : 'F')).join(',')}]` +
+            ` present=${present}/${totalShards}`,
+        );
+      }
+      const anyMissing = available.some((a) => !a);
+      if (anyMissing) {
+        if (present < N)
+          throw new BfsError(
+            `Not enough shards for stripe ${stripe}: need ${N}, got ${present}`,
+          );
+        const rs = newRs();
+        const result = rs.reconstruct(flat, N, K, available);
+        if (result !== 0)
+          throw new BfsError(`RS stripe reconstruct failed: code ${result}`);
+      }
+      const remaining = blobSize - bytesEmitted;
+      const toEmit = Math.min(N * stripeSize, remaining);
+      if (toEmit > 0) {
+        output.push(Buffer.from(flat.subarray(0, toEmit)));
+        bytesEmitted += toEmit;
+      }
+    }
+    output.push(null);
+  } catch (err) {
+    output.destroy(err instanceof Error ? err : new BfsError(String(err)));
+  }
+}
+
+/** Buffered reader for a Readable stream — allows reading exactly N bytes per call. */
+class _ShardReader {
+  private readonly iter: AsyncIterator<Buffer | Uint8Array>;
+  private leftover: Buffer = Buffer.alloc(0);
+
+  constructor(stream: Readable) {
+    this.iter = stream[Symbol.asyncIterator]() as AsyncIterator<
+      Buffer | Uint8Array
+    >;
+  }
+
+  /**
+   * Reads up to `n` bytes into `outBuf` at `outOffset`.
+   * @returns number of bytes actually read (< n only at end of stream)
+   */
+  async readInto(
+    outBuf: Uint8Array,
+    outOffset: number,
+    n: number,
+  ): Promise<number> {
+    let filled = 0;
+    if (this.leftover.length > 0) {
+      const take = Math.min(this.leftover.length, n);
+      outBuf.set(this.leftover.subarray(0, take), outOffset);
+      filled += take;
+      this.leftover = this.leftover.subarray(take);
+    }
+    while (filled < n) {
+      const { done, value } = await this.iter.next();
+      if (done) break;
+      const chunk = Buffer.isBuffer(value)
+        ? value
+        : Buffer.from(value as Uint8Array);
+      const take = Math.min(chunk.length, n - filled);
+      chunk.copy(outBuf, outOffset + filled, 0, take);
+      filled += take;
+      if (take < chunk.length) {
+        this.leftover = Buffer.from(chunk.subarray(take));
+      }
+    }
+    return filled;
+  }
 }

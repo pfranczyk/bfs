@@ -1,9 +1,14 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ProviderError } from '../../src/core/errors.js';
-import { buildShard, parseShard } from '../../src/core/shard-io.js';
+import { streamToBuffer } from '../../src/core/hash.js';
+import {
+  buildShard,
+  parseShardHeaderFromStream,
+} from '../../src/core/shard-io.js';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
 import type {
@@ -43,10 +48,28 @@ function makeHeader(overrides: Partial<ShardHeader> = {}): ShardHeader {
     version: 1,
     encrypted: false,
     kdf_salt: null,
+    rs_stripe_size: null,
     map_length: 0,
     location_map: TEST_LOCATIONS,
     ...overrides,
   };
+}
+
+/** Upload helper: wraps Buffer in Readable.from() as required by the new interface. */
+async function uploadBuf(
+  provider: LocalFsProvider,
+  filename: string,
+  data: Buffer,
+) {
+  return provider.upload(filename, Readable.from(data), data.length);
+}
+
+/** Download helper: collects the Readable stream into a Buffer. */
+async function downloadBuf(
+  provider: LocalFsProvider,
+  ref: { provider_id: string; path: string },
+): Promise<Buffer> {
+  return streamToBuffer(await provider.download(ref));
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -70,22 +93,22 @@ describe('LocalFsProvider', () => {
 
   it('should upload and download identical data', async () => {
     const data = Buffer.from('hello, shard data');
-    const ref = await provider.upload('shard_0.bfs.1', data);
-    const downloaded = await provider.download(ref);
+    const ref = await uploadBuf(provider, 'shard_0.bfs.1', data);
+    const downloaded = await downloadBuf(provider, ref);
     expect(downloaded).toEqual(data);
   });
 
   it('should preserve binary data on upload/download', async () => {
     const data = Buffer.alloc(512);
     for (let i = 0; i < 512; i++) data[i] = i % 256;
-    const ref = await provider.upload('shard_0.bfs.1', data);
-    const downloaded = await provider.download(ref);
+    const ref = await uploadBuf(provider, 'shard_0.bfs.1', data);
+    const downloaded = await downloadBuf(provider, ref);
     expect(downloaded).toEqual(data);
   });
 
   it('should return hash in RemoteRef after upload', async () => {
     const data = Buffer.from('test');
-    const ref = await provider.upload('shard_0.bfs.1', data);
+    const ref = await uploadBuf(provider, 'shard_0.bfs.1', data);
     expect(ref.provider_id).toBe('test-local');
     expect(ref.path).toBe('shard_0.bfs.1');
     expect(ref.hash).toBeDefined();
@@ -95,17 +118,17 @@ describe('LocalFsProvider', () => {
   // ─── list ─────────────────────────────────────────────────────────────────
 
   it('should list uploaded files', async () => {
-    await provider.upload('shard_0.bfs.1', Buffer.from('a'));
-    await provider.upload('shard_1.bfs.1', Buffer.from('b'));
+    await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('a'));
+    await uploadBuf(provider, 'shard_1.bfs.1', Buffer.from('b'));
     const refs = await provider.list();
     const names = refs.map((r) => r.path).sort();
     expect(names).toEqual(['shard_0.bfs.1', 'shard_1.bfs.1']);
   });
 
   it('should filter list by prefix', async () => {
-    await provider.upload('shard_0.bfs.1', Buffer.from('a'));
-    await provider.upload('shard_0.bfs.2', Buffer.from('b'));
-    await provider.upload('shard_1.bfs.1', Buffer.from('c'));
+    await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('a'));
+    await uploadBuf(provider, 'shard_0.bfs.2', Buffer.from('b'));
+    await uploadBuf(provider, 'shard_1.bfs.1', Buffer.from('c'));
     const refs = await provider.list('shard_0');
     expect(refs.map((r) => r.path).sort()).toEqual([
       'shard_0.bfs.1',
@@ -124,7 +147,7 @@ describe('LocalFsProvider', () => {
   // ─── delete ───────────────────────────────────────────────────────────────
 
   it('should delete a file and remove it from list', async () => {
-    const ref = await provider.upload('shard_0.bfs.1', Buffer.from('data'));
+    const ref = await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('data'));
     await provider.delete(ref);
     const refs = await provider.list();
     expect(refs.map((r) => r.path)).not.toContain('shard_0.bfs.1');
@@ -180,14 +203,12 @@ describe('LocalFsProvider', () => {
   // ─── rename ───────────────────────────────────────────────────────────────
 
   it('should rename a file and make it available under the new name', async () => {
-    const ref = await provider.upload(
-      'shard_0.bfs.1.tmp',
-      Buffer.from('payload'),
-    );
+    const tmpBuf = Buffer.from('payload');
+    const ref = await uploadBuf(provider, 'shard_0.bfs.1.tmp', tmpBuf);
     const newRef = await provider.rename(ref, 'shard_0.bfs.1');
     expect(newRef.path).toBe('shard_0.bfs.1');
 
-    const downloaded = await provider.download(newRef);
+    const downloaded = await downloadBuf(provider, newRef);
     expect(downloaded).toEqual(Buffer.from('payload'));
 
     const refs = await provider.list();
@@ -203,7 +224,7 @@ describe('LocalFsProvider', () => {
     const originalHeader = makeHeader({ shard_index: 0 });
     const originalShard = buildShard(originalHeader, payload);
 
-    const ref = await provider.upload('shard_0.bfs.1', originalShard);
+    const ref = await uploadBuf(provider, 'shard_0.bfs.1', originalShard);
 
     // Build a new header with updated location info (simulating a heal operation)
     const updatedHeader = makeHeader({
@@ -227,10 +248,13 @@ describe('LocalFsProvider', () => {
 
     await provider.updateShardHeader(ref, newHeaderData);
 
-    const updated = await provider.download(ref);
+    const updatedBuf = await downloadBuf(provider, ref);
 
     // Should parse without error (checksum must be valid)
-    const { header: h, payload: p } = parseShard(updated);
+    const { header: h, payloadStream } = await parseShardHeaderFromStream(
+      Readable.from(updatedBuf),
+    );
+    const p = await streamToBuffer(payloadStream);
 
     // Payload must be untouched
     expect(p).toEqual(payload);

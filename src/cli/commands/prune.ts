@@ -1,3 +1,4 @@
+import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
 import { listVersions, prune } from '../../vault/vault-manager.js';
@@ -97,26 +98,58 @@ export function registerPrune(program: Command): void {
                 value: '__manual__',
               },
             ];
-            const { picked } = await promptWithRawMode<{ picked: string[] }>([
-              {
-                type: 'checkbox',
-                name: 'picked',
-                message: t('prune_select_prompt'),
-                choices,
-              },
-            ]);
-            if (picked.includes('__manual__')) {
-              const { rangeInput } = await promptWithRawMode<{
-                rangeInput: string;
-              }>([
+            // theme.style.keysHelpTip adds "esc cancel" to the help bar.
+            // Cast: legacy inquirer types don't expose @inquirer/checkbox theme.
+            let picked: string[] = [];
+            try {
+              const ans = await promptWithRawMode<{ picked: string[] }>([
                 {
-                  type: 'input',
-                  name: 'rangeInput',
-                  message: t('prune_range_prompt'),
-                  validate: (v: string) => (v.trim() ? true : t('required')),
-                },
+                  type: 'checkbox',
+                  name: 'picked',
+                  message: t('prune_select_prompt'),
+                  choices,
+                  theme: {
+                    style: {
+                      keysHelpTip: (
+                        keys: [key: string, action: string][],
+                      ): string =>
+                        [...keys, ['esc', t('cancel').toLowerCase()]]
+                          .map(([k, a]) => `${k} ${a}`)
+                          .join(' • '),
+                    },
+                  },
+                } as never,
               ]);
-              toRemove = parseVersionRange(rangeInput.trim(), allVersions);
+              picked = ans.picked;
+            } catch (err) {
+              if (
+                !(err instanceof AbortPromptError) &&
+                !(err instanceof ExitPromptError)
+              )
+                throw err;
+              // Esc / Ctrl+C → treat as empty selection
+            }
+            if (picked.includes('__manual__')) {
+              try {
+                const { rangeInput } = await promptWithRawMode<{
+                  rangeInput: string;
+                }>([
+                  {
+                    type: 'input',
+                    name: 'rangeInput',
+                    message: t('prune_range_prompt'),
+                    validate: (v: string) => (v.trim() ? true : t('required')),
+                  },
+                ]);
+                toRemove = parseVersionRange(rangeInput.trim(), allVersions);
+              } catch (err) {
+                if (
+                  !(err instanceof AbortPromptError) &&
+                  !(err instanceof ExitPromptError)
+                )
+                  throw err;
+                // Esc / Ctrl+C → treat as empty selection
+              }
             } else {
               toRemove = picked
                 .map(Number)
@@ -137,16 +170,25 @@ export function registerPrune(program: Command): void {
           warn(fmt('prune_versions_to_delete', toRemove.join(', ')));
 
           if (!opts.yes) {
-            const { confirmed } = await promptWithRawMode<{
-              confirmed: boolean;
-            }>([
-              {
-                type: 'confirm',
-                name: 'confirmed',
-                message: fmt('prune_confirm', String(toRemove.length)),
-                default: false,
-              },
-            ]);
+            let confirmed = false;
+            try {
+              const ans = await promptWithRawMode<{ confirmed: boolean }>([
+                {
+                  type: 'confirm',
+                  name: 'confirmed',
+                  message: fmt('prune_confirm', String(toRemove.length)),
+                  default: false,
+                },
+              ]);
+              confirmed = ans.confirmed;
+            } catch (err) {
+              if (
+                !(err instanceof AbortPromptError) &&
+                !(err instanceof ExitPromptError)
+              )
+                throw err;
+              // Esc / Ctrl+C → treat as decline
+            }
             if (!confirmed) {
               console.log(t('cancelled'));
               return;
@@ -157,6 +199,8 @@ export function registerPrune(program: Command): void {
           success(fmt('prune_deleted', toRemove.join(', ')));
         } catch (err) {
           if (err instanceof CommandAbort) throw err;
+          if (err instanceof AbortPromptError) throw err;
+          if (err instanceof ExitPromptError) throw err;
           error(err instanceof Error ? err.message : String(err));
           throw new CommandAbort();
         }

@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { generateSalt } from '../../src/core/crypto.js';
 import {
@@ -5,10 +6,12 @@ import {
   DecryptionError,
   ShardCorruptedError,
 } from '../../src/core/errors.js';
+import { streamToBuffer } from '../../src/core/hash.js';
 import {
   buildShard,
-  parseShard,
-  parseShardHeaderOnly,
+  buildShardStream,
+  parseShardHeaderFromStream,
+  serializeShardHeader,
 } from '../../src/core/shard-io.js';
 import type { ShardHeader, ShardLocation } from '../../src/types/index.js';
 
@@ -58,6 +61,7 @@ function makeHeader(overrides: Partial<ShardHeader> = {}): ShardHeader {
     version: 1,
     encrypted: false,
     kdf_salt: null,
+    rs_stripe_size: null,
     map_length: 0, // computed during build
     location_map: TEST_LOCATIONS,
     ...overrides,
@@ -66,14 +70,28 @@ function makeHeader(overrides: Partial<ShardHeader> = {}): ShardHeader {
 
 const TEST_PAYLOAD = Buffer.from('Hello, BFS shard payload! '.repeat(20));
 
+// ─── Helper: parse shard buffer and collect payload ─────────────────────────
+
+async function parseShard(
+  shard: Buffer,
+  key?: Buffer,
+): Promise<{ header: ShardHeader; payload: Buffer }> {
+  const { header, payloadStream } = await parseShardHeaderFromStream(
+    Readable.from(shard),
+    key,
+  );
+  const payload = await streamToBuffer(payloadStream);
+  return { header, payload };
+}
+
 // ─── Tests ─────────────────────────────────────────────────────────────────
 
 describe('shard-io', () => {
-  describe('buildShard + parseShard roundtrip (no encryption)', () => {
-    it('should preserve header fields and payload', () => {
+  describe('buildShard + parseShardHeaderFromStream roundtrip (no encryption)', () => {
+    it('should preserve header fields and payload', async () => {
       const header = makeHeader();
       const shard = buildShard(header, TEST_PAYLOAD);
-      const { header: h, payload } = parseShard(shard);
+      const { header: h, payload } = await parseShard(shard);
 
       expect(h.magic).toBe('BFSS');
       expect(h.format_version).toBe(1);
@@ -90,10 +108,10 @@ describe('shard-io', () => {
       expect(payload).toEqual(TEST_PAYLOAD);
     });
 
-    it('should preserve location map exactly', () => {
+    it('should preserve location map exactly', async () => {
       const header = makeHeader();
       const shard = buildShard(header, TEST_PAYLOAD);
-      const { header: h } = parseShard(shard);
+      const { header: h } = await parseShard(shard);
 
       expect(h.location_map).toHaveLength(TEST_LOCATIONS.length);
       expect(h.location_map[0].provider_id).toBe('local-disk');
@@ -106,31 +124,31 @@ describe('shard-io', () => {
       });
     });
 
-    it('should handle binary payload correctly', () => {
+    it('should handle binary payload correctly', async () => {
       const binaryPayload = Buffer.alloc(512);
       for (let i = 0; i < 512; i++) binaryPayload[i] = i % 256;
 
       const shard = buildShard(makeHeader(), binaryPayload);
-      const { payload } = parseShard(shard);
+      const { payload } = await parseShard(shard);
 
       expect(payload).toEqual(binaryPayload);
     });
 
-    it('should handle UTF-8 vault name with special chars', () => {
+    it('should handle UTF-8 vault name with special chars', async () => {
       const header = makeHeader({ vault_name: 'Zdjęcia-2025' });
       const shard = buildShard(header, TEST_PAYLOAD);
-      const { header: h } = parseShard(shard);
+      const { header: h } = await parseShard(shard);
       expect(h.vault_name).toBe('Zdjęcia-2025');
     });
 
-    it('should handle empty payload', () => {
+    it('should handle empty payload', async () => {
       const empty = Buffer.alloc(0);
       const shard = buildShard(makeHeader(), empty);
-      const { payload } = parseShard(shard);
+      const { payload } = await parseShard(shard);
       expect(payload.length).toBe(0);
     });
 
-    it('should handle large version numbers', () => {
+    it('should handle large version numbers', async () => {
       const header = makeHeader({
         version: 999,
         shard_index: 5,
@@ -138,7 +156,7 @@ describe('shard-io', () => {
         parity_shards: 2,
       });
       const shard = buildShard(header, TEST_PAYLOAD);
-      const { header: h } = parseShard(shard);
+      const { header: h } = await parseShard(shard);
       expect(h.version).toBe(999);
       expect(h.shard_index).toBe(5);
       expect(h.data_shards).toBe(4);
@@ -146,14 +164,14 @@ describe('shard-io', () => {
     });
   });
 
-  describe('buildShard + parseShard roundtrip (with encryption)', () => {
-    it('should encrypt and decrypt location map correctly', () => {
+  describe('buildShard + parseShardHeaderFromStream roundtrip (with encryption)', () => {
+    it('should encrypt and decrypt location map correctly', async () => {
       const salt = generateSalt();
       const encryptionKey = Buffer.alloc(32, 0xab); // 32-byte test key
       const header = makeHeader({ encrypted: true, kdf_salt: salt });
 
       const shard = buildShard(header, TEST_PAYLOAD, encryptionKey);
-      const { header: h, payload } = parseShard(shard, encryptionKey);
+      const { header: h, payload } = await parseShard(shard, encryptionKey);
 
       expect(h.encrypted).toBe(true);
       expect(h.kdf_salt).toEqual(salt);
@@ -174,18 +192,22 @@ describe('shard-io', () => {
       expect(shard1.equals(shard2)).toBe(false);
     });
 
-    it('should throw DecryptionError when encrypted shard is parsed without key', () => {
+    it('should parse without error when encrypted shard is parsed without key (location_map empty)', async () => {
       const salt = generateSalt();
       const encryptionKey = Buffer.alloc(32, 0xef);
       const header = makeHeader({ encrypted: true, kdf_salt: salt });
 
       const shard = buildShard(header, TEST_PAYLOAD, encryptionKey);
 
-      expect(() => parseShard(shard)).toThrow(DecryptionError);
-      expect(() => parseShard(shard)).toThrow(/key/i);
+      // Without key: header parses successfully — location_map stays []
+      const { header: h } = await parseShardHeaderFromStream(
+        Readable.from(shard),
+      );
+      expect(h.encrypted).toBe(true);
+      expect(h.location_map).toHaveLength(0);
     });
 
-    it('should throw DecryptionError when wrong key is used', () => {
+    it('should throw DecryptionError when wrong key is used', async () => {
       const salt = generateSalt();
       const correctKey = Buffer.alloc(32, 0x11);
       const wrongKey = Buffer.alloc(32, 0x22);
@@ -193,29 +215,33 @@ describe('shard-io', () => {
 
       const shard = buildShard(header, TEST_PAYLOAD, correctKey);
 
-      expect(() => parseShard(shard, wrongKey)).toThrow(DecryptionError);
+      await expect(parseShard(shard, wrongKey)).rejects.toThrow(
+        DecryptionError,
+      );
     });
   });
 
-  describe('parseShardHeaderOnly', () => {
-    it('should parse header metadata without key (unencrypted)', () => {
+  describe('parseShardHeaderFromStream (header-only, no key)', () => {
+    it('should parse metadata without key (unencrypted) — location_map populated', async () => {
       const header = makeHeader({ shard_index: 3, version: 42 });
       const shard = buildShard(header, TEST_PAYLOAD);
 
-      const meta = parseShardHeaderOnly(shard);
+      const { header: h } = await parseShardHeaderFromStream(
+        Readable.from(shard),
+      );
 
-      expect(meta.magic).toBe('BFSS');
-      expect(meta.vault_id).toBe(TEST_VAULT_ID);
-      expect(meta.vault_name).toBe('myvault');
-      expect(meta.shard_index).toBe(3);
-      expect(meta.version).toBe(42);
-      expect(meta.encrypted).toBe(false);
-      expect(meta.kdf_salt).toBeNull();
-      // location_map must NOT be present
-      expect((meta as ShardHeader).location_map).toBeUndefined();
+      expect(h.magic).toBe('BFSS');
+      expect(h.vault_id).toBe(TEST_VAULT_ID);
+      expect(h.vault_name).toBe('myvault');
+      expect(h.shard_index).toBe(3);
+      expect(h.version).toBe(42);
+      expect(h.encrypted).toBe(false);
+      expect(h.kdf_salt).toBeNull();
+      // unencrypted: location_map is always populated
+      expect(h.location_map).toHaveLength(TEST_LOCATIONS.length);
     });
 
-    it('should parse header metadata without key (encrypted)', () => {
+    it('should parse metadata without key (encrypted) — location_map empty', async () => {
       const salt = generateSalt();
       const encryptionKey = Buffer.alloc(32, 0x55);
       const header = makeHeader({
@@ -225,68 +251,78 @@ describe('shard-io', () => {
       });
       const shard = buildShard(header, TEST_PAYLOAD, encryptionKey);
 
-      // Can call without key — should not throw
-      const meta = parseShardHeaderOnly(shard);
+      // Can call without key — should not throw, location_map stays []
+      const { header: h } = await parseShardHeaderFromStream(
+        Readable.from(shard),
+      );
 
-      expect(meta.encrypted).toBe(true);
-      expect(meta.kdf_salt).toEqual(salt);
-      expect(meta.shard_index).toBe(1);
-      // location_map must NOT be present
-      expect((meta as ShardHeader).location_map).toBeUndefined();
+      expect(h.encrypted).toBe(true);
+      expect(h.kdf_salt).toEqual(salt);
+      expect(h.shard_index).toBe(1);
+      expect(h.location_map).toHaveLength(0); // not decrypted without key
     });
 
-    it('should expose kdf_salt for key derivation flow', () => {
+    it('should expose kdf_salt for key derivation flow', async () => {
       const salt = generateSalt();
       const encryptionKey = Buffer.alloc(32, 0x77);
       const header = makeHeader({ encrypted: true, kdf_salt: salt });
       const shard = buildShard(header, TEST_PAYLOAD, encryptionKey);
 
       // Step 1: discover salt without key
-      const meta = parseShardHeaderOnly(shard);
+      const { header: meta } = await parseShardHeaderFromStream(
+        Readable.from(shard),
+      );
       expect(meta.kdf_salt).not.toBeNull();
       expect(meta.kdf_salt).toEqual(salt);
 
       // Step 2: use salt to derive key, then parse full shard
-      const { header: h } = parseShard(shard, encryptionKey);
+      const { header: h } = await parseShardHeaderFromStream(
+        Readable.from(shard),
+        encryptionKey,
+      );
       expect(h.location_map).toHaveLength(TEST_LOCATIONS.length);
     });
   });
 
   describe('checksum validation', () => {
-    it('should throw ShardCorruptedError when checksum is wrong', () => {
+    it('should throw ShardCorruptedError when checksum is wrong', async () => {
       const shard = buildShard(makeHeader(), TEST_PAYLOAD);
       // Corrupt one byte in the middle of the shard
       const corrupted = Buffer.from(shard);
       corrupted[50] ^= 0xff;
 
-      expect(() => parseShard(corrupted)).toThrow(ShardCorruptedError);
-      expect(() => parseShard(corrupted)).toThrow(/checksum/i);
+      await expect(parseShard(corrupted)).rejects.toThrow(ShardCorruptedError);
+      await expect(parseShard(corrupted)).rejects.toThrow(/checksum/i);
     });
 
-    it('should throw ShardCorruptedError when payload is tampered', () => {
+    it('should throw ShardCorruptedError when payload is tampered', async () => {
       const shard = buildShard(makeHeader(), TEST_PAYLOAD);
       const corrupted = Buffer.from(shard);
       // Flip a bit near the end (in the payload area, before the checksum)
       corrupted[corrupted.length - 40] ^= 0x01;
 
-      expect(() => parseShard(corrupted)).toThrow(ShardCorruptedError);
+      await expect(parseShard(corrupted)).rejects.toThrow(ShardCorruptedError);
     });
 
-    it('should throw ShardCorruptedError when magic bytes are wrong', () => {
+    it('should throw ShardCorruptedError when magic bytes are wrong', async () => {
       const shard = buildShard(makeHeader(), TEST_PAYLOAD);
       const corrupted = Buffer.from(shard);
       corrupted.write('XXXX', 0, 'ascii');
 
-      expect(() => parseShard(corrupted)).toThrow(ShardCorruptedError);
-      expect(() => parseShard(corrupted)).toThrow(/magic/i);
+      await expect(
+        parseShardHeaderFromStream(Readable.from(corrupted)),
+      ).rejects.toThrow(ShardCorruptedError);
+      await expect(
+        parseShardHeaderFromStream(Readable.from(corrupted)),
+      ).rejects.toThrow(/magic/i);
     });
 
-    it('should throw ShardCorruptedError for invalid magic in parseShardHeaderOnly', () => {
-      const buf = Buffer.alloc(64, 0);
-      buf.write('NOPE', 0, 'ascii');
+    it('should throw ShardCorruptedError for stream too short', async () => {
+      const buf = Buffer.alloc(3, 0); // too short for any valid shard
 
-      expect(() => parseShardHeaderOnly(buf)).toThrow(ShardCorruptedError);
-      expect(() => parseShardHeaderOnly(buf)).toThrow(/magic/i);
+      await expect(
+        parseShardHeaderFromStream(Readable.from(buf)),
+      ).rejects.toThrow(ShardCorruptedError);
     });
   });
 
@@ -305,6 +341,52 @@ describe('shard-io', () => {
 
       expect(() => buildShard(header, TEST_PAYLOAD, key)).toThrow(BfsError);
       expect(() => buildShard(header, TEST_PAYLOAD, key)).toThrow(/kdf_salt/i);
+    });
+  });
+
+  describe('buildShardStream + parseShardHeaderFromStream roundtrip (FORMAT_VERSION=2)', () => {
+    it('should roundtrip header and payload via stream including rs_stripe_size', async () => {
+      const header = makeHeader({
+        shard_index: 1,
+        version: 5,
+        rs_stripe_size: 64 * 1024 * 1024,
+      });
+      const serializedHeader = serializeShardHeader(header);
+      const payloadInput = Readable.from(TEST_PAYLOAD);
+      const shardStream = buildShardStream(serializedHeader, payloadInput);
+
+      const shardBuf = await streamToBuffer(shardStream);
+      const { header: h, payloadStream } = await parseShardHeaderFromStream(
+        Readable.from(shardBuf),
+      );
+      const payload = await streamToBuffer(payloadStream);
+
+      expect(h.format_version).toBe(2);
+      expect(h.rs_stripe_size).toBe(64 * 1024 * 1024);
+      expect(h.shard_index).toBe(1);
+      expect(h.version).toBe(5);
+      expect(h.vault_id).toBe(TEST_VAULT_ID);
+      expect(h.location_map).toHaveLength(TEST_LOCATIONS.length);
+      expect(payload).toEqual(TEST_PAYLOAD);
+    });
+
+    it('should detect checksum corruption in v2 stream shard', async () => {
+      const serializedHeader = serializeShardHeader(makeHeader());
+      const shardStream = buildShardStream(
+        serializedHeader,
+        Readable.from(TEST_PAYLOAD),
+      );
+      const shardBuf = await streamToBuffer(shardStream);
+
+      const corrupted = Buffer.from(shardBuf);
+      corrupted[corrupted.length - 40] ^= 0x01; // tamper payload region
+
+      const { payloadStream } = await parseShardHeaderFromStream(
+        Readable.from(corrupted),
+      );
+      await expect(streamToBuffer(payloadStream)).rejects.toThrow(
+        ShardCorruptedError,
+      );
     });
   });
 });

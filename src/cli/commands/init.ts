@@ -1,5 +1,7 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
@@ -131,6 +133,7 @@ interface InitCiOpts {
   parityShards?: string;
   provider?: string[];
   pushMode?: string;
+  maxRam?: string;
 }
 
 export function registerInit(program: Command): void {
@@ -149,6 +152,7 @@ export function registerInit(program: Command): void {
       [] as string[],
     )
     .option('--push-mode <mode>', t('init_opt_push_mode'), 'new_version')
+    .option('--max-ram <mb>', t('init_opt_max_ram'))
     .action(
       async (argName: string | undefined, ciOpts: InitCiOpts, cmd: Command) => {
         const rootDir = resolveCwd(cmd);
@@ -301,6 +305,28 @@ export function registerInit(program: Command): void {
           pushMode = ans.pushMode;
         }
 
+        // ── RAM limit ──────────────────────────────────────────────────────────
+        let maxRamMb: Nullable<number>;
+        if (isCi) {
+          maxRamMb = ciOpts.maxRam ? parseInt(ciOpts.maxRam, 10) : null;
+        } else {
+          const detectedRam = Math.round(os.totalmem() / (1024 * 1024));
+          const suggested = Math.min(4096, Math.round(detectedRam * 0.25));
+          const ans = await promptWithRawMode<{ maxRamStr: string }>([
+            {
+              type: 'input',
+              name: 'maxRamStr',
+              message: fmt('init_max_ram_prompt', String(detectedRam)),
+              default: String(suggested),
+              validate: (v: string) => {
+                const n = parseInt(v, 10);
+                return n > 0 ? true : 'Must be a positive number';
+              },
+            },
+          ]);
+          maxRamMb = parseInt(ans.maxRamStr, 10);
+        }
+
         // Execute
         const io = createCliProviderIO();
         try {
@@ -314,10 +340,13 @@ export function registerInit(program: Command): void {
             },
             providers,
             push_mode: pushMode,
+            max_ram_mb: maxRamMb,
             io,
           });
           success(fmt('init_success', vaultName));
         } catch (err) {
+          if (err instanceof AbortPromptError) throw err;
+          if (err instanceof ExitPromptError) throw err;
           error(err instanceof Error ? err.message : String(err));
           throw new CommandAbort();
         }

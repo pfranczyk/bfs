@@ -61,6 +61,7 @@ export const pl: Strings = {
   lang_set: 'Język ustawiony na: %s',
   no_config:
     'Brak kopii zapasowej w tym katalogu. Uruchom najpierw `bfs init`.',
+  cancel: 'Anuluj',
   cancelled: 'Anulowano.',
   required: 'Wymagane',
   path_required: 'Ścieżka jest wymagana',
@@ -102,6 +103,9 @@ export const pl: Strings = {
     'Nieprawidłowy --push-mode: "%s". Dozwolone: new_version|overwrite|ask',
   init_provider_format_invalid:
     'Nieprawidłowy format --provider: "%s". Oczekiwany: typ:id:ścieżka (np. local:dysk1:/mnt/usb)',
+  init_max_ram_prompt:
+    'Limit RAM do kodowania (MB, wykryto: %sMB, 4096MB wystarczy):',
+  init_opt_max_ram: 'Limit RAM do kodowania w MB (tryb CI)',
   init_success:
     'Kopia zapasowa "%s" gotowa. Użyj `bfs push`, aby wykonać pierwszą kopię.',
 
@@ -109,6 +113,20 @@ export const pl: Strings = {
   cmd_clear_desc:
     'Wyczyść tymczasowe dane kopii zapasowej z przerwanego push/pull',
   clear_done: 'Cache wyczyszczony.',
+
+  // ─── config ───────────────────────────────────────────────────────────────
+  cmd_config_desc: 'Wyświetl lub zmień ustawienia kopii zapasowej',
+  config_current_settings: 'Aktualne ustawienia:',
+  config_updated: 'Ustawienia zaktualizowane.',
+  config_reset: 'Ustawienie przywrócone do domyślnego.',
+  config_reset_no_field: 'Podaj --cache-dir lub --temp-dir razem z --reset.',
+  config_dir_hint:
+    'Zmień przez `bfs config --%s <ścieżka>` lub `bfs config --%s --reset`',
+  config_opt_cache_dir: 'Ustaw katalog cache (zastępuje .bfs/cache)',
+  config_opt_temp_dir:
+    'Ustaw katalog plików tymczasowych (zastępuje systemowy temp)',
+  config_opt_max_ram: 'Ustaw limit RAM do kodowania (MB, 0 = auto)',
+  config_opt_reset: 'Przywróć ustawienie do wartości domyślnej',
 
   // ─── push ─────────────────────────────────────────────────────────────────
   push_preparing: 'Przygotowanie push…',
@@ -124,6 +142,10 @@ export const pl: Strings = {
   push_opt_password: 'Hasło szyfrowania (pomija interaktywny prompt)',
   push_opt_cache:
     'Wyślij zbuforowane dane kopii z poprzedniej przerwanej operacji',
+  push_opt_max_ram: 'Nadpisz limit RAM dla tego push (MB)',
+  opt_temp_dir_desc: 'Katalog dla plików tymczasowych podczas push/pull',
+  opt_cache_dir_desc:
+    'Katalog dla zbuforowanych danych kopii (zastępuje .bfs/cache)',
 
   // ─── pull ─────────────────────────────────────────────────────────────────
   pull_preparing: 'Przygotowanie pull…',
@@ -224,6 +246,13 @@ export const pl: Strings = {
   scheme_changed: 'Schemat zmieniony: %s → %s/%s.',
   scheme_apply_push: 'Uruchom `bfs push`, aby zastosować nowy schemat.',
 
+  // ─── provider: local-fs ──────────────────────────────────────────────────
+  provider_local_path_not_exist_confirm:
+    'Ścieżka "%s" nie istnieje. Utworzyć ją?',
+  provider_local_path_not_exist_error:
+    'Ścieżka "%s" nie istnieje, a utworzenie zostało odrzucone.',
+  provider_local_path_not_writable: 'Ścieżka "%s" nie jest zapisywalna.',
+
   // ─── provider add ─────────────────────────────────────────────────────────
   provider_add_opt_ci: 'Tryb nieinteraktywny (CI/skrypty): pomija prompty',
   provider_add_opt_id: 'ID nowego nośnika (tryb CI)',
@@ -292,6 +321,8 @@ export const pl: Strings = {
   provider_remove_rebuild_latest: '[T]ylko najnowszą wersję',
   provider_remove_no_other_providers:
     'Brak innych dostępnych providerów do odbudowy.',
+  provider_remove_rebuild_new_location:
+    '[N]owa lokalizacja — dodaj nowy nośnik do odbudowanej kopii',
   provider_remove_target_prompt: 'Na który provider przesłać odbudowany shard?',
   provider_remove_yes_required:
     '--yes jest wymagane dla strategii remove w trybie CI',
@@ -312,4 +343,50 @@ export const pl: Strings = {
   provider_relocate_success: 'Provider "%s" przeniesiony.',
   provider_rebuild_success:
     'Provider "%s" zastąpiony. Uruchom `bfs push`, aby zaktualizować schemat.',
+
+  // ─── vault operations ────────────────────────────────────────────────────
+  vault_download_shards: 'Pobieranie shardów dla wersji %s…',
+  vault_provider_not_found:
+    'Provider "%s" nie znaleziony w konfiguracji — pomijam shard %s',
+  vault_download_shard_progress: 'Pobieranie sharda %s/%s',
+  vault_provider_unreachable: 'Nośnik "%s" jest niedostępny — pomijam.',
+  vault_file_missing_on_provider:
+    'Dane kopii brakują na nośniku "%s" — pomijam.',
+  vault_decoding_rs: 'Dekodowanie Reed-Solomon…',
+  vault_ask_decrypt_password: 'Podaj hasło deszyfrowania:',
+  vault_decrypting: 'Odszyfrowanie…',
+  vault_push_version_confirm:
+    'Na dysku: wersja %s. Najnowsza: %s. Push utworzy wersję %s. Kontynuować?',
+  vault_using_cached_blob: 'Używam zbuforowanych danych…',
+  vault_no_cached_blob_push:
+    'Brak zbuforowanych danych — wykonuję pełne pakowanie…',
+  vault_push_skipped_confirm:
+    '%s plik(ów) nie można było odczytać:\n%s\nKontynuować bez nich?',
+  vault_ask_encrypt_password: 'Podaj hasło szyfrowania:',
+  vault_ask_confirm_password: 'Potwierdź hasło:',
+  vault_encrypting: 'Szyfrowanie shardów…',
+  vault_password_overrides_config:
+    'Szyfrowanie włączone przez --password (w konfiguracji szyfrowanie wyłączone).',
+  vault_encoding_rs: 'Kodowanie Reed-Solomon…',
+  vault_uploading_shards: 'Przesyłanie shardów…',
+  vault_upload_shard_progress: 'Przesyłanie sharda %s/%s',
+  vault_no_cached_blob_pull:
+    'Brak zbuforowanych danych — wykonuję pełne pobieranie…',
+  vault_pull_overwrite_confirm:
+    'Na dysku: wersja %s. Przywrócenie wersji %s nadpisze katalog. Kontynuować?',
+  vault_unpacking_files: 'Rozpakowywanie plików…',
+  vault_pull_write_error_confirm:
+    '%s plik(ów) nie można było zapisać:\n%s\nNapraw uprawnienia, naciśnij Y aby ponowić lub N aby anulować.',
+  vault_degraded_provider_unreachable:
+    'Pula zdegradowana: jeden lub więcej nośników jest niedostępnych. Użyj `bfs provider remove`, aby zastąpić nośnik, a następnie `bfs push`, aby przywrócić redundancję.',
+  vault_degraded_file_missing:
+    'Pula zdegradowana: dane kopii zostały usunięte ze sprawnego nośnika. Uruchom `bfs push`, aby odtworzyć kopię.',
+
+  // ─── recovery operations (vault layer) ──────────────────────────────────
+  recovery_ask_version_password:
+    'Podaj hasło dla tej wersji (zostaw puste, aby pominąć):',
+
+  // ─── bootstrap operations ────────────────────────────────────────────────
+  bootstrap_single_provider_warn:
+    'Tylko 1 provider dostępny — nie można zweryfikować konsensusu. Dane mogą być naruszone. Kontynuuję.',
 };

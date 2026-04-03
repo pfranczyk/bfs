@@ -1,3 +1,4 @@
+import { ExitPromptError } from '@inquirer/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VersionHealth } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
@@ -230,5 +231,32 @@ describe('prune', () => {
       expect.any(String),
       expect.objectContaining({ versions: [1, 2] }),
     );
+  });
+
+  // ─── Anulowanie ───────────────────────────────────────────────────────────
+
+  it('should treat ExitPromptError as empty selection during checkbox', async () => {
+    mockListVersions.mockResolvedValue(makeManifests([1, 2, 3]) as never);
+    mockPrompt.mockRejectedValueOnce(new ExitPromptError() as never);
+
+    const result = await runCmd(['prune']);
+
+    expect(result).toBe('ok');
+    expect(mockPrune).not.toHaveBeenCalled();
+  });
+
+  it('should treat ExitPromptError as decline during confirmation', async () => {
+    mockListVersions.mockResolvedValue(makeManifests([1, 2, 3]) as never);
+    mockPrompt.mockRejectedValueOnce(new ExitPromptError() as never);
+
+    const result = await runCmd(['prune', '1']);
+
+    expect(result).toBe('ok');
+    expect(mockPrune).not.toHaveBeenCalled();
+    expect(
+      capture.logs.some(
+        (l) => l.includes('Cancelled') || l.includes('Anulowano'),
+      ),
+    ).toBe(true);
   });
 });

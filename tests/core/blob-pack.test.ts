@@ -2,7 +2,11 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { packBlob } from '../../src/core/blob-pack.js';
+import {
+  estimateBlobSize,
+  packBlob,
+  packBlobToFile,
+} from '../../src/core/blob-pack.js';
 import { parseBlobFileTable, unpackBlob } from '../../src/core/blob-unpack.js';
 import { createIgnoreFilter } from '../../src/core/ignore.js';
 
@@ -199,5 +203,109 @@ describe('blob-pack / blob-unpack', () => {
     const outFiles = await readAllFiles(outDir);
     expect(outFiles.has('include.txt')).toBe(true);
     expect(outFiles.has('exclude.txt')).toBe(false);
+  });
+});
+
+describe('estimateBlobSize', () => {
+  let srcDir: string;
+
+  beforeEach(async () => {
+    srcDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-est-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(srcDir, { recursive: true, force: true });
+  });
+
+  it('should return a positive size for a non-empty directory', async () => {
+    await fs.writeFile(path.join(srcDir, 'a.txt'), Buffer.alloc(100));
+    const ignoreFilter = createIgnoreFilter(srcDir);
+    const estimate = await estimateBlobSize(srcDir, ignoreFilter);
+    expect(estimate).toBeGreaterThan(100);
+  });
+
+  it('should match actual blob size within a small tolerance', async () => {
+    await fs.writeFile(path.join(srcDir, 'file.bin'), Buffer.alloc(1024, 0xab));
+    const ignoreFilter = createIgnoreFilter(srcDir);
+
+    const estimate = await estimateBlobSize(srcDir, ignoreFilter);
+    const { blob } = await packBlob(srcDir, ignoreFilter);
+
+    // Estimate should equal actual blob length (exact calculation)
+    expect(estimate).toBe(blob.length);
+  });
+
+  it('should return header+checksum size for an empty directory', async () => {
+    const ignoreFilter = createIgnoreFilter(srcDir);
+    const estimate = await estimateBlobSize(srcDir, ignoreFilter);
+    // HEADER_SIZE (70) + trailing SHA-256 (32) = 102
+    expect(estimate).toBe(102);
+  });
+});
+
+describe('packBlobToFile', () => {
+  let srcDir: string;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    srcDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-src-'));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-out-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(srcDir, { recursive: true, force: true });
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should produce an identical blob to packBlob', async () => {
+    await fs.writeFile(path.join(srcDir, 'hello.txt'), 'Hello, World!');
+    await fs.writeFile(path.join(srcDir, 'data.bin'), Buffer.alloc(256, 0x42));
+    const ignoreFilter = createIgnoreFilter(srcDir);
+
+    const outputPath = path.join(tmpDir, 'out.blob');
+    const { blobSize, fileCount } = await packBlobToFile(
+      srcDir,
+      outputPath,
+      ignoreFilter,
+    );
+
+    const { blob: ramBlob } = await packBlob(srcDir, ignoreFilter);
+    const diskBlob = await fs.readFile(outputPath);
+
+    expect(fileCount).toBe(2);
+    expect(blobSize).toBe(diskBlob.length);
+
+    // The two blobs differ in timestamp (header offset 0x1A) — compare everything except bytes 26-33
+    // Instead, verify both unpack to the same files
+    const outDir1 = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-cmp1-'));
+    const outDir2 = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-cmp2-'));
+    try {
+      await unpackBlob(ramBlob, outDir1);
+      await unpackBlob(diskBlob, outDir2);
+      const files1 = await readAllFiles(outDir1);
+      const files2 = await readAllFiles(outDir2);
+      expect([...files1.keys()].sort()).toEqual([...files2.keys()].sort());
+      for (const [key, buf1] of files1) {
+        expect(buf1).toEqual(files2.get(key));
+      }
+    } finally {
+      await fs.rm(outDir1, { recursive: true, force: true });
+      await fs.rm(outDir2, { recursive: true, force: true });
+    }
+  });
+
+  it('should report skipped files for unreadable entries', async () => {
+    await fs.writeFile(path.join(srcDir, 'ok.txt'), 'readable');
+    const ignoreFilter = createIgnoreFilter(srcDir);
+    const outputPath = path.join(tmpDir, 'out2.blob');
+
+    const { fileCount, skipped } = await packBlobToFile(
+      srcDir,
+      outputPath,
+      ignoreFilter,
+    );
+    // No unreadable files in this test — skipped should be empty
+    expect(skipped).toHaveLength(0);
+    expect(fileCount).toBe(1);
   });
 });

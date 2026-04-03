@@ -29,6 +29,9 @@ export function registerPush(program: Command): void {
     .option('--overwrite', t('push_opt_overwrite'))
     .option('--password <password>', t('push_opt_password'))
     .option('--cache', t('push_opt_cache'))
+    .option('--temp-dir <path>', t('opt_temp_dir_desc'))
+    .option('--cache-dir <path>', t('opt_cache_dir_desc'))
+    .option('--max-ram <mb>', t('push_opt_max_ram'))
     .action(
       async (
         opts: {
@@ -36,6 +39,9 @@ export function registerPush(program: Command): void {
           overwrite?: boolean;
           password?: string;
           cache?: boolean;
+          tempDir?: string;
+          cacheDir?: string;
+          maxRam?: string;
         },
         cmd: Command,
       ) => {
@@ -92,6 +98,11 @@ export function registerPush(program: Command): void {
           await push(rootDir, {
             ...(mode !== undefined ? { mode } : {}),
             ...(opts.password !== undefined ? { password: opts.password } : {}),
+            ...(opts.tempDir !== undefined ? { tempDir: opts.tempDir } : {}),
+            ...(opts.cacheDir !== undefined ? { cacheDir: opts.cacheDir } : {}),
+            ...(opts.maxRam !== undefined
+              ? { maxRamMb: parseInt(opts.maxRam, 10) }
+              : {}),
             fromCache: opts.cache ?? false,
             interactive: isReplMode(),
             io: wrappedIo,

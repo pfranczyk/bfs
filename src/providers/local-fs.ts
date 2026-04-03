@@ -1,10 +1,16 @@
+import { createHash } from 'node:crypto';
 import type { Dirent } from 'node:fs';
+import { createReadStream, createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import type { Readable, TransformCallback } from 'node:stream';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { ProviderError } from '../core/errors.js';
 import { isEnoent } from '../core/fs-utils.js';
 import { hashBuffer } from '../core/hash.js';
 import { computeShardHeaderSize } from '../core/shard-io.js';
+import { fmt } from '../i18n/index.js';
 import type {
   ProviderConfig,
   ProviderIO,
@@ -85,11 +91,11 @@ export class LocalFsProvider implements StorageProvider {
 
     if (!exists) {
       const create = await this.io.confirm(
-        `Path "${this.basePath}" does not exist. Create it?`,
+        fmt('provider_local_path_not_exist_confirm', this.basePath),
       );
       if (!create) {
         throw new ProviderError(
-          `Path "${this.basePath}" does not exist and creation was refused`,
+          fmt('provider_local_path_not_exist_error', this.basePath),
         );
       }
       try {
@@ -105,7 +111,9 @@ export class LocalFsProvider implements StorageProvider {
     try {
       await fs.access(this.basePath, fs.constants.W_OK);
     } catch {
-      throw new ProviderError(`Path "${this.basePath}" is not writable`);
+      throw new ProviderError(
+        fmt('provider_local_path_not_writable', this.basePath),
+      );
     }
   }
 
@@ -119,15 +127,21 @@ export class LocalFsProvider implements StorageProvider {
   }
 
   /**
-   * Uploads a shard file to {basePath}/{vaultName}/{shardFilename}.
+   * Uploads a shard stream to {basePath}/{vaultName}/{shardFilename}.
    * Creates the vault directory if it does not exist.
+   * Hash is computed incrementally during the stream write.
    *
    * @param shardFilename - Target filename, e.g. "shard_0.bfs.1"
-   * @param data          - Full shard binary (header + payload + checksum)
-   * @returns RemoteRef with the provider_id and the shard filename as path
+   * @param data          - Readable stream of the full shard (header + payload + checksum)
+   * @param _size         - Total byte size (unused by LocalFs, required by StorageProvider interface)
+   * @returns RemoteRef with the provider_id, shard filename, and SHA-256 hash
    * @throws ProviderError on write failure
    */
-  async upload(shardFilename: string, data: Buffer): Promise<RemoteRef> {
+  async upload(
+    shardFilename: string,
+    data: Readable,
+    _size: number,
+  ): Promise<RemoteRef> {
     const dir = this.vaultDir();
     try {
       await fs.mkdir(dir, { recursive: true });
@@ -138,8 +152,21 @@ export class LocalFsProvider implements StorageProvider {
     }
 
     const filePath = path.join(dir, shardFilename);
+    const hasher = createHash('sha256');
+    const hashTransform = new Transform({
+      transform(
+        chunk: Buffer | Uint8Array,
+        _enc: string,
+        cb: TransformCallback,
+      ) {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        hasher.update(buf);
+        cb(null, buf);
+      },
+    });
+
     try {
-      await fs.writeFile(filePath, data);
+      await pipeline(data, hashTransform, createWriteStream(filePath));
     } catch (err) {
       throw new ProviderError(
         `Failed to write shard "${filePath}": ${String(err)}`,
@@ -149,26 +176,27 @@ export class LocalFsProvider implements StorageProvider {
     return {
       provider_id: this.id,
       path: shardFilename,
-      hash: hashBuffer(data),
+      hash: hasher.digest('hex'),
     };
   }
 
   /**
-   * Downloads a shard file identified by ref.
+   * Downloads a shard as a Readable stream.
    *
    * @param ref - RemoteRef returned by upload() or list()
-   * @returns   Full shard binary
-   * @throws ProviderError if the file cannot be read
+   * @returns   Readable stream of the full shard binary
+   * @throws ProviderError if the file is not accessible
    */
-  async download(ref: RemoteRef): Promise<Buffer> {
+  async download(ref: RemoteRef): Promise<Readable> {
     const filePath = this.refToPath(ref);
     try {
-      return await fs.readFile(filePath);
+      await fs.access(filePath, fs.constants.R_OK);
     } catch (err) {
       throw new ProviderError(
         `Failed to read shard "${filePath}": ${String(err)}`,
       );
     }
+    return createReadStream(filePath);
   }
 
   /**

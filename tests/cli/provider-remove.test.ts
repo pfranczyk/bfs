@@ -1,3 +1,4 @@
+import { ExitPromptError } from '@inquirer/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VersionHealth } from '../../src/types/index.js';
 import { captureConsole, makeConfig, runCmd } from './_helpers.js';
@@ -368,6 +369,35 @@ describe('provider remove', () => {
     ]);
 
     expect(result).toBe('abort');
+  });
+
+  // ─── Wpływ na wersje ──────────────────────────────────────────────────────
+
+  // ─── Anulowanie ───────────────────────────────────────────────────────────
+
+  it('should cancel when __cancel__ selected in provider list', async () => {
+    mockReadConfig.mockResolvedValue(makeConfig() as never);
+    mockPrompt.mockResolvedValueOnce({ chosen: '__cancel__' } as never);
+
+    const result = await runCmd(['provider', 'remove']);
+
+    expect(result).toBe('ok');
+    expect(mockRemoveProvider).not.toHaveBeenCalled();
+    expect(
+      capture.logs.some(
+        (l) => l.includes('Cancelled') || l.includes('Anulowano'),
+      ),
+    ).toBe(true);
+  });
+
+  it('should propagate ExitPromptError on Ctrl+C during provider selection', async () => {
+    mockReadConfig.mockResolvedValue(makeConfig() as never);
+    mockPrompt.mockRejectedValueOnce(new ExitPromptError() as never);
+
+    const result = await runCmd(['provider', 'remove']);
+
+    expect(result).toBe('cancelled');
+    expect(mockRemoveProvider).not.toHaveBeenCalled();
   });
 
   // ─── Wpływ na wersje ──────────────────────────────────────────────────────

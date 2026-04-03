@@ -26,6 +26,7 @@ bfs pull
 ## Requirements
 
 - Node.js >= 23
+- Minimum 4 GB RAM (BFS uses ~25% of system memory for Reed-Solomon encoding)
 
 ## Installation
 

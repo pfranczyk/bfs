@@ -36,6 +36,8 @@ export function registerPull(program: Command): void {
     .option('--path <path>', t('pull_opt_path'))
     .option('--name <vaultName>', t('pull_opt_name'))
     .option('--cache', t('pull_opt_cache'))
+    .option('--temp-dir <path>', t('opt_temp_dir_desc'))
+    .option('--cache-dir <path>', t('opt_cache_dir_desc'))
     .action(
       async (
         opts: {
@@ -47,6 +49,8 @@ export function registerPull(program: Command): void {
           path?: string;
           name?: string;
           cache?: boolean;
+          tempDir?: string;
+          cacheDir?: string;
         },
         cmd: Command,
       ) => {
@@ -112,6 +116,8 @@ export function registerPull(program: Command): void {
             ...(opts.force !== undefined ? { force: opts.force } : {}),
             ...(opts.yes ? { yes: true } : {}),
             ...(opts.password !== undefined ? { password: opts.password } : {}),
+            ...(opts.tempDir !== undefined ? { tempDir: opts.tempDir } : {}),
+            ...(opts.cacheDir !== undefined ? { cacheDir: opts.cacheDir } : {}),
             fromCache: opts.cache ?? false,
             interactive: isReplMode(),
             io: wrappedIo,

@@ -1,9 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { Readable } from 'node:stream';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BfsError } from '../../src/core/errors.js';
+import { streamToBuffer } from '../../src/core/hash.js';
 import {
   calcShardPayloadSize,
   rsDecode,
+  rsDecodeStriped,
   rsEncode,
+  rsEncodeStriped,
   rsRepair,
   SHARD_ALIGNMENT,
 } from '../../src/core/reed-solomon.js';
@@ -193,5 +200,121 @@ describe('rsRepair', () => {
     const shards = rsEncode(data, 5, 2);
     const withMissing = dropShards(shards, [0, 1, 2]);
     expect(() => rsRepair(withMissing, 5, 2)).toThrow(BfsError);
+  });
+});
+
+describe('rsEncodeStriped / rsDecodeStriped', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-rs-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /**
+   * Produces the N data shard buffers for rsDecodeStriped by interleaving the blob
+   * stripe by stripe: shard i gets bytes [i*stripeSize : (i+1)*stripeSize] of each stripe.
+   * Pads the last stripe to N*stripeSize if needed.
+   */
+  function makeDataShards(
+    blob: Buffer,
+    N: number,
+    stripeSize: number,
+  ): Buffer[] {
+    const shards: Buffer[] = Array.from({ length: N }, () => Buffer.alloc(0));
+    const stripeInputSize = N * stripeSize;
+    for (let offset = 0; offset < blob.length; offset += stripeInputSize) {
+      const inputBlock = Buffer.alloc(stripeInputSize); // zero-padded
+      blob.subarray(offset, offset + stripeInputSize).copy(inputBlock);
+      for (let i = 0; i < N; i++) {
+        shards[i] = Buffer.concat([
+          shards[i],
+          inputBlock.subarray(i * stripeSize, (i + 1) * stripeSize),
+        ]);
+      }
+    }
+    return shards;
+  }
+
+  it('should encode and decode a blob exactly (N=2, K=1)', async () => {
+    const N = 2;
+    const K = 1;
+    const stripeSize = 64; // small stripe for testing
+    const blob = makeData(300); // not a multiple of stripe boundary
+
+    const parityPaths = [path.join(tmpDir, 'parity_0.bin')];
+    await rsEncodeStriped(Readable.from(blob), parityPaths, N, K, stripeSize);
+
+    const dataShards = makeDataShards(blob, N, stripeSize);
+    const parityPath0 = parityPaths[0];
+    if (!parityPath0) throw new Error('Internal: parityPaths[0] missing');
+    const parityBuf = await fs.readFile(parityPath0);
+    const shardStreams: (Readable | null)[] = [
+      ...dataShards.map((s) => Readable.from(s)),
+      Readable.from(parityBuf),
+    ];
+
+    const decoded = await streamToBuffer(
+      rsDecodeStriped(shardStreams, N, K, stripeSize, blob.length),
+    );
+
+    expect(decoded).toEqual(blob);
+  });
+
+  it('should recover from one missing data shard (degraded mode)', async () => {
+    const N = 2;
+    const K = 1;
+    const stripeSize = 64;
+    const blob = makeData(256);
+
+    const parityPaths = [path.join(tmpDir, 'parity_0.bin')];
+    await rsEncodeStriped(Readable.from(blob), parityPaths, N, K, stripeSize);
+
+    const dataShards = makeDataShards(blob, N, stripeSize);
+    const parityPath0 = parityPaths[0];
+    if (!parityPath0) throw new Error('Internal: parityPaths[0] missing');
+    const parityBuf = await fs.readFile(parityPath0);
+    const shard1 = dataShards[1];
+    if (!shard1) throw new Error('Internal: dataShards[1] missing');
+    // Drop shard 0 — recover using shard 1 + parity
+    const shardStreams: (Readable | null)[] = [
+      null,
+      Readable.from(shard1),
+      Readable.from(parityBuf),
+    ];
+
+    const decoded = await streamToBuffer(
+      rsDecodeStriped(shardStreams, N, K, stripeSize, blob.length),
+    );
+
+    expect(decoded).toEqual(blob);
+  });
+
+  it('should handle blob that is an exact multiple of N*stripeSize', async () => {
+    const N = 2;
+    const K = 1;
+    const stripeSize = 64;
+    const blob = makeData(N * stripeSize * 3); // exact multiple
+
+    const parityPaths = [path.join(tmpDir, 'parity_0.bin')];
+    await rsEncodeStriped(Readable.from(blob), parityPaths, N, K, stripeSize);
+
+    const dataShards = makeDataShards(blob, N, stripeSize);
+    const parityPath0 = parityPaths[0];
+    if (!parityPath0) throw new Error('Internal: parityPaths[0] missing');
+    const parityBuf = await fs.readFile(parityPath0);
+    const shardStreams: (Readable | null)[] = [
+      ...dataShards.map((s) => Readable.from(s)),
+      Readable.from(parityBuf),
+    ];
+
+    const decoded = await streamToBuffer(
+      rsDecodeStriped(shardStreams, N, K, stripeSize, blob.length),
+    );
+
+    expect(decoded).toEqual(blob);
   });
 });

@@ -1,4 +1,12 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHmac,
+  randomBytes,
+} from 'node:crypto';
+import type { Readable, TransformCallback } from 'node:stream';
+import { Transform } from 'node:stream';
+
 import { Algorithm, hashRaw } from '@node-rs/argon2';
 import type { ShardLocation } from '../types/index.js';
 import { DecryptionError } from './errors.js';
@@ -95,6 +103,124 @@ export function decryptLocationMap(data: Buffer, key: Buffer): ShardLocation[] {
   } catch {
     throw new DecryptionError('Location map JSON is invalid after decryption');
   }
+}
+
+// ─── Streaming per-shard crypto (FORMAT_VERSION=2) ────────────────────────
+
+/**
+ * Derives a deterministic 12-byte AES-GCM nonce for a specific shard.
+ * Formula: HMAC-SHA256(key, "shard_nonce" || uint32LE(version) || uint8(shardIndex))[:12]
+ * Uniqueness guaranteed: different version → different KDF salt → different key;
+ *                        same version → different shardIndex → different nonce.
+ * @param key        - 32-byte AES key derived by deriveKey()
+ * @param version    - snapshot version number (from shard header)
+ * @param shardIndex - shard index 0..N+K-1
+ * @returns 12-byte nonce (NONCE_SIZE)
+ */
+export function deriveShardNonce(
+  key: Buffer,
+  version: number,
+  shardIndex: number,
+): Buffer {
+  const label = Buffer.from('shard_nonce', 'utf8');
+  const versionBuf = Buffer.allocUnsafe(4);
+  versionBuf.writeUInt32LE(version, 0);
+  const indexBuf = Buffer.allocUnsafe(1);
+  indexBuf.writeUInt8(shardIndex, 0);
+  const mac = createHmac('sha256', key)
+    .update(Buffer.concat([label, versionBuf, indexBuf]))
+    .digest();
+  return mac.subarray(0, NONCE_SIZE);
+}
+
+/**
+ * Creates a Readable stream that encrypts data from `input` with AES-256-GCM.
+ * Output format: [ciphertext chunks...][auth tag 16B]
+ * The 16-byte GCM auth tag is appended as the last bytes of the stream —
+ * compatible with decryptStream which extracts it via tail-buffer.
+ * @param input - plaintext Readable stream
+ * @param key   - 32-byte AES-256 key
+ * @param nonce - 12-byte nonce (use deriveShardNonce for per-shard encryption)
+ * @returns Readable stream with encrypted data + trailing auth tag
+ */
+export function encryptStream(
+  input: Readable,
+  key: Buffer,
+  nonce: Buffer,
+): Readable {
+  const cipher = createCipheriv('aes-256-gcm', key, nonce);
+  const transform = new Transform({
+    transform(chunk: Buffer, _enc: string, cb: TransformCallback) {
+      cb(null, cipher.update(chunk));
+    },
+    flush(cb: TransformCallback) {
+      const remaining = cipher.final();
+      const tag = cipher.getAuthTag();
+      cb(null, Buffer.concat([remaining, tag]));
+    },
+  });
+  input.on('error', (err) => transform.destroy(err));
+  input.pipe(transform);
+  return transform;
+}
+
+/**
+ * Creates a Readable stream that decrypts AES-256-GCM data from `input`.
+ * Input format: [ciphertext chunks...][auth tag 16B]
+ * Uses a tail-buffer: last TAG_SIZE bytes of the stream are treated as the auth tag.
+ * The tag is set via decipher.setAuthTag() and verified by decipher.final().
+ * @param input - encrypted Readable stream (ciphertext + trailing tag)
+ * @param key   - 32-byte AES-256 key
+ * @param nonce - 12-byte nonce (same as used for encryption)
+ * @returns Readable stream with decrypted plaintext
+ * @throws DecryptionError if auth tag verification fails or stream too short
+ */
+export function decryptStream(
+  input: Readable,
+  key: Buffer,
+  nonce: Buffer,
+): Readable {
+  const decipher = createDecipheriv('aes-256-gcm', key, nonce);
+  // tail holds the last TAG_SIZE bytes seen so far — may be the auth tag
+  let tail = Buffer.alloc(0);
+
+  const transform = new Transform({
+    transform(chunk: Buffer, _enc: string, cb: TransformCallback) {
+      const combined = Buffer.concat([tail, chunk]);
+      if (combined.length > TAG_SIZE) {
+        const toProcess = combined.subarray(0, combined.length - TAG_SIZE);
+        tail = combined.subarray(combined.length - TAG_SIZE);
+        cb(null, decipher.update(toProcess));
+      } else {
+        // Not enough data yet — accumulate in tail, nothing to emit yet
+        tail = combined;
+        cb();
+      }
+    },
+    flush(cb: TransformCallback) {
+      if (tail.length !== TAG_SIZE) {
+        cb(
+          new DecryptionError(
+            'Encrypted stream too short — missing GCM auth tag',
+          ),
+        );
+        return;
+      }
+      decipher.setAuthTag(tail);
+      try {
+        cb(null, decipher.final());
+      } catch {
+        cb(
+          new DecryptionError(
+            'Decryption failed — wrong key or corrupted data',
+          ),
+        );
+      }
+    },
+  });
+  input.on('error', (err) => transform.destroy(err));
+  input.pipe(transform);
+  return transform;
 }
 
 // ─── Internal helpers ──────────────────────────────────────────────────────

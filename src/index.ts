@@ -1,10 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2025  <Paweł Franczyk>
+
+import { createRequire } from 'node:module';
 import path from 'node:path';
+import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import { Command } from 'commander';
+
+const _require = createRequire(import.meta.url);
+const { version: PKG_VERSION } = _require('../package.json') as {
+  version: string;
+};
 // Side-effect import: registers 'local' provider in the registry
 import './providers/local-fs.js';
 import { registerClear } from './cli/commands/clear.js';
+import { registerConfig } from './cli/commands/config.js';
 import { registerInit } from './cli/commands/init.js';
 import { registerProviderAdd } from './cli/commands/provider-add.js';
 import { registerProviderList } from './cli/commands/provider-list.js';
@@ -40,7 +49,7 @@ function buildProgram(): Command {
   const program = new Command();
   program
     .name('bfs')
-    .version('0.1.0', '-V', t('cmd_version_flag'))
+    .version(PKG_VERSION, '-V', t('cmd_version_flag'))
     .helpOption('-h, --help', t('cmd_help_flag'))
     .helpCommand('help [command]', t('cmd_help_cmd'))
     .description(t('cmd_bfs_desc'))
@@ -52,6 +61,7 @@ function buildProgram(): Command {
   // Register all commands
   registerInit(program);
   registerClear(program);
+  registerConfig(program);
   registerPush(program);
   registerPull(program);
   registerStatus(program);
@@ -145,8 +155,12 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  if (!(err instanceof CommandAbort)) {
-    console.error(err instanceof Error ? err.message : String(err));
+  if (err instanceof CommandAbort) {
+    process.exit(1);
   }
+  if (err instanceof AbortPromptError || err instanceof ExitPromptError) {
+    process.exit(130);
+  }
+  console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

@@ -682,4 +682,27 @@ describe('recovery', () => {
     expect(config?.vault_name).toBe('test-vault');
     expect(config?.scheme).toEqual({ data_shards: 2, parity_shards: 1 });
   });
+
+  it('should rebuild manifests with rs_striped=true for v2 shards', async () => {
+    await fs.rm(path.join(root, '.bfs'), { recursive: true });
+
+    const { io: bsIO } = createMockProviderIO();
+    const bootstrapProvider = new LocalFsProvider(
+      localProvider('p0', pdirs[0] ?? ''),
+      bsIO,
+    );
+    await bootstrapProvider.authenticate();
+
+    await recover(root, {
+      vaultName: 'test-vault',
+      provider: bootstrapProvider,
+      io: bsIO,
+    });
+
+    const manifest = await readManifest(root, 1);
+    expect(manifest?.rs_striped).toBe(true);
+    expect(typeof manifest?.rs_stripe_size).toBe('number');
+    expect(manifest?.rs_stripe_size).toBeGreaterThan(0);
+    expect(manifest?.encrypted_per_shard).toBeUndefined();
+  });
 });

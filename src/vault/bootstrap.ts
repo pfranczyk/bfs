@@ -1,6 +1,7 @@
 import { deriveKey } from '../core/crypto.js';
 import { BfsError, TamperDetectedError } from '../core/errors.js';
-import { parseShard, parseShardHeaderOnly } from '../core/shard-io.js';
+import { parseShardHeaderFromStream } from '../core/shard-io.js';
+import { t } from '../i18n/index.js';
 import { createProvider } from '../providers/provider.js';
 import type {
   ProviderConfig,
@@ -108,9 +109,7 @@ async function runConsensusCheck(
     (p) => p.id !== bootstrapProvider.id,
   );
   if (consensusProviders.length === 0) {
-    io.warn(
-      'Only 1 provider available — cannot verify consensus. Data may be compromised. Proceeding anyway.',
-    );
+    io.warn(t('bootstrap_single_provider_warn'));
     return;
   }
 
@@ -121,11 +120,14 @@ async function runConsensusCheck(
   if (!consensusLoc) return;
 
   try {
-    const consensusData = await consensusProvider.download({
+    const consensusStream = await consensusProvider.download({
       provider_id: consensusProvider.id,
       path: `shard_${consensusLoc.shard_index}.bfs.${version}`,
     });
-    const cm = parseShardHeaderOnly(consensusData);
+    // Only ~4 KB read for header; payloadStream discarded immediately
+    const { header: cm, payloadStream: cps } =
+      await parseShardHeaderFromStream(consensusStream);
+    cps.destroy();
 
     const mismatch: string[] = [];
     if (cm.vault_id !== meta.vault_id) mismatch.push('vault_id');
@@ -186,10 +188,12 @@ export async function bootstrapFromProvider(
   const version =
     targetVersion !== undefined ? targetVersion : Math.max(...versionSet);
 
-  // Download the bootstrap shard and validate its filename against the header
+  // Download bootstrap shard — only reads ~4 KB for header (no full-shard buffering)
   const bootstrapRef = findTargetShard(refs, version);
-  const bootstrapData = await bootstrapProvider.download(bootstrapRef);
-  const meta = parseShardHeaderOnly(bootstrapData);
+  const bootstrapStream = await bootstrapProvider.download(bootstrapRef);
+  const { header: meta, payloadStream: ps1 } =
+    await parseShardHeaderFromStream(bootstrapStream);
+  ps1.destroy(); // discard payload — only header metadata needed
 
   const parsedFilename = parseVersionFromFilename(bootstrapRef.path);
   if (!parsedFilename)
@@ -215,13 +219,17 @@ export async function bootstrapFromProvider(
     if (!meta.kdf_salt)
       throw new BfsError('kdf_salt missing from encrypted shard header.');
     encKey = await deriveKey(password, meta.kdf_salt);
-    ({
-      header: { location_map },
-    } = parseShard(bootstrapData, encKey));
+    // Re-download to parse location map with decryption key (~4 KB read)
+    const stream2 = await bootstrapProvider.download(bootstrapRef);
+    const { header: h2, payloadStream: ps2 } = await parseShardHeaderFromStream(
+      stream2,
+      encKey,
+    );
+    ps2.destroy();
+    location_map = h2.location_map;
   } else {
-    ({
-      header: { location_map },
-    } = parseShard(bootstrapData));
+    // Non-encrypted: location_map already parsed in first header read
+    location_map = meta.location_map;
   }
 
   // Connect to all providers discovered in the location map, then run consensus check

@@ -220,7 +220,8 @@ describe('init', () => {
       .mockResolvedValueOnce({ id: 'p3' } as never) // provider 3 id
       .mockResolvedValueOnce({ type: 'local' } as never) // provider 3 type
       .mockResolvedValueOnce({ dirPath: '/mnt/d3' } as never) // provider 3 path
-      .mockResolvedValueOnce({ pushMode: PushMode.NewVersion } as never); // push_mode
+      .mockResolvedValueOnce({ pushMode: PushMode.NewVersion } as never) // push_mode
+      .mockResolvedValueOnce({ maxRamStr: '1024' } as never); // max_ram_mb
 
     await runCmd(['init']);
 
@@ -246,7 +247,8 @@ describe('init', () => {
       .mockResolvedValueOnce({ id: 'p3' } as never)
       .mockResolvedValueOnce({ type: 'local' } as never)
       .mockResolvedValueOnce({ dirPath: '/mnt/d3' } as never)
-      .mockResolvedValueOnce({ pushMode: PushMode.NewVersion } as never);
+      .mockResolvedValueOnce({ pushMode: PushMode.NewVersion } as never) // push_mode
+      .mockResolvedValueOnce({ maxRamStr: '1024' } as never); // max_ram_mb
 
     await runCmd(['init', 'myvault']);
 

@@ -58,6 +58,7 @@ export interface Strings {
   global_settings_group: string;
   lang_set: string;
   no_config: string;
+  cancel: string;
   cancelled: string;
   required: string;
   path_required: string;
@@ -100,12 +101,28 @@ export interface Strings {
   init_push_mode_invalid: string;
   /** %s = spec */
   init_provider_format_invalid: string;
+  /** %s = detected MB */
+  init_max_ram_prompt: string;
+  init_opt_max_ram: string;
   /** %s = vaultName */
   init_success: string;
 
   // ─── clear ────────────────────────────────────────────────────────────────
   cmd_clear_desc: string;
   clear_done: string;
+
+  // ─── config ───────────────────────────────────────────────────────────────
+  cmd_config_desc: string;
+  config_current_settings: string;
+  config_updated: string;
+  config_reset: string;
+  config_reset_no_field: string;
+  /** %s = flag name (twice) */
+  config_dir_hint: string;
+  config_opt_cache_dir: string;
+  config_opt_temp_dir: string;
+  config_opt_max_ram: string;
+  config_opt_reset: string;
 
   // ─── push ─────────────────────────────────────────────────────────────────
   push_preparing: string;
@@ -119,6 +136,9 @@ export interface Strings {
   push_opt_overwrite: string;
   push_opt_password: string;
   push_opt_cache: string;
+  push_opt_max_ram: string;
+  opt_temp_dir_desc: string;
+  opt_cache_dir_desc: string;
 
   // ─── pull ─────────────────────────────────────────────────────────────────
   pull_preparing: string;
@@ -220,6 +240,14 @@ export interface Strings {
   scheme_changed: string;
   scheme_apply_push: string;
 
+  // ─── provider: local-fs ──────────────────────────────────────────────────
+  /** %s = basePath */
+  provider_local_path_not_exist_confirm: string;
+  /** %s = basePath */
+  provider_local_path_not_exist_error: string;
+  /** %s = basePath */
+  provider_local_path_not_writable: string;
+
   // ─── provider add ─────────────────────────────────────────────────────────
   /** %s = count */
   provider_add_opt_ci: string;
@@ -279,6 +307,7 @@ export interface Strings {
   provider_remove_rebuild_all: string;
   provider_remove_rebuild_latest: string;
   provider_remove_no_other_providers: string;
+  provider_remove_rebuild_new_location: string;
   provider_remove_target_prompt: string;
   provider_remove_yes_required: string;
   /** %s = id */
@@ -298,6 +327,49 @@ export interface Strings {
   provider_relocate_success: string;
   /** %s = id */
   provider_rebuild_success: string;
+
+  // ─── vault operations ────────────────────────────────────────────────────
+  /** %s = version */
+  vault_download_shards: string;
+  /** %s = provider_id, %s = shard_index */
+  vault_provider_not_found: string;
+  /** %s = shard_index+1 (1-based), %s = N+K total */
+  vault_download_shard_progress: string;
+  /** %s = provider_id */
+  vault_provider_unreachable: string;
+  /** %s = provider_id */
+  vault_file_missing_on_provider: string;
+  vault_decoding_rs: string;
+  vault_ask_decrypt_password: string;
+  vault_decrypting: string;
+  /** %s = working_version, %s = latest_version, %s = targetVersion */
+  vault_push_version_confirm: string;
+  vault_using_cached_blob: string;
+  vault_no_cached_blob_push: string;
+  /** %s = count, %s = file list */
+  vault_push_skipped_confirm: string;
+  vault_ask_encrypt_password: string;
+  vault_ask_confirm_password: string;
+  vault_encrypting: string;
+  vault_password_overrides_config: string;
+  vault_encoding_rs: string;
+  vault_uploading_shards: string;
+  /** %s = i+1 (1-based), %s = N+K total */
+  vault_upload_shard_progress: string;
+  vault_no_cached_blob_pull: string;
+  /** %s = working_version, %s = targetVersion */
+  vault_pull_overwrite_confirm: string;
+  vault_unpacking_files: string;
+  /** %s = count, %s = file list */
+  vault_pull_write_error_confirm: string;
+  vault_degraded_provider_unreachable: string;
+  vault_degraded_file_missing: string;
+
+  // ─── recovery operations (vault layer) ──────────────────────────────────
+  recovery_ask_version_password: string;
+
+  // ─── bootstrap operations ────────────────────────────────────────────────
+  bootstrap_single_provider_warn: string;
 }
 
 const translations: Record<string, Strings> = { en, pl };

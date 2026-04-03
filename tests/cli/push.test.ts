@@ -179,6 +179,22 @@ describe('push', () => {
     );
   });
 
+  it('should pass cacheDir when --cache-dir flag given', async () => {
+    mockPush.mockResolvedValue({
+      version: 1,
+      file_count: 0,
+      total_size: 0,
+      skipped: [],
+    });
+
+    await runCmd(['push', '--cache-dir', '/custom/cache']);
+
+    expect(mockPush).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ cacheDir: '/custom/cache' }),
+    );
+  });
+
   // ─── Prompt ask (push_mode=ask) ───────────────────────────────────────────
 
   it('should call io.choose when push_mode=ask and pass user answer to push', async () => {
