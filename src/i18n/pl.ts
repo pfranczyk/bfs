@@ -406,9 +406,18 @@ export const pl: Strings = {
 
   // ─── recovery operations (vault layer) ──────────────────────────────────
   recovery_ask_version_password:
-    'Podaj hasło dla tej wersji (zostaw puste, aby pominąć):',
+    'Podaj hasło dla wersji %s (zostaw puste, aby pominąć):',
+  recovery_pool_password_failed: 'Znane hasła nie pasują do wersji %s.',
+  recovery_wrong_password_retry:
+    'Błędne hasło. Spróbuj ponownie dla wersji %s (zostaw puste, aby pominąć):',
+  recovery_decrypt_skip:
+    'Wersja %s pominięta — nie udało się odszyfrować (błędne hasło lub nie podano).',
 
   // ─── bootstrap operations ────────────────────────────────────────────────
+  bootstrap_ask_password:
+    'Kopia zapasowa jest zaszyfrowana. Podaj hasło dla wersji %s:',
+  bootstrap_wrong_password_retry:
+    'Błędne hasło. Spróbuj ponownie dla wersji %s:',
   bootstrap_single_provider_warn:
     'Tylko 1 provider dostępny — nie można zweryfikować konsensusu. Dane mogą być naruszone. Kontynuuję.',
 };

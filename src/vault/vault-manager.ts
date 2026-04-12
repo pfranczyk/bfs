@@ -172,7 +172,7 @@ export interface PushOptions {
    * Defaults to false (standalone CLI: abort with PushSkippedError).
    */
   interactive?: boolean;
-  /** Directory for temporary parity files during push. Defaults to os.tmpdir(). */
+  /** Directory for temporary parity files during push. Defaults to cacheDir. */
   tempDir?: string;
   /** Overrides cache directory for push.blob.pending. Defaults to {rootDir}/.bfs/cache. */
   cacheDir?: string;
@@ -200,7 +200,7 @@ export interface PullOptions {
    * Defaults to false (standalone CLI: abort with PullSkippedError).
    */
   interactive?: boolean;
-  /** Directory for temporary files during pull. Defaults to os.tmpdir(). */
+  /** Directory for temporary files during pull. Defaults to output dir. */
   tempDir?: string;
   /** Overrides cache directory for pull.blob.pending. Defaults to {rootDir}/.bfs/cache. */
   cacheDir?: string;
@@ -908,9 +908,10 @@ export async function push(
   // ── Validate configured directories early (before any prompts) ────────────
   const cacheDir =
     options.cacheDir ?? config.cache_dir ?? path.join(rootDir, '.bfs', 'cache');
-  const tempDir = options.tempDir ?? config.temp_dir ?? os.tmpdir();
   await _validateConfigDir(cacheDir, 'cache-dir');
-  await _validateConfigDir(tempDir, 'temp-dir');
+  await fs.mkdir(cacheDir, { recursive: true });
+  const tempDir = options.tempDir ?? config.temp_dir ?? cacheDir;
+  if (tempDir !== cacheDir) await _validateConfigDir(tempDir, 'temp-dir');
 
   // ── Decide target version ──────────────────────────────────────────────────
   const effectiveMode = options.mode ?? config.push_mode;
@@ -1094,16 +1095,13 @@ export async function push(
     }
     let password: Nullable<string> = options.password ?? null;
     if (!password) {
-      const existingManifests = await listManifests(rootDir);
       password = await options.io.askSecret(t('vault_ask_encrypt_password'));
       if (!password)
         throw new BfsError('Password required for encrypted vault.');
-      if (existingManifests.length === 0) {
-        const confirm = await options.io.askSecret(
-          t('vault_ask_confirm_password'),
-        );
-        if (confirm !== password) throw new BfsError('Passwords do not match.');
-      }
+      const confirm = await options.io.askSecret(
+        t('vault_ask_confirm_password'),
+      );
+      if (confirm !== password) throw new BfsError('Passwords do not match.');
     }
     kdf_salt = generateSalt();
     encKey = await deriveKey(password, kdf_salt);

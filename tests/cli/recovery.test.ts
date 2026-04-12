@@ -359,7 +359,7 @@ describe('recovery', () => {
 
     expect(mockRecover).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ password: 'tajne' }),
+      expect.objectContaining({ passwords: ['tajne'] }),
     );
   });
 });

@@ -1,11 +1,10 @@
-import { createReadStream, createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
 import { deriveKey } from '../core/crypto.js';
 import { BfsError } from '../core/errors.js';
 import { parseShardHeaderFromStream } from '../core/shard-io.js';
-import { t } from '../i18n/index.js';
+import { fmt } from '../i18n/index.js';
 import type {
   ManifestShard,
   ProviderConfig,
@@ -36,8 +35,8 @@ export interface RecoveryOptions {
   provider: StorageProvider;
   /** ProviderIO for authentication of other providers */
   io: ProviderIO;
-  /** Starting password for encrypted vaults (added to the password pool) */
-  password?: string;
+  /** Known passwords for encrypted vaults (all added to the password pool) */
+  passwords?: string[];
   /** Overrides cache directory for recovered shards. Defaults to {rootDir}/.bfs/cache. */
   cacheDir?: string;
 }
@@ -57,29 +56,31 @@ export interface RecoveryReport {
 /** Context passed to processVersion for each version discovered during recovery. */
 interface ProcessVersionContext {
   readonly vaultName: string;
-  readonly cacheDir: string;
   readonly bootstrapVaultId: string;
   readonly passwordPool: string[];
   readonly io: ProviderIO;
 }
 
+const MAX_PASSWORD_ATTEMPTS = 3;
+
 /** Attempts to decrypt a location map from a shard using the provided password pool (MRU order). */
 async function tryDecryptLocationMap(
   header: ShardHeader,
-  filePath: string,
+  headerBytes: Buffer,
+  version: number,
   passwordPool: string[],
   io: ProviderIO,
 ): Promise<Nullable<{ location_map: ShardLocation[]; encKey: Buffer }>> {
   if (!header.encrypted || !header.kdf_salt) return null;
 
+  // Try all known passwords from pool (MRU order)
   for (let i = passwordPool.length - 1; i >= 0; i--) {
     const pwd = passwordPool[i];
     if (pwd === undefined) continue;
     try {
       const key = await deriveKey(pwd, header.kdf_salt);
-      const fs1 = createReadStream(filePath);
       const { header: h1, payloadStream: ps1 } =
-        await parseShardHeaderFromStream(fs1, key);
+        await parseShardHeaderFromStream(Readable.from(headerBytes), key);
       ps1.on('error', () => {}).destroy();
       return { location_map: h1.location_map, encKey: key };
     } catch {
@@ -87,28 +88,38 @@ async function tryDecryptLocationMap(
     }
   }
 
-  // No password in pool worked — ask user for a new one
-  let newPassword: Nullable<string> = null;
-  try {
-    newPassword = await io.askSecret(t('recovery_ask_version_password'));
-  } catch {
-    return null;
+  // No password in pool worked — ask user with retry
+  const ver = String(version);
+  if (passwordPool.length > 0) {
+    io.warn(fmt('recovery_pool_password_failed', ver));
   }
-  if (!newPassword) return null;
 
-  try {
-    const key = await deriveKey(newPassword, header.kdf_salt);
-    const fs2 = createReadStream(filePath);
-    const { header: h2, payloadStream: ps2 } = await parseShardHeaderFromStream(
-      fs2,
-      key,
-    );
-    ps2.on('error', () => {}).destroy();
-    passwordPool.push(newPassword); // add to pool for future versions
-    return { location_map: h2.location_map, encKey: key };
-  } catch {
-    return null;
+  for (let attempt = 0; attempt < MAX_PASSWORD_ATTEMPTS; attempt++) {
+    let newPassword: Nullable<string> = null;
+    try {
+      const prompt =
+        attempt === 0
+          ? fmt('recovery_ask_version_password', ver)
+          : fmt('recovery_wrong_password_retry', ver);
+      newPassword = await io.askSecret(prompt);
+    } catch {
+      return null;
+    }
+    if (!newPassword) return null;
+
+    try {
+      const key = await deriveKey(newPassword, header.kdf_salt);
+      const { header: h2, payloadStream: ps2 } =
+        await parseShardHeaderFromStream(Readable.from(headerBytes), key);
+      ps2.on('error', () => {}).destroy();
+      passwordPool.push(newPassword);
+      return { location_map: h2.location_map, encKey: key };
+    } catch {
+      // wrong password — retry
+    }
   }
+
+  return null;
 }
 
 /**
@@ -160,13 +171,13 @@ async function processVersion(
   entries: Array<{ shardIndex: number; provider: StorageProvider }>,
   ctx: ProcessVersionContext,
 ): Promise<Nullable<{ manifest: VersionManifest; consensusOk: boolean }>> {
-  const { vaultName, cacheDir, bootstrapVaultId, passwordPool, io } = ctx;
+  const { vaultName, bootstrapVaultId, passwordPool, io } = ctx;
 
-  // Download up to 2 shards from different providers for consensus.
-  // Each shard streamed to cache file; header parsed from full file stream.
+  // Download up to 2 shard headers from different providers for consensus.
+  // Only the first ~16 KB is read (header bytes); full payload is NOT downloaded.
   const shardDataList: Array<{
     header: ShardHeader;
-    filePath: string;
+    headerBytes: Buffer;
     providerId: string;
   }> = [];
   for (const entry of entries) {
@@ -178,18 +189,27 @@ async function processVersion(
         provider_id: entry.provider.id,
         path: filename,
       });
-      // Stream shard directly to cache file — no full-shard buffering
-      const cachedPath = path.join(cacheDir, filename);
-      await pipeline(stream, createWriteStream(cachedPath));
+      // Read only the header portion (~16 KB), not the full shard payload.
+      // break from for-await calls iterator.return() which destroys the stream.
+      const chunks: Buffer[] = [];
+      let bytesRead = 0;
+      for await (const chunk of stream) {
+        const buf = Buffer.isBuffer(chunk)
+          ? chunk
+          : Buffer.from(chunk as Uint8Array);
+        chunks.push(buf);
+        bytesRead += buf.length;
+        if (bytesRead >= 16384) break;
+      }
+      const headerBytes = Buffer.concat(chunks);
 
-      // Parse header from full file stream; destroy payload to avoid background SHA-256 read
-      const fileStream = createReadStream(cachedPath);
+      // Parse header from buffered bytes; payload stream errors are expected (truncated data)
       const { header: shardHeader, payloadStream } =
-        await parseShardHeaderFromStream(fileStream);
+        await parseShardHeaderFromStream(Readable.from(headerBytes));
       payloadStream.on('error', () => {}).destroy();
       shardDataList.push({
         header: shardHeader,
-        filePath: cachedPath,
+        headerBytes,
         providerId: entry.provider.id,
       });
     } catch {
@@ -246,7 +266,8 @@ async function processVersion(
   if (primaryMeta.encrypted) {
     const result = await tryDecryptLocationMap(
       primaryData.header,
-      primaryData.filePath,
+      primaryData.headerBytes,
+      version,
       passwordPool,
       io,
     );
@@ -255,7 +276,7 @@ async function processVersion(
     location_map = primaryData.header.location_map;
   }
   if (!location_map) {
-    io.warn(`Version ${version}: could not decrypt location map — skipping`);
+    io.warn(fmt('recovery_decrypt_skip', String(version)));
     return null;
   }
 
@@ -367,14 +388,16 @@ export async function recover(
   }
 
   // ── 2. Bootstrap ──────────────────────────────────────────────────────────
-  const passwordPool: string[] = options.password ? [options.password] : [];
+  const passwordPool: string[] = options.passwords
+    ? [...options.passwords]
+    : [];
 
   const bootstrap = await bootstrapFromProvider(
     bootstrapProvider,
     vaultName,
     io,
     undefined,
-    options.password,
+    passwordPool,
   );
 
   // Save bootstrap shard to cache
@@ -396,13 +419,14 @@ export async function recover(
   let latestVerified = 0;
   const processCtx: ProcessVersionContext = {
     vaultName,
-    cacheDir,
     bootstrapVaultId: bootstrap.vault_id,
     passwordPool,
     io,
   };
 
-  for (const version of [...versionProviderMap.keys()].sort((a, b) => a - b)) {
+  // Process newest versions first — bootstrap password is most likely to match
+  // recent versions, minimizing interactive password prompts when passwords change.
+  for (const version of [...versionProviderMap.keys()].sort((a, b) => b - a)) {
     const providerEntries = versionProviderMap.get(version);
     if (!providerEntries || providerEntries.size === 0) continue;
 

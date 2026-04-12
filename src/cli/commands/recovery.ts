@@ -49,14 +49,19 @@ export function registerRecovery(program: Command): void {
     .option('--provider <type>', t('recovery_opt_provider'))
     .option('--path <path>', t('recovery_opt_path'))
     .option('--name <vaultName>', t('recovery_opt_name'))
-    .option('--password <password>', t('recovery_opt_password'))
+    .option(
+      '--password <password>',
+      t('recovery_opt_password'),
+      (val: string, prev: string[]) => [...prev, val],
+      [] as string[],
+    )
     .action(
       async (
         opts: {
           provider?: string;
           path?: string;
           name?: string;
-          password?: string;
+          password: string[];
         },
         cmd: Command,
       ) => {
@@ -116,8 +121,37 @@ export function registerRecovery(program: Command): void {
           info(msg: string): void {
             spinner.text = chalk.dim(msg);
           },
+          warn(msg: string): void {
+            spinner.stop();
+            io.warn(msg);
+            spinner.start();
+          },
           progress(label: string, percent: number): void {
             spinner.text = `${label} ${chalk.dim(`${Math.round(percent)}%`)}`;
+          },
+          async ask(prompt: string): Promise<string> {
+            spinner.stop();
+            const result = await io.ask(prompt);
+            spinner.start();
+            return result;
+          },
+          async askSecret(prompt: string): Promise<string> {
+            spinner.stop();
+            const result = await io.askSecret(prompt);
+            spinner.start();
+            return result;
+          },
+          async confirm(message: string): Promise<boolean> {
+            spinner.stop();
+            const result = await io.confirm(message);
+            spinner.start();
+            return result;
+          },
+          async choose(message: string, options: string[]): Promise<string> {
+            spinner.stop();
+            const result = await io.choose(message, options);
+            spinner.start();
+            return result;
           },
         };
 
@@ -142,7 +176,7 @@ export function registerRecovery(program: Command): void {
           const report = await recover(rootDir, {
             vaultName,
             provider,
-            ...(opts.password !== undefined ? { password: opts.password } : {}),
+            ...(opts.password.length > 0 ? { passwords: opts.password } : {}),
             io: wrappedIo,
           });
 

@@ -393,8 +393,13 @@ export interface Strings {
 
   // ─── recovery operations (vault layer) ──────────────────────────────────
   recovery_ask_version_password: string;
+  recovery_pool_password_failed: string;
+  recovery_wrong_password_retry: string;
+  recovery_decrypt_skip: string;
 
   // ─── bootstrap operations ────────────────────────────────────────────────
+  bootstrap_ask_password: string;
+  bootstrap_wrong_password_retry: string;
   bootstrap_single_provider_warn: string;
 }
 

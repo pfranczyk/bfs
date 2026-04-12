@@ -30,6 +30,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the next `bfs push`.
 - `bfs config` (no arguments) now also shows the current compression and encryption status
   alongside the existing cache/temp/RAM settings.
+- `bfs recovery` now asks for the password interactively when the backup is encrypted and
+  `--password` is not given. Previously this was a hard error ("provide --password to bootstrap").
+- `bfs recovery` now supports multiple `--password` flags for vaults where the password was
+  changed between versions: `bfs recovery --password oldpass --password newpass`.
+- Wrong password entry during recovery now allows up to 3 retries per version instead of
+  immediately skipping. Each prompt shows the version number it applies to.
+
+### Changed
+- `bfs recovery` now processes versions from newest to oldest. When a password changes between
+  versions, the user only needs to enter the old password once — it is reused automatically
+  for all earlier versions that share it.
+- `bfs push` now always asks to confirm the encryption password when entering it interactively,
+  not only on the first push. Previously a typo during a subsequent push silently uploaded the
+  backup with the wrong key and the failure was only visible later during `bfs pull`.
+
+### Fixed
+- `bfs push` could fail with `ENOENT` for temporary parity files on some Linux environments
+  (including GitHub Actions CI runners). Temporary files are now stored in the backup's cache
+  directory (`.bfs/cache/`) instead of the system temp directory.
+- `bfs recovery` appeared to hang at "Scanning providers…" when the backup was encrypted
+  and no `--password` was given. The spinner was covering the password prompt, so the user
+  could not see the app was waiting for input. Interactive prompts now pause the spinner.
+- `bfs recovery` downloaded entire shard files (multi-GB each) just to read their headers
+  (~1 KB). For a 10 GB backup with 2 versions and 3 providers, recovery would copy ~20 GB
+  of data to cache before finishing. Now only the first few kilobytes of each shard are read,
+  making recovery nearly instant regardless of backup size.
 
 ## [0.3.0] - 2026-04-03
 

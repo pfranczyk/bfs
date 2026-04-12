@@ -390,9 +390,16 @@ export const en: Strings = {
 
   // ─── recovery operations (vault layer) ──────────────────────────────────
   recovery_ask_version_password:
-    'Enter password for this version (or leave blank to skip):',
+    'Enter password for version %s (or leave blank to skip):',
+  recovery_pool_password_failed: 'Known passwords did not work for version %s.',
+  recovery_wrong_password_retry:
+    'Wrong password. Try again for version %s (or leave blank to skip):',
+  recovery_decrypt_skip:
+    'Version %s skipped — could not decrypt (wrong password or not provided).',
 
   // ─── bootstrap operations ────────────────────────────────────────────────
+  bootstrap_ask_password: 'Backup is encrypted. Enter password for version %s:',
+  bootstrap_wrong_password_retry: 'Wrong password. Try again for version %s:',
   bootstrap_single_provider_warn:
     'Only 1 provider available — cannot verify consensus. Data may be compromised. Proceeding anyway.',
 };

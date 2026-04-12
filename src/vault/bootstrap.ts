@@ -1,7 +1,7 @@
 import { deriveKey } from '../core/crypto.js';
 import { BfsError, TamperDetectedError } from '../core/errors.js';
 import { parseShardHeaderFromStream } from '../core/shard-io.js';
-import { t } from '../i18n/index.js';
+import { fmt, t } from '../i18n/index.js';
 import { createProvider } from '../providers/provider.js';
 import type {
   ProviderConfig,
@@ -11,6 +11,8 @@ import type {
   ShardLocation,
   StorageProvider,
 } from '../types/index.js';
+
+const MAX_PASSWORD_ATTEMPTS = 3;
 
 // ─── Result types ─────────────────────────────────────────────────────────────
 
@@ -158,7 +160,7 @@ async function runConsensusCheck(
  * @param bootstrapProvider - Already authenticated provider to start from
  * @param vaultName         - Vault subdirectory name on the provider
  * @param targetVersion     - Specific version to bootstrap; null/undefined = latest found
- * @param password          - Required if the vault is encrypted
+ * @param passwords         - Known passwords to try for encrypted vaults (asks interactively if none work)
  * @param io                - ProviderIO for authenticating additional providers
  * @returns BootstrapResult
  * @throws BfsError if no shards found or fewer than N shards available
@@ -169,7 +171,7 @@ export async function bootstrapFromProvider(
   vaultName: string,
   io: ProviderIO,
   targetVersion?: number,
-  password?: string,
+  passwords?: string[],
 ): Promise<BootstrapResult> {
   bootstrapProvider.setVaultName(vaultName);
 
@@ -210,23 +212,59 @@ export async function bootstrapFromProvider(
 
   // Derive key and parse the location map (decrypt if encrypted)
   let encKey: Nullable<Buffer> = null;
-  let location_map: ShardLocation[];
+  let location_map: ShardLocation[] = [];
   if (meta.encrypted) {
-    if (!password)
-      throw new BfsError(
-        'Vault is encrypted — provide --password to bootstrap.',
-      );
     if (!meta.kdf_salt)
       throw new BfsError('kdf_salt missing from encrypted shard header.');
-    encKey = await deriveKey(password, meta.kdf_salt);
-    // Re-download to parse location map with decryption key (~4 KB read)
-    const stream2 = await bootstrapProvider.download(bootstrapRef);
-    const { header: h2, payloadStream: ps2 } = await parseShardHeaderFromStream(
-      stream2,
-      encKey,
-    );
-    ps2.destroy();
-    location_map = h2.location_map;
+
+    // Try provided passwords first, then ask interactively with retry
+    const candidates = passwords ?? [];
+    let resolved = false;
+    for (const pwd of candidates) {
+      try {
+        encKey = await deriveKey(pwd, meta.kdf_salt);
+        const s = await bootstrapProvider.download(bootstrapRef);
+        const { header: h, payloadStream: ps } =
+          await parseShardHeaderFromStream(s, encKey);
+        ps.destroy();
+        location_map = h.location_map;
+        resolved = true;
+        break;
+      } catch {
+        // wrong password — try next
+      }
+    }
+    if (!resolved) {
+      // Ask user interactively with retry
+      for (let attempt = 0; attempt < MAX_PASSWORD_ATTEMPTS; attempt++) {
+        const ver = String(version);
+        const prompt =
+          attempt === 0
+            ? fmt('bootstrap_ask_password', ver)
+            : fmt('bootstrap_wrong_password_retry', ver);
+        const pwd = await io.askSecret(prompt);
+        if (!pwd) throw new BfsError('Password required for encrypted backup.');
+        try {
+          encKey = await deriveKey(pwd, meta.kdf_salt);
+          const s = await bootstrapProvider.download(bootstrapRef);
+          const { header: h, payloadStream: ps } =
+            await parseShardHeaderFromStream(s, encKey);
+          ps.destroy();
+          location_map = h.location_map;
+          // Add successful interactive password to the pool for processVersion
+          candidates.push(pwd);
+          resolved = true;
+          break;
+        } catch {
+          // wrong password — retry
+        }
+      }
+      if (!resolved) {
+        throw new BfsError(
+          'Could not decrypt backup — all password attempts failed.',
+        );
+      }
+    }
   } else {
     // Non-encrypted: location_map already parsed in first header read
     location_map = meta.location_map;
