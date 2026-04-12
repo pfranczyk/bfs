@@ -4,6 +4,7 @@ import path from 'node:path';
 import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import chalk from 'chalk';
 import type { Command } from 'commander';
+import { estimateCompressibility } from '../../core/compression.js';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO } from '../../providers/provider.js';
 import type { ProviderConfig } from '../../types/index.js';
@@ -129,6 +130,11 @@ function parseProviderSpec(spec: string): ProviderConfig {
 interface InitCiOpts {
   ci?: boolean;
   enc?: boolean;
+  /**
+   * Tri-state: true = --compress, false = --no-compress, undefined = neither.
+   * Detection: process.argv check before Commander defaults kick in.
+   */
+  compress?: boolean;
   dataShards?: string;
   parityShards?: string;
   provider?: string[];
@@ -143,6 +149,8 @@ export function registerInit(program: Command): void {
     .argument('[vault_name]', t('init_vault_name_arg'))
     .option('--ci', t('init_opt_ci'))
     .option('--enc', t('init_opt_enc'))
+    .option('--compress', t('init_opt_compress'))
+    .option('--no-compress', t('init_opt_no_compress'))
     .option('--data-shards <n>', t('init_opt_data_shards'))
     .option('--parity-shards <n>', t('init_opt_parity_shards'))
     .option(
@@ -205,6 +213,52 @@ export function registerInit(program: Command): void {
             },
           ]);
           encEnabled = ans.encEnabled;
+        }
+
+        // ── Compression ───────────────────────────────────────────────────────
+        let compressEnabled: boolean;
+        // Detect whether user provided --compress or --no-compress explicitly.
+        // Commander defaults compress=true via --no-compress registration, so we
+        // check argv directly to distinguish "explicit" from "no flag given".
+        const hasExplicitCompress = process.argv.some(
+          (a) => a === '--compress' || a === '--no-compress',
+        );
+
+        if (hasExplicitCompress) {
+          // Explicit flag → use as-is, skip detection
+          compressEnabled = ciOpts.compress !== false;
+        } else {
+          // No flag → run compressibility analysis, use smart default
+          info(t('init_compress_scanning'));
+          const cr = await estimateCompressibility(rootDir);
+          const ratioPercent = Math.round(cr.ratio * 100);
+          const defaultCompress = cr.ratio <= 0.7;
+
+          if (cr.ratio > 0.7) {
+            info(
+              fmt(
+                'init_compress_skip_suggest',
+                String(ratioPercent),
+                cr.topIncompressible.join(', '),
+              ),
+            );
+          } else {
+            info(t('init_compress_auto_on'));
+          }
+
+          if (isCi) {
+            compressEnabled = defaultCompress;
+          } else {
+            const ans = await promptWithRawMode<{ compressEnabled: boolean }>([
+              {
+                type: 'confirm',
+                name: 'compressEnabled',
+                message: t('init_compress_prompt'),
+                default: defaultCompress,
+              },
+            ]);
+            compressEnabled = ans.compressEnabled;
+          }
         }
 
         // ── N/K scheme ───────────────────────────────────────────────────────
@@ -338,6 +392,7 @@ export function registerInit(program: Command): void {
               algorithm: 'aes-256-gcm',
               kdf: 'argon2id',
             },
+            compression: { enabled: compressEnabled, algorithm: 'deflate' },
             providers,
             push_mode: pushMode,
             max_ram_mb: maxRamMb,

@@ -4,6 +4,12 @@ import type { SkippedFile } from '../core/errors.js';
 
 // ─── Enums ────────────────────────────────────────────────────
 
+/** Bitfield constants for BlobHeader.flags (uint32 LE). */
+export const BLOB_FLAGS = {
+  ENCRYPTED: 0x01,
+  COMPRESSED: 0x02,
+} as const;
+
 /** Tryb zachowania przy push — co robić z istniejącą wersją. */
 export enum PushMode {
   NewVersion = 'new_version',
@@ -36,6 +42,10 @@ export interface VaultConfig {
     enabled: boolean;
     algorithm: 'aes-256-gcm';
     kdf: 'argon2id';
+  };
+  compression: {
+    enabled: boolean;
+    algorithm: 'deflate';
   };
   push_mode: PushMode;
   providers: ProviderConfig[];
@@ -82,6 +92,10 @@ export interface VersionManifest {
   rs_striped?: boolean; // true = striped RS encoding (zawsze przy nowym push)
   rs_stripe_size?: number; // rozmiar stripe w bajtach (tylko gdy rs_striped=true)
   encrypted_per_shard?: boolean; // true = szyfrowanie per shard (zamiast per blob)
+  /** true = data section is a ZIP file (BLOB_FLAGS.COMPRESSED bit set). */
+  compressed?: boolean;
+  /** Sum of uncompressed file sizes before compression (bytes). Present when compressed=true. */
+  blob_size_uncompressed?: number;
 }
 
 export interface ManifestShard {

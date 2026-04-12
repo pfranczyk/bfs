@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-04-12
+
+### Added
+- **ZIP compression** — `bfs push` now compresses backup data using deflate before uploading.
+  Compression is enabled by default for new backups. For text-heavy projects (code, logs,
+  configs) this typically reduces backup size by 50–80 %.
+- `bfs init` now analyses directory contents before asking about compression. When most files
+  are already compressed (images, videos, archives), the prompt defaults to `[y/N]` (off) and
+  shows which file types were detected. For code and text-heavy directories the prompt defaults
+  to `[Y/n]` (on). In CI mode (`--ci`) compression is enabled or disabled automatically based
+  on the same analysis when no explicit flag is given.
+- `bfs init --compress` — explicitly enable compression, skipping the auto-detect analysis.
+  Useful in CI scripts that always want compression regardless of directory contents.
+- `bfs init --no-compress` — disable compression when initializing a new backup (CI/scripted
+  mode). In interactive mode skips the auto-detect analysis and defaults the prompt to off.
+- `bfs push --compress` — enable compression for a single push, overriding the backup
+  configuration (useful when compression was disabled at init time).
+- `bfs push --no-compress` — disable compression for a single push, overriding the backup
+  configuration.
+- `bfs config --on <feature>` / `bfs config --off <feature>` — toggle compression or
+  encryption for an existing backup without re-running `bfs init`. Accepted values:
+  `compress` (or `compression`) and `encryption` (or `encrypt`). The change takes effect
+  on the next `bfs push`.
+- `bfs config` (no arguments) now also shows the current compression and encryption status
+  alongside the existing cache/temp/RAM settings.
+
 ## [0.3.0] - 2026-04-03
 
 ### Changed
@@ -94,6 +120,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/pfranczyk/bfs/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/pfranczyk/bfs/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/pfranczyk/bfs/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/pfranczyk/bfs/releases/tag/v0.1.0

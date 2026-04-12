@@ -32,6 +32,8 @@ export function registerPush(program: Command): void {
     .option('--temp-dir <path>', t('opt_temp_dir_desc'))
     .option('--cache-dir <path>', t('opt_cache_dir_desc'))
     .option('--max-ram <mb>', t('push_opt_max_ram'))
+    .option('--no-compress', t('push_opt_no_compress'))
+    .option('--compress', t('push_opt_compress'))
     .action(
       async (
         opts: {
@@ -42,6 +44,8 @@ export function registerPush(program: Command): void {
           tempDir?: string;
           cacheDir?: string;
           maxRam?: string;
+          /** Commander: false when --no-compress, true when --compress, true by default. */
+          compress?: boolean;
         },
         cmd: Command,
       ) => {
@@ -49,6 +53,22 @@ export function registerPush(program: Command): void {
         let mode: PushMode.NewVersion | PushMode.Overwrite | undefined;
         if (opts.new) mode = PushMode.NewVersion;
         if (opts.overwrite) mode = PushMode.Overwrite;
+
+        // Detect conflict: both flags explicitly given by the user
+        // rawArgs is a JS runtime property not declared in Commander typings
+        const parent = cmd.parent as unknown as { rawArgs?: string[] } | null;
+        const rawArgs = parent?.rawArgs ?? [];
+        const hasCompressFlag = rawArgs.includes('--compress');
+        const hasNoCompressFlag = rawArgs.includes('--no-compress');
+        if (hasCompressFlag && hasNoCompressFlag) {
+          error(t('push_compress_conflict'));
+          throw new CommandAbort();
+        }
+
+        // compressOverride is set only when the user explicitly passed one of the flags
+        const compressSource = cmd.getOptionValueSource('compress');
+        const compressOverride: boolean | undefined =
+          compressSource === 'cli' ? opts.compress : undefined;
 
         const spinner = ora({ color: 'cyan' });
         const io = createCliProviderIO();
@@ -103,6 +123,7 @@ export function registerPush(program: Command): void {
             ...(opts.maxRam !== undefined
               ? { maxRamMb: parseInt(opts.maxRam, 10) }
               : {}),
+            ...(compressOverride !== undefined ? { compressOverride } : {}),
             fromCache: opts.cache ?? false,
             interactive: isReplMode(),
             io: wrappedIo,

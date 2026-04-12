@@ -75,6 +75,8 @@ export const en: Strings = {
   init_opt_ci: 'Non-interactive mode (CI/scripts): skip prompts',
   init_opt_enc:
     'Enable AES-256-GCM encryption (only with --ci, disabled by default)',
+  init_opt_no_compress: 'Disable ZIP compression (enabled by default)',
+  init_opt_compress: 'Enable ZIP compression (overrides auto-detect)',
   init_opt_data_shards: 'Number of data shards N (CI mode)',
   init_opt_parity_shards: 'Number of parity shards K (CI mode)',
   init_opt_provider:
@@ -86,6 +88,11 @@ export const en: Strings = {
   init_scanning: 'Scanning directory…',
   init_found_files: 'Found %s file(s) (%s)',
   init_enc_prompt: 'Enable AES-256-GCM encryption?',
+  init_compress_prompt: 'Enable ZIP compression?',
+  init_compress_scanning: 'Analyzing compressibility…',
+  init_compress_skip_suggest:
+    'Detected %s% already-compressed data (%s). Compression would not reduce backup size.',
+  init_compress_auto_on: 'Compressible data detected — compression recommended',
   init_data_shards_prompt: 'Number of data shards N (min. 2):',
   init_data_shards_min: 'Minimum 2 data shards',
   init_parity_shards_prompt: 'Number of parity shards K (min. 1):',
@@ -121,6 +128,15 @@ export const en: Strings = {
   config_opt_temp_dir: 'Set temporary files directory (overrides system temp)',
   config_opt_max_ram: 'Set RAM limit for encoding (MB, 0 = auto)',
   config_opt_reset: 'Reset setting to default value',
+  config_opt_on: 'Enable feature (compress, encryption)',
+  config_opt_off: 'Disable feature (compress, encryption)',
+  config_feature_on: '%s enabled.',
+  config_feature_off: '%s disabled.',
+  config_feature_unknown:
+    'Unknown feature: %s. Available: compress, encryption',
+  config_next_push: 'Change will take effect on the next push.',
+  config_label_compression: 'compression:',
+  config_label_encryption: 'encryption:',
 
   // ─── push ─────────────────────────────────────────────────────────────────
   push_preparing: 'Preparing push…',
@@ -135,6 +151,11 @@ export const en: Strings = {
   push_opt_password: 'Encryption password (skips interactive prompt)',
   push_opt_cache: 'Upload cached backup data from a previous interrupted push',
   push_opt_max_ram: 'Override RAM limit for this push (MB)',
+  push_opt_no_compress: 'Disable ZIP compression for this push',
+  push_opt_compress: 'Enable ZIP compression for this push',
+  push_compress_conflict: 'Cannot use --compress and --no-compress together',
+  vault_compressing: 'Compressing…',
+  vault_decompressing: 'Decompressing…',
   opt_temp_dir_desc: 'Directory for temporary files during push/pull',
   opt_cache_dir_desc: 'Directory for cached backup data (overrides .bfs/cache)',
 

@@ -1,8 +1,8 @@
 # BFS — Backup File System
 
 Distributed backup CLI tool for Node.js. Packs a directory into a binary blob,
-optionally encrypts it with AES-256-GCM, splits it using Reed-Solomon erasure
-coding, and distributes shards across multiple storage providers. Any N of N+K
+compresses it with deflate, optionally encrypts with AES-256-GCM, splits using
+Reed-Solomon erasure coding, and distributes shards across multiple storage providers. Any N of N+K
 shards can reconstruct the original data — losing up to K providers does not
 cause data loss.
 
@@ -15,6 +15,7 @@ bfs pull
 ## Features
 
 - **Reed-Solomon erasure coding** — configurable N data + K parity shards
+- **Deflate compression** — enabled by default, per-file ZIP with smart skip for already-compressed formats (images, video, archives)
 - **AES-256-GCM encryption** — optional, Argon2id key derivation
 - **Provider-agnostic** — local disk, USB drives, NAS (Google Drive, FTP, SSH — coming soon)
 - **Versioned backups** — every push creates a new numbered version
@@ -27,6 +28,7 @@ bfs pull
 
 - Node.js >= 23
 - Minimum 4 GB RAM (BFS uses ~25% of system memory for Reed-Solomon encoding)
+- **Windows only:** [Microsoft Visual C++ Redistributable 2015–2022 (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe) — required by the Argon2 native binding (Windows 11 desktop typically has this pre-installed; Windows Server usually does not)
 
 ## Installation
 
@@ -75,8 +77,8 @@ Global options:
 ## How it works
 
 ```
-push:  scan dir → pack blob → [encrypt] → Reed-Solomon encode → shards → upload × (N+K)
-pull:  read manifest → download N shards → Reed-Solomon decode → [decrypt] → write files
+push:  scan dir → pack blob → [compress] → [encrypt] → Reed-Solomon encode → shards → upload × (N+K)
+pull:  read manifest → download N shards → Reed-Solomon decode → [decrypt] → [decompress] → write files
 ```
 
 Each provider holds exactly one shard per version. No single provider has

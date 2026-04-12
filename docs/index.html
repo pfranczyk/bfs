@@ -4,9 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BFS — Distributed Backup CLI</title>
-  <meta name="description" content="Distributed backup CLI with Reed-Solomon erasure coding, AES-256-GCM encryption, and multi-provider storage. Lose up to K drives — data survives." />
-  <meta property="og:title" content="BFS — Distributed Backup CLI" />
-  <meta property="og:description" content="Reed-Solomon erasure coding + AES-256-GCM. No cloud lock-in. No single point of failure." />
+  <meta name="description" content="Split your backups across multiple drives with Reed-Solomon erasure coding. Lose drives, not data. AES-256-GCM encryption, deflate compression, versioned snapshots. Free, open-source CLI." />
+  <meta property="og:title" content="BFS — Your drives will fail. Your data won't." />
+  <meta property="og:description" content="Distributed backup with erasure coding. Split across drives, lose some, recover everything. No cloud lock-in. Free CLI tool." />
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     .code-comment { color: #6b7280; }
@@ -32,7 +32,7 @@
   <section class="min-h-screen flex flex-col items-center justify-center px-6 text-center">
     <div class="max-w-3xl">
       <div class="inline-block mb-6 px-3 py-1 rounded-full border border-slate-700 text-xs text-slate-400 tracking-widest uppercase">
-        v0.3.0 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 23
+        v0.4.0 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 23
       </div>
 
       <h1 class="text-7xl font-black tracking-tight mb-4 bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
@@ -40,12 +40,12 @@
       </h1>
 
       <p class="text-xl sm:text-2xl font-semibold text-slate-200 mb-3" data-i18n="hero_subtitle">
-        Distributed Backup CLI with Reed-Solomon Erasure Coding
+        Your drives will fail. Your data won't.
       </p>
       <p class="text-slate-400 text-base sm:text-lg mb-10 max-w-xl mx-auto" data-i18n="hero_desc">
-        Encrypt, split, distribute — reconstruct from any <span class="text-white font-mono">N</span> of
-        <span class="text-white font-mono">N+K</span> shards.
-        No cloud lock-in. No single point of failure.
+        Split backups across multiple drives so no single drive holds your complete data.
+        Lose a drive? Pull a new one, recover, keep going.
+        It's math, not luck.
       </p>
 
       <!-- Install command -->
@@ -81,52 +81,63 @@
       <div class="grid sm:grid-cols-2 gap-5">
 
         <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6">
-          <div class="text-3xl mb-3">🔐</div>
-          <h3 class="text-lg font-semibold mb-2" data-i18n="feat1_title">AES-256-GCM Encryption</h3>
-          <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat1_desc">
-            Optional, per-vault encryption with Argon2id key derivation.
-            No password — no data. Shards are opaque binary blobs.
+          <div class="text-3xl mb-3">🧩</div>
+          <h3 class="text-lg font-semibold mb-2" data-i18n="feat2_title">Survive Drive Failures</h3>
+          <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat2_desc">
+            Your backup is split into <span class="text-white font-mono">N+K</span> pieces using Reed-Solomon
+            erasure coding — the same math that keeps CDs readable despite scratches.
+            Lose up to K drives and still recover everything from any N.
           </p>
         </div>
 
         <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6">
-          <div class="text-3xl mb-3">🧩</div>
-          <h3 class="text-lg font-semibold mb-2" data-i18n="feat2_title">Reed-Solomon N+K</h3>
-          <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat2_desc">
-            Configurable erasure coding. Set your own <span class="text-white font-mono">N</span> data shards
-            and <span class="text-white font-mono">K</span> parity shards.
-            Lose up to K providers — data still reconstructs from any N.
+          <div class="text-3xl mb-3">🔐</div>
+          <h3 class="text-lg font-semibold mb-2" data-i18n="feat1_title">Your Eyes Only</h3>
+          <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat1_desc">
+            Optional AES-256-GCM encryption with Argon2id key derivation.
+            Each drive holds one piece — encrypted, incomplete, and useless on its own.
+          </p>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6">
+          <div class="text-3xl mb-3">📦</div>
+          <h3 class="text-lg font-semibold mb-2" data-i18n="feat0_title">Smaller Backups, Automatically</h3>
+          <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat0_desc">
+            Deflate compression is on by default.
+            BFS detects already-compressed files (photos, videos, archives)
+            and skips them — no wasted CPU, smaller shards.
           </p>
         </div>
 
         <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6">
           <div class="text-3xl mb-3">🌐</div>
-          <h3 class="text-lg font-semibold mb-2" data-i18n="feat3_title">Multi-provider</h3>
+          <h3 class="text-lg font-semibold mb-2" data-i18n="feat3_title">Use Whatever Storage You Have</h3>
           <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat3_desc">
-            Local disk, USB drives, network-mounted folders.
-            Google Drive, FTP, SSH/SFTP — coming soon.
-            Each provider holds exactly one shard per version.
+            USB drives, external HDDs, NAS, network folders —
+            anything that can hold a file. No cloud subscription required.
+            No vendor lock-in.
           </p>
         </div>
 
         <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6">
           <div class="text-3xl mb-3">🗂️</div>
-          <h3 class="text-lg font-semibold mb-2" data-i18n="feat4_title">Versioned Snapshots</h3>
+          <h3 class="text-lg font-semibold mb-2" data-i18n="feat4_title">Every Push Is a Snapshot</h3>
           <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat4_desc">
-            Every push creates a new version. Verify shard health, prune old versions,
-            or recover everything from a single found shard — no config needed.
+            Each backup creates a new numbered version.
+            Keep the last 7, or 30, or all of them.
+            Verify health, prune old ones, restore from any point.
           </p>
         </div>
 
-        <!-- Full-width 5th card -->
+        <!-- Full-width card -->
         <div class="sm:col-span-2 bg-gradient-to-r from-slate-900 to-slate-800 border border-indigo-500/40 rounded-2xl p-6 flex gap-5 items-start">
           <div class="text-4xl mt-0.5 shrink-0">🕸️</div>
           <div>
-            <h3 class="text-lg font-semibold mb-2" data-i18n="feat5_title">No Central Authority</h3>
+            <h3 class="text-lg font-semibold mb-2" data-i18n="feat5_title">Lost Everything? One Shard Is Enough</h3>
             <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat5_desc">
-              Every shard carries an encrypted map of all other shards' locations.
-              One shard is enough to discover and reconstruct the rest —
-              no master index, no coordination server, no single point of control.
+              Every piece of your backup carries a map to all the others.
+              Find one surviving drive, run <span class="text-white font-mono">bfs recovery</span> —
+              your config, your files, everything comes back.
             </p>
           </div>
         </div>
@@ -237,7 +248,7 @@
   <footer class="border-t border-slate-800 py-10 px-6 text-center text-slate-500 text-sm">
     <p class="mb-2">
       <span class="text-white font-semibold">BFS</span>
-      &nbsp;v0.3.0
+      &nbsp;v0.4.0
       &nbsp;·&nbsp;
       <a href="https://github.com/pfranczyk/BFS/blob/master/LICENSE" class="hover:text-white transition-colors">AGPL-3.0</a>
       &nbsp;·&nbsp;
@@ -254,18 +265,20 @@
   <script>
     const translations = {
       en: {
-        hero_subtitle: 'Distributed Backup CLI with Reed-Solomon Erasure Coding',
-        hero_desc:     'Encrypt, split, distribute — reconstruct from any <span class="text-white font-mono">N</span> of <span class="text-white font-mono">N+K</span> shards. No cloud lock-in. No single point of failure.',
+        hero_subtitle: 'Your drives will fail. Your data won\'t.',
+        hero_desc:     'Split backups across multiple drives so no single drive holds your complete data. Lose a drive? Pull a new one, recover, keep going. It\'s math, not luck.',
         copy_btn:      'copy',
         why_title:     'Why BFS?',
-        feat1_title:   'AES-256-GCM Encryption',
-        feat1_desc:    'Optional, per-vault encryption with Argon2id key derivation. No password — no data. Shards are opaque binary blobs.',
-        feat2_title:   'Reed-Solomon N+K',
-        feat2_desc:    'Configurable erasure coding. Set your own <span class="text-white font-mono">N</span> data shards and <span class="text-white font-mono">K</span> parity shards. Lose up to K providers — data still reconstructs from any N.',
-        feat3_title:   'Multi-provider',
-        feat3_desc:    'Local disk, USB drives, network-mounted folders. Google Drive, FTP, SSH/SFTP — coming soon. Each provider holds exactly one shard per version.',
-        feat4_title:   'Versioned Snapshots',
-        feat4_desc:    'Every push creates a new version. Verify shard health, prune old versions, or recover everything from a single found shard — no config needed.',
+        feat2_title:   'Survive Drive Failures',
+        feat2_desc:    'Your backup is split into <span class="text-white font-mono">N+K</span> pieces using Reed-Solomon erasure coding — the same math that keeps CDs readable despite scratches. Lose up to K drives and still recover everything from any N.',
+        feat1_title:   'Your Eyes Only',
+        feat1_desc:    'Optional AES-256-GCM encryption with Argon2id key derivation. Each drive holds one piece — encrypted, incomplete, and useless on its own.',
+        feat0_title:   'Smaller Backups, Automatically',
+        feat0_desc:    'Deflate compression is on by default. BFS detects already-compressed files (photos, videos, archives) and skips them — no wasted CPU, smaller shards.',
+        feat3_title:   'Use Whatever Storage You Have',
+        feat3_desc:    'USB drives, external HDDs, NAS, network folders — anything that can hold a file. No cloud subscription required. No vendor lock-in.',
+        feat4_title:   'Every Push Is a Snapshot',
+        feat4_desc:    'Each backup creates a new numbered version. Keep the last 7, or 30, or all of them. Verify health, prune old ones, restore from any point.',
         qs_title:      'Quick Start',
         step1_label:   'Initialize a vault',
         step1_comment: '# 3 data shards + 1 parity = 4 providers total',
@@ -286,22 +299,24 @@
         cmd_recovery:  'Rebuild vault config from provider shards',
         cmd_prune:     'Delete old backup versions',
         cmd_versions:  'List all versions with health status',
-        feat5_title:   'No Central Authority',
-        feat5_desc:    'Every shard carries an encrypted map of all other shards\' locations. One shard is enough to discover and reconstruct the rest — no master index, no coordination server, no single point of control.',
+        feat5_title:   'Lost Everything? One Shard Is Enough',
+        feat5_desc:    'Every piece of your backup carries a map to all the others. Find one surviving drive, run <span class="text-white font-mono">bfs recovery</span> — your config, your files, everything comes back.',
       },
       pl: {
-        hero_subtitle: 'Rozproszony CLI do kopii zapasowych z kodowaniem Reed-Solomona',
-        hero_desc:     'Szyfruj, dziel, rozpraszaj — odtwórz z dowolnych <span class="text-white font-mono">N</span> z <span class="text-white font-mono">N+K</span> shardów. Żadnych ograniczeń chmury. Żadnego jednego punktu awarii.',
+        hero_subtitle: 'Twoje dyski padną. Twoje dane przetrwają.',
+        hero_desc:     'Rozdziel backup na wiele dysków — żaden z nich nie ma kompletnych danych. Stracisz dysk? Podłącz nowy, odtwórz, działaj dalej. To matematyka, nie szczęście.',
         copy_btn:      'kopiuj',
         why_title:     'Dlaczego BFS?',
-        feat1_title:   'Szyfrowanie AES-256-GCM',
-        feat1_desc:    'Opcjonalne szyfrowanie per-vault z wyprowadzaniem klucza Argon2id. Brak hasła — brak danych. Shardy to nieprzejrzyste bloki binarne.',
-        feat2_title:   'Reed-Solomon N+K',
-        feat2_desc:    'Konfigurowalne kodowanie erasure. Ustaw własne <span class="text-white font-mono">N</span> shardów danych i <span class="text-white font-mono">K</span> shardów parzystości. Utrata do K providerów — dane i tak odtworzysz z dowolnych N.',
-        feat3_title:   'Wielu providerów',
-        feat3_desc:    'Dysk lokalny, pendrive, foldery sieciowe. Google Drive, FTP, SSH/SFTP — wkrótce. Każdy provider przechowuje dokładnie jeden shard na wersję.',
-        feat4_title:   'Wersjonowane snapshoty',
-        feat4_desc:    'Każdy push tworzy nową wersję. Weryfikuj stan shardów, usuwaj stare wersje lub odtwórz wszystko z jednego znalezionego sharda — bez konfiguracji.',
+        feat2_title:   'Odporność na awarie dysków',
+        feat2_desc:    'Backup jest dzielony na <span class="text-white font-mono">N+K</span> fragmentów za pomocą kodowania Reed-Solomona — tej samej matematyki, dzięki której porysowane CD wciąż działają. Stracisz do K dysków i nadal odtworzysz wszystko z dowolnych N.',
+        feat1_title:   'Tylko dla Twoich oczu',
+        feat1_desc:    'Opcjonalne szyfrowanie AES-256-GCM z Argon2id. Każdy dysk przechowuje jeden fragment — zaszyfrowany, niekompletny i bezużyteczny sam w sobie.',
+        feat0_title:   'Mniejsze backupy, automatycznie',
+        feat0_desc:    'Kompresja deflate domyślnie włączona. BFS wykrywa już skompresowane pliki (zdjęcia, filmy, archiwa) i je pomija — bez marnowania CPU, mniejsze fragmenty.',
+        feat3_title:   'Użyj czegokolwiek, co masz',
+        feat3_desc:    'Pendrive, dysk zewnętrzny, NAS, folder sieciowy — wszystko, co trzyma pliki. Bez subskrypcji chmury. Bez uzależnienia od dostawcy.',
+        feat4_title:   'Każdy push to snapshot',
+        feat4_desc:    'Każdy backup tworzy nową numerowaną wersję. Zachowaj ostatnie 7, 30 lub wszystkie. Sprawdzaj stan, usuwaj stare, odtwarzaj z dowolnego momentu.',
         qs_title:      'Szybki start',
         step1_label:   'Utwórz vault',
         step1_comment: '# 3 shardy danych + 1 parzystości = 4 providery łącznie',
@@ -322,8 +337,8 @@
         cmd_recovery:  'Odbuduj konfigurację vaulta z shardów',
         cmd_prune:     'Usuń stare wersje backupu',
         cmd_versions:  'Wylistuj wszystkie wersje ze stanem zdrowia',
-        feat5_title:   'Brak centralnego nadzorcy',
-        feat5_desc:    'Każdy shard zawiera zaszyfrowaną mapę lokalizacji wszystkich pozostałych shardów. Jeden shard wystarczy, by odnaleźć i odbudować resztę — bez głównego indeksu, bez serwera koordynującego, bez centralnego punktu kontroli.',
+        feat5_title:   'Straciłeś wszystko? Wystarczy jeden fragment',
+        feat5_desc:    'Każdy fragment backupu zawiera mapę do wszystkich pozostałych. Znajdź jeden ocalały dysk, uruchom <span class="text-white font-mono">bfs recovery</span> — konfiguracja, pliki, wszystko wraca.',
       },
     };
 

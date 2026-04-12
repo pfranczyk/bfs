@@ -726,6 +726,226 @@ describe('Scenariusz 9: full disaster recovery', () => {
   });
 });
 
+// ─── Scenariusz 9: Kompresja ZIP — roundtrip bez szyfrowania ─────────────────
+
+describe('Scenariusz 9: kompresja ZIP, brak szyfrowania, 2/1', () => {
+  let root: string;
+  let pdirs: string[];
+
+  beforeEach(async () => {
+    root = await tmp();
+    pdirs = [await tmp(), await tmp(), await tmp()];
+  });
+
+  afterEach(async () => {
+    for (const d of [root, ...pdirs])
+      await fs.rm(d, { recursive: true, force: true });
+  });
+
+  it('should roundtrip byte-for-byte with compression enabled', async () => {
+    await init(root, {
+      vault_name: 'zip-vault',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      compression: { enabled: true, algorithm: 'deflate' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    const originalHashes = await createTestFiles(root);
+    await push(root, { io: mockIO() });
+
+    const manifests = await listManifests(root);
+    expect(manifests).toHaveLength(1);
+    const manifest = await readManifest(root, 1);
+    expect(manifest?.compressed).toBe(true);
+
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
+        recursive: true,
+      });
+      await pull(dest, { io: mockIO(), force: true });
+      await assertFilesMatch(dest, originalHashes);
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+
+  it('should write compressed=true in manifest and blob_size_uncompressed', async () => {
+    await init(root, {
+      vault_name: 'zip-vault',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      compression: { enabled: true, algorithm: 'deflate' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    await createTestFiles(root);
+    await push(root, { io: mockIO() });
+
+    const manifest = await readManifest(root, 1);
+    expect(manifest?.compressed).toBe(true);
+    expect(typeof manifest?.blob_size_uncompressed).toBe('number');
+    expect((manifest?.blob_size_uncompressed ?? 0) > 0).toBe(true);
+  });
+
+  it('should push --no-compress override to disable compression per-push', async () => {
+    await init(root, {
+      vault_name: 'zip-vault',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      compression: { enabled: true, algorithm: 'deflate' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    await createTestFiles(root);
+    await push(root, { io: mockIO(), compressOverride: false });
+
+    const manifest = await readManifest(root, 1);
+    expect(manifest?.compressed).toBeUndefined();
+
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
+        recursive: true,
+      });
+      await pull(dest, { io: mockIO(), force: true });
+      await assertFilesMatch(dest, await hashAllFiles(root));
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+
+  it('should push --compress override to enable compression per-push when config has it off', async () => {
+    await init(root, {
+      vault_name: 'zip-vault',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      compression: { enabled: false, algorithm: 'deflate' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    await createTestFiles(root);
+    await push(root, { io: mockIO(), compressOverride: true });
+
+    const manifest = await readManifest(root, 1);
+    expect(manifest?.compressed).toBe(true);
+
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
+        recursive: true,
+      });
+      await pull(dest, { io: mockIO(), force: true });
+      await assertFilesMatch(dest, await hashAllFiles(root));
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── Scenariusz 10: Kompresja ZIP + szyfrowanie — roundtrip ──────────────────
+
+describe('Scenariusz 10: kompresja ZIP + szyfrowanie, 2/1', () => {
+  const PASSWORD = 'zip-enc-pass-789';
+  let root: string;
+  let pdirs: string[];
+
+  beforeEach(async () => {
+    root = await tmp();
+    pdirs = [await tmp(), await tmp(), await tmp()];
+  });
+
+  afterEach(async () => {
+    for (const d of [root, ...pdirs])
+      await fs.rm(d, { recursive: true, force: true });
+  });
+
+  it('should roundtrip byte-for-byte with compression + encryption', async () => {
+    await init(root, {
+      vault_name: 'zip-enc-vault',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: true, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      compression: { enabled: true, algorithm: 'deflate' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO({ password: PASSWORD }),
+    });
+
+    const originalHashes = await createTestFiles(root);
+    await push(root, { io: mockIO(), password: PASSWORD });
+
+    const manifest = await readManifest(root, 1);
+    expect(manifest?.compressed).toBe(true);
+    expect(manifest?.encrypted).toBe(true);
+
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
+        recursive: true,
+      });
+      await pull(dest, { io: mockIO(), force: true, password: PASSWORD });
+      await assertFilesMatch(dest, originalHashes);
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── Scenariusz 11: Wsteczna kompatybilność — blob bez flagi COMPRESSED ──────
+
+describe('Scenariusz 11: wsteczna kompatybilność — brak kompresji w konfiguracji', () => {
+  let root: string;
+  let pdirs: string[];
+
+  beforeEach(async () => {
+    root = await tmp();
+    pdirs = [await tmp(), await tmp(), await tmp()];
+  });
+
+  afterEach(async () => {
+    for (const d of [root, ...pdirs])
+      await fs.rm(d, { recursive: true, force: true });
+  });
+
+  it('should roundtrip without compression flag set (legacy blob)', async () => {
+    await init(root, {
+      vault_name: 'legacy-vault',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      compression: { enabled: false, algorithm: 'deflate' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    const originalHashes = await createTestFiles(root);
+    await push(root, { io: mockIO() });
+
+    const manifest = await readManifest(root, 1);
+    expect(manifest?.compressed).toBeUndefined();
+
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
+        recursive: true,
+      });
+      await pull(dest, { io: mockIO(), force: true });
+      await assertFilesMatch(dest, originalHashes);
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+});
+
 // ─── Scenariusz 8: --password override przy encryption.enabled=false ────────
 
 describe('Scenariusz 8: --password override przy encryption.enabled=false', () => {

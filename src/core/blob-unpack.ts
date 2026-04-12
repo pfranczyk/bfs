@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import type { FileEntry } from '../types/index.js';
+import { BLOB_FLAGS, type FileEntry } from '../types/index.js';
+import { extractZip } from './compression.js';
 import type { SkippedFile } from './errors.js';
 import { BfsError } from './errors.js';
 import { hashBuffer } from './hash.js';
@@ -94,20 +95,31 @@ export async function unpackBlob(
     );
   }
 
-  // 2. Parse file table
-  const entries = parseBlobFileTable(blob);
+  // 2. Detect compression flag
+  const flags = blob.readUInt32LE(0x16);
+  const isCompressed = (flags & BLOB_FLAGS.COMPRESSED) !== 0;
 
   // 3. Read data section offset from header
-  const dataSectionOffset = blob.readBigUInt64LE(0x36); // 54
+  const dataSectionOffset = Number(blob.readBigUInt64LE(0x36)); // 54
+  const dataSectionLength = Number(blob.readBigUInt64LE(0x3e)); // 62
 
-  // 4. Extract files
+  if (isCompressed) {
+    const zipBuffer = blob.subarray(
+      dataSectionOffset,
+      dataSectionOffset + dataSectionLength,
+    );
+    return _extractZipToDir(zipBuffer, targetDir);
+  }
+
+  // 4. Parse file table (raw path)
+  const entries = parseBlobFileTable(blob);
   const extracted: FileEntry[] = [];
   const skipped: SkippedFile[] = [];
 
   for (const entry of entries) {
     if (filter !== undefined && !filter(entry)) continue;
 
-    const start = Number(dataSectionOffset) + Number(entry.data_offset);
+    const start = dataSectionOffset + Number(entry.data_offset);
     const end = start + Number(entry.size);
 
     // Data-corruption checks still throw — these are not permission issues
@@ -321,7 +333,18 @@ export async function unpackBlobFromFile(
       );
     }
 
-    // ── 4. Extract each file using random-access reads ─────────────────────
+    // ── 4. Check compression flag ──────────────────────────────────────────
+    const flags = header.readUInt32LE(0x16);
+    const isCompressed = (flags & BLOB_FLAGS.COMPRESSED) !== 0;
+    const dataSectionLength = Number(header.readBigUInt64LE(0x3e));
+
+    if (isCompressed) {
+      const zipBuffer = Buffer.alloc(dataSectionLength);
+      await fh.read(zipBuffer, 0, dataSectionLength, dataSectionOffset);
+      return _extractZipToDir(zipBuffer, targetDir);
+    }
+
+    // ── 5. Extract each file using random-access reads ─────────────────────
     const extracted: FileEntry[] = [];
     const skipped: SkippedFile[] = [];
 
@@ -381,4 +404,43 @@ export async function unpackBlobFromFile(
   } finally {
     await fh.close();
   }
+}
+
+// ─── Private helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Extracts a ZIP buffer (from a compressed BFS data section) to targetDir.
+ * CRC-32 is verified by extractZip() for each entry.
+ * I/O errors (permission denied, disk full) are collected as skipped — not thrown.
+ */
+async function _extractZipToDir(
+  zipBuffer: Buffer,
+  targetDir: string,
+): Promise<{ extracted: FileEntry[]; skipped: SkippedFile[] }> {
+  const zipEntries = extractZip(zipBuffer); // throws BfsError on corrupt ZIP
+  const extracted: FileEntry[] = [];
+  const skipped: SkippedFile[] = [];
+
+  for (const entry of zipEntries) {
+    const targetPath = path.join(targetDir, entry.filename);
+    try {
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.writeFile(targetPath, entry.data);
+      extracted.push({
+        path: entry.filename,
+        size: BigInt(entry.data.length),
+        data_offset: 0n,
+        hash: '',
+        mode: 0,
+        modified_at: BigInt(Date.now()),
+      });
+    } catch (e: unknown) {
+      skipped.push({
+        path: entry.filename,
+        reason: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  return { extracted, skipped };
 }

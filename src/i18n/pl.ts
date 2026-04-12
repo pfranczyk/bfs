@@ -78,6 +78,8 @@ export const pl: Strings = {
   init_opt_ci: 'Tryb nieinteraktywny (CI/skrypty): pomija prompty',
   init_opt_enc:
     'Włącz szyfrowanie AES-256-GCM (tylko z --ci, domyślnie wyłączone)',
+  init_opt_no_compress: 'Wyłącz kompresję ZIP (domyślnie włączona)',
+  init_opt_compress: 'Włącz kompresję ZIP (nadpisuje auto-detekcję)',
   init_opt_data_shards: 'Liczba shardów danych N (tryb CI)',
   init_opt_parity_shards: 'Liczba shardów parzystości K (tryb CI)',
   init_opt_provider:
@@ -89,6 +91,11 @@ export const pl: Strings = {
   init_scanning: 'Skanowanie katalogu…',
   init_found_files: 'Znaleziono %s plik(ów) (%s)',
   init_enc_prompt: 'Włączyć szyfrowanie AES-256-GCM?',
+  init_compress_prompt: 'Włączyć kompresję ZIP?',
+  init_compress_scanning: 'Analiza kompresji…',
+  init_compress_skip_suggest:
+    'Wykryto %s% danych w formatach skompresowanych (%s). Kompresja nie zmniejszy rozmiaru kopii.',
+  init_compress_auto_on: 'Wykryto dane nadające się do kompresji',
   init_data_shards_prompt: 'Liczba shardów danych N (min. 2):',
   init_data_shards_min: 'Minimum 2 shardy danych',
   init_parity_shards_prompt: 'Liczba shardów parzystości K (min. 1):',
@@ -127,6 +134,15 @@ export const pl: Strings = {
     'Ustaw katalog plików tymczasowych (zastępuje systemowy temp)',
   config_opt_max_ram: 'Ustaw limit RAM do kodowania (MB, 0 = auto)',
   config_opt_reset: 'Przywróć ustawienie do wartości domyślnej',
+  config_opt_on: 'Włącz funkcję (compress, encryption)',
+  config_opt_off: 'Wyłącz funkcję (compress, encryption)',
+  config_feature_on: '%s włączono.',
+  config_feature_off: '%s wyłączono.',
+  config_feature_unknown:
+    'Nieznana funkcja: %s. Dostępne: compress, encryption',
+  config_next_push: 'Zmiana wejdzie w życie przy następnym push.',
+  config_label_compression: 'kompresja:',
+  config_label_encryption: 'szyfrowanie:',
 
   // ─── push ─────────────────────────────────────────────────────────────────
   push_preparing: 'Przygotowanie push…',
@@ -143,6 +159,12 @@ export const pl: Strings = {
   push_opt_cache:
     'Wyślij zbuforowane dane kopii z poprzedniej przerwanej operacji',
   push_opt_max_ram: 'Nadpisz limit RAM dla tego push (MB)',
+  push_opt_no_compress: 'Wyłącz kompresję ZIP dla tego push',
+  push_opt_compress: 'Włącz kompresję ZIP dla tego push',
+  push_compress_conflict:
+    'Nie można używać --compress i --no-compress jednocześnie',
+  vault_compressing: 'Kompresowanie…',
+  vault_decompressing: 'Dekompresowanie…',
   opt_temp_dir_desc: 'Katalog dla plików tymczasowych podczas push/pull',
   opt_cache_dir_desc:
     'Katalog dla zbuforowanych danych kopii (zastępuje .bfs/cache)',

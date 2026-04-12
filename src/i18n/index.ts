@@ -76,6 +76,8 @@ export interface Strings {
   init_dir_path_prompt: string;
   init_opt_ci: string;
   init_opt_enc: string;
+  init_opt_no_compress: string;
+  init_opt_compress: string;
   init_opt_data_shards: string;
   init_opt_parity_shards: string;
   init_opt_provider: string;
@@ -87,6 +89,12 @@ export interface Strings {
   /** %s = count, %s = size */
   init_found_files: string;
   init_enc_prompt: string;
+  init_compress_prompt: string;
+  /** %s = ratio%, %s = top extensions */
+  init_compress_scanning: string;
+  /** %s = ratio percent, %s = top extensions list */
+  init_compress_skip_suggest: string;
+  init_compress_auto_on: string;
   init_data_shards_prompt: string;
   init_data_shards_min: string;
   init_parity_shards_prompt: string;
@@ -123,6 +131,19 @@ export interface Strings {
   config_opt_temp_dir: string;
   config_opt_max_ram: string;
   config_opt_reset: string;
+  /** %s = feature name (compress, encryption) */
+  config_opt_on: string;
+  /** %s = feature name (compress, encryption) */
+  config_opt_off: string;
+  /** %s = feature display name */
+  config_feature_on: string;
+  /** %s = feature display name */
+  config_feature_off: string;
+  /** %s = unknown feature name */
+  config_feature_unknown: string;
+  config_next_push: string;
+  config_label_compression: string;
+  config_label_encryption: string;
 
   // ─── push ─────────────────────────────────────────────────────────────────
   push_preparing: string;
@@ -137,6 +158,11 @@ export interface Strings {
   push_opt_password: string;
   push_opt_cache: string;
   push_opt_max_ram: string;
+  push_opt_no_compress: string;
+  push_opt_compress: string;
+  push_compress_conflict: string;
+  vault_compressing: string;
+  vault_decompressing: string;
   opt_temp_dir_desc: string;
   opt_cache_dir_desc: string;
 

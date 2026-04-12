@@ -7,7 +7,7 @@ import {
 import type { Readable, TransformCallback } from 'node:stream';
 import { Transform } from 'node:stream';
 
-import { Algorithm, hashRaw } from '@node-rs/argon2';
+import { Algorithm, hashRawSync } from '@node-rs/argon2';
 import type { ShardLocation } from '../types/index.js';
 import { DecryptionError } from './errors.js';
 
@@ -37,7 +37,10 @@ export async function deriveKey(
   password: string,
   salt: Buffer,
 ): Promise<Buffer> {
-  return hashRaw(password, {
+  // hashRawSync avoids WASM worker-thread initialization, which fails on
+  // Windows Server 2025 + Node.js v25 when the native .node addon cannot load
+  // its DLL dependency and the WASM fallback tries to spawn pthreads.
+  return hashRawSync(password, {
     salt,
     algorithm: Algorithm.Argon2id,
     outputLen: KEY_SIZE,

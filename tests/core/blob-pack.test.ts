@@ -1,14 +1,20 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, assert, beforeEach, describe, expect, it } from 'vitest';
 import {
   estimateBlobSize,
   packBlob,
   packBlobToFile,
+  packBlobToFileZipped,
 } from '../../src/core/blob-pack.js';
-import { parseBlobFileTable, unpackBlob } from '../../src/core/blob-unpack.js';
+import {
+  parseBlobFileTable,
+  unpackBlob,
+  unpackBlobFromFile,
+} from '../../src/core/blob-unpack.js';
 import { createIgnoreFilter } from '../../src/core/ignore.js';
+import { BLOB_FLAGS } from '../../src/types/index.js';
 
 async function makeTempDir(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'bfs-test-'));
@@ -307,5 +313,179 @@ describe('packBlobToFile', () => {
     // No unreadable files in this test — skipped should be empty
     expect(skipped).toHaveLength(0);
     expect(fileCount).toBe(1);
+  });
+});
+
+// ─── packBlob (compressed) ────────────────────────────────────────────────────
+
+describe('packBlob (compressed=true)', () => {
+  let tmpDir: string;
+  let srcDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-test-comp-'));
+    srcDir = path.join(tmpDir, 'src');
+    await fs.mkdir(srcDir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should set COMPRESSED flag (bit1) in header', async () => {
+    await fs.writeFile(path.join(srcDir, 'a.txt'), 'hello');
+    const ignoreFilter = createIgnoreFilter(srcDir);
+
+    const { blob } = await packBlob(srcDir, ignoreFilter, undefined, true);
+
+    // Flags field at offset 0x16 = 22
+    const flags = blob.readUInt32LE(22);
+    expect(flags & BLOB_FLAGS.COMPRESSED).toBe(BLOB_FLAGS.COMPRESSED);
+  });
+
+  it('should set file_count=1 with entry name "bfs.pack.zip"', async () => {
+    await fs.writeFile(path.join(srcDir, 'a.txt'), 'hello');
+    await fs.writeFile(path.join(srcDir, 'b.txt'), 'world');
+    const ignoreFilter = createIgnoreFilter(srcDir);
+
+    const { blob } = await packBlob(srcDir, ignoreFilter, undefined, true);
+
+    const entries = parseBlobFileTable(blob);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.path).toBe('bfs.pack.zip');
+  });
+
+  it('should roundtrip via unpackBlob (byte-for-byte)', async () => {
+    await fs.writeFile(path.join(srcDir, 'hello.txt'), 'content of hello');
+    await fs.mkdir(path.join(srcDir, 'sub'), { recursive: true });
+    await fs.writeFile(path.join(srcDir, 'sub/nested.txt'), 'nested content');
+    const ignoreFilter = createIgnoreFilter(srcDir);
+
+    const { blob } = await packBlob(srcDir, ignoreFilter, undefined, true);
+    const destDir = path.join(tmpDir, 'dest');
+    await fs.mkdir(destDir);
+    await unpackBlob(blob, destDir);
+
+    const original = await readAllFiles(srcDir);
+    const restored = await readAllFiles(destDir);
+    expect(restored.size).toBe(original.size);
+    for (const [relPath, origData] of original) {
+      const restoredData = restored.get(relPath);
+      expect(restoredData).toBeDefined();
+      assert(restoredData !== undefined, `missing restored file: ${relPath}`);
+      expect(Buffer.compare(restoredData, origData)).toBe(0);
+    }
+  });
+
+  it('should handle empty directory', async () => {
+    const ignoreFilter = createIgnoreFilter(srcDir);
+
+    const { blob, skipped } = await packBlob(
+      srcDir,
+      ignoreFilter,
+      undefined,
+      true,
+    );
+
+    expect(skipped).toHaveLength(0);
+    const destDir = path.join(tmpDir, 'dest');
+    await fs.mkdir(destDir);
+    await unpackBlob(blob, destDir);
+    const restored = await readAllFiles(destDir);
+    expect(restored.size).toBe(0);
+  });
+});
+
+// ─── packBlobToFileZipped ─────────────────────────────────────────────────────
+
+describe('packBlobToFileZipped', () => {
+  let tmpDir: string;
+  let srcDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-test-zipped-'));
+    srcDir = path.join(tmpDir, 'src');
+    await fs.mkdir(srcDir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should produce a valid BFS blob with COMPRESSED flag set', async () => {
+    await fs.writeFile(path.join(srcDir, 'a.txt'), 'hello');
+    const ignoreFilter = createIgnoreFilter(srcDir);
+    const outputPath = path.join(tmpDir, 'out.blob');
+
+    await packBlobToFileZipped(srcDir, outputPath, ignoreFilter);
+
+    const blob = await fs.readFile(outputPath);
+    const flags = blob.readUInt32LE(22);
+    expect(flags & BLOB_FLAGS.COMPRESSED).toBe(BLOB_FLAGS.COMPRESSED);
+    const entries = parseBlobFileTable(blob);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.path).toBe('bfs.pack.zip');
+  });
+
+  it('should roundtrip via unpackBlobFromFile (byte-for-byte)', async () => {
+    const files = [
+      ['hello.txt', 'content of hello'],
+      ['sub/nested.txt', 'nested content'],
+      ['data.bin', Buffer.from([0x00, 0x01, 0x02, 0xff])],
+    ] as const;
+    for (const [name, content] of files) {
+      const full = path.join(srcDir, name);
+      await fs.mkdir(path.dirname(full), { recursive: true });
+      await fs.writeFile(full, content);
+    }
+    const ignoreFilter = createIgnoreFilter(srcDir);
+    const outputPath = path.join(tmpDir, 'out.blob');
+
+    await packBlobToFileZipped(srcDir, outputPath, ignoreFilter);
+
+    const destDir = path.join(tmpDir, 'dest');
+    await fs.mkdir(destDir);
+    await unpackBlobFromFile(outputPath, destDir);
+
+    const original = await readAllFiles(srcDir);
+    const restored = await readAllFiles(destDir);
+    expect(restored.size).toBe(original.size);
+    for (const [relPath, origData] of original) {
+      const restoredData = restored.get(relPath);
+      expect(restoredData).toBeDefined();
+      assert(restoredData !== undefined, `missing restored file: ${relPath}`);
+      expect(Buffer.compare(restoredData, origData)).toBe(0);
+    }
+  });
+
+  it('should return correct fileCount (actual directory files, not ZIP count)', async () => {
+    await fs.writeFile(path.join(srcDir, 'a.txt'), 'a');
+    await fs.writeFile(path.join(srcDir, 'b.txt'), 'b');
+    await fs.writeFile(path.join(srcDir, 'c.txt'), 'c');
+    const ignoreFilter = createIgnoreFilter(srcDir);
+    const outputPath = path.join(tmpDir, 'out.blob');
+
+    const { fileCount } = await packBlobToFileZipped(
+      srcDir,
+      outputPath,
+      ignoreFilter,
+    );
+
+    expect(fileCount).toBe(3); // 3 actual files, not 1 (the ZIP entry)
+  });
+
+  it('should return correct totalSize (sum of uncompressed sizes)', async () => {
+    const content = 'hello world';
+    await fs.writeFile(path.join(srcDir, 'a.txt'), content);
+    const ignoreFilter = createIgnoreFilter(srcDir);
+    const outputPath = path.join(tmpDir, 'out.blob');
+
+    const { totalSize } = await packBlobToFileZipped(
+      srcDir,
+      outputPath,
+      ignoreFilter,
+    );
+
+    expect(totalSize).toBe(Buffer.byteLength(content, 'utf8'));
   });
 });

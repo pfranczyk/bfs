@@ -322,6 +322,7 @@ function reconstructConfig(
       algorithm: 'aes-256-gcm',
       kdf: 'argon2id',
     },
+    compression: { enabled: true, algorithm: 'deflate' as const },
     push_mode: PushMode.NewVersion,
     providers: providerConfigs,
   };

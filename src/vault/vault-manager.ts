@@ -9,6 +9,7 @@ import {
   estimateBlobSize,
   packBlob,
   packBlobToFile,
+  packBlobToFileZipped,
 } from '../core/blob-pack.js';
 import {
   parseBlobFileTable,
@@ -68,7 +69,7 @@ import type {
   VaultConfig,
   VersionManifest,
 } from '../types/index.js';
-import { PushMode, VersionHealth } from '../types/index.js';
+import { BLOB_FLAGS, PushMode, VersionHealth } from '../types/index.js';
 import { readConfig, writeConfig } from './config.js';
 import {
   deleteManifest,
@@ -140,6 +141,8 @@ export interface InitOptions {
   vault_name: string;
   scheme: { data_shards: number; parity_shards: number };
   encryption: { enabled: boolean; algorithm: 'aes-256-gcm'; kdf: 'argon2id' };
+  /** Defaults to `{ enabled: true, algorithm: 'deflate' }` when omitted. */
+  compression?: { enabled: boolean; algorithm: 'deflate' };
   providers: ProviderConfig[];
   push_mode: PushMode;
   /** RAM limit for RS encoding (MB). null = auto (25% os.totalmem()). */
@@ -150,6 +153,13 @@ export interface InitOptions {
 export interface PushOptions {
   /** Overrides config.push_mode. If absent, config.push_mode is used. */
   mode?: PushMode.NewVersion | PushMode.Overwrite;
+  /**
+   * Override compression for this push only.
+   * true  = force compress (even if config.compression.enabled=false)
+   * false = force skip compression (even if config.compression.enabled=true)
+   * undefined = use config.compression.enabled
+   */
+  compressOverride?: boolean;
   /** Pre-provided encryption password (skips interactive prompt). */
   password?: string;
   /**
@@ -858,6 +868,7 @@ export async function init(
     version: 1,
     scheme: options.scheme,
     encryption: options.encryption,
+    compression: options.compression ?? { enabled: true, algorithm: 'deflate' },
     push_mode: options.push_mode,
     providers: options.providers,
     max_ram_mb: options.max_ram_mb ?? null,
@@ -954,11 +965,19 @@ export async function push(
     try {
       const stat = await fs.stat(cachePath);
       const cacheBlob = await fs.readFile(cachePath);
-      const cacheEntries = parseBlobFileTable(cacheBlob);
+      const cacheFlags = cacheBlob.readUInt32LE(0x16);
+      const isCacheCompressed = (cacheFlags & BLOB_FLAGS.COMPRESSED) !== 0;
+      if (isCacheCompressed) {
+        // Compressed blob: actual file_count/total_size not recoverable without extracting ZIP
+        file_count = 0;
+        total_size = 0;
+      } else {
+        const cacheEntries = parseBlobFileTable(cacheBlob);
+        file_count = cacheEntries.length;
+        total_size = cacheEntries.reduce((s, e) => s + Number(e.size), 0);
+      }
       blobSource = cacheBlob;
       blobSize = stat.size;
-      file_count = cacheEntries.length;
-      total_size = cacheEntries.reduce((s, e) => s + Number(e.size), 0);
       cacheLoaded = true;
       options.io.info(t('vault_using_cached_blob'));
     } catch {
@@ -968,34 +987,21 @@ export async function push(
 
   const maxRamMb = options.maxRamMb ?? config.max_ram_mb;
 
+  const shouldCompress =
+    options.compressOverride !== undefined
+      ? options.compressOverride
+      : (config.compression?.enabled ?? true);
+
   if (!cacheLoaded) {
     await fs.unlink(cachePath).catch(() => {});
     options.io.info(t('init_scanning'));
-    const estimated = await estimateBlobSize(rootDir, filter);
-    const ramThreshold = computeRamThreshold(maxRamMb, N, K);
-    let useRamPath = estimated < ramThreshold;
 
-    // Pre-allocate to verify RAM availability; fall back to disk on OOM
-    if (useRamPath) {
-      try {
-        Buffer.alloc(estimated);
-      } catch {
-        useRamPath = false;
-      }
-    }
-
-    if (useRamPath) {
-      const result = await packBlob(rootDir, filter, vaultIdBuf);
-      const ramEntries = parseBlobFileTable(result.blob);
-      blobSource = result.blob;
-      blobSize = result.blob.length;
-      file_count = ramEntries.length;
-      total_size = ramEntries.reduce((s, e) => s + Number(e.size), 0);
-      skipped = result.skipped;
-    } else {
+    if (shouldCompress) {
+      // Compression always uses disk path (ZIP is built in one pass)
+      options.io.info(t('vault_compressing'));
       await fs.mkdir(cacheDir, { recursive: true });
       trackFile(cachePath);
-      const result = await packBlobToFile(
+      const result = await packBlobToFileZipped(
         rootDir,
         cachePath,
         filter,
@@ -1006,6 +1012,43 @@ export async function push(
       file_count = result.fileCount;
       total_size = result.totalSize;
       skipped = result.skipped;
+    } else {
+      const estimated = await estimateBlobSize(rootDir, filter);
+      const ramThreshold = computeRamThreshold(maxRamMb, N, K);
+      let useRamPath = estimated < ramThreshold;
+
+      // Pre-allocate to verify RAM availability; fall back to disk on OOM
+      if (useRamPath) {
+        try {
+          Buffer.alloc(estimated);
+        } catch {
+          useRamPath = false;
+        }
+      }
+
+      if (useRamPath) {
+        const result = await packBlob(rootDir, filter, vaultIdBuf);
+        const ramEntries = parseBlobFileTable(result.blob);
+        blobSource = result.blob;
+        blobSize = result.blob.length;
+        file_count = ramEntries.length;
+        total_size = ramEntries.reduce((s, e) => s + Number(e.size), 0);
+        skipped = result.skipped;
+      } else {
+        await fs.mkdir(cacheDir, { recursive: true });
+        trackFile(cachePath);
+        const result = await packBlobToFile(
+          rootDir,
+          cachePath,
+          filter,
+          vaultIdBuf,
+        );
+        blobSource = cachePath;
+        blobSize = result.blobSize;
+        file_count = result.fileCount;
+        total_size = result.totalSize;
+        skipped = result.skipped;
+      }
     }
   }
 
@@ -1194,6 +1237,9 @@ export async function push(
     rs_striped: true,
     rs_stripe_size: stripeSize,
     encrypted_per_shard: shouldEncrypt,
+    ...(shouldCompress
+      ? { compressed: true as const, blob_size_uncompressed: total_size }
+      : {}),
     shards: manifestShards,
     health: VersionHealth.Healthy,
   };
@@ -1358,7 +1404,10 @@ export async function pull(
     }
   }
 
-  // ── Handle skipped files ───────────────────────────────────────────────────
+  // ── Unpack files ───────────────────────────────────────────────────────────
+  if (manifest?.compressed) {
+    options.io.info(t('vault_decompressing'));
+  }
   // V2: unpack from file (no full-blob Buffer); V1: unpack from Buffer
   let { extracted, skipped } = isV2
     ? await unpackBlobFromFile(blobCachePath, rootDir)

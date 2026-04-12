@@ -6,18 +6,20 @@ import { readConfig, writeConfig } from '../../vault/config.js';
 import { resolveCwd } from '../cwd.js';
 import { error, info, success } from '../ui.js';
 
+const FEATURE_MAP: Record<string, 'compression' | 'encryption'> = {
+  compress: 'compression',
+  compression: 'compression',
+  encryption: 'encryption',
+  encrypt: 'encryption',
+};
+
 /**
  * Registers the `bfs config` command on the given Commander program.
  *
- * Without arguments: displays current cache_dir and temp_dir settings.
- * With --cache-dir <path>: sets cache_dir in config.json.
- * With --temp-dir <path>: sets temp_dir in config.json.
- * With --cache-dir --reset (no path): resets cache_dir to default (null).
- * With --temp-dir --reset (no path): resets temp_dir to default (null).
- *
- * Note: --cache-dir and --temp-dir accept optional values ([path]).
- * When combined with --reset and no path given, the value is `true` (boolean)
- * which signals "reset this setting".
+ * Without arguments: displays current settings (cache/temp/ram + compression/encryption).
+ * With --cache-dir/--temp-dir/--max-ram: updates those settings.
+ * With --on <feature> / --off <feature>: toggles compression or encryption in vault config.
+ * With --reset: resets cache/temp/ram setting to default.
  *
  * @param program - Commander program to attach the command to
  */
@@ -29,6 +31,8 @@ export function registerConfig(program: Command): void {
     .option('--temp-dir [path]', t('config_opt_temp_dir'))
     .option('--max-ram [mb]', t('config_opt_max_ram'))
     .option('--reset', t('config_opt_reset'))
+    .option('--on <feature>', t('config_opt_on'))
+    .option('--off <feature>', t('config_opt_off'))
     .action(
       async (
         opts: {
@@ -36,6 +40,8 @@ export function registerConfig(program: Command): void {
           tempDir?: string | true;
           maxRam?: string | true;
           reset?: boolean;
+          on?: string;
+          off?: string;
         },
         cmd: Command,
       ) => {
@@ -43,6 +49,43 @@ export function registerConfig(program: Command): void {
         const config = await readConfig(rootDir);
         if (!config) {
           error(t('no_config'));
+          return;
+        }
+
+        // ── --on / --off <feature> ────────────────────────────────────────────
+        if (opts.on !== undefined || opts.off !== undefined) {
+          const featureArg = opts.on ?? opts.off ?? '';
+          const featureKey = FEATURE_MAP[featureArg.toLowerCase()];
+          if (!featureKey) {
+            error(fmt('config_feature_unknown', featureArg));
+            return;
+          }
+          const enable = opts.on !== undefined;
+          if (featureKey === 'compression') {
+            if (!config.compression)
+              config.compression = { enabled: enable, algorithm: 'deflate' };
+            else config.compression.enabled = enable;
+          } else {
+            if (!config.encryption)
+              config.encryption = {
+                enabled: enable,
+                algorithm: 'aes-256-gcm',
+                kdf: 'argon2id',
+              };
+            else config.encryption.enabled = enable;
+          }
+          await writeConfig(rootDir, config);
+          const displayName =
+            featureKey === 'compression'
+              ? t('config_label_compression')
+              : t('config_label_encryption');
+          success(
+            fmt(
+              enable ? 'config_feature_on' : 'config_feature_off',
+              displayName,
+            ),
+          );
+          info(t('config_next_push'));
           return;
         }
 
@@ -72,6 +115,16 @@ export function registerConfig(program: Command): void {
           info(
             `  max-ram:   ${config.max_ram_mb != null ? `${config.max_ram_mb} MB` : '(auto: 25% system RAM)'}`,
           );
+          const compressState = config.compression?.enabled
+            ? t('status_enc_enabled')
+            : t('status_enc_disabled');
+          const encState = config.encryption?.enabled
+            ? t('status_enc_enabled')
+            : t('status_enc_disabled');
+          info(
+            `  ${t('config_label_compression').padEnd(14)} ${compressState}`,
+          );
+          info(`  ${t('config_label_encryption').padEnd(14)} ${encState}`);
           return;
         }
 
