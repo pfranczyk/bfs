@@ -28,7 +28,7 @@ async function tmp(): Promise<string> {
 }
 
 function localProvider(id: string, dir: string): ProviderConfig {
-  return { id, type: 'local', config: { path: dir } };
+  return { id, type: 'local', adapterPackage: null, config: { path: dir } };
 }
 
 function mockIO(answers: Record<string, string> = {}): ProviderIO {
@@ -132,6 +132,7 @@ describe('init', () => {
     const badProvider: ProviderConfig = {
       id: 'bad',
       type: 'unknown-type',
+      adapterPackage: null,
       config: {},
     };
     await expect(
@@ -251,6 +252,43 @@ describe('push', () => {
     await push(root, { io: mockIO() });
     await prune(root, { versions: [1] });
     expect(await readManifest(root, 1)).toBeNull();
+  });
+
+  it('should throw human-readable error when scheme.data_shards is null', async () => {
+    // Simulate a corrupted .bfs/config.json produced by a buggy init.
+    const cfg = await readConfig(root);
+    if (!cfg) throw new Error('test setup: config missing');
+    await writeConfig(root, {
+      ...cfg,
+      scheme: {
+        data_shards: null as unknown as number,
+        parity_shards: null as unknown as number,
+      },
+    });
+    await createTestFiles(root);
+
+    await expect(push(root, { io: mockIO() })).rejects.toThrow(
+      /data_shards must be/,
+    );
+  });
+
+  it('should reject corrupted scheme BEFORE reaching Reed-Solomon encoder', async () => {
+    // The technical RS message ("dataShards must be >= 2, got null") must NOT
+    // surface — the user gets a scheme-level message with remediation hint.
+    const cfg = await readConfig(root);
+    if (!cfg) throw new Error('test setup: config missing');
+    await writeConfig(root, {
+      ...cfg,
+      scheme: {
+        data_shards: null as unknown as number,
+        parity_shards: 1,
+      },
+    });
+    await createTestFiles(root);
+
+    await expect(push(root, { io: mockIO() })).rejects.toThrow(
+      /bfs scheme set/,
+    );
   });
 });
 

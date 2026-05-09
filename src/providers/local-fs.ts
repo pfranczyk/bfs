@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import { createReadStream, createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import type { Readable, TransformCallback } from 'node:stream';
 import { Transform } from 'node:stream';
@@ -10,14 +11,17 @@ import { ProviderError } from '../core/errors.js';
 import { isEnoent } from '../core/fs-utils.js';
 import { hashBuffer } from '../core/hash.js';
 import { computeShardHeaderSize } from '../core/shard-io.js';
-import { fmt } from '../i18n/index.js';
+import { fmt, fmtFor, t, tFor } from '../i18n/index.js';
 import type {
+  CliProviderInput,
   ProviderConfig,
+  ProviderHelp,
   ProviderIO,
   RemoteRef,
   StorageProvider,
 } from '../types/index.js';
-import { registerProvider } from './provider.js';
+import { findStringFlag, readJsonObjectFile } from './flags.js';
+import { type ProviderFactory, providerRegistry } from './provider.js';
 
 const CHECKSUM_SIZE = 32;
 
@@ -39,15 +43,14 @@ export class LocalFsProvider implements StorageProvider {
   private vaultName: Nullable<string> = null;
 
   constructor(config: ProviderConfig, io: ProviderIO) {
+    // Lazy init — an incomplete config is allowed so CLI can construct a
+    // placeholder instance and call configureInteractive/configureFromFlags
+    // on it before persisting. Structural validation happens in
+    // validateConfig(); runtime checks happen in the actual operation.
     this.id = config.id;
     this.io = io;
     const p = config.config.path;
-    if (typeof p !== 'string' || p.length === 0) {
-      throw new ProviderError(
-        'LocalFsProvider requires config.path to be a non-empty string',
-      );
-    }
-    this.basePath = p;
+    this.basePath = typeof p === 'string' ? p : '';
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
@@ -279,7 +282,7 @@ export class LocalFsProvider implements StorageProvider {
 
     if (existing.length < oldHeaderSize + CHECKSUM_SIZE) {
       throw new ProviderError(
-        `Shard "${filePath}" is too short to contain a valid payload after the header`,
+        fmtFor(this.io.lang, 'provider_short_shard', filePath),
       );
     }
 
@@ -304,6 +307,76 @@ export class LocalFsProvider implements StorageProvider {
     }
 
     return { provider_id: this.id, path: ref.path };
+  }
+
+  /**
+   * Returns the size of a shard via `fs.stat()` — no content read.
+   *
+   * @param ref - RemoteRef of the shard
+   * @returns   Size in bytes
+   * @throws ProviderError if the file is missing or stat fails
+   */
+  async getSize(ref: RemoteRef): Promise<number> {
+    const filePath = this.refToPath(ref);
+    try {
+      const st = await fs.stat(filePath);
+      return st.size;
+    } catch (err) {
+      throw new ProviderError(
+        fmtFor(this.io.lang, 'provider_stat_failed', filePath, String(err)),
+      );
+    }
+  }
+
+  /**
+   * Reads at most `maxBytes` bytes from the start of the shard via
+   * `createReadStream({ start: 0, end: maxBytes - 1 })`. Used by recovery
+   * to load just the header (~16 KB) without buffering the full payload.
+   *
+   * @param ref      - RemoteRef of the shard
+   * @param maxBytes - Maximum byte count to return (must be > 0)
+   * @returns          Buffer of `min(file_size, maxBytes)` bytes
+   * @throws ProviderError on read failure or missing shard
+   */
+  async downloadHeader(ref: RemoteRef, maxBytes: number): Promise<Buffer> {
+    const lang = this.io.lang;
+    if (maxBytes <= 0) {
+      throw new ProviderError(
+        fmtFor(
+          lang,
+          'provider_download_header_invalid_max_bytes',
+          String(maxBytes),
+        ),
+      );
+    }
+    const filePath = this.refToPath(ref);
+    try {
+      await fs.access(filePath, fs.constants.R_OK);
+    } catch (err) {
+      throw new ProviderError(
+        fmtFor(lang, 'local_read_shard_failed', filePath, String(err)),
+      );
+    }
+    return new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      const stream = createReadStream(filePath, {
+        start: 0,
+        end: maxBytes - 1,
+      });
+      stream.on('data', (chunk: Buffer | string) => {
+        chunks.push(
+          Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string),
+        );
+      });
+      stream.on('end', () => resolve(Buffer.concat(chunks)));
+      stream.on('error', (err) =>
+        reject(
+          new ProviderError(
+            fmtFor(lang, 'provider_header_read_failed', filePath, String(err)),
+          ),
+        ),
+      );
+    });
   }
 
   /**
@@ -367,7 +440,211 @@ export class LocalFsProvider implements StorageProvider {
       return false;
     }
   }
+
+  // ─── Configuration lifecycle ──────────────────────────────────────────────
+
+  /**
+   * Interactively prompts for the base directory path via ProviderIO.
+   * Retries on empty input, non-directory, or non-existent path — surfaces
+   * the reason via `io.warn()` so the user understands why the prompt
+   * re-asked.
+   * @returns config fragment `{ path }` to persist in VaultConfig
+   */
+  async configureInteractive(io: ProviderIO): Promise<Record<string, unknown>> {
+    for (;;) {
+      const basePath = (await io.ask(t('local_path_prompt'))).trim();
+      if (basePath.length === 0) {
+        io.warn(t('path_required'));
+        continue;
+      }
+      try {
+        const stat = await fs.stat(basePath);
+        if (!stat.isDirectory()) {
+          io.warn(t('path_not_dir'));
+          continue;
+        }
+      } catch {
+        io.warn(fmt('dir_not_exist', basePath));
+        continue;
+      }
+      return { path: basePath };
+    }
+  }
+
+  /**
+   * Builds a config fragment from the BFS CLI pass-through input. Three
+   * grammars are accepted, in priority order:
+   *
+   *   1. `--path <path>` — inline. Absolute paths used verbatim; relative
+   *      paths resolve against `io.workDir`. Wins over `--config-file`.
+   *   2. `--config-file <path>` — JSON `{ "path": "<absolute>" }`.
+   *   3. neither — defaults to `~/.bfs-local/<name>/`.
+   *
+   * Empty-string values from the shell (e.g. `--path ""`) are treated as
+   * absent so scripts can safely forward an unset variable.
+   *
+   * @throws ProviderError when the JSON file is unreadable, malformed, or
+   *         lacks a non-empty `path` field
+   */
+  async configureFromFlags(
+    input: CliProviderInput,
+  ): Promise<Record<string, unknown>> {
+    const inlinePath = findStringFlag(input.rawArgs, '--path');
+    if (inlinePath !== null && inlinePath.length > 0) {
+      const resolved = path.isAbsolute(inlinePath)
+        ? inlinePath
+        : path.resolve(this.io.workDir, inlinePath);
+      return { path: resolved };
+    }
+
+    const rawFlag = findStringFlag(input.rawArgs, '--config-file');
+    if (rawFlag === null || rawFlag.length === 0) {
+      return {
+        path: path.join(os.homedir(), '.bfs-local', input.name),
+      };
+    }
+    const absolutePath = path.isAbsolute(rawFlag)
+      ? rawFlag
+      : path.resolve(this.io.workDir, rawFlag);
+    const obj = await readJsonObjectFile(absolutePath, 'Local adapter');
+    const p = typeof obj.path === 'string' ? obj.path : '';
+    if (p.length === 0) {
+      throw new ProviderError(tFor(this.io.lang, 'local_config_path_missing'));
+    }
+    return { path: p };
+  }
+
+  /**
+   * Structural validation: `path` must be a non-empty string.
+   * Runtime checks (exists, writable) happen in probeConnection().
+   */
+  validateConfig(config: Record<string, unknown>): string[] {
+    const errors: string[] = [];
+    const p = config.path;
+    if (typeof p !== 'string' || p.length === 0) {
+      errors.push(tFor(this.io.lang, 'local_validate_path_required'));
+    }
+    return errors;
+  }
+
+  /** Renders a one-line summary of the config for display. */
+  describeConfig(config: Record<string, unknown>): string {
+    const p = typeof config.path === 'string' ? config.path : '';
+    return fmtFor(this.io.lang, 'local_describe_config', p);
+  }
+
+  /** Local FS has no secrets. */
+  getSecretFields(): readonly string[] {
+    return [];
+  }
+
+  /**
+   * Full write/read/compare/cleanup round-trip against the configured path.
+   * Must be called after setVaultName() so the probe file lands in the
+   * correct sub-dir.
+   *
+   * @throws ProviderError with a step context when any stage fails
+   */
+  async probeConnection(): Promise<void> {
+    const lang = this.io.lang;
+    if (this.basePath.length === 0) {
+      throw new ProviderError(tFor(lang, 'local_probe_incomplete'));
+    }
+    const vaultDir = this.vaultDir();
+    const nonce = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    const probeName = `__bfs_probe_${nonce}.tmp`;
+    const probePath = path.join(vaultDir, probeName);
+    const probeData = Buffer.from(`bfs-probe-${nonce}`);
+
+    try {
+      await fs.mkdir(vaultDir, { recursive: true });
+    } catch (err) {
+      throw new ProviderError(
+        fmtFor(
+          lang,
+          'local_probe_step_mkdir',
+          err instanceof Error ? err.message : String(err),
+        ),
+      );
+    }
+
+    try {
+      await fs.writeFile(probePath, probeData);
+    } catch (err) {
+      throw new ProviderError(
+        fmtFor(
+          lang,
+          'local_probe_step_write',
+          err instanceof Error ? err.message : String(err),
+        ),
+      );
+    }
+
+    let readBack: Buffer;
+    try {
+      readBack = await fs.readFile(probePath);
+    } catch (err) {
+      await fs.rm(probePath, { force: true }).catch(() => undefined);
+      throw new ProviderError(
+        fmtFor(
+          lang,
+          'local_probe_step_read',
+          err instanceof Error ? err.message : String(err),
+        ),
+      );
+    }
+
+    if (Buffer.compare(probeData, readBack) !== 0) {
+      await fs.rm(probePath, { force: true }).catch(() => undefined);
+      throw new ProviderError(tFor(lang, 'local_probe_step_compare_local'));
+    }
+
+    try {
+      await fs.unlink(probePath);
+    } catch (err) {
+      throw new ProviderError(
+        fmtFor(
+          lang,
+          'local_probe_step_cleanup',
+          err instanceof Error ? err.message : String(err),
+        ),
+      );
+    }
+  }
 }
 
-// Register this provider in the global registry so createProvider("local", ...) works.
-registerProvider('local', (config, io) => new LocalFsProvider(config, io));
+// ─── Factory + registry ──────────────────────────────────────────────────────
+
+const localFsFactory: ProviderFactory = {
+  lang: 'en',
+  displayName: 'Local filesystem',
+  requiresApiVersion: 1,
+  create: (config, io) => new LocalFsProvider(config, io),
+  help(): ProviderHelp {
+    return {
+      usage: '[--path <path> | --config-file <path>]',
+      description: tFor(this.lang, 'local_help_description'),
+      flags: [
+        {
+          flag: '--path <path>',
+          description: tFor(this.lang, 'local_help_flag_path_desc'),
+        },
+        {
+          flag: '--config-file <path>',
+          description: tFor(this.lang, 'local_help_flag_config_file_desc'),
+        },
+      ],
+      examples: [
+        'bfs provider add --ci --name usb --type local --path /mnt/usb/backup',
+        '',
+        'bfs provider add --ci --name vol1 --type local --config-file ./usb.json',
+        '# usb.json: { "path": "/mnt/usb/backup" }',
+        '',
+        'bfs provider add --ci --name default --type local',
+        '# Uses ~/.bfs-local/default/ as base path',
+      ],
+    };
+  },
+};
+
+providerRegistry.register('local', localFsFactory);

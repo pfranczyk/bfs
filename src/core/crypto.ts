@@ -101,11 +101,20 @@ export function encryptLocationMap(map: ShardLocation[], key: Buffer): Buffer {
  */
 export function decryptLocationMap(data: Buffer, key: Buffer): ShardLocation[] {
   const json = decryptWithKey(data, key);
+  let parsed: ShardLocation[];
   try {
-    return JSON.parse(json.toString('utf8')) as ShardLocation[];
+    parsed = JSON.parse(json.toString('utf8')) as ShardLocation[];
   } catch {
     throw new DecryptionError('Location map JSON is invalid after decryption');
   }
+  // Backward compat: shards serialized before adapterPackage was introduced
+  // omit the field. Treat undefined as null — the correct semantics for
+  // legacy shards, which were always produced by built-in providers (local,
+  // ftp). See PLAN/binary-format.md for the full compatibility rule.
+  return parsed.map((loc) => ({
+    ...loc,
+    adapterPackage: loc.adapterPackage ?? null,
+  }));
 }
 
 // ─── Streaming per-shard crypto (FORMAT_VERSION=2) ────────────────────────

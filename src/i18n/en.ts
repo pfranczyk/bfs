@@ -80,7 +80,7 @@ export const en: Strings = {
   init_opt_data_shards: 'Number of data shards N (CI mode)',
   init_opt_parity_shards: 'Number of parity shards K (CI mode)',
   init_opt_provider:
-    'Provider in format type:id:path, e.g. local:usb1:/mnt/usb (repeatable)',
+    'Provider spec: "type:name [adapter-flags]" — e.g. "local:usb1 --path /mnt/usb". See `bfs provider -h` for per-adapter flags. Repeatable.',
   init_opt_push_mode: 'Push mode: new_version|overwrite|ask (CI mode)',
   init_vault_name_arg: 'Backup name (subfolder on providers)',
   init_vault_name_prompt: 'Backup name (subfolder on providers):',
@@ -105,11 +105,22 @@ export const en: Strings = {
   init_push_mode_invalid:
     'Invalid --push-mode: "%s". Allowed: new_version|overwrite|ask',
   init_provider_format_invalid:
-    'Invalid --provider format: "%s". Expected: type:id:path (e.g. local:myusb:/mnt/usb)',
+    'Invalid --provider format: "%s". Expected: "type:name [adapter-flags]" (e.g. "local:usb1 --path /mnt/usb" or "ftp:nas --config-file ./nas.json"). See `bfs provider -h` for per-adapter flags.',
+  init_provider_config_invalid: 'Provider configuration is invalid: %s',
   init_max_ram_prompt:
     'RAM limit for encoding (MB, detected: %sMB, 4096MB is enough):',
   init_opt_max_ram: 'RAM limit for encoding in MB (CI mode)',
   init_success: 'Backup "%s" is ready. Use `bfs push` to back up.',
+  init_ci_name_required:
+    '--ci mode requires backup name as positional argument.',
+  init_ci_scheme_required:
+    '--ci mode requires --data-shards and --parity-shards.',
+  init_ci_data_shards_invalid:
+    '--data-shards must be an integer >= 2, got "%s".',
+  init_ci_parity_shards_invalid:
+    '--parity-shards must be an integer >= 1, got "%s".',
+  init_ci_providers_required:
+    '--ci mode requires %s --provider flags (%s data + %s parity).',
 
   // ─── clear ────────────────────────────────────────────────────────────────
   cmd_clear_desc: 'Clear pending backup data cache',
@@ -177,6 +188,8 @@ export const en: Strings = {
   pull_opt_name: 'Backup name (subfolder on the provider)',
   pull_opt_cache:
     'Retry using cached backup data from a previous interrupted pull',
+  pull_opt_allow_missing_adapters:
+    'Continue when some external adapters are missing, relying on Reed-Solomon redundancy',
 
   // ─── status ───────────────────────────────────────────────────────────────
   status_header: '\n  Backup status\n',
@@ -225,15 +238,34 @@ export const en: Strings = {
   verify_col_available: 'Available',
   verify_col_scheme: 'Scheme',
   verify_col_tolerance: 'Tolerance',
+  /** %s = shard filename, %s = provider id, %s = reason */
+  verify_shard_check_failed:
+    'Shard "%s" on provider "%s" failed integrity check: %s',
 
   // ─── recovery ─────────────────────────────────────────────────────────────
   recovery_provider_type_prompt: 'Bootstrap provider type:',
-  recovery_opt_provider: 'Bootstrap provider type (e.g. local, ssh, ftp)',
-  recovery_opt_path: 'Provider base path; for remote: user@host/basePath',
+  recovery_opt_provider:
+    'Bootstrap provider type (e.g. local, ssh, ftp). Combine with --bootstrap for non-interactive mode.',
+  recovery_opt_bootstrap:
+    'Adapter flags for the bootstrap provider, e.g. "--host x --user y --password z --path /backup". Same flag grammar as `bfs init --ci` adapter-flags.',
   recovery_path_prompt: 'Provider base path (not the backup subfolder):',
   recovery_vault_name_prompt: 'Backup name (subfolder on providers):',
   recovery_opt_name: 'Backup name (subfolder on providers)',
   recovery_opt_password: 'Password (for encrypted backup)',
+  recovery_opt_allow_missing_adapters:
+    'Continue when some external adapters are missing, relying on Reed-Solomon redundancy',
+  /** %s = raw spec */
+  recovery_bootstrap_empty:
+    'Bootstrap spec is empty. Provide adapter flags, e.g. --bootstrap "--path /mnt/usb". Got: "%s"',
+  /** %s = validation errors joined */
+  recovery_bootstrap_config_invalid: 'Invalid bootstrap config: %s',
+  /** %s = provider type */
+  recovery_provider_type_unknown:
+    'Unknown provider type: "%s". Run `bfs provider -h` to list registered types.',
+  recovery_ci_provider_required:
+    '--bootstrap requires --provider <type> to know which adapter receives the flags.',
+  recovery_ci_name_required:
+    '--bootstrap requires --name <vaultName> to locate the backup on providers.',
   recovery_connecting: 'Connecting to provider…',
   recovery_scanning: 'Scanning providers…',
   recovery_rebuilt: '\n  Rebuilt .bfs/ — %s version(s)\n',
@@ -255,25 +287,35 @@ export const en: Strings = {
     'Remove %s provider(s) via `provider remove`, then change the scheme.',
   scheme_changed: 'Scheme changed: %s → %s/%s.',
   scheme_apply_push: 'Run `bfs push` to apply the new scheme.',
+  scheme_missing:
+    'Backup scheme is missing or corrupted in .bfs/config.json. Run `bfs scheme set` to fix.',
+  scheme_invalid_data_shards:
+    'Invalid scheme: data_shards must be an integer >= 2, got "%s". Run `bfs scheme set` to fix.',
+  scheme_invalid_parity_shards:
+    'Invalid scheme: parity_shards must be an integer >= 1, got "%s". Run `bfs scheme set` to fix.',
+  scheme_providers_mismatch:
+    'Scheme requires %s providers, configured: %s. Use `bfs provider add` or `bfs scheme set`.',
 
   // ─── provider: local-fs ──────────────────────────────────────────────────
   provider_local_path_not_exist_confirm: 'Path "%s" does not exist. Create it?',
   provider_local_path_not_exist_error:
     'Path "%s" does not exist and creation was refused.',
   provider_local_path_not_writable: 'Path "%s" is not writable.',
+  local_path_prompt: 'Base directory path:',
 
   // ─── provider add ─────────────────────────────────────────────────────────
   provider_add_opt_ci: 'Non-interactive mode (CI/scripts): skip prompts',
-  provider_add_opt_id: 'New provider ID (CI mode)',
-  provider_add_opt_type: 'Provider type: local (CI mode)',
-  provider_add_opt_path: 'Provider directory path (CI mode, for type=local)',
+  provider_add_opt_name: 'New provider name (CI mode)',
+  provider_add_opt_type:
+    'Provider type (CI mode). See `bfs provider -h` for available types.',
   provider_add_current: '\nCurrent providers (%s):',
   provider_add_warn:
     'Adding a provider changes the N+K scheme. Run `bfs push` after adding to update sharding.',
-  provider_add_id_required: '--id is required in CI mode',
-  provider_add_path_required: '--path is required for type=local in CI mode',
+  provider_add_type_required: '--type is required in CI mode',
   provider_add_name_prompt: 'New provider name:',
-  provider_add_name_required: 'Name is required',
+  provider_add_name_required: '--name is required in CI mode',
+  provider_id_invalid_chars:
+    'Provider name "%s" is invalid — only letters, digits, "." "_" "-" are allowed (no whitespace).',
   provider_add_exists: 'Provider "%s" already exists',
   provider_add_type_prompt: 'Provider type:',
   provider_add_dir_prompt: 'Directory path:',
@@ -284,7 +326,7 @@ export const en: Strings = {
   provider_list_empty: 'No providers configured.',
   provider_list_header: '\nProviders for backup "%s" (scheme %s/%s):\n',
   provider_list_col_num: '#',
-  provider_list_col_id: 'ID',
+  provider_list_col_id: 'Name',
   provider_list_col_type: 'Type',
   provider_list_col_config: 'Configuration',
 
@@ -293,10 +335,8 @@ export const en: Strings = {
     'Encryption password (for rebuild/relocate strategy)',
   provider_remove_opt_strategy:
     'CI strategy: relocate|rebuild|remove (skip prompt)',
-  provider_remove_opt_new_path:
-    'New provider path for relocate strategy; optionally with type prefix: local:/path (CI mode)',
   provider_remove_opt_new_type:
-    'New provider type for relocate strategy (when current type is unknown)',
+    'New provider type (CI mode). Optional for relocate (defaults to current type); required for rebuild to a new target.',
   provider_remove_opt_target: 'Target provider for rebuild strategy (CI mode)',
   provider_remove_opt_scope: 'Rebuild scope: all|latest (default: all)',
   provider_remove_opt_yes: 'Skip confirmation for remove strategy (CI mode)',
@@ -317,9 +357,11 @@ export const en: Strings = {
   provider_remove_strategy_remove:
     '[R]emove — remove provider without replacement, update N/K scheme',
   provider_remove_strategy_cancel: '[C]ancel',
-  provider_remove_new_path_required:
-    '--new-path is required for relocate strategy in CI mode',
-  provider_remove_new_path_prompt: 'New provider directory path:',
+  provider_remove_new_type_required:
+    '--new-type is required (or include "type:" prefix in --new-path)',
+  provider_remove_change_type_confirm: 'Change provider type? (current: %s)',
+  provider_remove_new_type_prompt: 'Select new provider type:',
+  provider_remove_config_invalid: 'Invalid provider configuration: %s',
   provider_remove_enc_password_relocate:
     'Encryption password (to update location map):',
   provider_remove_enc_password_rebuild:
@@ -402,4 +444,170 @@ export const en: Strings = {
   bootstrap_wrong_password_retry: 'Wrong password. Try again for version %s:',
   bootstrap_single_provider_warn:
     'Only 1 provider available — cannot verify consensus. Data may be compromised. Proceeding anyway.',
+
+  // ─── provider: ftp ──────────────────────────────────────────────────────
+  ftp_host_prompt: 'FTP host:',
+  ftp_port_prompt: 'Port (default 21):',
+  ftp_user_prompt: 'Username:',
+  ftp_password_prompt: 'Password:',
+  ftp_path_prompt: 'Base path on server:',
+  ftp_secure_prompt: 'Use FTPS (secure connection)?',
+  provider_add_ftp_ci_not_supported:
+    'FTP in CI mode is not yet supported. Use interactive mode.',
+
+  // ─── provider help (bfs provider -h) ─────────────────────────────────────
+  provider_help_available_header: 'Available providers:',
+  provider_help_usage_label: 'Usage:',
+  provider_help_options_label: 'Options:',
+  provider_help_example_label: 'Example:',
+  provider_help_install_hint: '(install: %s)',
+
+  local_help_description:
+    'Stores shards as files on the local filesystem (disk, USB, mount). ' +
+    'When neither --path nor --config-file is given, BFS uses ' +
+    '~/.bfs-local/<name>/ as the base path.',
+  local_help_flag_path_desc:
+    'Base directory for the provider. Absolute paths used as-is; ' +
+    'relative paths resolve against the BFS working directory. ' +
+    'Wins over --config-file when both are present.',
+  local_help_flag_config_file_desc:
+    'JSON file with { "path": "<absolute>" }. Used when --path is ' +
+    'absent. When also absent, defaults to ~/.bfs-local/<name>/',
+
+  ftp_help_description:
+    'Connects to an FTP(S) server and stores shards as files on the ' +
+    'remote. Configuration may come from inline flags, a JSON config ' +
+    'file, or both — inline flags override values loaded from JSON.',
+  ftp_help_flag_host_desc: 'FTP server hostname or IP',
+  ftp_help_flag_port_desc: 'FTP server port (default 21)',
+  ftp_help_flag_user_desc: 'FTP login user',
+  ftp_help_flag_password_desc: 'FTP login password',
+  ftp_help_flag_path_desc:
+    'Absolute base path on the FTP server (must start with "/")',
+  ftp_help_flag_secure_desc:
+    'Use FTPS (TLS). Accepts true|false|1|0|yes|no (default false)',
+  ftp_help_flag_config_file_desc:
+    'JSON with any of { host, port, user, password, path, secure }. ' +
+    'Inline flags override fields loaded from JSON.',
+
+  ftp_host_required:
+    'FTP adapter: "host" is required. Pass --host <hostname> or ' +
+    '--config-file <path> inside the --provider spec, e.g. ' +
+    '--provider "ftp:nas --host 192.168.1.1 --path /backup".',
+  ftp_path_required:
+    'FTP adapter: "path" is required. Pass --path </absolute/path> or ' +
+    '--config-file <path> inside the --provider spec, e.g. ' +
+    '--provider "ftp:nas --path /backup".',
+  ftp_path_must_be_absolute:
+    'FTP adapter: "path" must be absolute (start with "/").',
+  local_config_path_missing:
+    'Local adapter: --config-file JSON must contain non-empty "path".',
+
+  // ─── Adapter preflight (missing / version mismatch) ────────────────────────
+  adapter_preflight_missing_header:
+    'The following adapters are required but not installed:',
+  adapter_preflight_install_label: 'install:',
+  adapter_preflight_retry_hint:
+    'Install them and retry. Alternatively, if enough shards are available\n' +
+    'via already-installed providers, pass --allow-missing-adapters to try\n' +
+    'Reed-Solomon recovery from what is present.',
+  adapter_preflight_builtin_broken_one:
+    'Built-in provider type "%s" is not registered. Your BFS installation ' +
+    'appears to be broken. Reinstall BFS from a trusted source.',
+  adapter_preflight_builtin_broken_many:
+    'Built-in provider type(s) %s not registered. Your BFS installation ' +
+    'appears to be broken. Reinstall BFS from a trusted source.',
+  adapter_preflight_external_install_hint:
+    'Provider type "%s" requires adapter %s. Install it with: npm install -g %s',
+  adapter_version_mismatch_strong:
+    '[STRONG WARN] adapter "%s" recorded as %s but installed version is %s. ' +
+    'Consider: npm install -g %s',
+  adapter_version_mismatch_soft:
+    '[warn] adapter "%s" recorded as %s but installed version is %s. ' +
+    'Patch/minor delta should be safe under semver.',
+
+  // ─── Generic provider errors (CLI side) ────────────────────────────────────
+  provider_type_unknown: 'Unknown provider type: %s',
+  provider_add_configure_failed: 'Configuration failed: %s',
+  provider_add_validate_failed: 'Invalid config: %s',
+  provider_add_probe_failed: 'Provider probe failed: %s',
+  provider_add_probe_unsaved:
+    'Config NOT saved. Re-run with corrected settings.',
+
+  // ─── Recovery (consensus + final) ──────────────────────────────────────────
+  recovery_consensus_vault_id_mismatch:
+    'Version %s: vault_id mismatch — skipping',
+  recovery_consensus_filename_mismatch:
+    'Version %s: filename/header mismatch — skipping',
+  recovery_consensus_failed:
+    'Version %s: consensus failed (fields: %s) — marking as untrusted',
+  recovery_no_manifests:
+    'Could not reconstruct any valid manifest from the available providers.',
+  recovery_manifest_unreadable:
+    'Manifest for latest version %s could not be read after recovery.',
+
+  // ─── Provider runtime errors (FTP + LocalFS shared shape) ──────────────────
+  provider_short_shard:
+    'Shard "%s" is too short to contain a valid payload after the header',
+  provider_stat_failed: 'Failed to stat shard "%s": %s',
+  provider_header_read_failed: 'Failed to read shard header "%s": %s',
+  provider_download_header_invalid_max_bytes:
+    'downloadHeader: maxBytes must be > 0 (got %s)',
+
+  // ─── FTP — runtime errors ──────────────────────────────────────────────────
+  ftp_operation_failed: 'FTP operation failed on %s:%s: %s',
+  ftp_size_mismatch_attempt:
+    'FTP upload size mismatch for "%s" on attempt %s/%s: ' +
+    'sent %s B, server reports %s B — retrying.',
+  ftp_size_mismatch_final:
+    'FTP upload size mismatch for "%s" after %s attempts: ' +
+    'sent %s B, server reports %s B (diff %s). ' +
+    'Verify the FTP server runs in binary mode (TYPE I).',
+
+  // ─── FTP — configureFromFlags + validateConfig ─────────────────────────────
+  ftp_config_port_invalid:
+    'FTP adapter: config "port" must be an integer between 1 and 65535',
+  ftp_inline_port_invalid:
+    'FTP adapter: --port must be an integer between 1 and 65535',
+  ftp_inline_secure_invalid:
+    'FTP adapter: --secure must be one of true|false|1|0|yes|no',
+  ftp_validate_host_required:
+    'FTP: host is required and must be a non-empty string',
+  ftp_validate_port_invalid: 'FTP: port must be an integer between 1 and 65535',
+  ftp_validate_path_required:
+    'FTP: path is required and must be a non-empty string',
+  ftp_validate_path_absolute: 'FTP: path must start with "/"',
+  ftp_describe_config:
+    'host: %s, port: %s, user: %s, password: ****, path: %s, secure: %s',
+
+  // ─── FTP — probeConnection ─────────────────────────────────────────────────
+  ftp_probe_incomplete:
+    'Probe failed: FTP config incomplete (host and path must be set)',
+  ftp_probe_step_ensure_dir: 'Probe failed at ensureDir: %s',
+  ftp_probe_step_upload: 'Probe failed at upload: %s',
+  ftp_probe_step_download: 'Probe failed at download: %s',
+  ftp_probe_step_compare_remote:
+    'Probe failed at compare: downloaded bytes differ from uploaded',
+  ftp_probe_step_cleanup: 'Probe failed at cleanup: %s',
+
+  // ─── LocalFS — runtime errors ──────────────────────────────────────────────
+  local_list_failed: 'Failed to list vault directory "%s": %s',
+  local_list_vaults_failed: 'Failed to list vaults in "%s": %s',
+  local_update_header_failed: 'Failed to update shard header "%s": %s',
+  local_read_shard_failed: 'Failed to read shard "%s": %s',
+
+  // ─── LocalFS — validateConfig + describeConfig ─────────────────────────────
+  local_validate_path_required:
+    'Local FS: path is required and must be a non-empty string',
+  local_describe_config: 'path: %s',
+
+  // ─── LocalFS — probeConnection ─────────────────────────────────────────────
+  local_probe_incomplete:
+    'Probe failed: local FS config incomplete (path must be set)',
+  local_probe_step_mkdir: 'Probe failed at mkdir: %s',
+  local_probe_step_write: 'Probe failed at write: %s',
+  local_probe_step_read: 'Probe failed at read: %s',
+  local_probe_step_compare_local:
+    'Probe failed at compare: read bytes differ from written',
+  local_probe_step_cleanup: 'Probe failed at cleanup: %s',
 };

@@ -35,7 +35,7 @@ async function tmp(): Promise<string> {
 }
 
 function localProvider(id: string, dir: string): ProviderConfig {
-  return { id, type: 'local', config: { path: dir } };
+  return { id, type: 'local', adapterPackage: null, config: { path: dir } };
 }
 
 function mockIO(answers: Record<string, string> = {}): ProviderIO {

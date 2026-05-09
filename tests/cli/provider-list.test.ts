@@ -39,14 +39,14 @@ describe('provider list', () => {
     expect(capture.logs.some((l) => l.includes('No providers'))).toBe(true);
   });
 
-  it('should display table with #/ID/Type/Configuration columns', async () => {
+  it('should display table with #/Name/Type/Configuration columns', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
     await runCmd(['provider', 'list']);
 
     const output = capture.logs.join('\n');
     expect(output).toContain('#');
-    expect(output).toContain('ID');
+    expect(output).toContain('Name');
     expect(output).toContain('Type');
     expect(output).toContain('Configuration');
   });

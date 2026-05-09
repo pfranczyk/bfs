@@ -8,6 +8,10 @@
 import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import { Command } from 'commander';
 import { vi } from 'vitest';
+// Side-effect imports: register built-in providers in the global registry.
+// In production src/index.ts does this; the test harness mirrors it.
+import '../../src/providers/local-fs.js';
+import '../../src/providers/ftp.js';
 import { registerClear } from '../../src/cli/commands/clear.js';
 import { registerConfig } from '../../src/cli/commands/config.js';
 import { registerInit } from '../../src/cli/commands/init.js';

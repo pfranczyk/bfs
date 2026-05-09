@@ -1,8 +1,9 @@
+import { Readable } from 'node:stream';
 import { deriveKey } from '../core/crypto.js';
 import { BfsError, TamperDetectedError } from '../core/errors.js';
 import { parseShardHeaderFromStream } from '../core/shard-io.js';
 import { fmt, t } from '../i18n/index.js';
-import { createProvider } from '../providers/provider.js';
+import { providerRegistry } from '../providers/provider.js';
 import type {
   ProviderConfig,
   ProviderIO,
@@ -13,6 +14,13 @@ import type {
 } from '../types/index.js';
 
 const MAX_PASSWORD_ATTEMPTS = 3;
+
+/**
+ * Bytes pulled from a shard for header inspection. Enough to cover the
+ * common header + kdf_salt + a JSON location map for realistic schemes
+ * (≤ 32 providers). Adapters MUST NOT pull more than this from the wire.
+ */
+const SHARD_HEADER_READ_BYTES = 16384;
 
 // ─── Result types ─────────────────────────────────────────────────────────────
 
@@ -78,10 +86,11 @@ async function connectProvidersFromMap(
     const pc: ProviderConfig = {
       id: loc.provider_id,
       type: loc.provider_type,
+      adapterPackage: loc.adapterPackage,
       config: loc.connection_config,
     };
     try {
-      const p = createProvider(pc, io);
+      const p = providerRegistry.create(pc, io);
       await p.authenticate();
       p.setVaultName(vaultName);
       providers.push(p);
@@ -122,14 +131,17 @@ async function runConsensusCheck(
   if (!consensusLoc) return;
 
   try {
-    const consensusStream = await consensusProvider.download({
-      provider_id: consensusProvider.id,
-      path: `shard_${consensusLoc.shard_index}.bfs.${version}`,
-    });
-    // Only ~4 KB read for header; payloadStream discarded immediately
-    const { header: cm, payloadStream: cps } =
-      await parseShardHeaderFromStream(consensusStream);
-    cps.destroy();
+    const consensusBytes = await consensusProvider.downloadHeader(
+      {
+        provider_id: consensusProvider.id,
+        path: `shard_${consensusLoc.shard_index}.bfs.${version}`,
+      },
+      SHARD_HEADER_READ_BYTES,
+    );
+    const { header: cm, payloadStream: cps } = await parseShardHeaderFromStream(
+      Readable.from(consensusBytes),
+    );
+    cps.on('error', () => {}).destroy();
 
     const mismatch: string[] = [];
     if (cm.vault_id !== meta.vault_id) mismatch.push('vault_id');
@@ -190,12 +202,17 @@ export async function bootstrapFromProvider(
   const version =
     targetVersion !== undefined ? targetVersion : Math.max(...versionSet);
 
-  // Download bootstrap shard — only reads ~4 KB for header (no full-shard buffering)
+  // Pull only the header window — providers MUST avoid streaming the full
+  // payload over the wire (FTP issues SIZE + aborts after maxBytes).
   const bootstrapRef = findTargetShard(refs, version);
-  const bootstrapStream = await bootstrapProvider.download(bootstrapRef);
-  const { header: meta, payloadStream: ps1 } =
-    await parseShardHeaderFromStream(bootstrapStream);
-  ps1.destroy(); // discard payload — only header metadata needed
+  const headerBytes = await bootstrapProvider.downloadHeader(
+    bootstrapRef,
+    SHARD_HEADER_READ_BYTES,
+  );
+  const { header: meta, payloadStream: ps1 } = await parseShardHeaderFromStream(
+    Readable.from(headerBytes),
+  );
+  ps1.on('error', () => {}).destroy();
 
   const parsedFilename = parseVersionFromFilename(bootstrapRef.path);
   if (!parsedFilename)
@@ -217,16 +234,17 @@ export async function bootstrapFromProvider(
     if (!meta.kdf_salt)
       throw new BfsError('kdf_salt missing from encrypted shard header.');
 
-    // Try provided passwords first, then ask interactively with retry
+    // Try provided passwords first, then ask interactively with retry.
+    // We already hold the header bytes — re-parse them with each candidate
+    // key instead of re-fetching the shard from the provider per attempt.
     const candidates = passwords ?? [];
     let resolved = false;
     for (const pwd of candidates) {
       try {
         encKey = await deriveKey(pwd, meta.kdf_salt);
-        const s = await bootstrapProvider.download(bootstrapRef);
         const { header: h, payloadStream: ps } =
-          await parseShardHeaderFromStream(s, encKey);
-        ps.destroy();
+          await parseShardHeaderFromStream(Readable.from(headerBytes), encKey);
+        ps.on('error', () => {}).destroy();
         location_map = h.location_map;
         resolved = true;
         break;
@@ -246,10 +264,12 @@ export async function bootstrapFromProvider(
         if (!pwd) throw new BfsError('Password required for encrypted backup.');
         try {
           encKey = await deriveKey(pwd, meta.kdf_salt);
-          const s = await bootstrapProvider.download(bootstrapRef);
           const { header: h, payloadStream: ps } =
-            await parseShardHeaderFromStream(s, encKey);
-          ps.destroy();
+            await parseShardHeaderFromStream(
+              Readable.from(headerBytes),
+              encKey,
+            );
+          ps.on('error', () => {}).destroy();
           location_map = h.location_map;
           // Add successful interactive password to the pool for processVersion
           candidates.push(pwd);

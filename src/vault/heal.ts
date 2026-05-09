@@ -4,7 +4,7 @@ import { BfsError } from '../core/errors.js';
 import { hashBuffer, streamToBuffer } from '../core/hash.js';
 import { rsRepair } from '../core/reed-solomon.js';
 import { buildShard, parseShardHeaderFromStream } from '../core/shard-io.js';
-import { createProvider } from '../providers/provider.js';
+import { providerRegistry } from '../providers/provider.js';
 import type {
   ManifestShard,
   ProviderConfig,
@@ -69,7 +69,7 @@ async function downloadAvailableShards(
     const pc = config.providers.find((p) => p.id === ms.provider_id);
     if (!pc) continue;
     try {
-      const provider = createProvider(pc, io);
+      const provider = providerRegistry.create(pc, io);
       await provider.authenticate();
       provider.setVaultName(config.vault_name);
       const stream = await provider.download({
@@ -160,7 +160,7 @@ async function uploadRepairedShard(
   encKey: Buffer | undefined,
   io: ProviderIO,
 ): Promise<void> {
-  const targetProvider = createProvider(targetProviderConfig, io);
+  const targetProvider = providerRegistry.create(targetProviderConfig, io);
   await targetProvider.authenticate();
   targetProvider.setVaultName(vaultName);
   const shardBuffer = buildShard(header, payload, encKey);
@@ -210,7 +210,7 @@ export async function updateLocationMaps(
     if (!pc) continue; // provider removed from config — skip
 
     try {
-      const provider = createProvider(pc, io);
+      const provider = providerRegistry.create(pc, io);
       await provider.authenticate();
       provider.setVaultName(config.vault_name);
 
@@ -350,6 +350,7 @@ export async function rebuildVersion(
         shard_index: ms.shard_index,
         provider_id: targetProviderId,
         provider_type: targetProviderConfig.type,
+        adapterPackage: targetProviderConfig.adapterPackage,
         connection_config: targetProviderConfig.config,
         remote_path: buildRemotePath(
           targetProviderConfig,
@@ -359,12 +360,15 @@ export async function rebuildVersion(
         shard_hash: repairedPayloadHash,
       };
     }
+    const sourceProvider = config.providers.find(
+      (p) => p.id === ms.provider_id,
+    );
     return {
       shard_index: ms.shard_index,
       provider_id: ms.provider_id,
       provider_type: ms.provider_type,
-      connection_config:
-        config.providers.find((p) => p.id === ms.provider_id)?.config ?? {},
+      adapterPackage: sourceProvider?.adapterPackage ?? null,
+      connection_config: sourceProvider?.config ?? {},
       remote_path: ms.remote_path,
       shard_hash: ms.shard_hash,
     };
@@ -539,14 +543,25 @@ export async function relocateProvider(
     throw new BfsError(`Provider "${providerId}" not found in config.`);
 
   const resolvedType = newType ?? existingProvider.type;
+  // When the type changes the adapter may also change — refresh the package
+  // metadata from the registry so the probed provider advertises the correct
+  // provenance. When the type is unchanged, keep the persisted adapterPackage.
+  const updatedMeta = providerRegistry.getMeta(resolvedType);
+  const updatedAdapterPackage =
+    resolvedType === existingProvider.type
+      ? existingProvider.adapterPackage
+      : updatedMeta
+        ? `${updatedMeta.packageName}@${updatedMeta.packageVersion}`
+        : null;
 
   // Create a temporary config with the new connection parameters
   const updatedProviderConfig = {
     ...existingProvider,
     type: resolvedType,
+    adapterPackage: updatedAdapterPackage,
     config: newConnectionConfig,
   };
-  const tempProvider = createProvider(updatedProviderConfig, io);
+  const tempProvider = providerRegistry.create(updatedProviderConfig, io);
 
   // Verify accessibility
   const healthy = await tempProvider.healthCheck();
@@ -577,10 +592,21 @@ export async function relocateProvider(
     }
   }
 
-  // Update config.json with the new connection config (and type if changed)
+  // Update config.json with the new connection config (and type if changed).
+  // When the type changes, refresh adapterPackage from the registry so the
+  // persisted metadata matches the new adapter's provenance.
+  const resolvedMeta = providerRegistry.getMeta(resolvedType);
+  const resolvedAdapterPackage = resolvedMeta
+    ? `${resolvedMeta.packageName}@${resolvedMeta.packageVersion}`
+    : null;
   const updatedProviders = config.providers.map((p) =>
     p.id === providerId
-      ? { ...p, type: resolvedType, config: newConnectionConfig }
+      ? {
+          ...p,
+          type: resolvedType,
+          adapterPackage: resolvedAdapterPackage,
+          config: newConnectionConfig,
+        }
       : p,
   );
   await writeConfig(rootDir, { ...config, providers: updatedProviders });
@@ -594,6 +620,7 @@ export async function relocateProvider(
           shard_index: ms.shard_index,
           provider_id: providerId,
           provider_type: resolvedType,
+          adapterPackage: resolvedAdapterPackage,
           connection_config: newConnectionConfig,
           remote_path: [
             String(newConnectionConfig.path ?? ''),
@@ -610,6 +637,7 @@ export async function relocateProvider(
         shard_index: ms.shard_index,
         provider_id: ms.provider_id,
         provider_type: ms.provider_type,
+        adapterPackage: pc?.adapterPackage ?? null,
         connection_config: pc?.config ?? {},
         remote_path: ms.remote_path,
         shard_hash: ms.shard_hash,

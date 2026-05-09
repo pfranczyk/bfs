@@ -1,0 +1,14 @@
+# Enforce LF line endings for all text files across Windows / macOS / Linux.
+# Overrides local core.autocrlf so a fresh clone on Windows still gets LF —
+# required for Biome to be green on every dev environment.
+* text=auto eol=lf
+
+# Explicit binary markers (don't touch these at all).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.wasm binary

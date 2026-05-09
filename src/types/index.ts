@@ -60,6 +60,20 @@ export interface VaultConfig {
 export interface ProviderConfig {
   id: string; // nazwa nadana przez usera przy init/provider-add, np. "backup-firma", "dysk-usb"
   type: string; // "local" | "gdrive" | "onedrive" | "ftp" | "ssh" | "smb"
+  /**
+   * Full npm spec of the adapter package for external adapters (e.g.
+   * "bfs-adapter-ssh@1.0.1" or "@corp/bfs-adapter-x@2.0.0"). null for
+   * built-in providers (local, ftp) — they ship with BFS itself.
+   *
+   * Persisted in .bfs/config.json, manifest and shard header location map.
+   * Recovery preflight reads this to tell the user which `npm install -g`
+   * commands are needed to reconstruct a backup on a fresh machine.
+   *
+   * Backward compat: when parsing legacy data that lacks this field, it is
+   * set to null. Legacy backups were always produced with built-in providers,
+   * so null is the correct semantics for them.
+   */
+  adapterPackage: Nullable<string>;
   config: Record<string, unknown>; // type-specific config
 }
 
@@ -185,6 +199,12 @@ export interface ShardLocation {
   shard_index: number;
   provider_id: string; // user-defined name, np. "NAS-piwnica", "FTP-ovh"
   provider_type: string;
+  /**
+   * Full npm spec of the adapter package for external providers (e.g.
+   * "bfs-adapter-ssh@1.0.1"), null for built-in providers or for shards
+   * serialized by BFS versions older than the adapterPackage field.
+   */
+  adapterPackage: Nullable<string>;
   // UWAGA: connection_config przechowuje dane połączenia (host, port, user, path).
   // Gdy encrypted=false, location map jest zapisana jako surowy JSON w nagłówku sharda.
   // Każdy kto ma dostęp do jednego sharda widzi connection_config WSZYSTKICH providerów.
@@ -202,13 +222,130 @@ export interface ShardLocation {
 // W testach: mockowy ProviderIO z predefiniowanymi odpowiedziami.
 
 export interface ProviderIO {
+  /**
+   * Active user language (BCP-47 tag, e.g. 'en', 'pl').
+   *
+   * Informational-only — built-in providers ignore this because they use
+   * the global `t()` translator. External plugin adapters may read it to
+   * decide how (or whether) to localize their own prompts. BFS does NOT
+   * prescribe a translation mechanism for plugins.
+   */
+  readonly lang: string;
+
+  /**
+   * Working directory of the BFS invocation (absolute). Mirrors the same
+   * cwd BFS itself uses — i.e. respects `bfs --cwd <dir>` and falls back
+   * to `process.cwd()` when the flag is absent. Provider is free to
+   * resolve any relative path its own flags or prompts accept against
+   * this value (typical: `path.resolve(io.workDir, userInput)`).
+   *
+   * Informational-only context — BFS never inspects what providers do
+   * with it.
+   */
+  readonly workDir: string;
+
   ask(prompt: string): Promise<string>; // "Podaj login:"
   askSecret(prompt: string): Promise<string>; // "Podaj hasło:" (ukryte)
   confirm(message: string): Promise<boolean>; // "Kontynuować? [y/N]"
   choose(message: string, options: string[]): Promise<string>; // "Wybierz katalog:" → lista
   info(message: string): void; // "Łączę z FTP..."
+  /**
+   * Diagnostic log emitted only when `bfs --debug` is active. Built-in
+   * providers use it for connection chatter, retry attempts, and other
+   * implementation noise that would pollute verify/push/pull output by
+   * default. Output goes to stderr so stdout redirection stays clean.
+   */
+  debug(message: string): void;
   warn(message: string): void; // "Certyfikat niezaufany"
   progress(label: string, percent: number): void; // progress bar
+}
+
+// ─── CLI Provider Input (pass-through) ───────────────────────
+// BFS recognizes exactly two fields of a provider invocation: `type` (which
+// selects the adapter) and `name` (the id). Every other CLI token flows
+// verbatim to the provider as `rawArgs`. BFS does NOT look for
+// `--config-file`, `--private-key`, `--bucket`, or any other flag — those
+// belong to whatever grammar the adapter chooses to implement.
+//
+// The adapter interprets rawArgs however it documents in `help()`: its own
+// commander subinstance, hand-written parsing, reading a file, fetching a
+// URL, combining several flags, or ignoring them entirely. If the adapter
+// needs a working directory to resolve relative paths, it reads
+// `io.workDir`.
+
+export interface CliProviderInput {
+  /** Value of --name after trimming — non-empty; BFS validates before calling. */
+  readonly name: string;
+
+  /**
+   * Every CLI token that followed `--ci`, `--name <value>` and `--type <value>`
+   * on the command line, in the original order. BFS does NOT interpret them.
+   *
+   * Example for
+   *   `bfs provider add --ci --name ssh1 --type ssh \
+   *     --private-key /home/alice/.ssh/id_rsa --passphrase-env PASS`
+   * rawArgs = ['--private-key', '/home/alice/.ssh/id_rsa',
+   *            '--passphrase-env', 'PASS']
+   *
+   * For the `init --ci --provider "<type>:<name> [flags]"` grammar BFS
+   * tokenizes the spec shell-style and puts every token after `type:name`
+   * into rawArgs, unchanged.
+   */
+  readonly rawArgs: readonly string[];
+}
+
+// ─── Provider Help (structured) ──────────────────────────────
+// Each provider factory exposes a structured help object. BFS renders
+// these uniformly under `bfs provider -h` — adapters fill fields, not
+// free-form text, so layout stays consistent across built-ins and plugins.
+
+export interface ProviderHelpFlag {
+  /** Flag as it appears on the CLI, e.g. "--private-key <path>". */
+  readonly flag: string;
+  /** One-line description shown next to the flag. */
+  readonly description: string;
+}
+
+export interface ProviderHelp {
+  /**
+   * Suffix appended after `bfs provider add --name <name> --type <type>`.
+   * Example: "--config-file <path>"
+   * Example: "--host <h> --user <u> --private-key <path> [--port 22]"
+   * Empty string when the provider takes no extra flags.
+   */
+  readonly usage: string;
+
+  /** Multi-line human-readable description of the provider. */
+  readonly description: string;
+
+  /**
+   * Provider-specific flags parsed from rawArgs, plus any note about
+   * --config-file support. Empty array when the provider has no flags
+   * beyond the fixed BFS four.
+   */
+  readonly flags: readonly ProviderHelpFlag[];
+
+  /** Example invocations or config-file snippets. Rendered verbatim. */
+  readonly examples: readonly string[];
+
+  /**
+   * Optional custom installation hint for external adapters. When absent
+   * and the registry has adapter meta, BFS falls back to
+   * "npm install -g <packageName>". Built-in providers leave undefined.
+   */
+  readonly installation?: string;
+}
+
+// ─── Adapter registration metadata ───────────────────────────
+// External adapters MUST pass this when registering so BFS can persist
+// `ProviderConfig.adapterPackage` as "<packageName>@<packageVersion>"
+// for disaster-recovery reproducibility. Built-in providers omit it.
+
+export interface AdapterRegistrationMeta {
+  /** npm package name, e.g. "bfs-adapter-ssh" or "@corp/bfs-adapter-x". */
+  readonly packageName: string;
+  /** Package version from the adapter's own package.json (e.g. "1.0.1"). */
+  readonly packageVersion: string;
 }
 
 // ─── Storage Provider ────────────────────────────────────────
@@ -258,8 +395,87 @@ export interface StorageProvider {
   //   (od magic do końca location map, bez payloadu i checksum)
   updateShardHeader(ref: RemoteRef, headerData: Buffer): Promise<RemoteRef>;
   list(prefix?: string): Promise<RemoteRef[]>;
+  /**
+   * Returns the byte size of a shard on the remote without downloading it.
+   * Implementations MUST use a lightweight metadata call:
+   *   - LocalFS: `fs.stat(path).size`
+   *   - FTP:     `client.size(remotePath)` (SIZE)
+   *   - SFTP:    `sftp.stat(path).size`
+   *   - S3/HTTP: HEAD / `Content-Length`
+   * Used by `bfs verify` to detect truncated/corrupt shards without
+   * pulling content, and by callers that need to preallocate buffers.
+   * @throws ProviderError if the shard does not exist or stat fails.
+   */
+  getSize(ref: RemoteRef): Promise<number>;
+  /**
+   * Downloads only the first `maxBytes` bytes of a shard for header parsing.
+   * Implementations SHOULD avoid pulling more than `maxBytes` over the wire
+   * (FTP: ABOR after maxBytes; LocalFS: `createReadStream({ end: maxBytes-1 })`;
+   * S3/HTTP: `Range` header). If the file is shorter than `maxBytes`, the
+   * returned buffer contains the entire file. Used by `bfs recovery` to read
+   * only the shard header (~16 KB) instead of the full multi-MB payload.
+   * @throws ProviderError on transport failure or missing shard.
+   */
+  downloadHeader(ref: RemoteRef, maxBytes: number): Promise<Buffer>;
   listVaults(): Promise<string[]>;
   healthCheck(): Promise<boolean>;
+
+  // ─── Configuration lifecycle ──────────────────────────────────────────────
+  // Provider owns its own configuration flow. CLI/core code is blind to
+  // provider-specific fields — it only calls these methods polymorphically.
+
+  /**
+   * Interactive configuration — provider prompts the user via ProviderIO.
+   * Called by CLI when the user runs `bfs provider add <type>` without flags.
+   * @returns config object to persist in VaultConfig.providers[].config
+   * @throws BfsError on invalid input or user cancellation
+   */
+  configureInteractive(io: ProviderIO): Promise<Record<string, unknown>>;
+
+  /**
+   * Non-interactive configuration from the minimal BFS pass-through input.
+   * Receives:
+   *   - `name`    — value of --name (already validated non-empty)
+   *   - `rawArgs` — every CLI token that followed `--ci`, `--name <v>` and
+   *                 `--type <v>`, in the original order. BFS does NOT
+   *                 inspect or interpret them.
+   *
+   * Provider defines its own grammar: may parse specific flags from
+   * rawArgs, may read a file whose path came from a flag, may fetch a URL,
+   * may require no flags at all. If the adapter needs a working directory
+   * to resolve relative paths, it reads `io.workDir` (set by BFS to the
+   * same cwd BFS itself uses).
+   *
+   * @returns config object to persist in VaultConfig.providers[].config
+   * @throws ProviderError when the input cannot satisfy the provider
+   */
+  configureFromFlags(input: CliProviderInput): Promise<Record<string, unknown>>;
+
+  /**
+   * Validate a persisted config before use.
+   * @returns array of human-readable errors; empty when valid
+   */
+  validateConfig(config: Record<string, unknown>): string[];
+
+  /**
+   * Render the config for display (e.g. `bfs provider list`).
+   * Implementations MUST mask fields listed in getSecretFields().
+   */
+  describeConfig(config: Record<string, unknown>): string;
+
+  /**
+   * Provider-declared secret field names (e.g. ['password']).
+   * Used by describeConfig and any other consumer that wants to mask.
+   */
+  getSecretFields(): readonly string[];
+
+  /**
+   * Full read/write/verify round-trip against the configured remote.
+   * Called after configureInteractive/configureFromFlags, BEFORE persisting
+   * the provider to VaultConfig. Failure = no persist.
+   * @throws ProviderError with step context (auth / ensureDir / upload / download / compare / delete)
+   */
+  probeConnection(): Promise<void>;
 }
 
 export interface RemoteRef {

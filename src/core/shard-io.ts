@@ -114,7 +114,7 @@ function serializeHeader(
 
   // Compute total header byte count
   const encryptedFieldsSize = header.encrypted ? SALT_SIZE : 0;
-  const v3FieldsSize = fmtVersion >= FORMAT_VERSION_2 ? 4 : 0; // rs_stripe_size
+  const v2FieldsSize = fmtVersion >= FORMAT_VERSION_2 ? 4 : 0; // rs_stripe_size
   const headerSize =
     4 +
     2 +
@@ -129,7 +129,7 @@ function serializeHeader(
     4 +
     1 + // blob_size + blob_hash + N + K + idx + ver + encrypted
     encryptedFieldsSize + // kdf_salt (only if encrypted)
-    v3FieldsSize + // rs_stripe_size (only format_version >= 3)
+    v2FieldsSize + // rs_stripe_size (only format_version >= 2)
     4 +
     locationMapPayload.length; // map_length + map_payload
 
@@ -182,7 +182,7 @@ function serializeHeader(
     pos += SALT_SIZE;
   }
 
-  // RS stripe size (v3+)
+  // RS stripe size (FORMAT_VERSION >= 2)
   if (fmtVersion >= FORMAT_VERSION_2) {
     buf.writeUInt32LE(header.rs_stripe_size ?? 0, pos);
     pos += 4;
@@ -279,7 +279,7 @@ export function buildShardStream(
 
 /**
  * Parses the shard header from the start of a Readable stream.
- * Supports FORMAT_VERSION 1 (legacy), 2 (streaming pipeline), and 3 (rs_stripe_size).
+ * Supports FORMAT_VERSION 1 (legacy) and 2 (streaming pipeline with rs_stripe_size).
  * Returns the parsed header and a payloadStream for the remaining bytes.
  *
  * payloadStream (v1): [RS_payload bytes] — verified against trailing SHA-256
@@ -487,9 +487,15 @@ function readLocationMap(
   }
 
   try {
-    const locationMap = JSON.parse(
-      mapPayload.toString('utf8'),
-    ) as ShardLocation[];
+    const parsed = JSON.parse(mapPayload.toString('utf8')) as ShardLocation[];
+    // Backward compat: pre-adapterPackage shards omit the field. Map undefined
+    // to null — legacy shards come from built-in providers, which is the
+    // correct semantics for null. Keep this the ONLY normalization point for
+    // plain (unencrypted) location maps; see PLAN/binary-format.md.
+    const locationMap = parsed.map((loc) => ({
+      ...loc,
+      adapterPackage: loc.adapterPackage ?? null,
+    }));
     return { locationMap, endPos };
   } catch {
     throw new ShardCorruptedError('Location map JSON is invalid or corrupted');
@@ -510,6 +516,7 @@ function _buildChecksumVerifiedStream(
   const hasher = createHash('sha256');
   hasher.update(headerBuf); // checksum covers header too
   let tail = Buffer.alloc(0); // rolling last CHECKSUM_SIZE bytes
+  let totalBytes = headerBuf.length; // cumulative shard size (header + everything we consume from iter)
   const output = new PassThrough();
 
   void (async () => {
@@ -523,6 +530,7 @@ function _buildChecksumVerifiedStream(
       };
 
       const processChunk = async (chunk: Buffer) => {
+        totalBytes += chunk.length;
         const combined = Buffer.concat([tail, chunk]);
         if (combined.length > CHECKSUM_SIZE) {
           const toEmit = combined.subarray(0, combined.length - CHECKSUM_SIZE);
@@ -545,13 +553,19 @@ function _buildChecksumVerifiedStream(
       // tail is now the stored checksum (CHECKSUM_SIZE bytes)
       if (tail.length !== CHECKSUM_SIZE) {
         throw new ShardCorruptedError(
-          'Shard stream ended before checksum — data is truncated',
+          `Shard stream ended before checksum — data is truncated (read ${totalBytes} B, ` +
+            `expected at least header + ${CHECKSUM_SIZE} B trailer)`,
         );
       }
       const computed = hasher.digest();
       if (!computed.equals(tail)) {
+        const expectedPrefix = tail.toString('hex').slice(0, 16);
+        const computedPrefix = computed.toString('hex').slice(0, 16);
         throw new ShardCorruptedError(
-          'Shard checksum mismatch — data is corrupted or tampered',
+          `Shard checksum mismatch — data is corrupted or tampered ` +
+            `(expected ${expectedPrefix}…, computed ${computedPrefix}…, ` +
+            `shard size ${totalBytes} B). Compare shard sizes across providers ` +
+            'to spot transport-level truncation.',
         );
       }
       output.push(null);

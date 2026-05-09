@@ -5,10 +5,11 @@ import ora from 'ora';
 import { fmt, t } from '../../i18n/index.js';
 import {
   createCliProviderIO,
-  createProvider,
+  providerRegistry,
 } from '../../providers/provider.js';
 import { recover } from '../../vault/recovery.js';
 import { resolveCwd } from '../cwd.js';
+import { parseRecoveryBootstrapSpec } from '../parse-provider-spec.js';
 import { promptWithRawMode } from '../prompt.js';
 import { CommandAbort, error, formatHealth, success, table } from '../ui.js';
 
@@ -17,37 +18,28 @@ import { CommandAbort, error, formatHealth, success, table } from '../ui.js';
  * Rebuilds .bfs/ (config, manifests, state) from remote providers.
  * Does NOT restore files — use `bfs pull` afterwards.
  *
- * Usage:
- *   bfs recovery --provider local --path /mnt/usb-backup --name picture
- *   bfs recovery --provider ssh --path user@192.168.1.10/backup/ --name docs
- *   bfs recovery --provider ftp --path user@192.168.1.10/backup/ --name docs
- *   --path format: [user@host/]basePath — CLI parses user and host before passing to provider.
+ * Two execution modes:
+ *  - **Non-interactive (CI):** triggered by `--bootstrap`. Adapter flags are
+ *    forwarded verbatim to `StorageProvider.configureFromFlags()` — same
+ *    grammar as `bfs init --ci` adapter-flags. Requires `--provider <type>`
+ *    and `--name <vaultName>`.
+ *  - **Interactive:** without `--bootstrap`. Falls back to the provider's
+ *    `configureInteractive()` flow (REPL prompts for host/user/password/etc).
+ *
+ * Examples:
+ *   bfs recovery --provider local --name picture \
+ *     --bootstrap "--path /mnt/usb"
+ *   bfs recovery --provider ftp --name temp \
+ *     --bootstrap "--host x --user u --password p --path /a"
  *
  * @param program - Commander program to attach the command to
  */
-/**
- * Parses a --path value into provider config fields.
- * Local:  "/mnt/usb"            → { path: "/mnt/usb" }
- * Remote: "user@host/base/path" → { user, host, path: "/base/path" }
- */
-function parseProviderPath(raw: string): Record<string, string> {
-  const atIdx = raw.indexOf('@');
-  if (atIdx === -1) return { path: raw };
-  const user = raw.slice(0, atIdx);
-  const rest = raw.slice(atIdx + 1);
-  const slashIdx = rest.indexOf('/');
-  if (slashIdx === -1) return { user, host: rest, path: '/' };
-  const host = rest.slice(0, slashIdx);
-  const path = `/${rest.slice(slashIdx + 1)}`;
-  return { user, host, path };
-}
-
 export function registerRecovery(program: Command): void {
   program
     .command('recovery')
     .description(t('cmd_recovery_desc'))
     .option('--provider <type>', t('recovery_opt_provider'))
-    .option('--path <path>', t('recovery_opt_path'))
+    .option('--bootstrap <spec>', t('recovery_opt_bootstrap'))
     .option('--name <vaultName>', t('recovery_opt_name'))
     .option(
       '--password <password>',
@@ -55,20 +47,42 @@ export function registerRecovery(program: Command): void {
       (val: string, prev: string[]) => [...prev, val],
       [] as string[],
     )
+    .option(
+      '--allow-missing-adapters',
+      t('recovery_opt_allow_missing_adapters'),
+    )
     .action(
       async (
         opts: {
           provider?: string;
-          path?: string;
+          bootstrap?: string;
           name?: string;
           password: string[];
+          allowMissingAdapters?: boolean;
         },
         cmd: Command,
       ) => {
         const rootDir = resolveCwd(cmd);
-        const io = createCliProviderIO();
+        const io = createCliProviderIO(rootDir);
 
-        // Interactive prompts for missing required fields
+        // CI mode is gated by --bootstrap. Without it, recovery falls back
+        // to the interactive flow (rawlist + configureInteractive) so the
+        // REPL experience is unchanged.
+        const isCi = opts.bootstrap !== undefined;
+
+        if (isCi) {
+          if (!opts.provider) {
+            error(t('recovery_ci_provider_required'));
+            throw new CommandAbort();
+          }
+          if (!opts.name?.trim()) {
+            error(t('recovery_ci_name_required'));
+            throw new CommandAbort();
+          }
+        }
+
+        // Interactive provider type selection — only when CI mode is off
+        // and the user did not pre-select a type.
         if (!opts.provider) {
           const { providerType } = await promptWithRawMode<{
             providerType: string;
@@ -77,7 +91,12 @@ export function registerRecovery(program: Command): void {
               type: 'rawlist',
               name: 'providerType',
               message: t('recovery_provider_type_prompt'),
-              choices: ['local', { name: t('cancel'), value: '__cancel__' }],
+              choices: [
+                ...providerRegistry
+                  .listTypes()
+                  .map((pt) => ({ name: pt.displayName, value: pt.type })),
+                { name: t('cancel'), value: '__cancel__' },
+              ],
             },
           ]);
           if (providerType === '__cancel__') {
@@ -86,17 +105,55 @@ export function registerRecovery(program: Command): void {
           }
           opts.provider = providerType;
         }
-        if (!opts.path) {
-          const { basePath } = await promptWithRawMode<{ basePath: string }>([
+
+        // Branch on isCi — CI delegates flag parsing to the adapter via the
+        // shared parse-provider-spec helper; interactive delegates to the
+        // adapter's own configureInteractive prompts.
+        let connectionConfig: Record<string, unknown>;
+        let bootstrapAdapterPackage: Nullable<string>;
+        if (isCi) {
+          // Type-narrow the optional fields validated above. Re-asserting
+          // here keeps Promise.all callbacks and Record<string, unknown>
+          // typing happy without non-null assertions.
+          const providerType = opts.provider;
+          const bootstrapSpec = opts.bootstrap;
+          if (providerType === undefined || bootstrapSpec === undefined) {
+            throw new Error('invariant: CI fields validated earlier');
+          }
+          try {
+            const parsed = await parseRecoveryBootstrapSpec(
+              bootstrapSpec,
+              providerType,
+              rootDir,
+            );
+            connectionConfig = parsed.config;
+            bootstrapAdapterPackage = parsed.adapterPackage;
+          } catch (err) {
+            error(err instanceof Error ? err.message : String(err));
+            throw new CommandAbort();
+          }
+        } else {
+          const factory = providerRegistry.getFactory(opts.provider);
+          if (!factory) {
+            error(fmt('recovery_provider_type_unknown', opts.provider));
+            throw new CommandAbort();
+          }
+          const meta = providerRegistry.getMeta(opts.provider);
+          bootstrapAdapterPackage = meta
+            ? `${meta.packageName}@${meta.packageVersion}`
+            : null;
+          const placeholder = factory.create(
             {
-              type: 'input',
-              name: 'basePath',
-              message: t('recovery_path_prompt'),
-              validate: (v: string) => (v.trim() ? true : t('required')),
+              id: 'recovery-bootstrap',
+              type: opts.provider,
+              adapterPackage: bootstrapAdapterPackage,
+              config: {},
             },
-          ]);
-          opts.path = basePath.trim();
+            io,
+          );
+          connectionConfig = await placeholder.configureInteractive(io);
         }
+
         if (!opts.name) {
           const { vaultName } = await promptWithRawMode<{ vaultName: string }>([
             {
@@ -109,10 +166,8 @@ export function registerRecovery(program: Command): void {
           opts.name = vaultName.trim();
         }
 
-        // All three fields are guaranteed non-null after the prompts above
-        const providerType = opts.provider as string;
-        const basePath = opts.path as string;
-        const vaultName = opts.name as string;
+        const providerType = opts.provider;
+        const vaultName = opts.name;
 
         const spinner = ora(t('recovery_connecting')).start();
 
@@ -155,19 +210,18 @@ export function registerRecovery(program: Command): void {
           },
         };
 
-        // Build bootstrap provider config
-        // --path format: [user@host/]basePath  e.g. "alice@192.168.1.10/backup/"
-        const connectionConfig: Record<string, unknown> =
-          parseProviderPath(basePath);
-
         try {
           // Create and authenticate bootstrap provider
           const bootstrapProviderConfig = {
             id: `bootstrap-${providerType}`,
             type: providerType,
+            adapterPackage: bootstrapAdapterPackage,
             config: connectionConfig,
           };
-          const provider = createProvider(bootstrapProviderConfig, wrappedIo);
+          const provider = providerRegistry.create(
+            bootstrapProviderConfig,
+            wrappedIo,
+          );
           await provider.authenticate();
           provider.setVaultName(vaultName);
 
@@ -177,6 +231,9 @@ export function registerRecovery(program: Command): void {
             vaultName,
             provider,
             ...(opts.password.length > 0 ? { passwords: opts.password } : {}),
+            ...(opts.allowMissingAdapters === true
+              ? { allowMissingAdapters: true }
+              : {}),
             io: wrappedIo,
           });
 

@@ -10,8 +10,9 @@ const _require = createRequire(import.meta.url);
 const { version: PKG_VERSION } = _require('../package.json') as {
   version: string;
 };
-// Side-effect import: registers 'local' provider in the registry
+// Side-effect imports: register providers in the global registry
 import './providers/local-fs.js';
+import './providers/ftp.js';
 import { registerClear } from './cli/commands/clear.js';
 import { registerConfig } from './cli/commands/config.js';
 import { registerInit } from './cli/commands/init.js';
@@ -26,11 +27,13 @@ import { registerScheme } from './cli/commands/scheme.js';
 import { registerStatus } from './cli/commands/status.js';
 import { registerVerify } from './cli/commands/verify.js';
 import { registerVersions } from './cli/commands/versions.js';
+import { buildProviderHelpSection } from './cli/provider-help.js';
 import { startRepl } from './cli/repl.js';
 import { CommandAbort } from './cli/ui.js';
 import { dbg, enableDebug } from './debug.js';
 import { readGlobalSettings, writeGlobalSettings } from './global/settings.js';
 import { fmt, setLang, t } from './i18n/index.js';
+import { providerRegistry } from './providers/provider.js';
 
 /**
  * Applies exitOverride() recursively to a command and all its sub-commands.
@@ -78,6 +81,9 @@ function buildProgram(): Command {
   registerProviderAdd(providerCmd);
   registerProviderList(providerCmd);
   registerProviderRemove(providerCmd);
+  // Append per-provider help aggregation after Commander's standard preamble.
+  // Each registered provider contributes a structured ProviderHelp block.
+  providerCmd.addHelpText('after', buildProviderHelpSection);
 
   return program;
 }
@@ -103,6 +109,7 @@ async function main(): Promise<void> {
   const settings = await readGlobalSettings();
   const activeLang = cliLang ?? settings.language ?? 'en';
   setLang(activeLang);
+  providerRegistry.setLang(activeLang);
 
   if (cliLang !== undefined) {
     if (cliLang !== settings.language) {

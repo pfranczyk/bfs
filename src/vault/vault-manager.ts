@@ -56,7 +56,7 @@ import {
 } from '../core/shard-io.js';
 import { debugEnabled } from '../debug.js';
 import { fmt, t } from '../i18n/index.js';
-import { createProvider } from '../providers/provider.js';
+import { providerRegistry } from '../providers/provider.js';
 import type {
   ManifestShard,
   ProviderConfig,
@@ -70,7 +70,12 @@ import type {
   VersionManifest,
 } from '../types/index.js';
 import { BLOB_FLAGS, PushMode, VersionHealth } from '../types/index.js';
-import { readConfig, writeConfig } from './config.js';
+import {
+  checkVersionMismatch,
+  detectMissingAdapters,
+  formatMissingAdaptersMessage,
+} from './adapter-preflight.js';
+import { assertSchemeValid, readConfig, writeConfig } from './config.js';
 import {
   deleteManifest,
   listManifests,
@@ -204,6 +209,13 @@ export interface PullOptions {
   tempDir?: string;
   /** Overrides cache directory for pull.blob.pending. Defaults to {rootDir}/.bfs/cache. */
   cacheDir?: string;
+  /**
+   * When true, pull continues even if some external adapters are missing
+   * and Reed-Solomon redundancy can decode from whatever providers remain
+   * reachable. Missing built-in providers (local, ftp) always abort —
+   * their absence indicates a broken BFS installation, not a plugin gap.
+   */
+  allowMissingAdapters?: boolean;
   io: ProviderIO;
 }
 
@@ -400,14 +412,14 @@ async function _downloadShardsToTempFiles(
     }
     // Check provider health BEFORE authenticate to avoid interactive prompts
     // (e.g. LocalFS asking to create a missing directory during pull)
-    const probe = createProvider(pc, options.io);
+    const probe = providerRegistry.create(pc, options.io);
     if (!(await probe.healthCheck())) {
       failures.set(ms.shard_index, 'provider_unreachable');
       options.io.warn(fmt('vault_provider_unreachable', pc.id));
       continue;
     }
     try {
-      const provider = createProvider(pc, options.io);
+      const provider = providerRegistry.create(pc, options.io);
       await provider.authenticate();
       provider.setVaultName(config.vault_name);
       const stream = await provider.download({
@@ -628,7 +640,7 @@ async function openProviders(
 ): Promise<StorageProvider[]> {
   const providers: StorageProvider[] = [];
   for (const pc of config.providers) {
-    const p = createProvider(pc, io);
+    const p = providerRegistry.create(pc, io);
     await p.authenticate();
     p.setVaultName(config.vault_name);
     providers.push(p);
@@ -679,7 +691,7 @@ async function downloadShardSlots(
       );
       continue;
     }
-    const probe = createProvider(pc, io);
+    const probe = providerRegistry.create(pc, io);
     if (!(await probe.healthCheck())) {
       failures.set(ms.shard_index, 'provider_unreachable');
       io.warn(fmt('vault_provider_unreachable', pc.id));
@@ -746,7 +758,7 @@ async function fetchShard(
     // cache miss — proceed to provider download
   }
 
-  const provider = createProvider(pc, io);
+  const provider = providerRegistry.create(pc, io);
   await provider.authenticate();
   provider.setVaultName(config.vault_name);
   const shardStream = await provider.download({
@@ -857,7 +869,7 @@ export async function init(
   // This ensures we never leave a corrupted config on disk if a provider
   // type is unknown or authentication fails.
   for (const pc of options.providers) {
-    const p = createProvider(pc, options.io);
+    const p = providerRegistry.create(pc, options.io);
     await p.authenticate();
     p.setVaultName(options.vault_name);
   }
@@ -896,14 +908,9 @@ export async function push(
   if (!config)
     throw new BfsError('No vault config found. Run `bfs init` first.');
 
+  assertSchemeValid(config);
   const state = await readState(rootDir);
   const { data_shards: N, parity_shards: K } = config.scheme;
-
-  if (config.providers.length !== N + K) {
-    throw new BfsError(
-      `Scheme requires ${N + K} providers, configured: ${config.providers.length}.`,
-    );
-  }
 
   // ── Validate configured directories early (before any prompts) ────────────
   const cacheDir =
@@ -1137,6 +1144,7 @@ export async function push(
     shard_index: i,
     provider_id: pc.id,
     provider_type: pc.type,
+    adapterPackage: pc.adapterPackage,
     connection_config: pc.config,
     remote_path: buildRemotePath(
       pc,
@@ -1280,6 +1288,43 @@ export async function pull(
     throw new BfsError(
       'No vault config found. Run `bfs init` or `bfs recovery` first.',
     );
+
+  assertSchemeValid(config);
+
+  // Adapter preflight: the vault config lists every provider type the backup
+  // uses. Refuse to proceed when an adapter is missing unless the caller
+  // explicitly opts into best-effort mode via allowMissingAdapters.
+  const missing = detectMissingAdapters(config.providers);
+  const missingBuiltIn = missing.filter((m) => m.adapterPackage === null);
+  if (missingBuiltIn.length > 0) {
+    const names = missingBuiltIn.map((m) => `"${m.type}"`).join(', ');
+    throw new BfsError(fmt('adapter_preflight_builtin_broken_many', names));
+  }
+  const missingExternal = missing.filter((m) => m.adapterPackage !== null);
+  if (missingExternal.length > 0 && options.allowMissingAdapters !== true) {
+    throw new BfsError(`${formatMissingAdaptersMessage(missingExternal)}\n`);
+  }
+  if (missingExternal.length > 0) {
+    options.io.warn(formatMissingAdaptersMessage(missingExternal));
+  }
+  for (const vm of checkVersionMismatch(config.providers)) {
+    options.io.warn(
+      vm.severity === 'strong'
+        ? fmt(
+            'adapter_version_mismatch_strong',
+            vm.type,
+            vm.recordedPackage,
+            vm.installedPackage,
+            vm.recordedPackage,
+          )
+        : fmt(
+            'adapter_version_mismatch_soft',
+            vm.type,
+            vm.recordedPackage,
+            vm.installedPackage,
+          ),
+    );
+  }
 
   const state = await readState(rootDir);
   const targetVersion = options.version ?? state.latest_version;
@@ -1513,14 +1558,19 @@ export async function prune(
   const config = await readConfig(rootDir);
   if (!config) throw new BfsError('No vault config found.');
 
+  assertSchemeValid(config);
+
   const state = await readState(rootDir);
 
   const silentIO: ProviderIO = {
+    lang: 'en',
+    workDir: rootDir,
     ask: async () => '',
     askSecret: async () => '',
     confirm: async () => false,
     choose: async (_m, opts) => opts[0] ?? '',
     info: () => {},
+    debug: () => {},
     warn: () => {},
     progress: () => {},
   };
@@ -1533,7 +1583,7 @@ export async function prune(
       const pc = config.providers.find((p) => p.id === ms.provider_id);
       if (!pc) continue;
       try {
-        const provider = createProvider(pc, silentIO);
+        const provider = providerRegistry.create(pc, silentIO);
         await provider.authenticate();
         provider.setVaultName(config.vault_name);
         await provider.delete({
@@ -1576,6 +1626,8 @@ export async function removeProvider(
 ): Promise<void> {
   const config = await readConfig(rootDir);
   if (!config) throw new BfsError('No vault config found.');
+
+  // No assertSchemeValid — rebuild flow needs providers.length > N+K transiently.
 
   if (!config.providers.find((p) => p.id === providerId)) {
     throw new BfsError(`Provider "${providerId}" not found in config.`);

@@ -1,9 +1,26 @@
+import { Readable } from 'node:stream';
 import { BfsError } from '../core/errors.js';
-import { createProvider } from '../providers/provider.js';
-import type { ProviderIO } from '../types/index.js';
+import { parseShardHeaderFromStream } from '../core/shard-io.js';
+import { fmt } from '../i18n/index.js';
+import { providerRegistry } from '../providers/provider.js';
+import type {
+  ManifestShard,
+  ProviderIO,
+  ShardHeader,
+  StorageProvider,
+  VaultConfig,
+  VersionManifest,
+} from '../types/index.js';
 import { VersionHealth } from '../types/index.js';
 import { readConfig } from './config.js';
 import { listManifests, readManifest, writeManifest } from './manifest.js';
+
+/**
+ * Bytes pulled from a shard for header verification. Must cover the common
+ * header + kdf_salt + JSON location map for realistic schemes (≤ 32
+ * providers). Adapters MUST NOT pull more than this from the wire.
+ */
+const SHARD_HEADER_READ_BYTES = 16384;
 
 // ─── Report types ─────────────────────────────────────────────────────────────
 
@@ -78,20 +95,16 @@ export async function verifyVersion(
     if (!pc) continue; // provider removed from config
 
     try {
-      const provider = createProvider(pc, io);
+      const provider = providerRegistry.create(pc, io);
 
       // Check provider health
       const healthy = await provider.healthCheck();
       if (!healthy) continue;
 
-      // Check shard exists (list with filename prefix)
       await provider.authenticate();
       provider.setVaultName(config.vault_name);
-      const filename = `shard_${ms.shard_index}.bfs.${version}`;
-      const refs = await provider.list(filename);
-      if (refs.some((r) => r.path === filename)) {
-        available++;
-      }
+      const ok = await checkShardIntegrity(provider, config, manifest, ms, io);
+      if (ok) available++;
     } catch {
       // provider unreachable or error — shard counts as unavailable
     }
@@ -121,4 +134,92 @@ export async function verifyVersion(
     total_shards: total,
     tolerance,
   };
+}
+
+/**
+ * Verifies that a single shard exists, has a non-zero size, and carries a
+ * header consistent with the manifest. Pulls only the header window
+ * (~16 KB) — providers MUST NOT stream the full payload.
+ *
+ * Failure modes (all reported via io.warn and counted as unavailable):
+ *   - getSize fails or returns 0   → shard missing
+ *   - downloadHeader / parse fails → header truncated or corrupt
+ *   - vault_id / version / shard_index / blob_hash / scheme mismatch → wrong shard
+ *
+ * @returns true when the shard is healthy
+ */
+async function checkShardIntegrity(
+  provider: StorageProvider,
+  config: VaultConfig,
+  manifest: VersionManifest,
+  ms: ManifestShard,
+  io: ProviderIO,
+): Promise<boolean> {
+  const filename = `shard_${ms.shard_index}.bfs.${manifest.version}`;
+  const ref = { provider_id: provider.id, path: filename };
+
+  let size: number;
+  try {
+    size = await provider.getSize(ref);
+  } catch {
+    return false; // missing
+  }
+  if (size === 0) {
+    io.warn(fmt('verify_shard_check_failed', filename, provider.id, 'size=0'));
+    return false;
+  }
+
+  let headerBytes: Buffer;
+  try {
+    headerBytes = await provider.downloadHeader(ref, SHARD_HEADER_READ_BYTES);
+  } catch (err) {
+    io.warn(
+      fmt(
+        'verify_shard_check_failed',
+        filename,
+        provider.id,
+        err instanceof Error ? err.message : String(err),
+      ),
+    );
+    return false;
+  }
+
+  let header: ShardHeader;
+  try {
+    const parsed = await parseShardHeaderFromStream(Readable.from(headerBytes));
+    parsed.payloadStream.on('error', () => {}).destroy();
+    header = parsed.header;
+  } catch (err) {
+    io.warn(
+      fmt(
+        'verify_shard_check_failed',
+        filename,
+        provider.id,
+        err instanceof Error ? err.message : String(err),
+      ),
+    );
+    return false;
+  }
+
+  const mismatches: string[] = [];
+  if (header.vault_id !== config.vault_id) mismatches.push('vault_id');
+  if (header.version !== manifest.version) mismatches.push('version');
+  if (header.shard_index !== ms.shard_index) mismatches.push('shard_index');
+  if (header.blob_hash !== manifest.blob_hash) mismatches.push('blob_hash');
+  if (header.data_shards !== manifest.scheme.data_shards)
+    mismatches.push('data_shards');
+  if (header.parity_shards !== manifest.scheme.parity_shards)
+    mismatches.push('parity_shards');
+  if (mismatches.length > 0) {
+    io.warn(
+      fmt(
+        'verify_shard_check_failed',
+        filename,
+        provider.id,
+        `header mismatch: ${mismatches.join(', ')}`,
+      ),
+    );
+    return false;
+  }
+  return true;
 }

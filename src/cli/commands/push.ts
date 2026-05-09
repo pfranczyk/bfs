@@ -71,7 +71,7 @@ export function registerPush(program: Command): void {
           compressSource === 'cli' ? opts.compress : undefined;
 
         const spinner = ora({ color: 'cyan' });
-        const io = createCliProviderIO();
+        const io = createCliProviderIO(rootDir);
 
         // Wrap io: info/progress update spinner; interactive methods pause it first
         const wrappedIo = {

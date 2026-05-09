@@ -6,11 +6,16 @@ import chalk from 'chalk';
 import type { Command } from 'commander';
 import { estimateCompressibility } from '../../core/compression.js';
 import { fmt, t } from '../../i18n/index.js';
-import { createCliProviderIO } from '../../providers/provider.js';
+import {
+  createCliProviderIO,
+  providerRegistry,
+  validateProviderId,
+} from '../../providers/provider.js';
 import type { ProviderConfig } from '../../types/index.js';
 import { PushMode } from '../../types/index.js';
 import { init } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
+import { parseInitProviderSpec } from '../parse-provider-spec.js';
 import { promptWithRawMode } from '../prompt.js';
 import { CommandAbort, error, formatBytes, info, success } from '../ui.js';
 
@@ -18,12 +23,19 @@ import { CommandAbort, error, formatBytes, info, success } from '../ui.js';
 
 /**
  * Interactively prompts the user to configure a single provider.
- * Currently only "local" type is supported.
+ * The type list comes from providerRegistry; each provider owns its own
+ * configuration flow via StorageProvider.configureInteractive().
  *
- * @param index - Provider index (for display purposes)
- * @returns      A ProviderConfig ready for use in VaultConfig.providers
+ * @param index   - Provider index (for display purposes)
+ * @param workDir - BFS working directory exposed to the adapter through
+ *                  `io.workDir` so its prompts / path resolution respect
+ *                  `bfs --cwd`
+ * @returns         A ProviderConfig ready for use in VaultConfig.providers
  */
-async function promptProvider(index: number): Promise<ProviderConfig> {
+async function promptProvider(
+  index: number,
+  workDir: string,
+): Promise<ProviderConfig> {
   console.log(chalk.bold(fmt('init_provider_header', String(index + 1))));
 
   const { id } = await promptWithRawMode<{ id: string }>([
@@ -31,8 +43,16 @@ async function promptProvider(index: number): Promise<ProviderConfig> {
       type: 'input',
       name: 'id',
       message: t('init_provider_name_prompt'),
-      validate: (v: string) =>
-        v.trim() ? true : t('init_provider_name_required'),
+      validate: (v: string) => {
+        const trimmed = v.trim();
+        if (!trimmed) return t('init_provider_name_required');
+        try {
+          validateProviderId(trimmed);
+        } catch (err) {
+          return err instanceof Error ? err.message : String(err);
+        }
+        return true;
+      },
     },
   ]);
 
@@ -41,34 +61,28 @@ async function promptProvider(index: number): Promise<ProviderConfig> {
       type: 'rawlist',
       name: 'type',
       message: t('init_provider_type_prompt'),
-      choices: ['local'],
+      choices: providerRegistry
+        .listTypes()
+        .map((pt) => ({ name: pt.displayName, value: pt.type })),
     },
   ]);
 
-  let config: Record<string, unknown> = {};
-
-  if (type === 'local') {
-    const { dirPath } = await promptWithRawMode<{ dirPath: string }>([
-      {
-        type: 'input',
-        name: 'dirPath',
-        message: t('init_dir_path_prompt'),
-        validate: async (v: string) => {
-          if (!v.trim()) return t('path_required');
-          try {
-            const stat = await fs.stat(v.trim());
-            if (!stat.isDirectory()) return t('path_not_dir');
-            return true;
-          } catch {
-            return fmt('dir_not_exist', v);
-          }
-        },
-      },
-    ]);
-    config = { path: dirPath.trim() };
+  const factory = providerRegistry.getFactory(type);
+  if (!factory) {
+    throw new Error(`Unknown provider type: ${type}`);
   }
+  const meta = providerRegistry.getMeta(type);
+  const adapterPackage = meta
+    ? `${meta.packageName}@${meta.packageVersion}`
+    : null;
+  const io = createCliProviderIO(workDir);
+  const placeholder = factory.create(
+    { id: id.trim(), type, adapterPackage, config: {} },
+    io,
+  );
+  const config = await placeholder.configureInteractive(io);
 
-  return { id: id.trim(), type, config };
+  return { id: id.trim(), type, adapterPackage, config };
 }
 
 /**
@@ -102,31 +116,6 @@ async function scanDir(dir: string): Promise<{ count: number; size: number }> {
 
 // ─── Command ───────────────────────────────────────────────────────────────────
 
-/**
- * Registers the `bfs init` command on the given Commander program.
- *
- * @param program - Commander program to attach the command to
- */
-/**
- * Parses a --provider flag value in the format `type:id:path`.
- *
- * @param spec - Provider spec string, e.g. "local:myusb:/mnt/usb"
- * @returns     ProviderConfig ready for use in VaultConfig
- * @throws      Error if the format is invalid
- */
-function parseProviderSpec(spec: string): ProviderConfig {
-  const parts = spec.split(':');
-  if (parts.length < 3) {
-    throw new Error(fmt('init_provider_format_invalid', spec));
-  }
-  const [type, id, ...pathParts] = parts;
-  const provPath = pathParts.join(':'); // Windows paths contain ":"
-  if (!type || !id || !provPath) {
-    throw new Error(fmt('init_provider_format_invalid', spec));
-  }
-  return { id, type, config: { path: provPath } };
-}
-
 interface InitCiOpts {
   ci?: boolean;
   enc?: boolean;
@@ -142,6 +131,11 @@ interface InitCiOpts {
   maxRam?: string;
 }
 
+/**
+ * Registers the `bfs init` command on the given Commander program.
+ *
+ * @param program - Commander program to attach the command to
+ */
 export function registerInit(program: Command): void {
   program
     .command('init')
@@ -164,6 +158,84 @@ export function registerInit(program: Command): void {
     .action(
       async (argName: string | undefined, ciOpts: InitCiOpts, cmd: Command) => {
         const rootDir = resolveCwd(cmd);
+
+        // ── Tryb CI: walidacja WSZYSTKICH flag, zanim cokolwiek zrobimy ──────
+        // W trybie --ci user kontraktowo dostarcza wszystkie wymagane wartości;
+        // nie wolno nam ani wpaść w prompty, ani przepuścić null/NaN do configu.
+        const isCi = ciOpts.ci === true;
+        const ciDataShardsRaw = ciOpts.dataShards;
+        const ciParityShardsRaw = ciOpts.parityShards;
+        let ciDataShards: Nullable<number> = null;
+        let ciParityShards: Nullable<number> = null;
+        let ciProviders: ProviderConfig[] = [];
+
+        if (isCi) {
+          if (!argName?.trim()) {
+            error(t('init_ci_name_required'));
+            throw new CommandAbort();
+          }
+          if (!ciDataShardsRaw || !ciParityShardsRaw) {
+            error(t('init_ci_scheme_required'));
+            throw new CommandAbort();
+          }
+          const parsedData = parseInt(ciDataShardsRaw, 10);
+          if (!Number.isInteger(parsedData) || parsedData < 2) {
+            error(fmt('init_ci_data_shards_invalid', ciDataShardsRaw));
+            throw new CommandAbort();
+          }
+          const parsedParity = parseInt(ciParityShardsRaw, 10);
+          if (!Number.isInteger(parsedParity) || parsedParity < 1) {
+            error(fmt('init_ci_parity_shards_invalid', ciParityShardsRaw));
+            throw new CommandAbort();
+          }
+          try {
+            ciProviders = await Promise.all(
+              (ciOpts.provider ?? []).map((spec) =>
+                parseInitProviderSpec(spec, rootDir),
+              ),
+            );
+          } catch (err) {
+            error(err instanceof Error ? err.message : String(err));
+            throw new CommandAbort();
+          }
+          const required = parsedData + parsedParity;
+          if (ciProviders.length !== required) {
+            error(
+              fmt(
+                'init_ci_providers_required',
+                String(required),
+                String(parsedData),
+                String(parsedParity),
+              ),
+            );
+            throw new CommandAbort();
+          }
+          // Push mode validated early so we abort before scanning the directory.
+          const m = ciOpts.pushMode ?? PushMode.NewVersion;
+          if (
+            m !== PushMode.NewVersion &&
+            m !== PushMode.Overwrite &&
+            m !== PushMode.Ask
+          ) {
+            error(fmt('init_push_mode_invalid', m));
+            throw new CommandAbort();
+          }
+          ciDataShards = parsedData;
+          ciParityShards = parsedParity;
+        } else {
+          // Interactive mode — --provider flags (if any) are parsed the same way;
+          // format errors surface immediately as CommandAbort rather than a stack.
+          try {
+            ciProviders = await Promise.all(
+              (ciOpts.provider ?? []).map((spec) =>
+                parseInitProviderSpec(spec, rootDir),
+              ),
+            );
+          } catch (err) {
+            error(err instanceof Error ? err.message : String(err));
+            throw new CommandAbort();
+          }
+        }
 
         // ── Vault name ────────────────────────────────────────────────────────
         let vaultName: string;
@@ -188,16 +260,6 @@ export function registerInit(program: Command): void {
         info(t('init_scanning'));
         const { count, size } = await scanDir(rootDir);
         info(fmt('init_found_files', String(count), formatBytes(size)));
-
-        // ── Tryb CI: --ci + flagi → pomiń wszystkie prompty Inquirer ─────────
-        const isCi = ciOpts.ci === true;
-        const ciProviders = (ciOpts.provider ?? []).map(parseProviderSpec);
-        const ciDataShards = ciOpts.dataShards
-          ? parseInt(ciOpts.dataShards, 10)
-          : null;
-        const ciParityShards = ciOpts.parityShards
-          ? parseInt(ciOpts.parityShards, 10)
-          : null;
 
         // ── Encryption ────────────────────────────────────────────────────────
         let encEnabled: boolean;
@@ -265,8 +327,12 @@ export function registerInit(program: Command): void {
         let dataShardsN: number;
         let parityK: number;
         if (isCi) {
-          dataShardsN = ciDataShards as number;
-          parityK = ciParityShards as number;
+          if (ciDataShards === null || ciParityShards === null) {
+            // Unreachable: CI validation above guarantees both are set.
+            throw new Error('invariant: CI scheme values validated earlier');
+          }
+          dataShardsN = ciDataShards;
+          parityK = ciParityShards;
         } else {
           const ans = await promptWithRawMode<{
             dataShardsStr: string;
@@ -316,7 +382,7 @@ export function registerInit(program: Command): void {
         } else {
           providers = [];
           for (let i = 0; i < total; i++) {
-            const prov = await promptProvider(i);
+            const prov = await promptProvider(i, rootDir);
             providers.push(prov);
           }
         }
@@ -382,7 +448,7 @@ export function registerInit(program: Command): void {
         }
 
         // Execute
-        const io = createCliProviderIO();
+        const io = createCliProviderIO(rootDir);
         try {
           await init(rootDir, {
             vault_name: vaultName,

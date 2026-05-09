@@ -83,7 +83,7 @@ export const pl: Strings = {
   init_opt_data_shards: 'Liczba shardów danych N (tryb CI)',
   init_opt_parity_shards: 'Liczba shardów parzystości K (tryb CI)',
   init_opt_provider:
-    'Provider w formacie typ:id:ścieżka, np. local:usb1:/mnt/usb (wielokrotny)',
+    'Provider w formacie "typ:nazwa [flagi-adaptera]", np. "local:usb1 --path /mnt/usb". Flagi per adapter: `bfs provider -h`. Wielokrotny.',
   init_opt_push_mode: 'Tryb push: new_version|overwrite|ask (tryb CI)',
   init_vault_name_arg: 'Nazwa kopii zapasowej (podfolder na nośnikach)',
   init_vault_name_prompt: 'Nazwa kopii zapasowej (= podfolder na nośnikach):',
@@ -109,12 +109,23 @@ export const pl: Strings = {
   init_push_mode_invalid:
     'Nieprawidłowy --push-mode: "%s". Dozwolone: new_version|overwrite|ask',
   init_provider_format_invalid:
-    'Nieprawidłowy format --provider: "%s". Oczekiwany: typ:id:ścieżka (np. local:dysk1:/mnt/usb)',
+    'Nieprawidłowy format --provider: "%s". Oczekiwany: "typ:nazwa [flagi-adaptera]" (np. "local:usb1 --path /mnt/usb" lub "ftp:nas --config-file ./nas.json"). Flagi per adapter: `bfs provider -h`.',
+  init_provider_config_invalid: 'Konfiguracja providera jest nieprawidłowa: %s',
   init_max_ram_prompt:
     'Limit RAM do kodowania (MB, wykryto: %sMB, 4096MB wystarczy):',
   init_opt_max_ram: 'Limit RAM do kodowania w MB (tryb CI)',
   init_success:
     'Kopia zapasowa "%s" gotowa. Użyj `bfs push`, aby wykonać pierwszą kopię.',
+  init_ci_name_required:
+    'Tryb --ci wymaga podania nazwy kopii zapasowej jako argumentu.',
+  init_ci_scheme_required:
+    'Tryb --ci wymaga flag --data-shards i --parity-shards.',
+  init_ci_data_shards_invalid:
+    '--data-shards musi być liczbą całkowitą >= 2, podano "%s".',
+  init_ci_parity_shards_invalid:
+    '--parity-shards musi być liczbą całkowitą >= 1, podano "%s".',
+  init_ci_providers_required:
+    'Tryb --ci wymaga %s flag --provider (%s danych + %s parzystości).',
 
   // ─── clear ────────────────────────────────────────────────────────────────
   cmd_clear_desc:
@@ -187,6 +198,8 @@ export const pl: Strings = {
   pull_opt_name: 'Nazwa kopii zapasowej (podfolder na nośniku)',
   pull_opt_cache:
     'Ponów przy użyciu zbuforowanych danych kopii z poprzedniej przerwanej operacji',
+  pull_opt_allow_missing_adapters:
+    'Kontynuuj mimo brakujących zewnętrznych adapterów, korzystając z nadmiarowości Reed-Solomon',
 
   // ─── status ───────────────────────────────────────────────────────────────
   status_header: '\n  Status kopii zapasowej\n',
@@ -235,16 +248,35 @@ export const pl: Strings = {
   verify_col_available: 'Dostępne',
   verify_col_scheme: 'Schemat',
   verify_col_tolerance: 'Tolerancja',
+  /** %s = nazwa pliku shardu, %s = id nośnika, %s = powód */
+  verify_shard_check_failed:
+    'Shard "%s" na nośniku "%s" nie przeszedł weryfikacji integralności: %s',
 
   // ─── recovery ─────────────────────────────────────────────────────────────
   recovery_provider_type_prompt: 'Typ bootstrapowego providera:',
-  recovery_opt_provider: 'Typ bootstrapowego nośnika (np. local, ssh, ftp)',
-  recovery_opt_path: 'Ścieżka bazowa nośnika; dla zdalnych: user@host/ścieżka',
+  recovery_opt_provider:
+    'Typ bootstrapowego nośnika (np. local, ssh, ftp). Połącz z --bootstrap dla trybu nieinteraktywnego.',
+  recovery_opt_bootstrap:
+    'Flagi adaptera bootstrapowego nośnika, np. "--host x --user y --password z --path /backup". Ta sama gramatyka co w `bfs init --ci`.',
   recovery_path_prompt:
     'Ścieżka bazowa nośnika (nie podfolder kopii zapasowej):',
   recovery_vault_name_prompt: 'Nazwa kopii zapasowej (podfolder na nośnikach):',
   recovery_opt_name: 'Nazwa kopii zapasowej (podfolder na nośnikach)',
   recovery_opt_password: 'Hasło (dla zaszyfrowanej kopii zapasowej)',
+  recovery_opt_allow_missing_adapters:
+    'Kontynuuj mimo brakujących zewnętrznych adapterów, korzystając z nadmiarowości Reed-Solomon',
+  /** %s = raw spec */
+  recovery_bootstrap_empty:
+    'Spec --bootstrap jest pusty. Podaj flagi adaptera, np. --bootstrap "--path /mnt/usb". Otrzymano: "%s"',
+  /** %s = validation errors joined */
+  recovery_bootstrap_config_invalid: 'Nieprawidłowa konfiguracja bootstrap: %s',
+  /** %s = provider type */
+  recovery_provider_type_unknown:
+    'Nieznany typ nośnika: "%s". Uruchom `bfs provider -h`, aby zobaczyć zarejestrowane typy.',
+  recovery_ci_provider_required:
+    'Flaga --bootstrap wymaga --provider <typ>, aby wiedzieć do którego adaptera przekazać flagi.',
+  recovery_ci_name_required:
+    'Flaga --bootstrap wymaga --name <nazwaKopii>, aby zlokalizować kopię na nośnikach.',
   recovery_connecting: 'Łączenie z providerem…',
   recovery_scanning: 'Skanowanie providerów…',
   recovery_rebuilt: '\n  Odbudowano .bfs/ — %s wersja/wersji\n',
@@ -267,6 +299,14 @@ export const pl: Strings = {
     'Usuń %s provider(ów) przez `provider remove`, a następnie zmień schemat.',
   scheme_changed: 'Schemat zmieniony: %s → %s/%s.',
   scheme_apply_push: 'Uruchom `bfs push`, aby zastosować nowy schemat.',
+  scheme_missing:
+    'Schemat kopii zapasowej brakuje lub jest uszkodzony w .bfs/config.json. Uruchom `bfs scheme set`, aby naprawić.',
+  scheme_invalid_data_shards:
+    'Nieprawidłowy schemat: data_shards musi być liczbą całkowitą >= 2, podano "%s". Uruchom `bfs scheme set`, aby naprawić.',
+  scheme_invalid_parity_shards:
+    'Nieprawidłowy schemat: parity_shards musi być liczbą całkowitą >= 1, podano "%s". Uruchom `bfs scheme set`, aby naprawić.',
+  scheme_providers_mismatch:
+    'Schemat wymaga %s providerów, skonfigurowano: %s. Użyj `bfs provider add` lub `bfs scheme set`.',
 
   // ─── provider: local-fs ──────────────────────────────────────────────────
   provider_local_path_not_exist_confirm:
@@ -274,20 +314,21 @@ export const pl: Strings = {
   provider_local_path_not_exist_error:
     'Ścieżka "%s" nie istnieje, a utworzenie zostało odrzucone.',
   provider_local_path_not_writable: 'Ścieżka "%s" nie jest zapisywalna.',
+  local_path_prompt: 'Ścieżka katalogu bazowego:',
 
   // ─── provider add ─────────────────────────────────────────────────────────
   provider_add_opt_ci: 'Tryb nieinteraktywny (CI/skrypty): pomija prompty',
-  provider_add_opt_id: 'ID nowego nośnika (tryb CI)',
-  provider_add_opt_type: 'Typ nośnika: local (tryb CI)',
-  provider_add_opt_path:
-    'Ścieżka do katalogu nośnika (tryb CI, dla type=local)',
+  provider_add_opt_name: 'Nazwa nowego nośnika (tryb CI)',
+  provider_add_opt_type:
+    'Typ nośnika (tryb CI). Listę dostępnych typów pokaże `bfs provider -h`.',
   provider_add_current: '\nAktualne providery (%s):',
   provider_add_warn:
     'Dodanie providera zmienia schemat N+K. Uruchom `bfs push` po dodaniu, aby zaktualizować sharding.',
-  provider_add_id_required: '--id jest wymagane w trybie CI',
-  provider_add_path_required: '--path jest wymagane dla type=local w trybie CI',
-  provider_add_name_prompt: 'Nazwa nowego providera:',
-  provider_add_name_required: 'Nazwa jest wymagana',
+  provider_add_type_required: '--type jest wymagane w trybie CI',
+  provider_add_name_prompt: 'Nazwa nowego nośnika:',
+  provider_add_name_required: '--name jest wymagane w trybie CI',
+  provider_id_invalid_chars:
+    'Nazwa providera "%s" jest nieprawidłowa — dozwolone są wyłącznie litery, cyfry oraz ". _ -" (bez białych znaków).',
   provider_add_exists: 'Provider "%s" już istnieje',
   provider_add_type_prompt: 'Typ providera:',
   provider_add_dir_prompt: 'Ścieżka do katalogu:',
@@ -298,7 +339,7 @@ export const pl: Strings = {
   provider_list_empty: 'Brak skonfigurowanych providerów.',
   provider_list_header: '\nNośniki dla kopii "%s" (schemat %s/%s):\n',
   provider_list_col_num: '#',
-  provider_list_col_id: 'ID',
+  provider_list_col_id: 'Nazwa',
   provider_list_col_type: 'Typ',
   provider_list_col_config: 'Konfiguracja',
 
@@ -307,10 +348,8 @@ export const pl: Strings = {
     'Hasło szyfrowania (dla strategii rebuild/relocate)',
   provider_remove_opt_strategy:
     'Strategia CI: relocate|rebuild|remove (pomija prompt)',
-  provider_remove_opt_new_path:
-    'Nowa ścieżka nośnika dla strategii relocate; opcjonalnie z prefiksem typu: local:/ścieżka (tryb CI)',
   provider_remove_opt_new_type:
-    'Nowy typ nośnika dla strategii relocate (gdy obecny typ jest nieznany)',
+    'Nowy typ nośnika (tryb CI). Opcjonalny dla relocate (domyślnie aktualny typ); wymagany dla rebuild do nowej lokalizacji.',
   provider_remove_opt_target: 'Docelowy nośnik dla strategii rebuild (tryb CI)',
   provider_remove_opt_scope: 'Zakres odbudowy: all|latest (domyślnie: all)',
   provider_remove_opt_yes: 'Pomiń potwierdzenie dla strategii remove (tryb CI)',
@@ -331,9 +370,12 @@ export const pl: Strings = {
   provider_remove_strategy_remove:
     '[R]emove — usuń provider bez zastępstwa, zaktualizuj schemat N/K',
   provider_remove_strategy_cancel: '[A]nuluj',
-  provider_remove_new_path_required:
-    '--new-path jest wymagane dla strategii relocate w trybie CI',
-  provider_remove_new_path_prompt: 'Nowa ścieżka do katalogu providera:',
+  provider_remove_new_type_required:
+    '--new-type jest wymagane (lub dodaj prefix "type:" do --new-path)',
+  provider_remove_change_type_confirm: 'Zmienić typ providera? (aktualny: %s)',
+  provider_remove_new_type_prompt: 'Wybierz nowy typ providera:',
+  provider_remove_config_invalid:
+    'Konfiguracja providera jest nieprawidłowa: %s',
   provider_remove_enc_password_relocate:
     'Hasło szyfrowania (do aktualizacji mapy lokalizacji):',
   provider_remove_enc_password_rebuild:
@@ -420,4 +462,172 @@ export const pl: Strings = {
     'Błędne hasło. Spróbuj ponownie dla wersji %s:',
   bootstrap_single_provider_warn:
     'Tylko 1 provider dostępny — nie można zweryfikować konsensusu. Dane mogą być naruszone. Kontynuuję.',
+
+  // ─── provider: ftp ──────────────────────────────────────────────────────
+  ftp_host_prompt: 'Host FTP:',
+  ftp_port_prompt: 'Port (domyślnie 21):',
+  ftp_user_prompt: 'Nazwa użytkownika:',
+  ftp_password_prompt: 'Hasło:',
+  ftp_path_prompt: 'Ścieżka bazowa na serwerze:',
+  ftp_secure_prompt: 'Użyć FTPS (szyfrowane połączenie)?',
+  provider_add_ftp_ci_not_supported:
+    'FTP w trybie CI nie jest jeszcze obsługiwany. Użyj trybu interaktywnego.',
+
+  // ─── provider help (bfs provider -h) ─────────────────────────────────────
+  provider_help_available_header: 'Dostępne providery:',
+  provider_help_usage_label: 'Użycie:',
+  provider_help_options_label: 'Opcje:',
+  provider_help_example_label: 'Przykład:',
+  provider_help_install_hint: '(instalacja: %s)',
+
+  local_help_description:
+    'Przechowuje shardy jako pliki na lokalnym systemie plików (dysk, USB, ' +
+    'zamontowany katalog). Gdy brak --path i --config-file, BFS używa ' +
+    '~/.bfs-local/<nazwa>/ jako katalog bazowy.',
+  local_help_flag_path_desc:
+    'Katalog bazowy dla nośnika. Ścieżki absolutne używane bez zmian; ' +
+    'ścieżki relatywne rozwiązywane względem katalogu roboczego BFS. ' +
+    'Wygrywa z --config-file gdy podane oba.',
+  local_help_flag_config_file_desc:
+    'Plik JSON z { "path": "<absolute>" }. Używany gdy brak --path. ' +
+    'Gdy oba brak, używa ~/.bfs-local/<nazwa>/',
+
+  ftp_help_description:
+    'Łączy się z serwerem FTP(S) i przechowuje shardy jako pliki na ' +
+    'zdalnym serwerze. Konfiguracja może pochodzić z flag inline, pliku ' +
+    'JSON lub obu — flagi inline nadpisują pola z JSON-a.',
+  ftp_help_flag_host_desc: 'Nazwa hosta lub IP serwera FTP',
+  ftp_help_flag_port_desc: 'Port serwera FTP (domyślnie 21)',
+  ftp_help_flag_user_desc: 'Nazwa użytkownika FTP',
+  ftp_help_flag_password_desc: 'Hasło FTP',
+  ftp_help_flag_path_desc:
+    'Absolutna ścieżka bazowa na serwerze FTP (musi zaczynać się od "/")',
+  ftp_help_flag_secure_desc:
+    'Użyj FTPS (TLS). Przyjmuje true|false|1|0|yes|no (domyślnie false)',
+  ftp_help_flag_config_file_desc:
+    'JSON z dowolnymi polami { host, port, user, password, path, secure }. ' +
+    'Flagi inline nadpisują pola wczytane z JSON-a.',
+
+  ftp_host_required:
+    'Adapter FTP: pole "host" jest wymagane. Podaj --host <host> lub ' +
+    '--config-file <ścieżka> wewnątrz spec --provider, np. ' +
+    '--provider "ftp:nas --host 192.168.1.1 --path /backup".',
+  ftp_path_required:
+    'Adapter FTP: pole "path" jest wymagane. Podaj --path </absolutna/ścieżka> ' +
+    'lub --config-file <ścieżka> wewnątrz spec --provider, np. ' +
+    '--provider "ftp:nas --path /backup".',
+  ftp_path_must_be_absolute:
+    'Adapter FTP: "path" musi być absolutne (zaczynać się od "/").',
+  local_config_path_missing:
+    'Adapter lokalny: JSON z --config-file musi zawierać niepuste pole "path".',
+
+  // ─── Adapter preflight (missing / version mismatch) ────────────────────────
+  adapter_preflight_missing_header:
+    'Wymagane są następujące adaptery, ale nie są zainstalowane:',
+  adapter_preflight_install_label: 'instalacja:',
+  adapter_preflight_retry_hint:
+    'Zainstaluj je i ponów. Alternatywnie, jeśli wystarczająco dużo shardów\n' +
+    'jest dostępnych przez już zainstalowanych providerów, użyj\n' +
+    '--allow-missing-adapters, aby spróbować odbudowy Reed-Solomon z tego, co jest.',
+  adapter_preflight_builtin_broken_one:
+    'Wbudowany typ providera "%s" nie jest zarejestrowany. Twoja instalacja BFS ' +
+    'wygląda na uszkodzoną. Zainstaluj BFS ponownie z zaufanego źródła.',
+  adapter_preflight_builtin_broken_many:
+    'Wbudowane typy providerów %s nie są zarejestrowane. Twoja instalacja BFS ' +
+    'wygląda na uszkodzoną. Zainstaluj BFS ponownie z zaufanego źródła.',
+  adapter_preflight_external_install_hint:
+    'Typ providera "%s" wymaga adaptera %s. Zainstaluj go: npm install -g %s',
+  adapter_version_mismatch_strong:
+    '[STRONG WARN] adapter "%s" zapisany jako %s, ale zainstalowana wersja to %s. ' +
+    'Rozważ: npm install -g %s',
+  adapter_version_mismatch_soft:
+    '[warn] adapter "%s" zapisany jako %s, ale zainstalowana wersja to %s. ' +
+    'Różnica patch/minor powinna być bezpieczna w semver.',
+
+  // ─── Generic provider errors (CLI side) ────────────────────────────────────
+  provider_type_unknown: 'Nieznany typ providera: %s',
+  provider_add_configure_failed: 'Konfiguracja nieudana: %s',
+  provider_add_validate_failed: 'Niepoprawna konfiguracja: %s',
+  provider_add_probe_failed: 'Test połączenia providera nieudany: %s',
+  provider_add_probe_unsaved:
+    'Konfiguracja NIE została zapisana. Uruchom ponownie z poprawnymi ustawieniami.',
+
+  // ─── Recovery (consensus + final) ──────────────────────────────────────────
+  recovery_consensus_vault_id_mismatch:
+    'Wersja %s: niezgodność vault_id — pomijam',
+  recovery_consensus_filename_mismatch:
+    'Wersja %s: niezgodność nazwy pliku/nagłówka — pomijam',
+  recovery_consensus_failed:
+    'Wersja %s: konsensus nieudany (pola: %s) — oznaczam jako niezaufaną',
+  recovery_no_manifests:
+    'Nie udało się odtworzyć żadnego poprawnego manifestu z dostępnych providerów.',
+  recovery_manifest_unreadable:
+    'Manifest najnowszej wersji %s nie mógł zostać odczytany po recovery.',
+
+  // ─── Provider runtime errors (FTP + LocalFS shared shape) ──────────────────
+  provider_short_shard:
+    'Shard "%s" jest za krótki, aby zawierać poprawny payload po nagłówku',
+  provider_stat_failed: 'Nie udało się odczytać metadanych sharda "%s": %s',
+  provider_header_read_failed:
+    'Nie udało się odczytać nagłówka sharda "%s": %s',
+  provider_download_header_invalid_max_bytes:
+    'downloadHeader: maxBytes musi być > 0 (otrzymano %s)',
+
+  // ─── FTP — runtime errors ──────────────────────────────────────────────────
+  ftp_operation_failed: 'Operacja FTP nieudana na %s:%s: %s',
+  ftp_size_mismatch_attempt:
+    'Niezgodność rozmiaru uploadu FTP dla "%s" w próbie %s/%s: ' +
+    'wysłano %s B, serwer raportuje %s B — ponawiam.',
+  ftp_size_mismatch_final:
+    'Niezgodność rozmiaru uploadu FTP dla "%s" po %s próbach: ' +
+    'wysłano %s B, serwer raportuje %s B (różnica %s). ' +
+    'Sprawdź, czy serwer FTP działa w trybie binarnym (TYPE I).',
+
+  // ─── FTP — configureFromFlags + validateConfig ─────────────────────────────
+  ftp_config_port_invalid:
+    'Adapter FTP: pole "port" w configu musi być liczbą całkowitą 1–65535',
+  ftp_inline_port_invalid:
+    'Adapter FTP: --port musi być liczbą całkowitą 1–65535',
+  ftp_inline_secure_invalid:
+    'Adapter FTP: --secure musi być jednym z: true|false|1|0|yes|no',
+  ftp_validate_host_required:
+    'FTP: host jest wymagany i musi być niepustym ciągiem znaków',
+  ftp_validate_port_invalid: 'FTP: port musi być liczbą całkowitą 1–65535',
+  ftp_validate_path_required:
+    'FTP: path jest wymagany i musi być niepustym ciągiem znaków',
+  ftp_validate_path_absolute: 'FTP: path musi zaczynać się od "/"',
+  ftp_describe_config:
+    'host: %s, port: %s, użytkownik: %s, hasło: ****, ścieżka: %s, bezpieczne: %s',
+
+  // ─── FTP — probeConnection ─────────────────────────────────────────────────
+  ftp_probe_incomplete:
+    'Test nieudany: niepełna konfiguracja FTP (host i path muszą być ustawione)',
+  ftp_probe_step_ensure_dir: 'Test nieudany w fazie ensureDir: %s',
+  ftp_probe_step_upload: 'Test nieudany w fazie upload: %s',
+  ftp_probe_step_download: 'Test nieudany w fazie download: %s',
+  ftp_probe_step_compare_remote:
+    'Test nieudany w fazie compare: pobrane bajty różnią się od wysłanych',
+  ftp_probe_step_cleanup: 'Test nieudany w fazie cleanup: %s',
+
+  // ─── LocalFS — runtime errors ──────────────────────────────────────────────
+  local_list_failed: 'Nie udało się wylistować katalogu vaulta "%s": %s',
+  local_list_vaults_failed: 'Nie udało się wylistować vaultów w "%s": %s',
+  local_update_header_failed:
+    'Nie udało się zaktualizować nagłówka sharda "%s": %s',
+  local_read_shard_failed: 'Nie udało się odczytać sharda "%s": %s',
+
+  // ─── LocalFS — validateConfig + describeConfig ─────────────────────────────
+  local_validate_path_required:
+    'Local FS: path jest wymagany i musi być niepustym ciągiem znaków',
+  local_describe_config: 'ścieżka: %s',
+
+  // ─── LocalFS — probeConnection ─────────────────────────────────────────────
+  local_probe_incomplete:
+    'Test nieudany: niepełna konfiguracja Local FS (path musi być ustawiony)',
+  local_probe_step_mkdir: 'Test nieudany w fazie mkdir: %s',
+  local_probe_step_write: 'Test nieudany w fazie write: %s',
+  local_probe_step_read: 'Test nieudany w fazie read: %s',
+  local_probe_step_compare_local:
+    'Test nieudany w fazie compare: odczytane bajty różnią się od zapisanych',
+  local_probe_step_cleanup: 'Test nieudany w fazie cleanup: %s',
 };

@@ -6,7 +6,7 @@ import {
   DecryptionError,
   ShardCorruptedError,
 } from '../../src/core/errors.js';
-import { streamToBuffer } from '../../src/core/hash.js';
+import { hashBuffer, streamToBuffer } from '../../src/core/hash.js';
 import {
   buildShard,
   buildShardStream,
@@ -25,6 +25,7 @@ const TEST_LOCATIONS: ShardLocation[] = [
     shard_index: 0,
     provider_id: 'local-disk',
     provider_type: 'local',
+    adapterPackage: null,
     connection_config: { path: '/mnt/backup' },
     remote_path: '/mnt/backup/myvault/shard_0.bfs.1',
     shard_hash: 'b'.repeat(64),
@@ -33,6 +34,7 @@ const TEST_LOCATIONS: ShardLocation[] = [
     shard_index: 1,
     provider_id: 'usb-drive',
     provider_type: 'local',
+    adapterPackage: null,
     connection_config: { path: '/mnt/usb' },
     remote_path: '/mnt/usb/myvault/shard_1.bfs.1',
     shard_hash: 'c'.repeat(64),
@@ -41,6 +43,7 @@ const TEST_LOCATIONS: ShardLocation[] = [
     shard_index: 2,
     provider_id: 'ftp-server',
     provider_type: 'ftp',
+    adapterPackage: null,
     connection_config: { host: 'ftp.example.com', port: 21 },
     remote_path: '/backup/myvault/shard_2.bfs.1',
     shard_hash: 'd'.repeat(64),
@@ -387,6 +390,95 @@ describe('shard-io', () => {
       await expect(streamToBuffer(payloadStream)).rejects.toThrow(
         ShardCorruptedError,
       );
+    });
+  });
+
+  // ─── Backward compatibility: legacy shards without adapterPackage ────────
+  //
+  // Shards produced by BFS versions older than the adapterPackage addition
+  // store a location map JSON that lacks this field. The parser must accept
+  // them verbatim (no flag, no migration) and return adapterPackage=null for
+  // every entry. This is the single most important guarantee of the adapter
+  // contract — legacy backups stay fully recoverable.
+  describe('backward compat: legacy location map JSON (no adapterPackage)', () => {
+    it('should parse legacy plain JSON and fall back to adapterPackage=null', async () => {
+      const header = makeHeader();
+      const shard = buildShard(header, TEST_PAYLOAD);
+
+      // Locate the modern JSON in the serialized shard and rewrite it into
+      // the legacy shape (no "adapterPackage" keys). Then recompute both the
+      // map_length (uint32 LE immediately before the JSON bytes) and the
+      // trailing SHA-256 checksum so the shard remains structurally valid.
+      const modernJson = JSON.stringify(TEST_LOCATIONS);
+      const modernJsonBytes = Buffer.from(modernJson, 'utf8');
+      const jsonStart = shard.indexOf(modernJsonBytes);
+      if (jsonStart < 0) {
+        throw new Error('test setup: modern JSON not found in shard');
+      }
+
+      const legacyMap = TEST_LOCATIONS.map(
+        ({ adapterPackage: _ap, ...rest }) => rest,
+      );
+      const legacyJsonBytes = Buffer.from(JSON.stringify(legacyMap), 'utf8');
+
+      const mapLenOffset = jsonStart - 4;
+      const prefix = Buffer.from(shard.subarray(0, mapLenOffset));
+      const afterJson = Buffer.from(
+        shard.subarray(jsonStart + modernJsonBytes.length, shard.length - 32),
+      );
+
+      const newMapLen = Buffer.alloc(4);
+      newMapLen.writeUInt32LE(legacyJsonBytes.length, 0);
+
+      const body = Buffer.concat([
+        prefix,
+        newMapLen,
+        legacyJsonBytes,
+        afterJson,
+      ]);
+      const checksum = Buffer.from(hashBuffer(body), 'hex');
+      const legacyShard = Buffer.concat([body, checksum]);
+
+      const { header: parsed } = await parseShard(legacyShard);
+
+      expect(parsed.location_map).toHaveLength(TEST_LOCATIONS.length);
+      for (const loc of parsed.location_map) {
+        expect(loc.adapterPackage).toBeNull();
+      }
+      // Other fields must round-trip unchanged.
+      expect(parsed.location_map[0]?.provider_id).toBe('local-disk');
+      expect(parsed.location_map[2]?.provider_type).toBe('ftp');
+    });
+
+    it('should parse legacy encrypted JSON and fall back to adapterPackage=null', async () => {
+      const key = Buffer.alloc(32, 0xab);
+      const salt = generateSalt();
+      const header = makeHeader({ encrypted: true, kdf_salt: salt });
+      // Serialize a header whose location_map is the legacy shape (no
+      // adapterPackage). serializeHeader → encryptLocationMap runs
+      // JSON.stringify on the array, so only the legacy keys hit the
+      // encrypted JSON payload — exactly the on-disk shape of a shard
+      // produced by a BFS version older than adapterPackage.
+      const legacyMap = TEST_LOCATIONS.map(
+        ({ adapterPackage: _ap, ...rest }) => rest,
+      );
+
+      // We can't easily swap only the encrypted bytes in-place, so instead
+      // serialize a fresh header whose `location_map` is cast to the legacy
+      // shape. serializeHeader uses JSON.stringify → the legacy keys are
+      // the only ones written.
+      const legacyHeader: ShardHeader = {
+        ...header,
+        location_map: legacyMap as unknown as ShardLocation[],
+      };
+      const legacyShard = buildShard(legacyHeader, TEST_PAYLOAD, key);
+
+      const { header: parsed } = await parseShard(legacyShard, key);
+
+      expect(parsed.location_map).toHaveLength(TEST_LOCATIONS.length);
+      for (const loc of parsed.location_map) {
+        expect(loc.adapterPackage).toBeNull();
+      }
     });
   });
 });

@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { BfsError } from '../core/errors.js';
 import { isEnoent } from '../core/fs-utils.js';
+import { fmt, t } from '../i18n/index.js';
 import type { VaultConfig } from '../types/index.js';
 
 /**
@@ -32,4 +34,39 @@ export async function writeConfig(
 ): Promise<void> {
   const filePath = path.join(rootDir, '.bfs', 'config.json');
   await fs.writeFile(filePath, JSON.stringify(config, null, 2), 'utf-8');
+}
+
+/**
+ * Validates scheme + providers in the loaded config. Called by commands that
+ * interact with providers (push/pull/verify/prune/heal/provider-remove) to
+ * fail fast with a user-level message before any provider work starts —
+ * instead of letting lower layers throw cryptic internal errors.
+ *
+ * @throws BfsError if scheme is missing or corrupted, or providers count does
+ *         not equal data_shards + parity_shards.
+ */
+export function assertSchemeValid(config: VaultConfig): void {
+  const scheme = config.scheme;
+  if (scheme === null || scheme === undefined) {
+    throw new BfsError(t('scheme_missing'));
+  }
+  const { data_shards, parity_shards } = scheme;
+  if (!Number.isInteger(data_shards) || (data_shards as number) < 2) {
+    throw new BfsError(fmt('scheme_invalid_data_shards', String(data_shards)));
+  }
+  if (!Number.isInteger(parity_shards) || (parity_shards as number) < 1) {
+    throw new BfsError(
+      fmt('scheme_invalid_parity_shards', String(parity_shards)),
+    );
+  }
+  const required = data_shards + parity_shards;
+  if (config.providers.length !== required) {
+    throw new BfsError(
+      fmt(
+        'scheme_providers_mismatch',
+        String(required),
+        String(config.providers.length),
+      ),
+    );
+  }
 }

@@ -102,12 +102,12 @@ All modifying commands support non-interactive flags:
 
 ```bash
 # Initialize
-bfs init --ci --name docs --data-shards 3 --parity-shards 2 \
-  --provider local:nas1:/backup \
-  --provider local:nas2:/backup \
-  --provider local:usb1:/backup \
-  --provider local:usb2:/backup \
-  --provider local:usb3:/backup
+bfs init --ci docs --data-shards 3 --parity-shards 2 \
+  --provider "local:nas1 --path /backup" \
+  --provider "local:nas2 --path /backup" \
+  --provider "local:usb1 --path /backup" \
+  --provider "local:usb2 --path /backup" \
+  --provider "local:usb3 --path /backup"
 
 # Scheduled backup (crontab)
 bfs push --new --password "$VAULT_PASS"
@@ -123,8 +123,9 @@ Currently supported:
 | Type | Description |
 |---|---|
 | `local` | Local directory, USB drive, network mount |
+| `ftp` | FTP/FTPS server (uses `basic-ftp`) |
 
-Planned: Google Drive, FTP/FTPS, SSH/SFTP.
+Planned: SSH/SFTP.
 
 ## Versioning
 

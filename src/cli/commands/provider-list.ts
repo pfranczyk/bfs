@@ -1,6 +1,10 @@
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
+import {
+  createCliProviderIO,
+  providerRegistry,
+} from '../../providers/provider.js';
 import { readConfig } from '../../vault/config.js';
 import { resolveCwd } from '../cwd.js';
 import { CommandAbort, error, table } from '../ui.js';
@@ -38,10 +42,17 @@ export function registerProviderList(providerCmd: Command): void {
         ),
       );
 
+      const io = createCliProviderIO(rootDir);
       const rows = config.providers.map((p, i) => {
-        const connInfo = Object.entries(p.config)
-          .map(([k, v]) => `${k}: ${v}`)
-          .join(', ');
+        const factory = providerRegistry.getFactory(p.type);
+        let connInfo: string;
+        if (factory) {
+          connInfo = factory.create(p, io).describeConfig(p.config);
+        } else {
+          // Unknown type (e.g. plugin not loaded) — fall back to a minimal,
+          // non-secret-aware dump so the row still renders.
+          connInfo = `(unknown type "${p.type}")`;
+        }
         return [String(i), p.id, p.type, connInfo || '—'];
       });
 

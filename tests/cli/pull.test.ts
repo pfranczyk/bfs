@@ -135,11 +135,14 @@ describe('pull', () => {
       '../../src/providers/provider.js'
     );
     vi.mocked(createCliProviderIO).mockReturnValueOnce({
+      lang: 'en',
+      workDir: process.cwd(),
       ask: vi.fn(),
       askSecret: vi.fn(),
       confirm: vi.fn().mockResolvedValue(false),
       choose: vi.fn(),
       info: vi.fn(),
+      debug: vi.fn(),
       warn: vi.fn(),
       progress: vi.fn(),
     });
@@ -170,11 +173,14 @@ describe('pull', () => {
       '../../src/providers/provider.js'
     );
     vi.mocked(createCliProviderIO).mockReturnValueOnce({
+      lang: 'en',
+      workDir: process.cwd(),
       ask: vi.fn(),
       askSecret: vi.fn().mockResolvedValue(''),
       confirm: vi.fn().mockResolvedValue(true),
       choose: vi.fn(),
       info: vi.fn(),
+      debug: vi.fn(),
       warn: warnMock,
       progress: vi.fn(),
     });

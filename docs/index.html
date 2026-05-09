@@ -4,15 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BFS — Distributed Backup CLI</title>
-  <meta name="description" content="Split your backups across multiple drives with Reed-Solomon erasure coding. Lose drives, not data. AES-256-GCM encryption, deflate compression, versioned snapshots. Free, open-source CLI." />
+  <meta name="description" content="Split your backups across multiple drives and FTP servers with Reed-Solomon erasure coding. Lose drives, not data. AES-256-GCM encryption, ZIP compression, versioned snapshots. Free, open-source CLI." />
   <meta property="og:title" content="BFS — Your drives will fail. Your data won't." />
-  <meta property="og:description" content="Distributed backup with erasure coding. Split across drives, lose some, recover everything. No cloud lock-in. Free CLI tool." />
+  <meta property="og:description" content="Distributed backup with erasure coding. Split across drives and FTP servers, lose some, recover everything. No cloud lock-in. Free CLI tool." />
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     .code-comment { color: #6b7280; }
-    .code-cmd     { color: #86efac; }
-    .code-flag    { color: #93c5fd; }
-    .code-string  { color: #fcd34d; }
+                                            .code-cmd     { color: #86efac; }
+                                            .code-flag    { color: #93c5fd; }
+                                            .code-string  { color: #fcd34d; }
   </style>
 </head>
 <body class="bg-slate-950 text-gray-100 font-sans antialiased">
@@ -32,7 +32,7 @@
   <section class="min-h-screen flex flex-col items-center justify-center px-6 text-center">
     <div class="max-w-3xl">
       <div class="inline-block mb-6 px-3 py-1 rounded-full border border-slate-700 text-xs text-slate-400 tracking-widest uppercase">
-        v0.4.0 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 23
+        v0.5.0 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 23
       </div>
 
       <h1 class="text-7xl font-black tracking-tight mb-4 bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
@@ -103,7 +103,7 @@
           <div class="text-3xl mb-3">📦</div>
           <h3 class="text-lg font-semibold mb-2" data-i18n="feat0_title">Smaller Backups, Automatically</h3>
           <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat0_desc">
-            Deflate compression is on by default.
+            ZIP/Deflate compression is on by default.
             BFS detects already-compressed files (photos, videos, archives)
             and skips them — no wasted CPU, smaller shards.
           </p>
@@ -113,9 +113,9 @@
           <div class="text-3xl mb-3">🌐</div>
           <h3 class="text-lg font-semibold mb-2" data-i18n="feat3_title">Use Whatever Storage You Have</h3>
           <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat3_desc">
-            USB drives, external HDDs, NAS, network folders —
-            anything that can hold a file. No cloud subscription required.
-            No vendor lock-in.
+            USB drives, external HDDs, NAS, FTP/FTPS servers, network folders —
+            anything that can hold a file. Mix and match across providers.
+            No cloud subscription required. No vendor lock-in.
           </p>
         </div>
 
@@ -157,36 +157,35 @@
         <div>
           <div class="flex items-center gap-3 mb-3">
             <span class="w-7 h-7 rounded-full bg-slate-700 text-sm font-bold flex items-center justify-center text-white">1</span>
-            <span class="text-slate-300 font-medium" data-i18n="step1_label">Initialize a vault</span>
+            <span class="text-slate-300 font-medium" data-i18n="step1_label">Initialize (one command, mix any storage)</span>
           </div>
-          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step1_comment"># 3 data shards + 1 parity = 4 providers total</span>
-<span class="code-cmd">bfs</span> init <span class="code-flag">--name</span> <span class="code-string">mybackup</span> <span class="code-flag">--data-shards</span> 3 <span class="code-flag">--parity-shards</span> 1</code></pre>
+          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step1_comment"># 2 data shards + 1 parity = 3 providers (mix local disks and FTP/FTPS)</span>
+<span class="code-cmd">bfs</span> init <span class="code-string">mybackup</span> <span class="code-flag">--ci</span> <span class="code-flag">--data-shards</span> 2 <span class="code-flag">--parity-shards</span> 1 \
+  <span class="code-flag">--provider</span> <span class="code-string">"local:disk1 --path /mnt/disk1"</span> \
+  <span class="code-flag">--provider</span> <span class="code-string">"local:usb   --path /mnt/usb"</span> \
+  <span class="code-flag">--provider</span> <span class="code-string">"ftp:nas     --config-file ./nas.json"</span></code></pre>
         </div>
 
         <!-- Step 2 -->
         <div>
           <div class="flex items-center gap-3 mb-3">
             <span class="w-7 h-7 rounded-full bg-slate-700 text-sm font-bold flex items-center justify-center text-white">2</span>
-            <span class="text-slate-300 font-medium" data-i18n="step2_label">Add storage providers</span>
+            <span class="text-slate-300 font-medium" data-i18n="step2_label">Backup &amp; restore</span>
           </div>
-          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step2_comment"># One provider per shard (local disk, USB, NAS…)</span>
-<span class="code-cmd">bfs</span> provider add <span class="code-flag">--type</span> local <span class="code-flag">--path</span> <span class="code-string">/mnt/disk1</span>
-<span class="code-cmd">bfs</span> provider add <span class="code-flag">--type</span> local <span class="code-flag">--path</span> <span class="code-string">/mnt/disk2</span>
-<span class="code-cmd">bfs</span> provider add <span class="code-flag">--type</span> local <span class="code-flag">--path</span> <span class="code-string">/mnt/disk3</span>
-<span class="code-cmd">bfs</span> provider add <span class="code-flag">--type</span> local <span class="code-flag">--path</span> <span class="code-string">/mnt/disk4</span></code></pre>
+          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step2_comment"># Each push creates a new versioned snapshot</span>
+<span class="code-cmd">bfs</span> push  <span class="code-comment" data-i18n="step2_c1"># backup → new version</span>
+<span class="code-cmd">bfs</span> pull  <span class="code-comment" data-i18n="step2_c2"># restore latest version</span></code></pre>
         </div>
 
         <!-- Step 3 -->
         <div>
           <div class="flex items-center gap-3 mb-3">
             <span class="w-7 h-7 rounded-full bg-slate-700 text-sm font-bold flex items-center justify-center text-white">3</span>
-            <span class="text-slate-300 font-medium" data-i18n="step3_label">Push &amp; restore</span>
+            <span class="text-slate-300 font-medium" data-i18n="step3_label">Disaster recovery — one shard is enough</span>
           </div>
-          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-cmd">bfs</span> push  <span class="code-comment" data-i18n="step3_c1"># backup → new version</span>
-<span class="code-cmd">bfs</span> pull  <span class="code-comment" data-i18n="step3_c2"># restore files</span>
-
-<span class="code-comment" data-i18n="step3_c3"># Disaster recovery — no .bfs/ config needed</span>
-<span class="code-cmd">bfs</span> recovery <span class="code-flag">--provider</span> local <span class="code-flag">--path</span> <span class="code-string">/mnt/disk1</span></code></pre>
+          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step3_comment"># Lost .bfs/? Any one surviving shard rebuilds the config, then `bfs pull`</span>
+<span class="code-cmd">bfs</span> recovery <span class="code-flag">--provider</span> local <span class="code-flag">--name</span> <span class="code-string">mybackup</span> \
+  <span class="code-flag">--bootstrap</span> <span class="code-string">"--path /mnt/disk1"</span></code></pre>
         </div>
 
       </div>
@@ -248,7 +247,7 @@
   <footer class="border-t border-slate-800 py-10 px-6 text-center text-slate-500 text-sm">
     <p class="mb-2">
       <span class="text-white font-semibold">BFS</span>
-      &nbsp;v0.4.0
+      &nbsp;v0.5.0
       &nbsp;·&nbsp;
       <a href="https://github.com/pfranczyk/BFS/blob/master/LICENSE" class="hover:text-white transition-colors">AGPL-3.0</a>
       &nbsp;·&nbsp;
@@ -264,105 +263,105 @@
   <!-- ─── I18N ──────────────────────────────────────────────────────────── -->
   <script>
     const translations = {
-      en: {
-        hero_subtitle: 'Your drives will fail. Your data won\'t.',
-        hero_desc:     'Split backups across multiple drives so no single drive holds your complete data. Lose a drive? Pull a new one, recover, keep going. It\'s math, not luck.',
-        copy_btn:      'copy',
-        why_title:     'Why BFS?',
-        feat2_title:   'Survive Drive Failures',
-        feat2_desc:    'Your backup is split into <span class="text-white font-mono">N+K</span> pieces using Reed-Solomon erasure coding — the same math that keeps CDs readable despite scratches. Lose up to K drives and still recover everything from any N.',
-        feat1_title:   'Your Eyes Only',
-        feat1_desc:    'Optional AES-256-GCM encryption with Argon2id key derivation. Each drive holds one piece — encrypted, incomplete, and useless on its own.',
-        feat0_title:   'Smaller Backups, Automatically',
-        feat0_desc:    'Deflate compression is on by default. BFS detects already-compressed files (photos, videos, archives) and skips them — no wasted CPU, smaller shards.',
-        feat3_title:   'Use Whatever Storage You Have',
-        feat3_desc:    'USB drives, external HDDs, NAS, network folders — anything that can hold a file. No cloud subscription required. No vendor lock-in.',
-        feat4_title:   'Every Push Is a Snapshot',
-        feat4_desc:    'Each backup creates a new numbered version. Keep the last 7, or 30, or all of them. Verify health, prune old ones, restore from any point.',
-        qs_title:      'Quick Start',
-        step1_label:   'Initialize a vault',
-        step1_comment: '# 3 data shards + 1 parity = 4 providers total',
-        step2_label:   'Add storage providers',
-        step2_comment: '# One provider per shard (local disk, USB, NAS…)',
-        step3_label:   'Push &amp; restore',
-        step3_c1:      '# backup → new version',
-        step3_c2:      '# restore files',
-        step3_c3:      '# Disaster recovery — no .bfs/ config needed',
-        cmd_title:     'Commands',
-        cmd_th_cmd:    'Command',
-        cmd_th_desc:   'Description',
-        cmd_init:      'Initialize vault in current directory',
-        cmd_push:      'Backup current directory → new version',
-        cmd_pull:      'Restore files from backup',
-        cmd_status:    'Show vault health and version info',
-        cmd_verify:    'Check shard availability across providers',
-        cmd_recovery:  'Rebuild vault config from provider shards',
-        cmd_prune:     'Delete old backup versions',
-        cmd_versions:  'List all versions with health status',
-        feat5_title:   'Lost Everything? One Shard Is Enough',
-        feat5_desc:    'Every piece of your backup carries a map to all the others. Find one surviving drive, run <span class="text-white font-mono">bfs recovery</span> — your config, your files, everything comes back.',
-      },
-      pl: {
-        hero_subtitle: 'Twoje dyski padną. Twoje dane przetrwają.',
-        hero_desc:     'Rozdziel backup na wiele dysków — żaden z nich nie ma kompletnych danych. Stracisz dysk? Podłącz nowy, odtwórz, działaj dalej. To matematyka, nie szczęście.',
-        copy_btn:      'kopiuj',
-        why_title:     'Dlaczego BFS?',
-        feat2_title:   'Odporność na awarie dysków',
-        feat2_desc:    'Backup jest dzielony na <span class="text-white font-mono">N+K</span> fragmentów za pomocą kodowania Reed-Solomona — tej samej matematyki, dzięki której porysowane CD wciąż działają. Stracisz do K dysków i nadal odtworzysz wszystko z dowolnych N.',
-        feat1_title:   'Tylko dla Twoich oczu',
-        feat1_desc:    'Opcjonalne szyfrowanie AES-256-GCM z Argon2id. Każdy dysk przechowuje jeden fragment — zaszyfrowany, niekompletny i bezużyteczny sam w sobie.',
-        feat0_title:   'Mniejsze backupy, automatycznie',
-        feat0_desc:    'Kompresja deflate domyślnie włączona. BFS wykrywa już skompresowane pliki (zdjęcia, filmy, archiwa) i je pomija — bez marnowania CPU, mniejsze fragmenty.',
-        feat3_title:   'Użyj czegokolwiek, co masz',
-        feat3_desc:    'Pendrive, dysk zewnętrzny, NAS, folder sieciowy — wszystko, co trzyma pliki. Bez subskrypcji chmury. Bez uzależnienia od dostawcy.',
-        feat4_title:   'Każdy push to snapshot',
-        feat4_desc:    'Każdy backup tworzy nową numerowaną wersję. Zachowaj ostatnie 7, 30 lub wszystkie. Sprawdzaj stan, usuwaj stare, odtwarzaj z dowolnego momentu.',
-        qs_title:      'Szybki start',
-        step1_label:   'Utwórz vault',
-        step1_comment: '# 3 shardy danych + 1 parzystości = 4 providery łącznie',
-        step2_label:   'Dodaj providery',
-        step2_comment: '# Jeden provider na shard (dysk, pendrive, NAS…)',
-        step3_label:   'Push i odtworzenie',
-        step3_c1:      '# backup → nowa wersja',
-        step3_c2:      '# odtworzenie plików',
-        step3_c3:      '# Disaster recovery — nie potrzeba pliku .bfs/',
-        cmd_title:     'Komendy',
-        cmd_th_cmd:    'Komenda',
-        cmd_th_desc:   'Opis',
-        cmd_init:      'Inicjalizacja vaulta w bieżącym katalogu',
-        cmd_push:      'Backup bieżącego katalogu → nowa wersja',
-        cmd_pull:      'Odtworzenie plików z backupu',
-        cmd_status:    'Pokaż stan vaulta i informacje o wersjach',
-        cmd_verify:    'Sprawdź dostępność shardów u providerów',
-        cmd_recovery:  'Odbuduj konfigurację vaulta z shardów',
-        cmd_prune:     'Usuń stare wersje backupu',
-        cmd_versions:  'Wylistuj wszystkie wersje ze stanem zdrowia',
-        feat5_title:   'Straciłeś wszystko? Wystarczy jeden fragment',
-        feat5_desc:    'Każdy fragment backupu zawiera mapę do wszystkich pozostałych. Znajdź jeden ocalały dysk, uruchom <span class="text-white font-mono">bfs recovery</span> — konfiguracja, pliki, wszystko wraca.',
-      },
-    };
+                                              en: {
+                                                hero_subtitle: 'Your drives will fail. Your data won\'t.',
+                                                hero_desc:     'Split backups across multiple drives so no single drive holds your complete data. Lose a drive? Pull a new one, recover, keep going. It\'s math, not luck.',
+                                                copy_btn:      'copy',
+                                                why_title:     'Why BFS?',
+                                                feat2_title:   'Survive Drive Failures',
+                                                feat2_desc:    'Your backup is split into <span class="text-white font-mono">N+K</span> pieces using Reed-Solomon erasure coding — the same math that keeps CDs readable despite scratches. Lose up to K drives and still recover everything from any N.',
+                                                feat1_title:   'Your Eyes Only',
+                                                feat1_desc:    'Optional AES-256-GCM encryption with Argon2id key derivation. Each drive holds one piece — encrypted, incomplete, and useless on its own.',
+                                                feat0_title:   'Smaller Backups, Automatically',
+                                                feat0_desc:    'ZIP/Deflate compression is on by default. BFS detects already-compressed files (photos, videos, archives) and skips them — no wasted CPU, smaller shards.',
+                                                feat3_title:   'Use Whatever Storage You Have',
+                                                feat3_desc:    'USB drives, external HDDs, NAS, FTP/FTPS servers, network folders — anything that can hold a file. Mix and match across providers. No cloud subscription required. No vendor lock-in.',
+                                                feat4_title:   'Every Push Is a Snapshot',
+                                                feat4_desc:    'Each backup creates a new numbered version. Keep the last 7, or 30, or all of them. Verify health, prune old ones, restore from any point.',
+                                                qs_title:      'Quick Start',
+                                                step1_label:   'Initialize (one command, mix any storage)',
+                                                step1_comment: '# 2 data shards + 1 parity = 3 providers (mix local disks and FTP/FTPS)',
+                                                step2_label:   'Backup &amp; restore',
+                                                step2_comment: '# Each push creates a new versioned snapshot',
+                                                step2_c1:      '# backup → new version',
+                                                step2_c2:      '# restore latest version',
+                                                step3_label:   'Disaster recovery — one shard is enough',
+                                                step3_comment: '# Lost .bfs/? Any one surviving shard rebuilds the config, then `bfs pull`',
+                                                cmd_title:     'Commands',
+                                                cmd_th_cmd:    'Command',
+                                                cmd_th_desc:   'Description',
+                                                cmd_init:      'Initialize vault in current directory',
+                                                cmd_push:      'Backup current directory → new version',
+                                                cmd_pull:      'Restore files from backup',
+                                                cmd_status:    'Show vault health and version info',
+                                                cmd_verify:    'Check shard availability across providers',
+                                                cmd_recovery:  'Rebuild vault config from provider shards',
+                                                cmd_prune:     'Delete old backup versions',
+                                                cmd_versions:  'List all versions with health status',
+                                                feat5_title:   'Lost Everything? One Shard Is Enough',
+                                                feat5_desc:    'Every piece of your backup carries a map to all the others. Find one surviving drive, run <span class="text-white font-mono">bfs recovery</span> — your config, your files, everything comes back.',
+                                              },
+                                              pl: {
+                                                hero_subtitle: 'Twoje dyski padną. Twoje dane przetrwają.',
+                                                hero_desc:     'Rozdziel backup na wiele dysków — żaden z nich nie ma kompletnych danych. Stracisz dysk? Podłącz nowy, odtwórz, działaj dalej. To matematyka, nie szczęście.',
+                                                copy_btn:      'kopiuj',
+                                                why_title:     'Dlaczego BFS?',
+                                                feat2_title:   'Odporność na awarie dysków',
+                                                feat2_desc:    'Backup jest dzielony na <span class="text-white font-mono">N+K</span> fragmentów za pomocą kodowania Reed-Solomona — tej samej matematyki, dzięki której porysowane CD wciąż działają. Stracisz do K dysków i nadal odtworzysz wszystko z dowolnych N.',
+                                                feat1_title:   'Tylko dla Twoich oczu',
+                                                feat1_desc:    'Opcjonalne szyfrowanie AES-256-GCM z Argon2id. Każdy dysk przechowuje jeden fragment — zaszyfrowany, niekompletny i bezużyteczny sam w sobie.',
+                                                feat0_title:   'Mniejsze backupy, automatycznie',
+                                                feat0_desc:    'Kompresja ZIP (deflate) domyślnie włączona. BFS wykrywa już skompresowane pliki (zdjęcia, filmy, archiwa) i je pomija — bez marnowania CPU, mniejsze fragmenty.',
+                                                feat3_title:   'Użyj czegokolwiek, co masz',
+                                                feat3_desc:    'Pendrive, dysk zewnętrzny, NAS, serwer FTP/FTPS, folder sieciowy — wszystko, co trzyma pliki. Mieszaj nośniki dowolnie. Bez subskrypcji chmury. Bez uzależnienia od dostawcy.',
+                                                feat4_title:   'Każdy push to snapshot',
+                                                feat4_desc:    'Każdy backup tworzy nową numerowaną wersję. Zachowaj ostatnie 7, 30 lub wszystkie. Sprawdzaj stan, usuwaj stare, odtwarzaj z dowolnego momentu.',
+                                                qs_title:      'Szybki start',
+                                                step1_label:   'Inicjalizacja (jedna komenda, dowolny mix nośników)',
+                                                step1_comment: '# 2 shardy danych + 1 parzystości = 3 providery (dyski lokalne + FTP/FTPS)',
+                                                step2_label:   'Backup i odtworzenie',
+                                                step2_comment: '# Każdy push tworzy nowy snapshot z numerem wersji',
+                                                step2_c1:      '# backup → nowa wersja',
+                                                step2_c2:      '# odtworzenie najnowszej wersji',
+                                                step3_label:   'Odzyskiwanie po awarii — wystarczy jeden shard',
+                                                step3_comment: '# Stracileś .bfs/? Każdy ocalały shard odbudowuje konfigurację, potem `bfs pull`',
+                                                cmd_title:     'Komendy',
+                                                cmd_th_cmd:    'Komenda',
+                                                cmd_th_desc:   'Opis',
+                                                cmd_init:      'Inicjalizacja vaulta w bieżącym katalogu',
+                                                cmd_push:      'Backup bieżącego katalogu → nowa wersja',
+                                                cmd_pull:      'Odtworzenie plików z backupu',
+                                                cmd_status:    'Pokaż stan vaulta i informacje o wersjach',
+                                                cmd_verify:    'Sprawdź dostępność shardów u providerów',
+                                                cmd_recovery:  'Odbuduj konfigurację vaulta z shardów',
+                                                cmd_prune:     'Usuń stare wersje backupu',
+                                                cmd_versions:  'Wylistuj wszystkie wersje ze stanem zdrowia',
+                                                feat5_title:   'Straciłeś wszystko? Wystarczy jeden fragment',
+                                                feat5_desc:    'Każdy fragment backupu zawiera mapę do wszystkich pozostałych. Znajdź jeden ocalały dysk, uruchom <span class="text-white font-mono">bfs recovery</span> — konfiguracja, pliki, wszystko wraca.',
+                                              },
+                                            };
 
-    let currentLang = localStorage.getItem('bfs-lang')
-      || (navigator.language.startsWith('pl') ? 'pl' : 'en');
+                                            let currentLang = localStorage.getItem('bfs-lang')
+                                              || (navigator.language.startsWith('pl') ? 'pl' : 'en');
 
-    function applyLang(lang) {
-      currentLang = lang;
-      document.documentElement.lang = lang;
-      document.getElementById('lang-label').textContent = lang.toUpperCase();
-      const dict = translations[lang];
-      document.querySelectorAll('[data-i18n]').forEach(el => {
-        const key = el.getAttribute('data-i18n');
-        if (dict[key] !== undefined) el.innerHTML = dict[key];
-      });
-      localStorage.setItem('bfs-lang', lang);
-    }
+                                            function applyLang(lang) {
+                                              currentLang = lang;
+                                              document.documentElement.lang = lang;
+                                              document.getElementById('lang-label').textContent = lang.toUpperCase();
+                                              const dict = translations[lang];
+                                              document.querySelectorAll('[data-i18n]').forEach(el => {
+                                                const key = el.getAttribute('data-i18n');
+                                                if (dict[key] !== undefined) el.innerHTML = dict[key];
+                                              });
+                                              localStorage.setItem('bfs-lang', lang);
+                                            }
 
-    // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick attribute
-    function toggleLang() {
-      applyLang(currentLang === 'en' ? 'pl' : 'en');
-    }
+                                            // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick attribute
+                                            function toggleLang() {
+                                              applyLang(currentLang === 'en' ? 'pl' : 'en');
+                                            }
 
-    applyLang(currentLang);
+                                            applyLang(currentLang);
   </script>
 
 </body>

@@ -4,7 +4,7 @@ import { Readable } from 'node:stream';
 import { deriveKey } from '../core/crypto.js';
 import { BfsError } from '../core/errors.js';
 import { parseShardHeaderFromStream } from '../core/shard-io.js';
-import { fmt } from '../i18n/index.js';
+import { fmt, t } from '../i18n/index.js';
 import type {
   ManifestShard,
   ProviderConfig,
@@ -16,6 +16,11 @@ import type {
   VersionManifest,
 } from '../types/index.js';
 import { PushMode, VersionHealth } from '../types/index.js';
+import {
+  checkVersionMismatch,
+  detectMissingAdapters,
+  formatMissingAdaptersMessage,
+} from './adapter-preflight.js';
 import {
   type BootstrapResult,
   bootstrapFromProvider,
@@ -39,6 +44,13 @@ export interface RecoveryOptions {
   passwords?: string[];
   /** Overrides cache directory for recovered shards. Defaults to {rootDir}/.bfs/cache. */
   cacheDir?: string;
+  /**
+   * When true, recovery continues even if some external adapters are missing,
+   * relying on Reed-Solomon redundancy to decode from whatever providers
+   * remain available. Missing built-in providers (local, ftp) always abort
+   * — their absence means the BFS installation itself is broken.
+   */
+  allowMissingAdapters?: boolean;
 }
 
 export interface RecoveryReport {
@@ -62,6 +74,15 @@ interface ProcessVersionContext {
 }
 
 const MAX_PASSWORD_ATTEMPTS = 3;
+
+/**
+ * Maximum bytes pulled from a shard for header inspection during recovery.
+ * The shard header (magic, common fields, kdf_salt, location_map) is bounded
+ * by the number of providers (N+K) and a JSON location map. 16 KB
+ * comfortably covers realistic schemes (≤ 32 providers) without forcing
+ * adapters to stream the full multi-MB payload.
+ */
+const SHARD_HEADER_READ_BYTES = 16384;
 
 /** Attempts to decrypt a location map from a shard using the provided password pool (MRU order). */
 async function tryDecryptLocationMap(
@@ -173,8 +194,10 @@ async function processVersion(
 ): Promise<Nullable<{ manifest: VersionManifest; consensusOk: boolean }>> {
   const { vaultName, bootstrapVaultId, passwordPool, io } = ctx;
 
-  // Download up to 2 shard headers from different providers for consensus.
-  // Only the first ~16 KB is read (header bytes); full payload is NOT downloaded.
+  // Pull up to 2 shard headers from different providers for consensus.
+  // Providers MUST honor `downloadHeader` and avoid pulling the full payload
+  // over the wire (FTP issues SIZE + aborts after maxBytes; LocalFS uses a
+  // bounded createReadStream).
   const shardDataList: Array<{
     header: ShardHeader;
     headerBytes: Buffer;
@@ -185,23 +208,10 @@ async function processVersion(
     try {
       const filename = `shard_${entry.shardIndex}.bfs.${version}`;
       entry.provider.setVaultName(vaultName);
-      const stream = await entry.provider.download({
-        provider_id: entry.provider.id,
-        path: filename,
-      });
-      // Read only the header portion (~16 KB), not the full shard payload.
-      // break from for-await calls iterator.return() which destroys the stream.
-      const chunks: Buffer[] = [];
-      let bytesRead = 0;
-      for await (const chunk of stream) {
-        const buf = Buffer.isBuffer(chunk)
-          ? chunk
-          : Buffer.from(chunk as Uint8Array);
-        chunks.push(buf);
-        bytesRead += buf.length;
-        if (bytesRead >= 16384) break;
-      }
-      const headerBytes = Buffer.concat(chunks);
+      const headerBytes = await entry.provider.downloadHeader(
+        { provider_id: entry.provider.id, path: filename },
+        SHARD_HEADER_READ_BYTES,
+      );
 
       // Parse header from buffered bytes; payload stream errors are expected (truncated data)
       const { header: shardHeader, payloadStream } =
@@ -223,7 +233,7 @@ async function processVersion(
   const primaryMeta = primaryData.header;
 
   if (primaryMeta.vault_id !== bootstrapVaultId) {
-    io.warn(`Version ${version}: vault_id mismatch — skipping`);
+    io.warn(fmt('recovery_consensus_vault_id_mismatch', String(version)));
     return null;
   }
 
@@ -235,7 +245,7 @@ async function processVersion(
     parsedFilename.shardIndex !== primaryMeta.shard_index ||
     parsedFilename.version !== primaryMeta.version
   ) {
-    io.warn(`Version ${version}: filename/header mismatch — skipping`);
+    io.warn(fmt('recovery_consensus_filename_mismatch', String(version)));
     return null;
   }
 
@@ -255,7 +265,7 @@ async function processVersion(
       mismatch.push('parity_shards');
     if (mismatch.length > 0) {
       io.warn(
-        `Version ${version}: consensus failed (fields: ${mismatch.join(', ')}) — marking as untrusted`,
+        fmt('recovery_consensus_failed', String(version), mismatch.join(', ')),
       );
       consensusOk = false;
     }
@@ -330,6 +340,7 @@ function reconstructConfig(
     return {
       id: ms.provider_id,
       type: ms.provider_type,
+      adapterPackage: loc?.adapterPackage ?? null,
       config: loc?.connection_config ?? {},
     };
   });
@@ -403,6 +414,53 @@ export async function recover(
   // Save bootstrap shard to cache
   bootstrapProvider.setVaultName(vaultName);
 
+  // ── 2a. Adapter preflight from the bootstrap location map ─────────────────
+  // Every shard's location map advertises all provider types in the vault.
+  // Before we try to touch them, verify each type is registered. Missing
+  // built-in = hard abort ("BFS installation broken"). Missing external
+  // adapter = batched report with install commands, respecting
+  // allowMissingAdapters so Reed-Solomon can still decode from what remains.
+  const recoveredProviders: ProviderConfig[] = bootstrap.location_map.map(
+    (loc) => ({
+      id: loc.provider_id,
+      type: loc.provider_type,
+      adapterPackage: loc.adapterPackage,
+      config: loc.connection_config,
+    }),
+  );
+  const missing = detectMissingAdapters(recoveredProviders);
+  const builtInMissing = missing.filter((m) => m.adapterPackage === null);
+  if (builtInMissing.length > 0) {
+    const names = builtInMissing.map((m) => `"${m.type}"`).join(', ');
+    throw new BfsError(fmt('adapter_preflight_builtin_broken_many', names));
+  }
+  const externalMissing = missing.filter((m) => m.adapterPackage !== null);
+  if (externalMissing.length > 0 && options.allowMissingAdapters !== true) {
+    throw new BfsError(`${formatMissingAdaptersMessage(externalMissing)}\n`);
+  }
+  if (externalMissing.length > 0) {
+    io.warn(formatMissingAdaptersMessage(externalMissing));
+  }
+  const versionMismatches = checkVersionMismatch(recoveredProviders);
+  for (const vm of versionMismatches) {
+    io.warn(
+      vm.severity === 'strong'
+        ? fmt(
+            'adapter_version_mismatch_strong',
+            vm.type,
+            vm.recordedPackage,
+            vm.installedPackage,
+            vm.recordedPackage,
+          )
+        : fmt(
+            'adapter_version_mismatch_soft',
+            vm.type,
+            vm.recordedPackage,
+            vm.installedPackage,
+          ),
+    );
+  }
+
   // ── 3. Discover all versions across all providers ─────────────────────────
   const allProviders: StorageProvider[] = [
     bootstrapProvider,
@@ -447,9 +505,7 @@ export async function recover(
   }
 
   if (reportVersions.length === 0) {
-    throw new BfsError(
-      'Could not reconstruct any valid manifest from the available providers.',
-    );
+    throw new BfsError(t('recovery_no_manifests'));
   }
 
   // Find the actual latest verified version
@@ -460,7 +516,7 @@ export async function recover(
   const latestManifest = await readManifest(rootDir, latestVerified);
   if (!latestManifest) {
     throw new BfsError(
-      `Manifest for latest version ${latestVerified} could not be read after recovery.`,
+      fmt('recovery_manifest_unreadable', String(latestVerified)),
     );
   }
 

@@ -11,17 +11,9 @@ vi.mock('../../src/providers/provider.js', async (importOriginal) => {
     await importOriginal<typeof import('../../src/providers/provider.js')>();
   return {
     ...actual,
-    createProvider: vi.fn(() => ({
-      authenticate: vi.fn(),
-      setVaultName: vi.fn(),
-      upload: vi.fn(),
-      download: vi.fn(),
-      delete: vi.fn(),
-      list: vi.fn(),
-      listVaults: vi.fn(),
-      healthCheck: vi.fn(),
-    })),
     createCliProviderIO: vi.fn(() => ({
+      lang: 'en',
+      workDir: process.cwd(),
       ask: vi.fn(),
       askSecret: vi.fn(),
       confirm: vi.fn(),
@@ -48,12 +40,12 @@ vi.mock('ora', () => ({
 }));
 
 import inquirer from 'inquirer';
-import { createProvider } from '../../src/providers/provider.js';
+import { LocalFsProvider } from '../../src/providers/local-fs.js';
+import { providerRegistry } from '../../src/providers/provider.js';
 import { recover } from '../../src/vault/recovery.js';
 
 const mockRecover = vi.mocked(recover);
 const mockPrompt = vi.mocked(inquirer.prompt);
-const mockCreateProvider = vi.mocked(createProvider);
 
 const recoveryReport = {
   manifests_rebuilt: 3,
@@ -66,28 +58,57 @@ const recoveryReport = {
 
 describe('recovery', () => {
   let capture: ReturnType<typeof captureConsole>;
+  let mockCreate: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     capture = captureConsole();
     mockRecover.mockResolvedValue(recoveryReport as never);
+    // Interactive flow falls back to LocalFsProvider.configureInteractive,
+    // mocked to skip the provider's own prompts. configureFromFlags is the
+    // real implementation — it parses bootstrap spec tokens directly.
+    vi.spyOn(
+      LocalFsProvider.prototype,
+      'configureInteractive',
+    ).mockResolvedValue({ path: '/mnt/usb' });
+    // Replace providerRegistry.create with a spy returning a fake provider;
+    // recovery only calls authenticate/setVaultName on the bootstrap provider.
+    mockCreate = vi.spyOn(providerRegistry, 'create').mockReturnValue({
+      authenticate: vi.fn(),
+      setVaultName: vi.fn(),
+      upload: vi.fn(),
+      download: vi.fn(),
+      delete: vi.fn(),
+      rename: vi.fn(),
+      updateShardHeader: vi.fn(),
+      list: vi.fn().mockResolvedValue([]),
+      listVaults: vi.fn().mockResolvedValue([]),
+      healthCheck: vi.fn().mockResolvedValue(true),
+      configureInteractive: vi.fn().mockResolvedValue({}),
+      configureFromFlags: vi.fn().mockReturnValue({}),
+      validateConfig: vi.fn().mockReturnValue([]),
+      describeConfig: vi.fn().mockReturnValue(''),
+      getSecretFields: vi.fn().mockReturnValue([]),
+      probeConnection: vi.fn(),
+    } as unknown as ReturnType<typeof providerRegistry.create>);
   });
 
   afterEach(() => {
     capture.restore();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    vi.restoreAllMocks();
   });
 
-  // ─── Z pełnymi opcjami (CI mode) ──────────────────────────────────────────
+  // ─── CI mode: pełna ścieżka --bootstrap ───────────────────────────────────
 
-  it('should run without prompts when all options provided', async () => {
+  it('should run without prompts when --bootstrap, --provider, --name provided', async () => {
     await runCmd([
       'recovery',
       '--provider',
       'local',
-      '--path',
-      '/mnt/usb',
       '--name',
       'my-vault',
+      '--bootstrap',
+      '--path /mnt/usb',
     ]);
 
     expect(mockPrompt).not.toHaveBeenCalled();
@@ -102,10 +123,10 @@ describe('recovery', () => {
       'recovery',
       '--provider',
       'local',
-      '--path',
-      '/mnt/usb',
       '--name',
       'my-vault',
+      '--bootstrap',
+      '--path /mnt/usb',
     ]);
 
     const output = capture.logs.join('\n');
@@ -117,10 +138,10 @@ describe('recovery', () => {
       'recovery',
       '--provider',
       'local',
-      '--path',
-      '/mnt/usb',
       '--name',
       'my-vault',
+      '--bootstrap',
+      '--path /mnt/usb',
     ]);
 
     const output = capture.logs.join('\n');
@@ -134,52 +155,178 @@ describe('recovery', () => {
       'recovery',
       '--provider',
       'local',
-      '--path',
-      '/mnt/usb',
       '--name',
       'my-vault',
+      '--bootstrap',
+      '--path /mnt/usb',
     ]);
 
     const output = capture.logs.join('\n');
     expect(output).toContain('pull');
   });
 
-  // ─── Interaktywne prompty (bez opcji) ─────────────────────────────────────
+  // ─── CI mode: parse adapter flags via configureFromFlags ──────────────────
+  // Regression for the user's bug report — `bfs recovery --provider ftp
+  // --path bfsuser@host/ftp/bfsuser` returned "530 Login incorrect" because
+  // adapter flags never reached configureFromFlags. After the refactor,
+  // bootstrap spec is parsed by parseRecoveryBootstrapSpec and the resulting
+  // config is forwarded verbatim to providerRegistry.create.
 
-  it('should ask for provider type when --provider missing', async () => {
-    mockPrompt
-      .mockResolvedValueOnce({ providerType: 'local' } as never)
-      .mockResolvedValueOnce({ basePath: '/mnt/usb' } as never)
-      .mockResolvedValueOnce({ vaultName: 'my-vault' } as never);
-
-    await runCmd(['recovery']);
-
-    expect(mockPrompt).toHaveBeenCalledTimes(3);
-    expect(mockRecover).toHaveBeenCalled();
-  });
-
-  it('should ask only for missing options when some are provided', async () => {
-    mockPrompt
-      .mockResolvedValueOnce({ basePath: '/mnt/usb' } as never)
-      .mockResolvedValueOnce({ vaultName: 'my-vault' } as never);
-
-    await runCmd(['recovery', '--provider', 'local']);
-
-    expect(mockPrompt).toHaveBeenCalledTimes(2);
-  });
-
-  it('should not ask for any option when all three are provided', async () => {
+  it('should parse local --path from bootstrap spec into provider config', async () => {
     await runCmd([
       'recovery',
       '--provider',
       'local',
-      '--path',
-      '/mnt/usb',
+      '--name',
+      'my-vault',
+      '--bootstrap',
+      '--path /mnt/usb',
+    ]);
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ config: { path: '/mnt/usb' } }),
+      expect.anything(),
+    );
+  });
+
+  it('should parse ftp adapter flags from bootstrap spec into provider config', async () => {
+    await runCmd([
+      'recovery',
+      '--provider',
+      'ftp',
+      '--name',
+      'my-vault',
+      '--bootstrap',
+      '--host nas.local --port 21 --user bob --password secret --path /storage',
+    ]);
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          host: 'nas.local',
+          port: 21,
+          user: 'bob',
+          password: 'secret',
+          path: '/storage',
+          secure: false,
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  // ─── CI mode: walidacja flag ─────────────────────────────────────────────
+
+  it('should reject --bootstrap without --provider', async () => {
+    const result = await runCmd([
+      'recovery',
+      '--bootstrap',
+      '--path /mnt/usb',
       '--name',
       'my-vault',
     ]);
 
-    expect(mockPrompt).not.toHaveBeenCalled();
+    expect(result).toBe('abort');
+    expect(
+      capture.errors.some((l) => l.includes('--bootstrap requires --provider')),
+    ).toBe(true);
+  });
+
+  it('should reject --bootstrap without --name', async () => {
+    const result = await runCmd([
+      'recovery',
+      '--provider',
+      'local',
+      '--bootstrap',
+      '--path /mnt/usb',
+    ]);
+
+    expect(result).toBe('abort');
+    expect(
+      capture.errors.some((l) => l.includes('--bootstrap requires --name')),
+    ).toBe(true);
+  });
+
+  it('should reject empty --bootstrap spec', async () => {
+    const result = await runCmd([
+      'recovery',
+      '--provider',
+      'local',
+      '--name',
+      'my-vault',
+      '--bootstrap',
+      '',
+    ]);
+
+    expect(result).toBe('abort');
+    expect(
+      capture.errors.some((l) => l.includes('Bootstrap spec is empty')),
+    ).toBe(true);
+  });
+
+  it('should reject unknown provider type', async () => {
+    const result = await runCmd([
+      'recovery',
+      '--provider',
+      'made-up-type-xyz',
+      '--name',
+      'my-vault',
+      '--bootstrap',
+      '--path /mnt/usb',
+    ]);
+
+    expect(result).toBe('abort');
+    expect(
+      capture.errors.some((l) =>
+        l.includes('Unknown provider type: "made-up-type-xyz"'),
+      ),
+    ).toBe(true);
+  });
+
+  it('should surface adapter validation errors from configureFromFlags', async () => {
+    // FTP requires host + path; missing host triggers ProviderError from
+    // FtpProvider.configureFromFlags, surfaced as a CommandAbort.
+    const result = await runCmd([
+      'recovery',
+      '--provider',
+      'ftp',
+      '--name',
+      'my-vault',
+      '--bootstrap',
+      '--user bob --password secret',
+    ]);
+
+    expect(result).toBe('abort');
+    expect(
+      capture.errors.some(
+        (l) => l.includes('host') && l.toLowerCase().includes('required'),
+      ),
+    ).toBe(true);
+  });
+
+  // ─── Tryb interaktywny (bez --bootstrap) ──────────────────────────────────
+
+  it('should ask for provider type when --provider missing', async () => {
+    // promptWithRawMode calls: provider type + vaultName.
+    // Path is delegated to LocalFsProvider.configureInteractive (mocked).
+    mockPrompt
+      .mockResolvedValueOnce({ providerType: 'local' } as never)
+      .mockResolvedValueOnce({ vaultName: 'my-vault' } as never);
+
+    await runCmd(['recovery']);
+
+    expect(mockPrompt).toHaveBeenCalledTimes(2);
+    expect(mockRecover).toHaveBeenCalled();
+  });
+
+  it('should ask only for missing options when --provider is given', async () => {
+    // Only vaultName goes through promptWithRawMode; path is delegated to
+    // LocalFsProvider.configureInteractive (mocked).
+    mockPrompt.mockResolvedValueOnce({ vaultName: 'my-vault' } as never);
+
+    await runCmd(['recovery', '--provider', 'local']);
+
+    expect(mockPrompt).toHaveBeenCalledTimes(1);
   });
 
   // ─── Anulowanie ───────────────────────────────────────────────────────────
@@ -216,143 +363,27 @@ describe('recovery', () => {
       'recovery',
       '--provider',
       'local',
-      '--path',
-      '/mnt/bad',
       '--name',
       'my-vault',
+      '--bootstrap',
+      '--path /mnt/bad',
     ]);
 
     expect(result).toBe('abort');
     expect(capture.errors.some((l) => l.includes('Nie znaleziono'))).toBe(true);
   });
 
-  // ─── parseProviderPath — lokalna ścieżka ──────────────────────────────────
+  // ─── Vault password ───────────────────────────────────────────────────────
 
-  it('should pass plain path as-is for local provider', async () => {
+  it('should pass --password (vault encryption) to recover', async () => {
     await runCmd([
       'recovery',
       '--provider',
       'local',
-      '--path',
-      '/mnt/usb',
       '--name',
       'my-vault',
-    ]);
-
-    expect(mockCreateProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ config: { path: '/mnt/usb' } }),
-      expect.anything(),
-    );
-  });
-
-  // ─── parseProviderPath — zdalny user@host/path ─────────────────────────────
-
-  it('should parse user@host/path into separate config fields for ssh', async () => {
-    await runCmd([
-      'recovery',
-      '--provider',
-      'ssh',
-      '--path',
-      'alice@192.168.1.10/backup/',
-      '--name',
-      'my-vault',
-    ]);
-
-    expect(mockCreateProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: { user: 'alice', host: '192.168.1.10', path: '/backup/' },
-      }),
-      expect.anything(),
-    );
-  });
-
-  it('should parse user@host/path into separate config fields for ftp', async () => {
-    await runCmd([
-      'recovery',
-      '--provider',
-      'ftp',
-      '--path',
-      'bob@nas.local/storage/backups/',
-      '--name',
-      'docs',
-    ]);
-
-    expect(mockCreateProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {
-          user: 'bob',
-          host: 'nas.local',
-          path: '/storage/backups/',
-        },
-      }),
-      expect.anything(),
-    );
-  });
-
-  it('should set path to "/" when no path segment after host', async () => {
-    await runCmd([
-      'recovery',
-      '--provider',
-      'ssh',
-      '--path',
-      'alice@192.168.1.10',
-      '--name',
-      'my-vault',
-    ]);
-
-    expect(mockCreateProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: { user: 'alice', host: '192.168.1.10', path: '/' },
-      }),
-      expect.anything(),
-    );
-  });
-
-  // ─── Odrzucenie usuniętych opcji ──────────────────────────────────────────
-
-  it('should reject unknown --host option', async () => {
-    const result = await runCmd([
-      'recovery',
-      '--provider',
-      'local',
-      '--path',
-      '/mnt/usb',
-      '--name',
-      'my-vault',
-      '--host',
-      '192.168.1.10',
-    ]);
-
-    expect(result).toBe('commander');
-  });
-
-  it('should reject unknown --user option', async () => {
-    const result = await runCmd([
-      'recovery',
-      '--provider',
-      'local',
-      '--path',
-      '/mnt/usb',
-      '--name',
-      'my-vault',
-      '--user',
-      'alice',
-    ]);
-
-    expect(result).toBe('commander');
-  });
-
-  // ─── Z hasłem ─────────────────────────────────────────────────────────────
-
-  it('should pass --password to recover', async () => {
-    await runCmd([
-      'recovery',
-      '--provider',
-      'local',
-      '--path',
-      '/mnt/usb',
-      '--name',
-      'my-vault',
+      '--bootstrap',
+      '--path /mnt/usb',
       '--password',
       'tajne',
     ]);
@@ -360,6 +391,58 @@ describe('recovery', () => {
     expect(mockRecover).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ passwords: ['tajne'] }),
+    );
+  });
+
+  it('should accept multiple --password flags (variadic for multi-version)', async () => {
+    await runCmd([
+      'recovery',
+      '--provider',
+      'local',
+      '--name',
+      'my-vault',
+      '--bootstrap',
+      '--path /mnt/usb',
+      '--password',
+      'one',
+      '--password',
+      'two',
+    ]);
+
+    expect(mockRecover).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ passwords: ['one', 'two'] }),
+    );
+  });
+
+  // ─── --password w bootstrap nie koliduje z --password w recovery ──────────
+  // Vault `--password` (recovery flag, variadic, encryption key) and FTP
+  // `--password` (inside --bootstrap, single-value, login credential)
+  // coexist because the latter lives inside a quoted string Commander
+  // never sees as a top-level token.
+
+  it('should keep vault --password and bootstrap --password independent', async () => {
+    await runCmd([
+      'recovery',
+      '--provider',
+      'ftp',
+      '--name',
+      'my-vault',
+      '--bootstrap',
+      '--host nas --user bob --password ftp-secret --path /a',
+      '--password',
+      'vault-secret',
+    ]);
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({ password: 'ftp-secret' }),
+      }),
+      expect.anything(),
+    );
+    expect(mockRecover).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ passwords: ['vault-secret'] }),
     );
   });
 });

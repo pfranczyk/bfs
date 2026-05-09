@@ -1,40 +1,58 @@
-import fs from 'node:fs/promises';
 import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
-import { createCliProviderIO } from '../../providers/provider.js';
-import type { ProviderConfig, VaultConfig } from '../../types/index.js';
+import {
+  createCliProviderIO,
+  providerRegistry,
+  validateProviderId,
+} from '../../providers/provider.js';
+import type {
+  CliProviderInput,
+  ProviderConfig,
+  ProviderIO,
+  VaultConfig,
+} from '../../types/index.js';
 import { readConfig, writeConfig } from '../../vault/config.js';
 import { listVersions, removeProvider } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { promptWithRawMode } from '../prompt.js';
 import { CommandAbort, error, info, success, warn } from '../ui.js';
 
-/**
- * Registers the `bfs provider remove <id>` command.
- * Shows impact on versions, asks for strategy (relocate/rebuild/remove),
- * and applies the chosen strategy via vault-manager.removeProvider().
- *
- * @param providerCmd - The `bfs provider` sub-command to attach to
- */
 interface ProviderRemoveOpts {
   password?: string;
   strategy?: string;
-  newPath?: string;
   newType?: string;
   target?: string;
   scope?: string;
   yes?: boolean;
 }
 
+/**
+ * Registers the `bfs provider remove <id>` command.
+ *
+ * CLI surface mirrors `bfs provider add --ci`: BFS recognizes a fixed set
+ * of flags (`--strategy`, `--new-type`, `--target`, `--scope`, `--yes`,
+ * `--password`); every other CLI token flows verbatim to the provider via
+ * `CliProviderInput.rawArgs`. Strategies `relocate` and
+ * `rebuild`-new-target delegate building the new connection config to the
+ * adapter through `configureFromFlags` / `configureInteractive`.
+ *
+ * Shows impact on versions, asks for strategy (relocate/rebuild/remove),
+ * and applies the chosen strategy via vault-manager.removeProvider().
+ *
+ * @param providerCmd - The `bfs provider` sub-command to attach to
+ */
 export function registerProviderRemove(providerCmd: Command): void {
   providerCmd
     .command('remove [id]')
     .description(t('cmd_provider_remove_desc'))
+    // allowUnknownOption / allowExcessArguments: adapter-specific flags
+    // (e.g. --config-file, --private-key) pass through as cmd.args → rawArgs.
+    .allowUnknownOption(true)
+    .allowExcessArguments(true)
     .option('--password <password>', t('provider_remove_opt_password'))
     .option('--strategy <strategy>', t('provider_remove_opt_strategy'))
-    .option('--new-path <path>', t('provider_remove_opt_new_path'))
     .option('--new-type <type>', t('provider_remove_opt_new_type'))
     .option('--target <id>', t('provider_remove_opt_target'))
     .option('--scope <scope>', t('provider_remove_opt_scope'), 'all')
@@ -46,7 +64,7 @@ export function registerProviderRemove(providerCmd: Command): void {
         cmd: Command,
       ) => {
         const rootDir = resolveCwd(cmd);
-        const io = createCliProviderIO();
+        const io = createCliProviderIO(rootDir);
 
         const config = await readConfig(rootDir);
         if (!config) {
@@ -181,44 +199,60 @@ export function registerProviderRemove(providerCmd: Command): void {
         let targetProviderId: string | undefined;
         let rebuildScope: 'all' | 'latest' = 'all';
 
-        /**
-         * Parses "type:path" format (e.g. "local:D:\foo") from --new-path.
-         * Single-letter prefixes (Windows drive letters like "D:") are not treated
-         * as type — only identifiers with 2+ lowercase chars qualify.
-         */
-        function parseNewPath(raw: string): { path: string; type?: string } {
-          const colonIdx = raw.indexOf(':');
-          if (colonIdx > 1) {
-            const prefix = raw.slice(0, colonIdx);
-            if (/^[a-z][a-z0-9-]+$/.test(prefix)) {
-              return { path: raw.slice(colonIdx + 1), type: prefix };
-            }
-          }
-          return { path: raw };
-        }
-
         if (strategy === 'relocate') {
-          if (isCi) {
-            if (!opts.newPath?.trim()) {
-              error(t('provider_remove_new_path_required'));
-              throw new CommandAbort();
-            }
-            const parsed = parseNewPath(opts.newPath.trim());
-            newConnectionConfig = { path: parsed.path };
-            relocateNewType = opts.newType?.trim() ?? parsed.type;
-          } else {
-            const { newPath } = await promptWithRawMode<{ newPath: string }>([
-              {
-                type: 'input',
-                name: 'newPath',
-                message: t('provider_remove_new_path_prompt'),
-                validate: (v: string) => (v.trim() ? true : t('path_required')),
-              },
-            ]);
-            const parsed = parseNewPath(newPath.trim());
-            newConnectionConfig = { path: parsed.path };
-            relocateNewType = opts.newType?.trim() ?? parsed.type;
+          const existingProvider = config.providers.find(
+            (p) => p.id === providerId,
+          );
+          if (!existingProvider) {
+            // Unreachable: providerExists check above, but narrows for TS.
+            throw new Error('invariant: provider existence verified earlier');
           }
+
+          const resolvedType = isCi
+            ? (opts.newType?.trim() ?? existingProvider.type)
+            : await promptTypeChoice(existingProvider.type);
+          const factory = providerRegistry.getFactory(resolvedType);
+          if (!factory) {
+            error(fmt('provider_type_unknown', resolvedType));
+            throw new CommandAbort();
+          }
+          const meta = providerRegistry.getMeta(resolvedType);
+          const adapterPackage = meta
+            ? `${meta.packageName}@${meta.packageVersion}`
+            : null;
+          const placeholder = factory.create(
+            {
+              id: providerId,
+              type: resolvedType,
+              adapterPackage,
+              config: {},
+            },
+            io,
+          );
+
+          try {
+            if (isCi) {
+              const input: CliProviderInput = {
+                name: providerId,
+                rawArgs: extractAdapterArgs(cmd),
+              };
+              newConnectionConfig = await placeholder.configureFromFlags(input);
+            } else {
+              newConnectionConfig = await placeholder.configureInteractive(io);
+            }
+          } catch (err) {
+            error(err instanceof Error ? err.message : String(err));
+            throw new CommandAbort();
+          }
+
+          const errors = placeholder.validateConfig(newConnectionConfig);
+          if (errors.length > 0) {
+            error(fmt('provider_remove_config_invalid', errors.join('; ')));
+            throw new CommandAbort();
+          }
+
+          relocateNewType =
+            resolvedType === existingProvider.type ? undefined : resolvedType;
 
           if (config.encryption.enabled && !password) {
             password = await io.askSecret(
@@ -244,33 +278,74 @@ export function registerProviderRemove(providerCmd: Command): void {
               error(t('provider_remove_target_required'));
               throw new CommandAbort();
             }
+            const targetId = opts.target.trim();
+            const targetExists = config.providers.some(
+              (p) => p.id === targetId,
+            );
 
-            if (opts.newPath?.trim()) {
-              // New provider: --target is ID, --new-path is path
-              const newId = opts.target.trim();
-              if (config.providers.some((p) => p.id === newId)) {
-                error(fmt('provider_add_exists', newId));
+            if (targetExists) {
+              // Existing target — must differ from the provider being removed.
+              if (targetId === providerId) {
+                error(fmt('provider_remove_target_invalid', targetId));
                 throw new CommandAbort();
               }
-              const parsed = parseNewPath(opts.newPath.trim());
-              const newType = opts.newType?.trim() ?? parsed.type ?? 'local';
+              targetProviderId = targetId;
+            } else {
+              // New target — BFS needs --new-type to know which adapter to
+              // instantiate. Adapter-specific flags ride along in rawArgs.
+              try {
+                validateProviderId(targetId);
+              } catch (err) {
+                error(err instanceof Error ? err.message : String(err));
+                throw new CommandAbort();
+              }
+              const newType = opts.newType?.trim();
+              if (!newType) {
+                error(t('provider_remove_new_type_required'));
+                throw new CommandAbort();
+              }
+              const newFactory = providerRegistry.getFactory(newType);
+              if (!newFactory) {
+                error(fmt('provider_type_unknown', newType));
+                throw new CommandAbort();
+              }
+              const newMeta = providerRegistry.getMeta(newType);
+              const newAdapterPackage = newMeta
+                ? `${newMeta.packageName}@${newMeta.packageVersion}`
+                : null;
+              const placeholder = newFactory.create(
+                {
+                  id: targetId,
+                  type: newType,
+                  adapterPackage: newAdapterPackage,
+                  config: {},
+                },
+                io,
+              );
+              let providerConfig: Record<string, unknown>;
+              try {
+                providerConfig = await placeholder.configureFromFlags({
+                  name: targetId,
+                  rawArgs: extractAdapterArgs(cmd),
+                });
+              } catch (err) {
+                error(err instanceof Error ? err.message : String(err));
+                throw new CommandAbort();
+              }
+              const errors = placeholder.validateConfig(providerConfig);
+              if (errors.length > 0) {
+                error(fmt('provider_remove_config_invalid', errors.join('; ')));
+                throw new CommandAbort();
+              }
               const np: ProviderConfig = {
-                id: newId,
+                id: targetId,
                 type: newType,
-                config: { path: parsed.path },
+                adapterPackage: newAdapterPackage,
+                config: providerConfig,
               };
               config.providers.push(np);
               await writeConfig(rootDir, config);
-              targetProviderId = newId;
-            } else {
-              const otherProviders = config.providers.filter(
-                (p) => p.id !== providerId,
-              );
-              if (!otherProviders.some((p) => p.id === opts.target?.trim())) {
-                error(fmt('provider_remove_target_invalid', opts.target ?? ''));
-                throw new CommandAbort();
-              }
-              targetProviderId = opts.target.trim();
+              targetProviderId = targetId;
             }
           } else {
             const { scope } = await promptWithRawMode<{
@@ -319,7 +394,21 @@ export function registerProviderRemove(providerCmd: Command): void {
             ]);
 
             if (targetId === NEW_LOC) {
-              targetProviderId = await promptNewProvider(config, rootDir);
+              const currentProvider = config.providers.find(
+                (p) => p.id === providerId,
+              );
+              if (!currentProvider) {
+                // Unreachable: providerExists check earlier narrows this.
+                throw new Error(
+                  'invariant: provider existence verified earlier',
+                );
+              }
+              targetProviderId = await promptNewProvider(
+                config,
+                rootDir,
+                io,
+                currentProvider.type,
+              );
             } else {
               targetProviderId = targetId;
             }
@@ -387,16 +476,75 @@ export function registerProviderRemove(providerCmd: Command): void {
 }
 
 /**
- * Prompts for new provider details (name, type, path), adds it to config,
- * and returns the new provider's ID.
+ * Returns the adapter-flag tokens that should flow through to
+ * `CliProviderInput.rawArgs`. With `.allowExcessArguments(true)` enabled,
+ * Commander leaves the optional `[id]` positional inside `cmd.args`
+ * alongside unknown flags; strip it so the adapter only sees flag-shaped
+ * tokens. A leading token that starts with `-` is never a positional.
+ */
+function extractAdapterArgs(cmd: Command): string[] {
+  const args = [...cmd.args];
+  if (args.length > 0 && !args[0].startsWith('-')) {
+    args.shift();
+  }
+  return args;
+}
+
+/**
+ * Confirms whether to change the provider's type, and when confirmed
+ * prompts for the new type from the registry. Shared by interactive
+ * `relocate` and `rebuild`-new-location flows so the UX is consistent.
  *
- * @param config - Current vault config (mutated: new provider is pushed)
- * @param rootDir - Vault root directory (for writing updated config)
- * @returns The new provider's ID
+ * @param currentType - Type shown as "current" in the confirm prompt;
+ *                      also returned verbatim when the user declines.
+ * @returns             Either the unchanged `currentType` or the newly
+ *                      selected type from the provider registry.
+ */
+async function promptTypeChoice(currentType: string): Promise<string> {
+  const { change } = await promptWithRawMode<{ change: boolean }>([
+    {
+      type: 'confirm',
+      name: 'change',
+      message: fmt('provider_remove_change_type_confirm', currentType),
+      default: false,
+    },
+  ]);
+  if (!change) return currentType;
+
+  const { newType } = await promptWithRawMode<{ newType: string }>([
+    {
+      type: 'rawlist',
+      name: 'newType',
+      message: t('provider_remove_new_type_prompt'),
+      choices: providerRegistry
+        .listTypes()
+        .map((pt) => ({ name: pt.displayName, value: pt.type })),
+    },
+  ]);
+  return newType;
+}
+
+/**
+ * Prompts for a new provider id + type, lets the adapter collect its own
+ * configuration via `configureInteractive`, pushes the resulting entry to
+ * the vault config, and returns the new provider's id.
+ *
+ * Used by `rebuild` interactive flow when the user picks
+ * `__new_location__` as the target. Type selection goes through
+ * {@link promptTypeChoice} with `fallbackType` (typically the removed
+ * provider's type) as the default.
+ *
+ * @param config       - Current vault config (mutated: new provider is pushed)
+ * @param rootDir      - Vault root directory (for writing updated config)
+ * @param io           - ProviderIO passed to the adapter's configureInteractive
+ * @param fallbackType - Type offered as "keep current" in promptTypeChoice
+ * @returns              The new provider's id
  */
 async function promptNewProvider(
   config: VaultConfig,
   rootDir: string,
+  io: ProviderIO,
+  fallbackType: string,
 ): Promise<string> {
   const { newId } = await promptWithRawMode<{ newId: string }>([
     {
@@ -404,48 +552,39 @@ async function promptNewProvider(
       name: 'newId',
       message: t('provider_add_name_prompt'),
       validate: (v: string) => {
-        if (!v.trim()) return t('provider_add_name_required');
-        if (config.providers.some((p) => p.id === v.trim()))
+        const trimmed = v.trim();
+        if (!trimmed) return t('provider_add_name_required');
+        try {
+          validateProviderId(trimmed);
+        } catch (err) {
+          return err instanceof Error ? err.message : String(err);
+        }
+        if (config.providers.some((p) => p.id === trimmed))
           return fmt('provider_add_exists', v);
         return true;
       },
     },
   ]);
 
-  const typeAns = await promptWithRawMode<{ type: string }>([
-    {
-      type: 'rawlist',
-      name: 'type',
-      message: t('provider_add_type_prompt'),
-      choices: ['local'],
-    },
-  ]);
-
-  let providerConfig: Record<string, unknown> = {};
-  if (typeAns.type === 'local') {
-    const { dirPath } = await promptWithRawMode<{ dirPath: string }>([
-      {
-        type: 'input',
-        name: 'dirPath',
-        message: t('provider_add_dir_prompt'),
-        validate: async (v: string) => {
-          if (!v.trim()) return t('path_required');
-          try {
-            const stat = await fs.stat(v.trim());
-            if (!stat.isDirectory()) return t('path_not_dir');
-            return true;
-          } catch {
-            return fmt('dir_not_exist', v);
-          }
-        },
-      },
-    ]);
-    providerConfig = { path: dirPath.trim() };
+  const chosenType = await promptTypeChoice(fallbackType);
+  const factory = providerRegistry.getFactory(chosenType);
+  if (!factory) {
+    throw new Error(`Unknown provider type: ${chosenType}`);
   }
+  const meta = providerRegistry.getMeta(chosenType);
+  const adapterPackage = meta
+    ? `${meta.packageName}@${meta.packageVersion}`
+    : null;
+  const placeholder = factory.create(
+    { id: newId.trim(), type: chosenType, adapterPackage, config: {} },
+    io,
+  );
+  const providerConfig = await placeholder.configureInteractive(io);
 
   const np: ProviderConfig = {
     id: newId.trim(),
-    type: typeAns.type,
+    type: chosenType,
+    adapterPackage,
     config: providerConfig,
   };
   config.providers.push(np);

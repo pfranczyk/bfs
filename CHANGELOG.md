@@ -5,6 +5,167 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.5.0] - 2026-05-08
+
+### Added
+- **FTP/FTPS provider** — `bfs init`, `bfs provider add`, `bfs recovery`, `bfs verify`,
+  `bfs push`, and `bfs pull` now support FTP servers as storage providers. Configure host,
+  port, credentials, base path, and optional TLS (FTPS). Each FTP connection is opened per
+  operation and closed immediately — no persistent sessions. Notable design points:
+  - **Post-upload verification.** Every `bfs push` queries the server for the stored file
+    size after each upload and aborts with a clear error pointing at the FTP server's
+    transfer mode if the size differs from what was sent — Alpine-based vsftpd builds and
+    similar configurations are known to silently drop bytes during storage. A full
+    byte-for-byte round-trip (upload + download + compare) runs once during
+    `bfs provider add` so a misconfigured server is caught the moment it is registered,
+    before any shard ever lands on it.
+  - **Automatic retry up to 3× on sporadic truncation.** Some vsftpd / Docker deployments
+    occasionally truncate the data connection on a single upload (verified independently
+    with Windows Explorer — environmental, not BFS-specific). Persistent truncation (e.g.
+    ASCII mode silently rewriting bytes) still fails after the last attempt with the same
+    clear diagnostic.
+  - **Binary mode (`TYPE I`) explicitly requested on every login** as a second line of
+    defence against ASCII-mode corruption.
+  - **Partial header reads.** `bfs recovery` and `bfs verify` pull only the first ~16 KB
+    of each shard from FTP, so disaster recovery against multi-MB shards finishes in
+    seconds instead of minutes.
+  - **Password masking everywhere.** `bfs provider add` shows `*` characters while typing
+    the FTP password; `bfs provider list` masks the password in the displayed configuration
+    so credentials never appear in plaintext terminal output.
+  - **Connection diagnostic silenced by default.** Internal `FTP connecting to host:port`
+    chatter is only visible when the hidden `--debug` flag is passed (in which case it
+    prints to stderr, keeping stdout redirection clean).
+- `bfs recovery --provider ftp` — recover a backup from an FTP server. Without
+  `--bootstrap`, the CLI prompts for full FTP configuration (host, port, user, password,
+  path, secure) interactively.
+- `bfs init --ci --provider "ftp:<name> --host <h> --port <p> --user <u> --password <pw> --path <abs-path> --secure <b>"` —
+  FTP providers can be specified in non-interactive mode via inline flags. JSON config
+  files are supported via `--config-file`, and inline flags can override individual JSON
+  fields (useful when the password comes from CI secrets).
+- **Public entry point for provider adapters** (`bfs-vault/provider`). Third-party packages
+  (e.g. `bfs-adapter-ssh`) can install BFS as a dependency and import the full provider
+  contract to publish their own storage backends. See `docs/adapter-guide.md` (shipped
+  inside the npm package). Adapters declare the minimum contract version they need via
+  `requiresApiVersion`; BFS refuses to register an adapter requiring a newer contract than
+  the installed version supports, with a clear error message. Provider type prompts in
+  `bfs init`, `bfs provider add`, `bfs provider remove`, and `bfs recovery` enumerate every
+  registered type — installing a third-party adapter automatically adds it to the choices,
+  no CLI rebuild required.
+- `bfs provider add` now runs a full write / read / verify round-trip against the new
+  provider BEFORE saving it to the vault configuration. Invalid credentials or
+  insufficient permissions are caught immediately, and the vault's N+K scheme stays
+  untouched until the probe succeeds.
+- **`bfs provider -h` aggregates help for every registered provider** (built-in and
+  external alike) into an "Available providers:" section. Each block shows `Usage`,
+  description, `Options`, and examples with a consistent layout, and respects `--lang` —
+  built-in providers (`local`, `ftp`) translate their description and flag descriptions
+  when the UI is set to Polish. Provider names (`Local filesystem`, `FTP/FTPS`) and CLI
+  examples stay in English as proper nouns and copy-pasteable commands. External adapters
+  can optionally translate their own help by reading `factory.lang` (BFS sets it from
+  `--lang`); adapters that don't ship translations stay English-only. Installing a
+  third-party adapter automatically adds its block.
+- **`bfs provider add --ci` pass-through mode.** BFS recognizes exactly three flags:
+  `--ci`, `--name`, `--type`. Every other CLI token — including `--config-file`,
+  `--private-key`, `--bucket` — is forwarded verbatim to the provider so adapters can
+  define their own grammar without BFS core needing to know about them. The FTP and
+  LocalFS built-in adapters accept a `--config-file <path>` pointing at a JSON file whose
+  shape each adapter documents.
+- **`bfs init --ci --provider` pass-through grammar.** The `--provider` flag accepts
+  `type:name [adapter-flags]` tokenized shell-style, e.g.
+  `--provider "local:usb1 --path /mnt/usb"` or
+  `--provider "ftp:nas --config-file ./ftp.json"`. Values with embedded spaces are
+  supported via single or double quotes; backslash is literal outside quotes, so Windows
+  paths inline (`--provider "local:vol1 --path D:\backup\vol1"`) work without
+  double-escaping. BFS splits only `type:name` and forwards every remaining token to the
+  provider, so adapters with their own flags (`--bucket`, `--region`, `--private-key`, …)
+  work without any BFS changes. Credentials can live in a config file read by the adapter
+  instead of on the shell command line, keeping passwords out of `ps` output and shell
+  history.
+- **Inline flags for built-in adapters.** `local` accepts `--path <path>` (absolute or
+  resolved relative to the BFS working directory). `ftp` accepts `--host`, `--port`,
+  `--user`, `--password`, `--path`, `--secure` (`true|false|1|0|yes|no`). Both still
+  accept `--config-file <path>`; inline flags override fields loaded from JSON.
+- **Provider name charset enforced.** `bfs init` and `bfs provider add` now reject names
+  containing whitespace, colons, slashes, or other punctuation — only letters, digits,
+  `.`, `_` and `-` are allowed. The name is a technical identifier that appears in the
+  backup config, folder layout on providers, and error messages, so it needs to be
+  unambiguous to split and quote. Existing backups with older names continue to load
+  unchanged; the rule applies only to newly created or newly added providers.
+- **Disaster-recovery preflight** — `bfs pull` and `bfs recovery` now list every missing
+  external adapter before touching any shard, with ready-to-copy
+  `npm install -g <package@version>` commands. Missing built-in providers abort with a
+  "BFS installation broken" diagnostic. `--allow-missing-adapters` allows Reed-Solomon
+  decoding to proceed with whichever providers remain reachable.
+- **Adapter version mismatch warnings** — when the recorded adapter version differs from
+  the installed one, BFS warns (soft for patch/minor deltas, strong with an install hint
+  for major ones) so users can pin the original version if recovery fails.
+
+### Changed
+- `bfs verify` now performs a real integrity check on every shard: it confirms that the
+  file is present, has a non-zero size, and carries a header consistent with the local
+  backup (vault id, version, scheme, and original data hash). Tampered or stale shards
+  are reported with a precise reason instead of silently passing.
+- `bfs recovery` non-interactive (CI) configuration now uses a single `--bootstrap "<adapter
+  flags>"` spec instead of the previous `--path <path>` shortcut. Adapter flags follow the
+  same grammar as `bfs init --ci --provider` (after the `type:name`) and reach the
+  adapter's own `configureFromFlags` parser, so every provider — built-in or external —
+  accepts its full flag set, including `--config-file <path>` for adapters that read JSON.
+  Examples:
+    bfs recovery --provider local --name picture --bootstrap "--path /mnt/usb"
+    bfs recovery --provider ftp   --name temp    --bootstrap "--host x --user u --password p --path /a"
+    bfs recovery --provider ftp   --name temp    --bootstrap "--config-file ./nas.json"
+  The `--config-file` form is the recommended approach for any provider whose credentials
+  don't fit cleanly on a command line (private keys, OAuth tokens, multi-line secrets) —
+  the JSON file stays on disk with restricted permissions, never appears in shell history.
+  The interactive REPL flow (no `--bootstrap`) is unchanged — recovery still prompts for
+  each field one by one.
+- `bfs provider remove --strategy relocate|rebuild` no longer accepts `--new-path <path>`.
+  Every adapter now declares its own flag grammar for new connection details, in symmetry
+  with `bfs provider add --ci` and `bfs init --ci --provider`. Use `--config-file ./new.json`
+  for the built-in FTP/LocalFS adapters, or whatever flags the adapter documents in
+  `bfs provider -h`. For `relocate`, `--new-type <type>` is optional (defaults to the
+  current provider type). For `rebuild` to a brand-new target, `--new-type <type>` is
+  required and `--target <new-id>` names the newly-registered provider — BFS detects
+  "new target vs. existing" by checking whether the id already exists in the vault config.
+  Interactive `relocate` and `rebuild`-new-location prompts now offer a separate
+  "Change provider type?" confirm, so the adapter can collect its own configuration via
+  `configureInteractive` regardless of the chosen type.
+- `bfs provider list` column previously labelled `ID` is now `Name` (EN) / `Nazwa` (PL).
+- `bfs provider add --ci` now requires `--type` explicitly; the previous implicit default
+  of `local` has been removed so CI invocations declare their storage backend
+  intentionally. The `--id` flag has been renamed to `--name` to match the prompt wording.
+- Backups produced by earlier BFS versions remain fully recoverable. The location map
+  inside shard headers now carries adapter package information for every entry, but BFS
+  falls back to a safe default when reading shards written before this field existed — no
+  migration, no flags, no format-version bump.
+- When a shard checksum fails to verify, the error now reports the shard's total size and
+  the expected/computed hash prefixes. This makes it easy to compare shard sizes across
+  providers and spot a truncated transfer without having to open each file manually.
+- **`bfs init --ci` now refuses incomplete argument sets instead of creating a broken
+  backup.** Previously `bfs init --ci myvault` (without `--data-shards` / `--parity-shards`
+  / enough `--provider` flags) silently produced a configuration with a null scheme, then
+  `bfs push` crashed later with an internal Reed-Solomon error. `--ci` now requires the
+  backup name as a positional argument, `--data-shards >= 2`, `--parity-shards >= 1`, and
+  exactly N+K `--provider` flags — missing or invalid values abort with a clear message
+  and no configuration file is written. `bfs init --ci` without a name no longer falls
+  back to an interactive prompt.
+- `bfs push`, `bfs pull`, and `bfs prune` now detect a corrupted `.bfs/config.json`
+  (missing or invalid scheme, provider count that does not match N+K) and stop with a
+  user-level message pointing at `bfs scheme set` or `bfs provider add`, instead of
+  surfacing an internal `dataShards must be >= 2, got null` error deep inside the encoder.
+
+### Removed
+- The legacy colon-separated `--provider` shorthand (`local:id:/path`,
+  `ftp:id:host:port:user:password:/path:secure`) is no longer accepted. The dispatcher is
+  now pass-through-only: every `--provider` value must follow `type:name [adapter-flags]`.
+  Migrate by replacing `local:p1:/mnt/usb` with `local:p1 --path /mnt/usb`, and the FTP
+  8-segment form with `ftp:nas --host <h> --port <p> --user <u> --password <pw> --path <p>
+  --secure <b>` (or `--config-file ./nas.json`). Existing backups created with the legacy
+  CLI continue to load — the path/host/etc. is persisted in `.bfs/config.json` and
+  manifests, not derived from the original spec.
+
 ## [0.4.0] - 2026-04-12
 
 ### Added
@@ -146,7 +307,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/pfranczyk/bfs/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/pfranczyk/bfs/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/pfranczyk/bfs/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/pfranczyk/bfs/compare/v0.1.0...v0.2.0

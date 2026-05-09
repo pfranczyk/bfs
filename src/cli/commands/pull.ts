@@ -38,6 +38,7 @@ export function registerPull(program: Command): void {
     .option('--cache', t('pull_opt_cache'))
     .option('--temp-dir <path>', t('opt_temp_dir_desc'))
     .option('--cache-dir <path>', t('opt_cache_dir_desc'))
+    .option('--allow-missing-adapters', t('pull_opt_allow_missing_adapters'))
     .action(
       async (
         opts: {
@@ -51,12 +52,13 @@ export function registerPull(program: Command): void {
           cache?: boolean;
           tempDir?: string;
           cacheDir?: string;
+          allowMissingAdapters?: boolean;
         },
         cmd: Command,
       ) => {
         const rootDir = resolveCwd(cmd);
         const spinner = ora({ color: 'cyan' });
-        const io = createCliProviderIO();
+        const io = createCliProviderIO(rootDir);
 
         // Wrap io: info/progress update spinner text; interactive methods pause it
         const wrappedIo = {
@@ -118,6 +120,9 @@ export function registerPull(program: Command): void {
             ...(opts.password !== undefined ? { password: opts.password } : {}),
             ...(opts.tempDir !== undefined ? { tempDir: opts.tempDir } : {}),
             ...(opts.cacheDir !== undefined ? { cacheDir: opts.cacheDir } : {}),
+            ...(opts.allowMissingAdapters === true
+              ? { allowMissingAdapters: true }
+              : {}),
             fromCache: opts.cache ?? false,
             interactive: isReplMode(),
             io: wrappedIo,

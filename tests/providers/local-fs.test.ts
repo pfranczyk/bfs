@@ -12,15 +12,28 @@ import {
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
 import type {
+  CliProviderInput,
   ProviderConfig,
   ShardHeader,
   ShardLocation,
 } from '../../src/types/index.js';
 
+function cliInput(overrides: Partial<CliProviderInput> = {}): CliProviderInput {
+  return {
+    name: overrides.name ?? 'test',
+    rawArgs: overrides.rawArgs ?? [],
+  };
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function makeConfig(basePath: string, id = 'test-local'): ProviderConfig {
-  return { id, type: 'local', config: { path: basePath } };
+  return {
+    id,
+    type: 'local',
+    adapterPackage: null,
+    config: { path: basePath },
+  };
 }
 
 const TEST_LOCATIONS: ShardLocation[] = [
@@ -28,6 +41,7 @@ const TEST_LOCATIONS: ShardLocation[] = [
     shard_index: 0,
     provider_id: 'test-local',
     provider_type: 'local',
+    adapterPackage: null,
     connection_config: { path: '/tmp/test' },
     remote_path: '/tmp/test/vault/shard_0.bfs.1',
     shard_hash: 'a'.repeat(64),
@@ -281,5 +295,373 @@ describe('LocalFsProvider', () => {
     const { io } = createMockProviderIO();
     const p = new LocalFsProvider(makeConfig('/nonexistent/xyz'), io);
     expect(await p.listVaults()).toEqual([]);
+  });
+
+  // ─── getSize ──────────────────────────────────────────────────────────────
+
+  describe('getSize', () => {
+    it('should return the byte size of an existing shard via fs.stat', async () => {
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(makeConfig(tmpDir), io);
+      p.setVaultName('vault-1');
+      const data = Buffer.alloc(1024, 0x42);
+      await uploadBuf(p, 'shard_0.bfs.1', data);
+
+      const size = await p.getSize({
+        provider_id: 'test-local',
+        path: 'shard_0.bfs.1',
+      });
+
+      expect(size).toBe(1024);
+    });
+
+    it('should throw ProviderError when the shard is missing', async () => {
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(makeConfig(tmpDir), io);
+      p.setVaultName('vault-1');
+
+      await expect(
+        p.getSize({ provider_id: 'test-local', path: 'shard_missing.bfs.1' }),
+      ).rejects.toThrow(ProviderError);
+    });
+  });
+
+  // ─── downloadHeader ───────────────────────────────────────────────────────
+
+  describe('downloadHeader', () => {
+    it('should return exactly maxBytes for a shard larger than the limit', async () => {
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(makeConfig(tmpDir), io);
+      p.setVaultName('vault-1');
+      // 100 KB shard, ask for 1 KB.
+      const data = Buffer.alloc(100 * 1024);
+      for (let i = 0; i < data.length; i++) data[i] = i & 0xff;
+      await uploadBuf(p, 'shard_0.bfs.1', data);
+
+      const head = await p.downloadHeader(
+        { provider_id: 'test-local', path: 'shard_0.bfs.1' },
+        1024,
+      );
+
+      expect(head.length).toBe(1024);
+      expect(Buffer.compare(head, data.subarray(0, 1024))).toBe(0);
+    });
+
+    it('should return the entire file when maxBytes exceeds file size', async () => {
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(makeConfig(tmpDir), io);
+      p.setVaultName('vault-1');
+      const data = Buffer.from('short');
+      await uploadBuf(p, 'shard_0.bfs.1', data);
+
+      const head = await p.downloadHeader(
+        { provider_id: 'test-local', path: 'shard_0.bfs.1' },
+        1_000_000,
+      );
+
+      expect(head.length).toBe(5);
+      expect(head.toString()).toBe('short');
+    });
+
+    it('should throw ProviderError for missing shard', async () => {
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(makeConfig(tmpDir), io);
+      p.setVaultName('vault-1');
+
+      await expect(
+        p.downloadHeader(
+          { provider_id: 'test-local', path: 'missing.bfs.1' },
+          1024,
+        ),
+      ).rejects.toThrow(ProviderError);
+    });
+
+    it('should reject maxBytes <= 0', async () => {
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(makeConfig(tmpDir), io);
+      p.setVaultName('vault-1');
+
+      await expect(
+        p.downloadHeader({ provider_id: 'test-local', path: 'x' }, 0),
+      ).rejects.toThrow(ProviderError);
+    });
+  });
+
+  // ─── configureInteractive ─────────────────────────────────────────────────
+
+  describe('configureInteractive', () => {
+    it('should ask for base path and return config', async () => {
+      const { io } = createMockProviderIO({
+        'Base directory path:': tmpDir,
+      });
+      const { io: ctorIO } = createMockProviderIO();
+      const p = new LocalFsProvider(
+        { id: 'stub', type: 'local', adapterPackage: null, config: {} },
+        ctorIO,
+      );
+
+      const config = await p.configureInteractive(io);
+
+      expect(config).toEqual({ path: tmpDir });
+    });
+  });
+
+  // ─── configureFromFlags ───────────────────────────────────────────────────
+
+  describe('configureFromFlags', () => {
+    it('should default to ~/.bfs-local/<name> when filePath is null', async () => {
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(
+        { id: 'stub', type: 'local', adapterPackage: null, config: {} },
+        io,
+      );
+
+      const config = await p.configureFromFlags(
+        cliInput({ name: 'my-backup' }),
+      );
+
+      expect(config.path).toBe(
+        path.join(os.homedir(), '.bfs-local', 'my-backup'),
+      );
+    });
+
+    it('should read JSON file containing { path } when filePath is given', async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-loc-'));
+      const file = path.join(dir, 'cfg.json');
+      await fs.writeFile(
+        file,
+        JSON.stringify({ path: '/custom/path' }),
+        'utf8',
+      );
+
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(
+        { id: 'stub', type: 'local', adapterPackage: null, config: {} },
+        io,
+      );
+
+      const config = await p.configureFromFlags(
+        cliInput({ name: 'x', rawArgs: ['--config-file', file] }),
+      );
+
+      expect(config).toEqual({ path: '/custom/path' });
+    });
+
+    it('should throw ProviderError when JSON lacks a non-empty "path"', async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-loc-'));
+      const file = path.join(dir, 'cfg.json');
+      await fs.writeFile(file, JSON.stringify({ path: '' }), 'utf8');
+
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(
+        { id: 'stub', type: 'local', adapterPackage: null, config: {} },
+        io,
+      );
+      await expect(
+        p.configureFromFlags(
+          cliInput({ name: 'x', rawArgs: ['--config-file', file] }),
+        ),
+      ).rejects.toThrow(ProviderError);
+      // Regression: error must mention the missing "path" field clearly so
+      // user knows the JSON shape, not the unrelated init-level flag layout.
+      await expect(
+        p.configureFromFlags(
+          cliInput({ name: 'x', rawArgs: ['--config-file', file] }),
+        ),
+      ).rejects.toThrow(/non-empty "path"/);
+    });
+
+    it('should throw on malformed JSON', async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-loc-'));
+      const file = path.join(dir, 'cfg.json');
+      await fs.writeFile(file, 'not json', 'utf8');
+
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(
+        { id: 'stub', type: 'local', adapterPackage: null, config: {} },
+        io,
+      );
+      await expect(
+        p.configureFromFlags(
+          cliInput({ name: 'x', rawArgs: ['--config-file', file] }),
+        ),
+      ).rejects.toThrow(ProviderError);
+    });
+
+    it('should throw when JSON is not a plain object', async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-loc-'));
+      const file = path.join(dir, 'cfg.json');
+      await fs.writeFile(file, JSON.stringify([1, 2]), 'utf8');
+
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(
+        { id: 'stub', type: 'local', adapterPackage: null, config: {} },
+        io,
+      );
+      await expect(
+        p.configureFromFlags(
+          cliInput({ name: 'x', rawArgs: ['--config-file', file] }),
+        ),
+      ).rejects.toThrow(ProviderError);
+    });
+
+    // ─── Inline --path ──────────────────────────────────────────────────────
+
+    it('should accept inline --path with absolute path', async () => {
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(
+        { id: 'stub', type: 'local', adapterPackage: null, config: {} },
+        io,
+      );
+
+      const config = await p.configureFromFlags(
+        cliInput({ name: 'x', rawArgs: ['--path', '/abs/custom'] }),
+      );
+
+      expect(config).toEqual({ path: '/abs/custom' });
+    });
+
+    it('should resolve a relative --path against io.workDir', async () => {
+      const { io } = createMockProviderIO({}, '/work');
+      const p = new LocalFsProvider(
+        { id: 'stub', type: 'local', adapterPackage: null, config: {} },
+        io,
+      );
+
+      const config = await p.configureFromFlags(
+        cliInput({ name: 'x', rawArgs: ['--path', './rel'] }),
+      );
+
+      expect(config).toEqual({ path: path.resolve('/work', './rel') });
+    });
+
+    it('should let inline --path win over --config-file', async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-loc-'));
+      const file = path.join(dir, 'cfg.json');
+      await fs.writeFile(file, JSON.stringify({ path: '/from/json' }), 'utf8');
+
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(
+        { id: 'stub', type: 'local', adapterPackage: null, config: {} },
+        io,
+      );
+
+      const config = await p.configureFromFlags(
+        cliInput({
+          name: 'x',
+          rawArgs: ['--path', '/from/inline', '--config-file', file],
+        }),
+      );
+
+      expect(config).toEqual({ path: '/from/inline' });
+    });
+  });
+
+  // ─── validateConfig ───────────────────────────────────────────────────────
+
+  describe('validateConfig', () => {
+    it('should return [] for a non-empty path', () => {
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(
+        { id: 'stub', type: 'local', adapterPackage: null, config: {} },
+        io,
+      );
+
+      expect(p.validateConfig({ path: tmpDir })).toEqual([]);
+    });
+
+    it('should report missing path', () => {
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(
+        { id: 'stub', type: 'local', adapterPackage: null, config: {} },
+        io,
+      );
+
+      const errors = p.validateConfig({});
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors.some((e) => /path/i.test(e))).toBe(true);
+    });
+
+    it('should report empty-string path', () => {
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(
+        { id: 'stub', type: 'local', adapterPackage: null, config: {} },
+        io,
+      );
+
+      const errors = p.validateConfig({ path: '' });
+      expect(errors.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── describeConfig ───────────────────────────────────────────────────────
+
+  describe('describeConfig', () => {
+    it('should include the path', () => {
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(
+        { id: 'stub', type: 'local', adapterPackage: null, config: {} },
+        io,
+      );
+
+      const desc = p.describeConfig({ path: '/my/backup' });
+
+      expect(desc).toContain('/my/backup');
+    });
+  });
+
+  // ─── getSecretFields ──────────────────────────────────────────────────────
+
+  describe('getSecretFields', () => {
+    it('should return []', () => {
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(
+        { id: 'stub', type: 'local', adapterPackage: null, config: {} },
+        io,
+      );
+      expect(p.getSecretFields()).toEqual([]);
+    });
+  });
+
+  // ─── probeConnection ──────────────────────────────────────────────────────
+
+  describe('probeConnection', () => {
+    it('should write/read/compare/unlink — leaving no residue in vault dir', async () => {
+      await provider.probeConnection();
+
+      const refs = await provider.list();
+      expect(refs).toEqual([]);
+    });
+
+    it('should throw ProviderError when basePath is unwritable', async () => {
+      const badPath = path.join(
+        os.tmpdir(),
+        `bfs-unwritable-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      );
+      // NOTE: path simply does not exist and its parent is writable —
+      // but probeConnection tries to create vaultDir under a non-existent
+      // root; on Windows this surfaces as EACCES/ENOENT. On Linux it may
+      // succeed via recursive mkdir. To force failure, use a path under a
+      // non-existent root whose parent chain includes an invalid segment.
+      const { io } = createMockProviderIO();
+      const p = new LocalFsProvider(
+        {
+          id: 'x',
+          type: 'local',
+          adapterPackage: null,
+          config: { path: path.join(badPath, 'nope') },
+        },
+        io,
+      );
+      p.setVaultName('testvault');
+
+      // Create a FILE at badPath so mkdir underneath it fails with ENOTDIR
+      await fs.writeFile(badPath, 'blocker');
+      try {
+        await expect(p.probeConnection()).rejects.toThrow(ProviderError);
+      } finally {
+        await fs.rm(badPath, { force: true });
+      }
+    });
   });
 });

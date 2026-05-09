@@ -23,6 +23,8 @@ vi.mock('../../src/providers/provider.js', async (importOriginal) => {
   return {
     ...actual,
     createCliProviderIO: vi.fn(() => ({
+      lang: 'en',
+      workDir: process.cwd(),
       ask: vi.fn(),
       askSecret: vi.fn(),
       confirm: vi.fn(),
@@ -35,10 +37,13 @@ vi.mock('../../src/providers/provider.js', async (importOriginal) => {
 });
 
 import inquirer from 'inquirer';
-import { readConfig } from '../../src/vault/config.js';
+import { FtpProvider } from '../../src/providers/ftp.js';
+import { LocalFsProvider } from '../../src/providers/local-fs.js';
+import { readConfig, writeConfig } from '../../src/vault/config.js';
 import { listVersions, removeProvider } from '../../src/vault/vault-manager.js';
 
 const mockReadConfig = vi.mocked(readConfig);
+const mockWriteConfig = vi.mocked(writeConfig);
 const mockListVersions = vi.mocked(listVersions);
 const mockRemoveProvider = vi.mocked(removeProvider);
 const mockPrompt = vi.mocked(inquirer.prompt);
@@ -50,11 +55,13 @@ describe('provider remove', () => {
     capture = captureConsole();
     mockListVersions.mockResolvedValue([]);
     mockRemoveProvider.mockResolvedValue(undefined as never);
+    mockWriteConfig.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     capture.restore();
     vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   // ─── Brak konfiguracji ────────────────────────────────────────────────────
@@ -183,141 +190,411 @@ describe('provider remove', () => {
     expect(mockRemoveProvider).not.toHaveBeenCalled();
   });
 
-  // ─── Strategia: relocate ──────────────────────────────────────────────────
+  // ─── Strategia: relocate (pass-through) ──────────────────────────────────
+  // Kontrakt: BFS zna tylko --strategy, --new-type, --password. Wszystko inne
+  // idzie do adaptera jako rawArgs; adapter sam zbiera config przez
+  // configureFromFlags / configureInteractive.
 
-  it('should ask for new path with relocate strategy', async () => {
-    mockReadConfig.mockResolvedValue(makeConfig() as never);
-    mockPrompt
-      .mockResolvedValueOnce({ strategy: 'relocate' } as never)
-      .mockResolvedValueOnce({ newPath: '/mnt/new-disk' } as never);
+  describe('relocate strategy', () => {
+    beforeEach(() => {
+      vi.spyOn(
+        LocalFsProvider.prototype,
+        'configureFromFlags',
+      ).mockResolvedValue({ path: '/adapter/new' });
+      vi.spyOn(
+        LocalFsProvider.prototype,
+        'configureInteractive',
+      ).mockResolvedValue({ path: '/adapter/int' });
+      vi.spyOn(LocalFsProvider.prototype, 'validateConfig').mockReturnValue([]);
+      vi.spyOn(FtpProvider.prototype, 'configureFromFlags').mockResolvedValue({
+        host: 'f',
+        port: 21,
+        user: 'u',
+        password: 'p',
+        path: '/b',
+        secure: false,
+      });
+      vi.spyOn(FtpProvider.prototype, 'configureInteractive').mockResolvedValue(
+        {
+          host: 'f',
+          port: 21,
+          user: 'u',
+          password: 'p',
+          path: '/b',
+          secure: false,
+        },
+      );
+      vi.spyOn(FtpProvider.prototype, 'validateConfig').mockReturnValue([]);
+    });
 
-    await runCmd(['provider', 'remove', 'dysk-1']);
+    it('CI: forwards unknown flags verbatim as rawArgs to configureFromFlags', async () => {
+      const spy = vi.mocked(LocalFsProvider.prototype.configureFromFlags);
+      mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    expect(mockRemoveProvider).toHaveBeenCalledWith(
-      expect.any(String),
-      'dysk-1',
-      expect.objectContaining({
-        strategy: 'relocate',
-        newConnectionConfig: { path: '/mnt/new-disk' },
-      }),
-    );
-  });
+      await runCmd([
+        'provider',
+        'remove',
+        'dysk-1',
+        '--strategy',
+        'relocate',
+        '--config-file',
+        './new.json',
+      ]);
 
-  it('CI: --new-path with type:path prefix passes newType and stripped path', async () => {
-    mockReadConfig.mockResolvedValue(makeConfig() as never);
+      expect(spy).toHaveBeenCalledOnce();
+      const [input] = spy.mock.calls[0];
+      expect(input.name).toBe('dysk-1');
+      expect(input.rawArgs).toEqual(['--config-file', './new.json']);
+      expect(mockRemoveProvider).toHaveBeenCalledWith(
+        expect.any(String),
+        'dysk-1',
+        expect.objectContaining({
+          strategy: 'relocate',
+          newConnectionConfig: { path: '/adapter/new' },
+        }),
+      );
+    });
 
-    await runCmd([
-      'provider',
-      'remove',
-      'dysk-1',
-      '--strategy',
-      'relocate',
-      '--new-path',
-      'local:/mnt/new-disk',
-    ]);
+    it('CI: without --new-type keeps current provider type (no newType in call)', async () => {
+      mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    expect(mockRemoveProvider).toHaveBeenCalledWith(
-      expect.any(String),
-      'dysk-1',
-      expect.objectContaining({
-        strategy: 'relocate',
-        newConnectionConfig: { path: '/mnt/new-disk' },
-        newType: 'local',
-      }),
-    );
-  });
+      await runCmd([
+        'provider',
+        'remove',
+        'dysk-1',
+        '--strategy',
+        'relocate',
+        '--config-file',
+        './new.json',
+      ]);
 
-  it('CI: --new-type overrides type from --new-path prefix', async () => {
-    mockReadConfig.mockResolvedValue(makeConfig() as never);
+      const call = mockRemoveProvider.mock.calls[0][2];
+      expect(call).not.toHaveProperty('newType');
+    });
 
-    await runCmd([
-      'provider',
-      'remove',
-      'dysk-1',
-      '--strategy',
-      'relocate',
-      '--new-path',
-      '/mnt/new-disk',
-      '--new-type',
-      'local',
-    ]);
+    it('CI: --new-type switches factory and sets newType on removeProvider', async () => {
+      const ftpSpy = vi.mocked(FtpProvider.prototype.configureFromFlags);
+      mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    expect(mockRemoveProvider).toHaveBeenCalledWith(
-      expect.any(String),
-      'dysk-1',
-      expect.objectContaining({
-        strategy: 'relocate',
-        newConnectionConfig: { path: '/mnt/new-disk' },
-        newType: 'local',
-      }),
-    );
-  });
+      await runCmd([
+        'provider',
+        'remove',
+        'dysk-1',
+        '--strategy',
+        'relocate',
+        '--new-type',
+        'ftp',
+        '--config-file',
+        './ftp.json',
+      ]);
 
-  it('CI: --new-path without type prefix uses path as-is and does not set newType', async () => {
-    // Spec: ścieżka bez prefiksu typu przekazywana jest jako całość do newConnectionConfig.path
-    mockReadConfig.mockResolvedValue(makeConfig() as never);
+      expect(ftpSpy).toHaveBeenCalledOnce();
+      expect(mockRemoveProvider).toHaveBeenCalledWith(
+        expect.any(String),
+        'dysk-1',
+        expect.objectContaining({ strategy: 'relocate', newType: 'ftp' }),
+      );
+    });
 
-    await runCmd([
-      'provider',
-      'remove',
-      'dysk-1',
-      '--strategy',
-      'relocate',
-      '--new-path',
-      '/mnt/backup',
-    ]);
+    it('CI: --new-type equal to current type does not set newType', async () => {
+      mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    expect(mockRemoveProvider).toHaveBeenCalledWith(
-      expect.any(String),
-      'dysk-1',
-      expect.objectContaining({
-        strategy: 'relocate',
-        newConnectionConfig: { path: '/mnt/backup' },
-      }),
-    );
-    const call = mockRemoveProvider.mock.calls[0][2];
-    expect(call).not.toHaveProperty('newType');
-  });
+      await runCmd([
+        'provider',
+        'remove',
+        'dysk-1',
+        '--strategy',
+        'relocate',
+        '--new-type',
+        'local',
+        '--config-file',
+        './new.json',
+      ]);
 
-  it('interactive relocate: type:path format parsed from prompt answer', async () => {
-    mockReadConfig.mockResolvedValue(makeConfig() as never);
-    mockPrompt
-      .mockResolvedValueOnce({ strategy: 'relocate' } as never)
-      .mockResolvedValueOnce({ newPath: 'local:/mnt/new-disk' } as never);
+      const call = mockRemoveProvider.mock.calls[0][2];
+      expect(call).not.toHaveProperty('newType');
+    });
 
-    await runCmd(['provider', 'remove', 'dysk-1']);
+    it('CI: aborts when adapter validateConfig returns errors', async () => {
+      vi.mocked(LocalFsProvider.prototype.validateConfig).mockReturnValueOnce([
+        'path must be absolute',
+      ]);
+      mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    expect(mockRemoveProvider).toHaveBeenCalledWith(
-      expect.any(String),
-      'dysk-1',
-      expect.objectContaining({
-        strategy: 'relocate',
-        newConnectionConfig: { path: '/mnt/new-disk' },
-        newType: 'local',
-      }),
-    );
+      const result = await runCmd([
+        'provider',
+        'remove',
+        'dysk-1',
+        '--strategy',
+        'relocate',
+        '--config-file',
+        './bad.json',
+      ]);
+
+      expect(result).toBe('abort');
+      expect(mockRemoveProvider).not.toHaveBeenCalled();
+      expect(
+        capture.errors.some((e) => e.includes('path must be absolute')),
+      ).toBe(true);
+    });
+
+    it('CI: aborts when --new-type references unknown adapter', async () => {
+      mockReadConfig.mockResolvedValue(makeConfig() as never);
+
+      const result = await runCmd([
+        'provider',
+        'remove',
+        'dysk-1',
+        '--strategy',
+        'relocate',
+        '--new-type',
+        'no-such-type',
+      ]);
+
+      expect(result).toBe('abort');
+      expect(mockRemoveProvider).not.toHaveBeenCalled();
+    });
+
+    it('interactive: keep current type -> configureInteractive on current type', async () => {
+      const interactiveSpy = vi.mocked(
+        LocalFsProvider.prototype.configureInteractive,
+      );
+      mockReadConfig.mockResolvedValue(makeConfig() as never);
+      mockPrompt
+        .mockResolvedValueOnce({ strategy: 'relocate' } as never)
+        .mockResolvedValueOnce({ change: false } as never); // keep type
+
+      await runCmd(['provider', 'remove', 'dysk-1']);
+
+      expect(interactiveSpy).toHaveBeenCalledOnce();
+      expect(mockRemoveProvider).toHaveBeenCalledWith(
+        expect.any(String),
+        'dysk-1',
+        expect.objectContaining({
+          strategy: 'relocate',
+          newConnectionConfig: { path: '/adapter/int' },
+        }),
+      );
+      const call = mockRemoveProvider.mock.calls[0][2];
+      expect(call).not.toHaveProperty('newType');
+    });
+
+    it('interactive: change type -> rawlist -> configureInteractive on new type', async () => {
+      const ftpInteractiveSpy = vi.mocked(
+        FtpProvider.prototype.configureInteractive,
+      );
+      mockReadConfig.mockResolvedValue(makeConfig() as never);
+      mockPrompt
+        .mockResolvedValueOnce({ strategy: 'relocate' } as never)
+        .mockResolvedValueOnce({ change: true } as never)
+        .mockResolvedValueOnce({ newType: 'ftp' } as never);
+
+      await runCmd(['provider', 'remove', 'dysk-1']);
+
+      expect(ftpInteractiveSpy).toHaveBeenCalledOnce();
+      expect(mockRemoveProvider).toHaveBeenCalledWith(
+        expect.any(String),
+        'dysk-1',
+        expect.objectContaining({ strategy: 'relocate', newType: 'ftp' }),
+      );
+    });
   });
 
   // ─── Strategia: rebuild ───────────────────────────────────────────────────
 
-  it('should ask for scope and target provider with rebuild strategy', async () => {
-    mockReadConfig.mockResolvedValue(makeConfig() as never);
-    mockPrompt
-      .mockResolvedValueOnce({ strategy: 'rebuild' } as never)
-      .mockResolvedValueOnce({ scope: 'all' } as never)
-      .mockResolvedValueOnce({ targetId: 'dysk-2' } as never);
+  describe('rebuild strategy', () => {
+    beforeEach(() => {
+      vi.spyOn(
+        LocalFsProvider.prototype,
+        'configureFromFlags',
+      ).mockResolvedValue({ path: '/adapter/rebuild' });
+      vi.spyOn(
+        LocalFsProvider.prototype,
+        'configureInteractive',
+      ).mockResolvedValue({ path: '/adapter/rebuild-int' });
+      vi.spyOn(LocalFsProvider.prototype, 'validateConfig').mockReturnValue([]);
+    });
 
-    await runCmd(['provider', 'remove', 'dysk-1']);
+    it('interactive: asks for scope and existing target', async () => {
+      mockReadConfig.mockResolvedValue(makeConfig() as never);
+      mockPrompt
+        .mockResolvedValueOnce({ strategy: 'rebuild' } as never)
+        .mockResolvedValueOnce({ scope: 'all' } as never)
+        .mockResolvedValueOnce({ targetId: 'dysk-2' } as never);
 
-    expect(mockRemoveProvider).toHaveBeenCalledWith(
-      expect.any(String),
-      'dysk-1',
-      expect.objectContaining({
-        strategy: 'rebuild',
-        targetProviderId: 'dysk-2',
-        rebuildScope: 'all',
-      }),
-    );
+      await runCmd(['provider', 'remove', 'dysk-1']);
+
+      expect(mockRemoveProvider).toHaveBeenCalledWith(
+        expect.any(String),
+        'dysk-1',
+        expect.objectContaining({
+          strategy: 'rebuild',
+          targetProviderId: 'dysk-2',
+          rebuildScope: 'all',
+        }),
+      );
+    });
+
+    it('CI: existing target id — targetProviderId resolved, no configureFromFlags call', async () => {
+      const spy = vi.mocked(LocalFsProvider.prototype.configureFromFlags);
+      mockReadConfig.mockResolvedValue(makeConfig() as never);
+
+      await runCmd([
+        'provider',
+        'remove',
+        'dysk-1',
+        '--strategy',
+        'rebuild',
+        '--target',
+        'dysk-2',
+      ]);
+
+      expect(spy).not.toHaveBeenCalled();
+      expect(mockWriteConfig).not.toHaveBeenCalled();
+      expect(mockRemoveProvider).toHaveBeenCalledWith(
+        expect.any(String),
+        'dysk-1',
+        expect.objectContaining({
+          strategy: 'rebuild',
+          targetProviderId: 'dysk-2',
+        }),
+      );
+    });
+
+    it('CI: new target id + --new-type creates provider via configureFromFlags and writes config', async () => {
+      const spy = vi.mocked(LocalFsProvider.prototype.configureFromFlags);
+      mockReadConfig.mockResolvedValue(makeConfig() as never);
+
+      await runCmd([
+        'provider',
+        'remove',
+        'dysk-1',
+        '--strategy',
+        'rebuild',
+        '--target',
+        'dysk-spare',
+        '--new-type',
+        'local',
+        '--config-file',
+        './spare.json',
+      ]);
+
+      expect(spy).toHaveBeenCalledOnce();
+      const [input] = spy.mock.calls[0];
+      expect(input.name).toBe('dysk-spare');
+      expect(input.rawArgs).toEqual(['--config-file', './spare.json']);
+
+      expect(mockWriteConfig).toHaveBeenCalledOnce();
+      const [, writtenConfig] = mockWriteConfig.mock.calls[0];
+      const added = writtenConfig.providers.find(
+        (p: { id: string }) => p.id === 'dysk-spare',
+      );
+      expect(added?.type).toBe('local');
+      expect(added?.config).toEqual({ path: '/adapter/rebuild' });
+
+      expect(mockRemoveProvider).toHaveBeenCalledWith(
+        expect.any(String),
+        'dysk-1',
+        expect.objectContaining({
+          strategy: 'rebuild',
+          targetProviderId: 'dysk-spare',
+        }),
+      );
+    });
+
+    it('CI: new target id without --new-type aborts', async () => {
+      mockReadConfig.mockResolvedValue(makeConfig() as never);
+
+      const result = await runCmd([
+        'provider',
+        'remove',
+        'dysk-1',
+        '--strategy',
+        'rebuild',
+        '--target',
+        'dysk-spare',
+      ]);
+
+      expect(result).toBe('abort');
+      expect(mockRemoveProvider).not.toHaveBeenCalled();
+      expect(mockWriteConfig).not.toHaveBeenCalled();
+    });
+
+    it('CI: new target id with invalid charset aborts', async () => {
+      mockReadConfig.mockResolvedValue(makeConfig() as never);
+
+      const result = await runCmd([
+        'provider',
+        'remove',
+        'dysk-1',
+        '--strategy',
+        'rebuild',
+        '--target',
+        'bad name',
+        '--new-type',
+        'local',
+      ]);
+
+      expect(result).toBe('abort');
+      expect(mockRemoveProvider).not.toHaveBeenCalled();
+      expect(mockWriteConfig).not.toHaveBeenCalled();
+    });
+
+    it('CI: new target aborts when adapter validateConfig returns errors', async () => {
+      vi.mocked(LocalFsProvider.prototype.validateConfig).mockReturnValueOnce([
+        'path is required',
+      ]);
+      mockReadConfig.mockResolvedValue(makeConfig() as never);
+
+      const result = await runCmd([
+        'provider',
+        'remove',
+        'dysk-1',
+        '--strategy',
+        'rebuild',
+        '--target',
+        'dysk-spare',
+        '--new-type',
+        'local',
+      ]);
+
+      expect(result).toBe('abort');
+      expect(mockWriteConfig).not.toHaveBeenCalled();
+    });
+
+    it('interactive new location: validates charset, prompts for type change, calls configureInteractive', async () => {
+      const interactiveSpy = vi.mocked(
+        LocalFsProvider.prototype.configureInteractive,
+      );
+      mockReadConfig.mockResolvedValue(makeConfig() as never);
+      mockPrompt
+        .mockResolvedValueOnce({ strategy: 'rebuild' } as never)
+        .mockResolvedValueOnce({ scope: 'latest' } as never)
+        .mockResolvedValueOnce({ targetId: '__new_location__' } as never)
+        .mockResolvedValueOnce({ newId: 'dysk-spare' } as never)
+        .mockResolvedValueOnce({ change: false } as never); // keep type = current (local)
+
+      await runCmd(['provider', 'remove', 'dysk-1']);
+
+      expect(interactiveSpy).toHaveBeenCalledOnce();
+      expect(mockWriteConfig).toHaveBeenCalledOnce();
+      const [, writtenConfig] = mockWriteConfig.mock.calls[0];
+      const added = writtenConfig.providers.find(
+        (p: { id: string }) => p.id === 'dysk-spare',
+      );
+      expect(added?.type).toBe('local');
+      expect(added?.config).toEqual({ path: '/adapter/rebuild-int' });
+
+      expect(mockRemoveProvider).toHaveBeenCalledWith(
+        expect.any(String),
+        'dysk-1',
+        expect.objectContaining({
+          strategy: 'rebuild',
+          targetProviderId: 'dysk-spare',
+          rebuildScope: 'latest',
+        }),
+      );
+    });
   });
 
   // ─── Tryb CI ──────────────────────────────────────────────────────────────

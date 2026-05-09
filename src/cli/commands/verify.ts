@@ -21,7 +21,7 @@ export function registerVerify(program: Command): void {
     .action(async (_opts: Record<string, unknown>, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
       const spinner = ora(t('verify_spinner')).start();
-      const io = createCliProviderIO();
+      const io = createCliProviderIO(rootDir);
 
       try {
         const report = await verifyAll(rootDir, io);

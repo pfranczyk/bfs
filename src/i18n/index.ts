@@ -109,11 +109,21 @@ export interface Strings {
   init_push_mode_invalid: string;
   /** %s = spec */
   init_provider_format_invalid: string;
+  /** %s = reasons */
+  init_provider_config_invalid: string;
   /** %s = detected MB */
   init_max_ram_prompt: string;
   init_opt_max_ram: string;
   /** %s = vaultName */
   init_success: string;
+  init_ci_name_required: string;
+  init_ci_scheme_required: string;
+  /** %s = supplied value */
+  init_ci_data_shards_invalid: string;
+  /** %s = supplied value */
+  init_ci_parity_shards_invalid: string;
+  /** %s = required total, %s = N, %s = K */
+  init_ci_providers_required: string;
 
   // ─── clear ────────────────────────────────────────────────────────────────
   cmd_clear_desc: string;
@@ -182,6 +192,7 @@ export interface Strings {
   pull_opt_path: string;
   pull_opt_name: string;
   pull_opt_cache: string;
+  pull_opt_allow_missing_adapters: string;
 
   // ─── status ───────────────────────────────────────────────────────────────
   status_header: string;
@@ -234,15 +245,25 @@ export interface Strings {
   verify_col_available: string;
   verify_col_scheme: string;
   verify_col_tolerance: string;
+  verify_shard_check_failed: string;
 
   // ─── recovery ─────────────────────────────────────────────────────────────
   recovery_provider_type_prompt: string;
   recovery_path_prompt: string;
   recovery_opt_provider: string;
-  recovery_opt_path: string;
+  recovery_opt_bootstrap: string;
   recovery_vault_name_prompt: string;
   recovery_opt_name: string;
   recovery_opt_password: string;
+  recovery_opt_allow_missing_adapters: string;
+  /** %s = raw spec */
+  recovery_bootstrap_empty: string;
+  /** %s = validation errors joined */
+  recovery_bootstrap_config_invalid: string;
+  /** %s = provider type */
+  recovery_provider_type_unknown: string;
+  recovery_ci_provider_required: string;
+  recovery_ci_name_required: string;
   recovery_connecting: string;
   recovery_scanning: string;
   /** %s = count */
@@ -265,6 +286,13 @@ export interface Strings {
   /** %s = old, %s = N, %s = K */
   scheme_changed: string;
   scheme_apply_push: string;
+  scheme_missing: string;
+  /** %s = current value */
+  scheme_invalid_data_shards: string;
+  /** %s = current value */
+  scheme_invalid_parity_shards: string;
+  /** %s = required, %s = current */
+  scheme_providers_mismatch: string;
 
   // ─── provider: local-fs ──────────────────────────────────────────────────
   /** %s = basePath */
@@ -273,20 +301,20 @@ export interface Strings {
   provider_local_path_not_exist_error: string;
   /** %s = basePath */
   provider_local_path_not_writable: string;
+  local_path_prompt: string;
 
   // ─── provider add ─────────────────────────────────────────────────────────
-  /** %s = count */
   provider_add_opt_ci: string;
-  provider_add_opt_id: string;
+  provider_add_opt_name: string;
   provider_add_opt_type: string;
-  provider_add_opt_path: string;
   /** %s = count */
   provider_add_current: string;
   provider_add_warn: string;
-  provider_add_id_required: string;
-  provider_add_path_required: string;
+  provider_add_type_required: string;
   provider_add_name_prompt: string;
   provider_add_name_required: string;
+  /** %s = id */
+  provider_id_invalid_chars: string;
   /** %s = name */
   provider_add_exists: string;
   provider_add_type_prompt: string;
@@ -306,7 +334,6 @@ export interface Strings {
   // ─── provider remove ──────────────────────────────────────────────────────
   provider_remove_opt_password: string;
   provider_remove_opt_strategy: string;
-  provider_remove_opt_new_path: string;
   provider_remove_opt_new_type: string;
   provider_remove_opt_target: string;
   provider_remove_opt_scope: string;
@@ -325,8 +352,12 @@ export interface Strings {
   provider_remove_strategy_rebuild: string;
   provider_remove_strategy_remove: string;
   provider_remove_strategy_cancel: string;
-  provider_remove_new_path_required: string;
-  provider_remove_new_path_prompt: string;
+  provider_remove_new_type_required: string;
+  /** %s = current type */
+  provider_remove_change_type_confirm: string;
+  provider_remove_new_type_prompt: string;
+  /** %s = reasons */
+  provider_remove_config_invalid: string;
   provider_remove_enc_password_relocate: string;
   provider_remove_enc_password_rebuild: string;
   provider_remove_rebuild_scope_prompt: string;
@@ -401,6 +432,150 @@ export interface Strings {
   bootstrap_ask_password: string;
   bootstrap_wrong_password_retry: string;
   bootstrap_single_provider_warn: string;
+
+  // ─── provider: ftp ──────────────────────────────────────────────────────
+  ftp_host_prompt: string;
+  ftp_port_prompt: string;
+  ftp_user_prompt: string;
+  ftp_password_prompt: string;
+  ftp_path_prompt: string;
+  ftp_secure_prompt: string;
+  provider_add_ftp_ci_not_supported: string;
+
+  // ─── provider help (bfs provider -h) ─────────────────────────────────────
+  // Frame strings (BFS-internal, used by provider-help.ts)
+  provider_help_available_header: string;
+  provider_help_usage_label: string;
+  provider_help_options_label: string;
+  provider_help_example_label: string;
+  /** %s = install command (e.g. "npm install -g foo") */
+  provider_help_install_hint: string;
+
+  // Built-in local provider — description + flag descriptions
+  local_help_description: string;
+  local_help_flag_path_desc: string;
+  local_help_flag_config_file_desc: string;
+
+  // Built-in ftp provider — description + flag descriptions
+  ftp_help_description: string;
+  ftp_help_flag_host_desc: string;
+  ftp_help_flag_port_desc: string;
+  ftp_help_flag_user_desc: string;
+  ftp_help_flag_password_desc: string;
+  ftp_help_flag_path_desc: string;
+  ftp_help_flag_secure_desc: string;
+  ftp_help_flag_config_file_desc: string;
+
+  // ─── Provider configuration errors ───────────────────────────────────────
+  ftp_host_required: string;
+  ftp_path_required: string;
+  ftp_path_must_be_absolute: string;
+  local_config_path_missing: string;
+
+  // ─── Adapter preflight (missing / version mismatch) ──────────────────────
+  adapter_preflight_missing_header: string;
+  adapter_preflight_install_label: string;
+  adapter_preflight_retry_hint: string;
+  /** %s = type */
+  adapter_preflight_builtin_broken_one: string;
+  /** %s = quoted, comma-joined types */
+  adapter_preflight_builtin_broken_many: string;
+  /** %s = type, %s = packageSpec, %s = packageSpec */
+  adapter_preflight_external_install_hint: string;
+  /** %s = type, %s = recorded, %s = installed, %s = recorded */
+  adapter_version_mismatch_strong: string;
+  /** %s = type, %s = recorded, %s = installed */
+  adapter_version_mismatch_soft: string;
+
+  // ─── Generic provider errors (CLI side) ──────────────────────────────────
+  /** %s = type */
+  provider_type_unknown: string;
+  /** %s = err.message */
+  provider_add_configure_failed: string;
+  /** %s = errors joined */
+  provider_add_validate_failed: string;
+  /** %s = err.message */
+  provider_add_probe_failed: string;
+  provider_add_probe_unsaved: string;
+
+  // ─── Recovery (consensus + final) ────────────────────────────────────────
+  /** %s = version */
+  recovery_consensus_vault_id_mismatch: string;
+  /** %s = version */
+  recovery_consensus_filename_mismatch: string;
+  /** %s = version, %s = mismatched fields */
+  recovery_consensus_failed: string;
+  recovery_no_manifests: string;
+  /** %s = version */
+  recovery_manifest_unreadable: string;
+
+  // ─── Provider runtime errors (FTP + LocalFS shared shape) ────────────────
+  /** %s = path */
+  provider_short_shard: string;
+  /** %s = path, %s = err */
+  provider_stat_failed: string;
+  /** %s = path, %s = err */
+  provider_header_read_failed: string;
+  /** %s = value */
+  provider_download_header_invalid_max_bytes: string;
+
+  // ─── FTP — runtime errors ────────────────────────────────────────────────
+  /** %s = host, %s = port, %s = err */
+  ftp_operation_failed: string;
+  /** %s = label, %s = attempt, %s = max, %s = sent, %s = reported */
+  ftp_size_mismatch_attempt: string;
+  /** %s = label, %s = max, %s = sent, %s = reported, %s = diff */
+  ftp_size_mismatch_final: string;
+
+  // ─── FTP — configureFromFlags + validateConfig ───────────────────────────
+  ftp_config_port_invalid: string;
+  ftp_inline_port_invalid: string;
+  ftp_inline_secure_invalid: string;
+  ftp_validate_host_required: string;
+  ftp_validate_port_invalid: string;
+  ftp_validate_path_required: string;
+  ftp_validate_path_absolute: string;
+  /** %s = host, %s = port, %s = user, %s = path, %s = secure */
+  ftp_describe_config: string;
+
+  // ─── FTP — probeConnection ───────────────────────────────────────────────
+  ftp_probe_incomplete: string;
+  /** %s = err */
+  ftp_probe_step_ensure_dir: string;
+  /** %s = err */
+  ftp_probe_step_upload: string;
+  /** %s = err */
+  ftp_probe_step_download: string;
+  ftp_probe_step_compare_remote: string;
+  /** %s = err */
+  ftp_probe_step_cleanup: string;
+
+  // ─── LocalFS — runtime errors ────────────────────────────────────────────
+  /** %s = path, %s = err */
+  local_list_failed: string;
+  /** %s = path, %s = err */
+  local_list_vaults_failed: string;
+  /** %s = path, %s = err */
+  local_update_header_failed: string;
+  /** %s = path, %s = err */
+  local_read_shard_failed: string;
+
+  // ─── LocalFS — validateConfig + describeConfig ───────────────────────────
+  local_validate_path_required: string;
+  /** %s = path */
+  local_describe_config: string;
+
+  // ─── LocalFS — probeConnection ───────────────────────────────────────────
+  local_probe_incomplete: string;
+  /** %s = err */
+  local_probe_step_mkdir: string;
+  /** %s = err */
+  local_probe_step_write: string;
+  /** %s = err */
+  local_probe_step_read: string;
+  local_probe_step_compare_local: string;
+  /** %s = err */
+  local_probe_step_cleanup: string;
 }
 
 const translations: Record<string, Strings> = { en, pl };
@@ -434,12 +609,46 @@ export function t(key: keyof Strings): string {
 }
 
 /**
+ * Returns the translation for the given key in an explicit language.
+ * Used by built-in provider factories which read `factory.lang` (set by
+ * BFS via `providerRegistry.setLang()`) instead of relying on the global
+ * `currentLang`. Falls back to English when the requested lang is unknown.
+ *
+ * @param lang - BCP 47 language tag (e.g. 'en', 'pl')
+ * @param key  - Key from the Strings interface
+ */
+export function tFor(lang: string, key: keyof Strings): string {
+  return (translations[lang] ?? translations.en)[key];
+}
+
+/**
  * Returns a translated string with %s placeholders replaced by the given args.
  * @param key  - Key from the Strings interface
  * @param args - Values to substitute for each %s in order
  */
 export function fmt(key: keyof Strings, ...args: string[]): string {
   let s = t(key);
+  for (const arg of args) {
+    s = s.replace('%s', arg);
+  }
+  return s;
+}
+
+/**
+ * Returns a translated string with %s placeholders, in an explicit language.
+ * Used by built-in provider adapters which read `factory.lang` / `io.lang`
+ * instead of relying on the global `currentLang`.
+ *
+ * @param lang - BCP 47 language tag (e.g. 'en', 'pl')
+ * @param key  - Key from the Strings interface
+ * @param args - Values to substitute for each %s in order
+ */
+export function fmtFor(
+  lang: string,
+  key: keyof Strings,
+  ...args: string[]
+): string {
+  let s = tFor(lang, key);
   for (const arg of args) {
     s = s.replace('%s', arg);
   }

@@ -11,6 +11,11 @@ export function enableDebug(): void {
   debugEnabled = true;
 }
 
+/** Deactivate debug output. Used by tests that exercise the gated path. */
+export function disableDebug(): void {
+  debugEnabled = false;
+}
+
 /** Log a debug line to stderr (no-op unless --debug was passed). */
 export function dbg(label: string, data?: Record<string, unknown>): void {
   if (!debugEnabled) return;
