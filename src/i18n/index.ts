@@ -128,6 +128,8 @@ export interface Strings {
   // ─── clear ────────────────────────────────────────────────────────────────
   cmd_clear_desc: string;
   clear_done: string;
+  /** %s = filename (e.g. "push.lock") */
+  clear_removed_file: string;
 
   // ─── config ───────────────────────────────────────────────────────────────
   cmd_config_desc: string;
@@ -163,6 +165,12 @@ export interface Strings {
   /** %s = count */
   push_skipped_header: string;
   push_cache_hint: string;
+  /** %s = version, %s = uploaded count, %s = total (N+K) */
+  push_completed_healthy: string;
+  /** %s = version, %s = uploaded count, %s = total (N+K) */
+  push_partial_degraded: string;
+  /** %s = version, %s = uploaded count, %s = required (N), %s = version (repeated for prune hint) */
+  push_damaged: string;
   push_opt_new: string;
   push_opt_overwrite: string;
   push_opt_password: string;
@@ -175,6 +183,14 @@ export interface Strings {
   vault_decompressing: string;
   opt_temp_dir_desc: string;
   opt_cache_dir_desc: string;
+
+  // ─── lockfile / push partial ─────────────────────────────────────────────
+  /** %s = operation ('push' or 'repair'), %s = PID, %s = started_at ISO timestamp */
+  lock_concurrent_active: string;
+  /** %s = version */
+  lock_partial_state_push: string;
+  /** %s = comma-separated list of missing files */
+  push_cache_no_lock: string;
 
   // ─── pull ─────────────────────────────────────────────────────────────────
   pull_preparing: string;
@@ -204,6 +220,8 @@ export interface Strings {
   status_providers: string;
   status_enc_enabled: string;
   status_enc_disabled: string;
+  /** %s = data_shards, %s = parity_shards */
+  status_push_disabled_warn: string;
 
   // ─── versions ─────────────────────────────────────────────────────────────
   versions_empty: string;
@@ -413,6 +431,8 @@ export interface Strings {
   vault_uploading_shards: string;
   /** %s = i+1 (1-based), %s = N+K total */
   vault_upload_shard_progress: string;
+  /** %s = shard index (1-based), %s = total (N+K), %s = error detail */
+  vault_upload_shard_failed: string;
   vault_no_cached_blob_pull: string;
   /** %s = working_version, %s = targetVersion */
   vault_pull_overwrite_confirm: string;

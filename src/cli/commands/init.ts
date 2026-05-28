@@ -159,9 +159,9 @@ export function registerInit(program: Command): void {
       async (argName: string | undefined, ciOpts: InitCiOpts, cmd: Command) => {
         const rootDir = resolveCwd(cmd);
 
-        // ── Tryb CI: walidacja WSZYSTKICH flag, zanim cokolwiek zrobimy ──────
-        // W trybie --ci user kontraktowo dostarcza wszystkie wymagane wartości;
-        // nie wolno nam ani wpaść w prompty, ani przepuścić null/NaN do configu.
+        // ── CI mode: validate ALL flags before doing anything ────────────────
+        // In --ci the user contractually provides every required value; we
+        // must neither fall into prompts nor let null/NaN reach the config.
         const isCi = ciOpts.ci === true;
         const ciDataShardsRaw = ciOpts.dataShards;
         const ciParityShardsRaw = ciOpts.parityShards;

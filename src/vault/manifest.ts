@@ -33,6 +33,12 @@ export async function readManifest(
 /**
  * Writes a version manifest to .bfs/manifests/vNNN.json (pretty-printed JSON).
  * The .bfs/manifests directory must already exist.
+ *
+ * Partial-commit tolerance: manifest.shards may contain fewer than
+ * scheme.data_shards + scheme.parity_shards entries — the writer makes no
+ * assumption about completeness. Health field carries the actual state
+ * (Healthy / Degraded / Damaged) as determined by the caller.
+ *
  * @throws on write failure.
  */
 export async function writeManifest(

@@ -8,7 +8,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as cryptoModule from '../../src/core/crypto.js';
+import { BfsError, DecryptionError } from '../../src/core/errors.js';
 // Side-effect import: rejestruje typ "local" w ProviderRegistry
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
@@ -1004,6 +1006,286 @@ describe('Scenariusz 8: --password override przy encryption.enabled=false', () =
       });
       await pull(dest, { io: mockIO(), force: true, password: PASSWORD });
       await assertFilesMatch(dest, originalHashes);
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── Scenariusz 9: --password na unencrypted vault = silent no-op ───────────
+
+describe('Scenariusz 9: --password na unencrypted vault = silent no-op', () => {
+  let root: string;
+  let pdirs: string[];
+
+  beforeEach(async () => {
+    root = await tmp();
+    pdirs = [await tmp(), await tmp(), await tmp()]; // 2/1
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const d of [root, ...pdirs])
+      await fs.rm(d, { recursive: true, force: true });
+  });
+
+  it('should ignore --password on unencrypted manifest (deriveKey not called, files restored)', async () => {
+    await init(root, {
+      vault_name: 'plain-vault',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    const originalHashes = await createTestFiles(root);
+    await push(root, { io: mockIO() });
+
+    const manifest = await readManifest(root, 1);
+    expect(manifest?.encrypted).toBe(false);
+
+    const deriveKeySpy = vi.spyOn(cryptoModule, 'deriveKey');
+
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
+        recursive: true,
+      });
+      await pull(dest, {
+        io: mockIO(),
+        force: true,
+        password: 'irrelevant-password',
+      });
+      await assertFilesMatch(dest, originalHashes);
+      expect(deriveKeySpy).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── Scenariusz 10: pull bez password na encrypted manifest fails czytelnie ─
+
+describe('Scenariusz 10: pull bez password na encrypted manifest fails czytelnie', () => {
+  const PASSWORD = 'enc-pass-789';
+  let root: string;
+  let pdirs: string[];
+
+  beforeEach(async () => {
+    root = await tmp();
+    pdirs = [await tmp(), await tmp(), await tmp()]; // 2/1
+  });
+
+  afterEach(async () => {
+    for (const d of [root, ...pdirs])
+      await fs.rm(d, { recursive: true, force: true });
+  });
+
+  it('should throw BfsError when no password provided for encrypted manifest', async () => {
+    await init(root, {
+      vault_name: 'enc-no-pwd',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: true, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    await createTestFiles(root);
+    await push(root, { io: mockIO(), password: PASSWORD });
+
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
+        recursive: true,
+      });
+      // mockIO without answers → askSecret returns '' → triggers
+      // 'Password required for encrypted vault.' in vault-manager.ts:597
+      await expect(pull(dest, { io: mockIO(), force: true })).rejects.toThrow(
+        BfsError,
+      );
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── Scenariusz 11: mixed-version vault — per-version encryption dispatch ───
+
+describe('Scenariusz 11: mixed-version vault — pull respektuje per-version encryption', () => {
+  const V2_PASSWORD = 'enc-v2-pwd';
+  let root: string;
+  let pdirs: string[];
+
+  beforeEach(async () => {
+    root = await tmp();
+    pdirs = [await tmp(), await tmp(), await tmp()]; // 2/1
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const d of [root, ...pdirs])
+      await fs.rm(d, { recursive: true, force: true });
+  });
+
+  async function setupMixedVault(): Promise<{
+    v1Hashes: Map<string, string>;
+    v2Hashes: Map<string, string>;
+  }> {
+    await init(root, {
+      vault_name: 'mixed-vault',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    const v1Hashes = await createTestFiles(root);
+    await push(root, { io: mockIO() });
+
+    const cfg = await readConfig(root);
+    if (!cfg) throw new Error('readConfig returned null after init');
+    cfg.encryption.enabled = true;
+    await writeConfig(root, cfg);
+
+    // Mutuj jeden plik, żeby v2 różnił się od v1 i było widać że pull v2
+    // przywraca v2-stan (nie v1).
+    const v2HelloContent = Buffer.from('v2 content');
+    await fs.writeFile(path.join(root, 'hello.txt'), v2HelloContent);
+    const v2Hashes = new Map(v1Hashes);
+    v2Hashes.set('hello.txt', sha256(v2HelloContent));
+    await push(root, { io: mockIO(), password: V2_PASSWORD });
+
+    const m1 = await readManifest(root, 1);
+    const m2 = await readManifest(root, 2);
+    expect(m1?.encrypted).toBe(false);
+    expect(m2?.encrypted).toBe(true);
+
+    return { v1Hashes, v2Hashes };
+  }
+
+  it('should pull v1 (unencrypted) without password', async () => {
+    const { v1Hashes } = await setupMixedVault();
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
+        recursive: true,
+      });
+      await pull(dest, { io: mockIO(), force: true, version: 1 });
+      await assertFilesMatch(dest, v1Hashes);
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+
+  it('should pull v2 (encrypted) with correct password', async () => {
+    const { v2Hashes } = await setupMixedVault();
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
+        recursive: true,
+      });
+      await pull(dest, {
+        io: mockIO(),
+        force: true,
+        version: 2,
+        password: V2_PASSWORD,
+      });
+      await assertFilesMatch(dest, v2Hashes);
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject pull v2 without password', async () => {
+    await setupMixedVault();
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
+        recursive: true,
+      });
+      await expect(
+        pull(dest, { io: mockIO(), force: true, version: 2 }),
+      ).rejects.toThrow(BfsError);
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+
+  it('should ignore --password on v1 (unencrypted) — deriveKey not called', async () => {
+    const { v1Hashes } = await setupMixedVault();
+    const deriveKeySpy = vi.spyOn(cryptoModule, 'deriveKey');
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
+        recursive: true,
+      });
+      await pull(dest, {
+        io: mockIO(),
+        force: true,
+        version: 1,
+        password: 'irrelevant',
+      });
+      await assertFilesMatch(dest, v1Hashes);
+      expect(deriveKeySpy).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── Scenariusz 12: pull ze złym hasłem na encrypted vault ───────────────────
+//
+// Regresja: zły klucz wywoływał DecryptionError w `flush` KAŻDEGO z N+K
+// równoległych strumieni deszyfrujących. Tylko shard aktywnie czytany przez
+// rsDecodeStriped surfował błąd czysto przez pipeline; pozostałe (sibling)
+// emitowały zdarzenie 'error' bez listenera → Node rzucał uncaught exception
+// (zrzut stosu do usera) zamiast czystego komunikatu. Test wymusza ścieżkę V2 z
+// wieloma shardami (wszystkie obecne, złe hasło): przed fixem wywraca workera
+// nieobsłużonym 'error', po fixie odrzuca jednym DecryptionError.
+describe('Scenariusz 12: pull ze złym hasłem na encrypted vault', () => {
+  let root: string;
+  let pdirs: string[];
+  const PASSWORD = 'correct-horse-battery';
+
+  beforeEach(async () => {
+    root = await tmp();
+    pdirs = [];
+    for (let i = 0; i < 5; i++) pdirs.push(await tmp());
+  });
+
+  afterEach(async () => {
+    for (const d of [root, ...pdirs])
+      await fs.rm(d, { recursive: true, force: true });
+  });
+
+  it('should reject with DecryptionError (no unhandled stream error) on wrong password', async () => {
+    await init(root, {
+      vault_name: 'enc-wrong-pwd',
+      scheme: { data_shards: 3, parity_shards: 2 },
+      encryption: { enabled: true, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    await createTestFiles(root);
+    await push(root, { io: mockIO(), password: PASSWORD });
+
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
+        recursive: true,
+      });
+
+      // All N+K shards present, but the wrong password → every shard's GCM
+      // check fails. Must surface as a single DecryptionError, never an
+      // uncaught 'error' event from a sibling decrypt stream.
+      await expect(
+        pull(dest, { io: mockIO(), force: true, password: 'wrong-password' }),
+      ).rejects.toThrow(DecryptionError);
     } finally {
       await fs.rm(dest, { recursive: true, force: true });
     }

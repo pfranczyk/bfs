@@ -1,18 +1,24 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Command } from 'commander';
-import { t } from '../../i18n/index.js';
+import { isEnoent } from '../../core/fs-utils.js';
+import { fmt, t } from '../../i18n/index.js';
 import { readConfig } from '../../vault/config.js';
+import { pushLockPath, repairLockPath } from '../../vault/lockfile.js';
 import { resolveCwd } from '../cwd.js';
-import { success } from '../ui.js';
+import { CommandAbort, error, info, success } from '../ui.js';
 
 /**
  * Registers the `bfs clear` command on the given Commander program.
- * Deletes cached blobs left over from aborted push/pull operations:
+ * Deletes the following leftover files from previous interrupted operations:
  *   <cacheDir>/push.blob.pending
  *   <cacheDir>/pull.blob.pending
+ *   <rootDir>/.bfs/push.lock
+ *   <rootDir>/.bfs/repair.lock
  *
- * Cache directory resolution order: --cache-dir flag → config.cache_dir → {rootDir}/.bfs/cache.
+ * Cache directory resolution: --cache-dir flag → config.cache_dir →
+ * {rootDir}/.bfs/cache. Per-file info is emitted for every file actually
+ * removed. ENOENT is tolerated; any other failure (e.g. EPERM) is rethrown.
  *
  * @param program - Commander program to attach the command to
  */
@@ -28,10 +34,35 @@ export function registerClear(program: Command): void {
         opts.cacheDir ??
         config?.cache_dir ??
         path.join(rootDir, '.bfs', 'cache');
-      const pushCache = path.join(cacheDir, 'push.blob.pending');
-      const pullCache = path.join(cacheDir, 'pull.blob.pending');
-      await fs.unlink(pushCache).catch(() => {});
-      await fs.unlink(pullCache).catch(() => {});
-      success(t('clear_done'));
+
+      // Note: variable name `entry` (not `t`) to avoid shadowing the i18n helper.
+      const targets: Array<{ label: string; path: string }> = [
+        {
+          label: 'push.blob.pending',
+          path: path.join(cacheDir, 'push.blob.pending'),
+        },
+        {
+          label: 'pull.blob.pending',
+          path: path.join(cacheDir, 'pull.blob.pending'),
+        },
+        { label: 'push.lock', path: pushLockPath(rootDir) },
+        { label: 'repair.lock', path: repairLockPath(rootDir) },
+      ];
+
+      try {
+        for (const entry of targets) {
+          try {
+            await fs.unlink(entry.path);
+            info(fmt('clear_removed_file', entry.label));
+          } catch (e: unknown) {
+            if (!isEnoent(e)) throw e;
+          }
+        }
+        success(t('clear_done'));
+      } catch (err: unknown) {
+        if (err instanceof CommandAbort) throw err;
+        error(err instanceof Error ? err.message : String(err));
+        throw new CommandAbort();
+      }
     });
 }

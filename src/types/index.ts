@@ -1,6 +1,7 @@
 import type { Readable } from 'node:stream';
 
 import type { SkippedFile } from '../core/errors.js';
+import type { PushLockFailedEntry } from '../vault/lockfile.js';
 
 // ─── Enums ────────────────────────────────────────────────────
 
@@ -10,14 +11,14 @@ export const BLOB_FLAGS = {
   COMPRESSED: 0x02,
 } as const;
 
-/** Tryb zachowania przy push — co robić z istniejącą wersją. */
+/** Push behavior mode — what to do with the existing version. */
 export enum PushMode {
   NewVersion = 'new_version',
   Overwrite = 'overwrite',
   Ask = 'ask',
 }
 
-/** Stan zdrowia wersji backupu, ustalany przez verify. */
+/** Backup version health state, determined by verify. */
 export enum VersionHealth {
   Healthy = 'healthy',
   Degraded = 'degraded',
@@ -25,19 +26,19 @@ export enum VersionHealth {
   Unknown = 'unknown',
 }
 
-// ─── Konfiguracja vaulta (.bfs/config.json) ──────────────────
+// ─── Vault configuration (.bfs/config.json) ──────────────────
 
 export interface VaultConfig {
   vault_id: string; // UUID v4
-  vault_name: string; // nazwa vaulta = podfolder na nośnikach (obowiązkowa przy init)
-  version: number; // wersja formatu konfiguracji (1)
+  vault_name: string; // vault name = subfolder on providers (required at init)
+  version: number; // config format version (1)
   scheme: {
     data_shards: number; // N (min. 2)
     parity_shards: number; // K (min. 1)
   };
   // INVARIANT: providers.length === scheme.data_shards + scheme.parity_shards
-  // Każdy provider trzyma dokładnie 1 shard per wersja.
-  // Walidowane przy init, push, provider-add, provider-remove.
+  // Each provider holds exactly 1 shard per version.
+  // Validated at init, push, provider-add, provider-remove.
   encryption: {
     enabled: boolean;
     algorithm: 'aes-256-gcm';
@@ -58,7 +59,7 @@ export interface VaultConfig {
 }
 
 export interface ProviderConfig {
-  id: string; // nazwa nadana przez usera przy init/provider-add, np. "backup-firma", "dysk-usb"
+  id: string; // user-assigned name from init/provider-add, e.g. "backup-firma", "dysk-usb"
   type: string; // "local" | "gdrive" | "onedrive" | "ftp" | "ssh" | "smb"
   /**
    * Full npm spec of the adapter package for external adapters (e.g.
@@ -77,35 +78,35 @@ export interface ProviderConfig {
   config: Record<string, unknown>; // type-specific config
 }
 
-// ─── Stan vaulta (.bfs/state.json) ───────────────────────────
+// ─── Vault state (.bfs/state.json) ───────────────────────────
 
 export interface VaultState {
-  latest_version: number; // najwyższa wersja istniejąca na nośnikach (0 = brak pushów)
-  working_version: number; // wersja aktualnie na dysku (0 = brak pull/push)
+  latest_version: number; // highest version present on providers (0 = no pushes)
+  working_version: number; // version currently on disk (0 = no pull/push)
 }
 
-// ─── Manifest wersji (.bfs/manifests/vNNN.json) ─────────────
-// Każda wersja ma osobny manifest — snapshot konfiguracji w momencie push.
-// Umożliwia: różne schematy N/K per wersja, różne zestawy providerów,
-// przeskakiwanie między wersjami bez pobierania shardów.
+// ─── Version manifest (.bfs/manifests/vNNN.json) ─────────────
+// Each version has its own manifest — a snapshot of the configuration at
+// push time. This allows: different N/K schemes per version, different
+// provider sets, jumping between versions without downloading shards.
 
 export interface VersionManifest {
   version: number;
-  pushed_at: Nullable<string>; // ISO 8601; null po recovery (uzupełniane po pull)
-  file_count: Nullable<number>; // null po recovery (uzupełniane po pull)
-  total_size: Nullable<number>; // bajty (rozmiar katalogu); null po recovery (uzupełniane po pull)
-  blob_hash: string; // SHA-256 bloba przed RS
+  pushed_at: Nullable<string>; // ISO 8601; null after recovery (filled in by next pull)
+  file_count: Nullable<number>; // null after recovery (filled in by next pull)
+  total_size: Nullable<number>; // bytes (directory size); null after recovery (filled in by next pull)
+  blob_hash: string; // SHA-256 of blob before RS
   scheme: {
     data_shards: number; // N
     parity_shards: number; // K
   };
   encrypted: boolean;
-  shards: ManifestShard[]; // N+K wpisów
-  health: VersionHealth; // push: "healthy" (po weryfikacji uploadu); recovery: "degraded" (przed verify)
-  // Pola streamingowego pipeline (FORMAT_VERSION=2 shards). Brak = stary format.
-  rs_striped?: boolean; // true = striped RS encoding (zawsze przy nowym push)
-  rs_stripe_size?: number; // rozmiar stripe w bajtach (tylko gdy rs_striped=true)
-  encrypted_per_shard?: boolean; // true = szyfrowanie per shard (zamiast per blob)
+  shards: ManifestShard[]; // 1..N+K entries (partial-committed versions hold fewer)
+  health: VersionHealth; // push: healthy/degraded/damaged from uploaded vs N+K; recovery: degraded (until verify)
+  // Streaming pipeline fields (FORMAT_VERSION=2 shards). Absent = legacy format.
+  rs_striped?: boolean; // true = striped RS encoding (always for new pushes)
+  rs_stripe_size?: number; // stripe size in bytes (only when rs_striped=true)
+  encrypted_per_shard?: boolean; // true = encryption per shard (instead of per blob)
   /** true = data section is a ZIP file (BLOB_FLAGS.COMPRESSED bit set). */
   compressed?: boolean;
   /** Sum of uncompressed file sizes before compression (bytes). Present when compressed=true. */
@@ -114,25 +115,31 @@ export interface VersionManifest {
 
 export interface ManifestShard {
   shard_index: number;
-  provider_id: string; // referencja do providera z config.json
+  provider_id: string; // reference to a provider in config.json
   provider_type: string; // "local" | "gdrive" | "ftp" | "ssh" | ...
-  remote_path: string; // ścieżka na nośniku
-  shard_hash: string; // SHA-256 PAYLOADU sharda (samych danych RS, bez nagłówka i trailing checksum)
-  // Payload jest niezmienny — nagłówek może się zmienić (heal, relocate),
-  // ale dane RS nie. Dlatego hash dotyczy tylko payloadu.
+  remote_path: string; // path on the provider
+  shard_hash: string; // SHA-256 of the shard PAYLOAD (RS data only, no header, no trailing checksum)
+  // The payload is immutable — the header can change (heal, relocate)
+  // but the RS data cannot. Hence the hash covers payload only.
 }
 
 // ─── Skip results ─────────────────────────────────────────────
 
 export type { SkippedFile };
 
-/** Result returned by push() on success. */
+/** Result returned by push() — successful, partial, or damaged. */
 export interface PushResult {
   version: number;
   file_count: number;
   total_size: number;
   /** Files skipped due to read errors (non-empty only in REPL interactive mode when user accepted). */
   skipped: SkippedFile[];
+  /** Count of shards uploaded successfully (manifest.shards.length). */
+  uploaded_count: number;
+  /** Shards whose upload failed; mirrors .bfs/push.lock.failed for callers that need detail without re-reading the lock. */
+  failed: PushLockFailedEntry[];
+  /** Healthy when uploaded_count === N+K; Degraded when >= N; Damaged when < N (and ≥ 1). */
+  health: VersionHealth;
 }
 
 /** Result returned by pull() on success. */
@@ -147,57 +154,57 @@ export interface PullResult {
 
 export type IgnoreFilter = (relativePath: string) => boolean;
 
-// ─── BFS Blob — format binarny ───────────────────────────────
+// ─── BFS Blob — binary format ────────────────────────────────
 
 export interface BlobHeader {
-  magic: 'BFS\0'; // 4 bajty
-  format_version: number; // 2 bajty (uint16, wartość: 1)
-  vault_id: string; // 16 bajtów (UUID jako binary)
-  flags: number; // 4 bajty (bitfield: bit 0 = encrypted, bit 1 = compressed)
-  created_at: bigint; // 8 bajtów (unix timestamp ms, uint64 LE)
-  file_count: number; // 4 bajty (uint32)
-  file_table_offset: bigint; // 8 bajtów
-  file_table_length: bigint; // 8 bajtów
-  data_offset: bigint; // 8 bajtów
-  data_length: bigint; // 8 bajtów
+  magic: 'BFS\0'; // 4 bytes
+  format_version: number; // 2 bytes (uint16, value: 1)
+  vault_id: string; // 16 bytes (UUID as binary)
+  flags: number; // 4 bytes (bitfield: bit 0 = encrypted, bit 1 = compressed)
+  created_at: bigint; // 8 bytes (unix timestamp ms, uint64 LE)
+  file_count: number; // 4 bytes (uint32)
+  file_table_offset: bigint; // 8 bytes
+  file_table_length: bigint; // 8 bytes
+  data_offset: bigint; // 8 bytes
+  data_length: bigint; // 8 bytes
 }
-// Total header size: 70 bajtów
+// Total header size: 70 bytes
 
 export interface FileEntry {
-  path: string; // ścieżka relatywna (UTF-8, separatory /)
-  size: bigint; // 8 bajtów
-  data_offset: bigint; // offset w data section, 8 bajtów
-  hash: string; // SHA-256, 32 bajty
-  mode: number; // permissions, 4 bajty
-  modified_at: bigint; // unix timestamp ms, 8 bajtów (uint64 LE)
+  path: string; // relative path (UTF-8, / separators)
+  size: bigint; // 8 bytes
+  data_offset: bigint; // offset into data section, 8 bytes
+  hash: string; // SHA-256, 32 bytes
+  mode: number; // permissions, 4 bytes
+  modified_at: bigint; // unix timestamp ms, 8 bytes (uint64 LE)
 }
 
-// ─── Shard — format binarny ──────────────────────────────────
+// ─── Shard — binary format ───────────────────────────────────
 
 export interface ShardHeader {
-  magic: 'BFSS'; // 4 bajty
-  format_version: number; // 2 bajty (uint16)
-  vault_id: string; // 16 bajtów (UUID binary)
+  magic: 'BFSS'; // 4 bytes
+  format_version: number; // 2 bytes (uint16)
+  vault_id: string; // 16 bytes (UUID binary)
   vault_name: string; // variable (length-prefixed)
-  blob_size: bigint; // 8 bajtów — rozmiar danych wchodzących w RS-encode
-  // (po encryption jeśli włączone, plain blob jeśli nie)
-  // Służy do obcięcia paddingu po RS-decode
-  blob_hash: string; // 32 bajty — SHA-256 PLAIN bloba (przed encryption/RS)
-  // Weryfikowany po RS-decode + decrypt
-  data_shards: number; // 2 bajty (uint16)
-  parity_shards: number; // 2 bajty (uint16)
-  shard_index: number; // 2 bajty (uint16)
-  version: number; // 4 bajty (uint32) — numer wersji snapshota
-  encrypted: boolean; // 1 bajt
-  kdf_salt: Nullable<Buffer>; // 16 bajtów jeśli encrypted=true, brak jeśli false
-  rs_stripe_size: Nullable<number>; // 4 bajty (uint32) — present when format_version >= 2; null for v1
-  map_length: number; // 4 bajty (uint32)
-  location_map: ShardLocation[]; // JSON (opcjonalnie AES-GCM encrypted)
+  blob_size: bigint; // 8 bytes — size of the data fed into RS-encode
+  // (post-encryption when enabled, plain blob otherwise)
+  // Used to trim padding after RS-decode
+  blob_hash: string; // 32 bytes — SHA-256 of the PLAIN blob (before encryption/RS)
+  // Verified after RS-decode + decrypt
+  data_shards: number; // 2 bytes (uint16)
+  parity_shards: number; // 2 bytes (uint16)
+  shard_index: number; // 2 bytes (uint16)
+  version: number; // 4 bytes (uint32) — snapshot version number
+  encrypted: boolean; // 1 byte
+  kdf_salt: Nullable<Buffer>; // 16 bytes when encrypted=true, absent otherwise
+  rs_stripe_size: Nullable<number>; // 4 bytes (uint32) — present when format_version >= 2; null for v1
+  map_length: number; // 4 bytes (uint32)
+  location_map: ShardLocation[]; // JSON (optionally AES-GCM encrypted)
 }
 
 export interface ShardLocation {
   shard_index: number;
-  provider_id: string; // user-defined name, np. "NAS-piwnica", "FTP-ovh"
+  provider_id: string; // user-defined name, e.g. "NAS-basement", "FTP-ovh"
   provider_type: string;
   /**
    * Full npm spec of the adapter package for external providers (e.g.
@@ -205,21 +212,23 @@ export interface ShardLocation {
    * serialized by BFS versions older than the adapterPackage field.
    */
   adapterPackage: Nullable<string>;
-  // UWAGA: connection_config przechowuje dane połączenia (host, port, user, path).
-  // Gdy encrypted=false, location map jest zapisana jako surowy JSON w nagłówku sharda.
-  // Każdy kto ma dostęp do jednego sharda widzi connection_config WSZYSTKICH providerów.
-  // Użytkownik świadomie akceptuje to ryzyko wybierając brak szyfrowania.
-  // Rekomendacja: nie umieszczaj haseł ani kluczy prywatnych w connection_config —
-  // sekrety powinny być podawane interaktywnie przez ProviderIO.askSecret().
+  // NOTE: connection_config stores connection details (host, port, user, path).
+  // When encrypted=false the location map is stored as raw JSON inside the
+  // shard header. Anyone who gets hold of a single shard sees the
+  // connection_config of EVERY provider. The user knowingly accepts that
+  // risk by choosing to disable encryption.
+  // Recommendation: never put passwords or private keys into connection_config
+  // — secrets should be supplied interactively via ProviderIO.askSecret().
   connection_config: Record<string, unknown>;
   remote_path: string;
-  shard_hash: string; // SHA-256 PAYLOADU (danych RS, bez nagłówka sharda)
+  shard_hash: string; // SHA-256 of the PAYLOAD (RS data, without the shard header)
 }
 
-// ─── Provider I/O — abstrakcja interakcji z userem ───────────
-// Provider NIE dotyka CLI bezpośrednio. Dostaje ProviderIO jako dependency injection.
-// Dzięki temu ten sam provider działa w REPL, standalone CLI, a w przyszłości w GUI.
-// W testach: mockowy ProviderIO z predefiniowanymi odpowiedziami.
+// ─── Provider I/O — abstraction over user interaction ────────
+// Providers do NOT touch the CLI directly. They receive ProviderIO via
+// dependency injection. The same provider therefore works in the REPL, in
+// the standalone CLI, and in a future GUI.
+// In tests: a mock ProviderIO with predefined answers.
 
 export interface ProviderIO {
   /**
@@ -244,11 +253,11 @@ export interface ProviderIO {
    */
   readonly workDir: string;
 
-  ask(prompt: string): Promise<string>; // "Podaj login:"
-  askSecret(prompt: string): Promise<string>; // "Podaj hasło:" (ukryte)
-  confirm(message: string): Promise<boolean>; // "Kontynuować? [y/N]"
-  choose(message: string, options: string[]): Promise<string>; // "Wybierz katalog:" → lista
-  info(message: string): void; // "Łączę z FTP..."
+  ask(prompt: string): Promise<string>; // "Enter login:"
+  askSecret(prompt: string): Promise<string>; // "Enter password:" (hidden)
+  confirm(message: string): Promise<boolean>; // "Continue? [y/N]"
+  choose(message: string, options: string[]): Promise<string>; // "Pick a directory:" → list
+  info(message: string): void; // "Connecting to FTP..."
   /**
    * Diagnostic log emitted only when `bfs --debug` is active. Built-in
    * providers use it for connection chatter, retry attempts, and other
@@ -256,7 +265,7 @@ export interface ProviderIO {
    * default. Output goes to stderr so stdout redirection stays clean.
    */
   debug(message: string): void;
-  warn(message: string): void; // "Certyfikat niezaufany"
+  warn(message: string): void; // "Untrusted certificate"
   progress(label: string, percent: number): void; // progress bar
 }
 
@@ -349,15 +358,15 @@ export interface AdapterRegistrationMeta {
 }
 
 // ─── Storage Provider ────────────────────────────────────────
-// Provider operuje w kontekście: {base_path}/{vault_name}/
-// vault_name przekazywany przy inicjalizacji providera.
-// ProviderIO przekazywany przy tworzeniu (factory/constructor).
+// A provider operates in the context: {base_path}/{vault_name}/
+// vault_name is supplied when the provider is initialized.
+// ProviderIO is supplied at construction (factory/constructor).
 //
-// Logika authenticate():
-//   1. Mam zapisany token/hasło && ważny → połącz cicho
-//   2. Token wygasł && mam refresh token → odśwież cicho
-//   3. Nic nie działa → ProviderIO: "Sesja wygasła, podaj hasło:"
-// User nie jest pytany niepotrzebnie.
+// authenticate() logic:
+//   1. Stored token/password && still valid → connect silently
+//   2. Token expired && refresh token available → refresh silently
+//   3. Nothing works → ProviderIO: "Session expired, enter password:"
+// The user is not asked unnecessarily.
 
 export interface StorageProvider {
   readonly id: string;
@@ -366,10 +375,10 @@ export interface StorageProvider {
   authenticate(): Promise<void>;
   setVaultName(name: string): void;
   /**
-   * Przesyła shard na nośnik jako strumień.
-   * @param shardFilename nazwa pliku na nośniku
-   * @param data strumień danych sharda (nagłówek + payload + checksum)
-   * @param size całkowity rozmiar strumienia w bajtach (do Content-Length / pre-alokacji)
+   * Uploads a shard to the provider as a stream.
+   * @param shardFilename filename on the provider
+   * @param data shard data stream (header + payload + checksum)
+   * @param size total stream size in bytes (for Content-Length / pre-allocation)
    */
   upload(
     shardFilename: string,
@@ -377,22 +386,22 @@ export interface StorageProvider {
     size: number,
   ): Promise<RemoteRef>;
   /**
-   * Pobiera shard z nośnika jako strumień.
-   * Caller odczytuje go porcjami (nagłówek, payload, checksum).
+   * Fetches a shard from the provider as a stream.
+   * The caller reads it in chunks (header, payload, checksum).
    */
   download(ref: RemoteRef): Promise<Readable>;
   delete(ref: RemoteRef): Promise<void>;
-  // rename — używane w overwrite mode (push --overwrite):
-  //   Upload nowego sharda jako .tmp → delete starego → rename .tmp na finalną nazwę.
-  //   Providerzy bez natywnego rename (np. S3) implementują jako copy + delete.
+  // rename — used in overwrite mode (push --overwrite):
+  //   Upload the new shard as .tmp → delete the old one → rename .tmp to the final name.
+  //   Providers without native rename (e.g. S3) implement this as copy + delete.
   rename(ref: RemoteRef, newFilename: string): Promise<RemoteRef>;
-  // updateShardHeader — używane w heal (provider-remove + heal):
-  //   Aktualizuje nagłówek sharda po zmianie location map.
-  //   Wynik: shard na nośniku ma nowy nagłówek, niezmieniony payload,
-  //   przeliczony trailing checksum (SHA-256 całości: nowy nagłówek + payload).
-  //   Implementacja zależy od adaptera (partial read, full rewrite, server-side, itp.)
-  //   headerData to pełny zserializowany nagłówek
-  //   (od magic do końca location map, bez payloadu i checksum)
+  // updateShardHeader — used by heal (provider-remove + heal):
+  //   Updates the shard header after the location map changes.
+  //   Result: the shard on the provider has a new header, the original payload,
+  //   and a recomputed trailing checksum (SHA-256 of new header + payload).
+  //   Implementation depends on the adapter (partial read, full rewrite, server-side, etc.)
+  //   headerData is the fully serialized header
+  //   (from magic to the end of the location map, without payload or checksum)
   updateShardHeader(ref: RemoteRef, headerData: Buffer): Promise<RemoteRef>;
   list(prefix?: string): Promise<RemoteRef[]>;
   /**
@@ -481,5 +490,5 @@ export interface StorageProvider {
 export interface RemoteRef {
   provider_id: string;
   path: string;
-  hash?: string; // SHA-256 — dostępny po upload(); list() może go nie zwrócić (FTP, SSH)
+  hash?: string; // SHA-256 — available after upload(); list() may not return it (FTP, SSH)
 }

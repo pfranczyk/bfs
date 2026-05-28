@@ -29,7 +29,9 @@ import {
 import type { SkippedFile } from '../core/errors.js';
 import {
   BfsError,
+  ProviderError,
   PullSkippedError,
+  PushCacheNoLockError,
   PushSkippedError,
 } from '../core/errors.js';
 import {
@@ -76,6 +78,14 @@ import {
   formatMissingAdaptersMessage,
 } from './adapter-preflight.js';
 import { assertSchemeValid, readConfig, writeConfig } from './config.js';
+import type { PushLock, PushLockFailedReason } from './lockfile.js';
+import {
+  assertNoActiveLock,
+  pushLockPath,
+  readLock,
+  removeLock,
+  writeLockAtomic,
+} from './lockfile.js';
 import {
   deleteManifest,
   listManifests,
@@ -495,15 +505,34 @@ async function _decodeFromTempFiles(
 ): Promise<void> {
   const payloadStreams: Nullable<Readable>[] = new Array(N + K).fill(null);
   for (const [shardIdx, tmpPath] of tmpPaths) {
+    // Belt-and-suspenders error sinks for the per-shard decode fan-out, each
+    // attached the instant its stream is created (no gap before the eager
+    // pipe inside decryptStream). On a wrong key every shard's decrypt flush
+    // throws; only the shard the RS decoder is actively reading surfaces the
+    // error to the caller (async-iterator rejection → output.destroy →
+    // pipeline reject). These sinks keep the sibling streams from emitting
+    // 'error' to no listener and aborting the process. Silent unless --debug,
+    // where they aid diagnosis. (decryptStream also self-sinks its transform.)
+    const sinkErr = (label: string) => (err: Error) => {
+      if (debugEnabled) {
+        process.stderr.write(
+          `[bfs:debug] _decodeFromTempFiles shard ${shardIdx} ${label}: ${err.message}\n`,
+        );
+      }
+    };
     const fileStream = createReadStream(tmpPath);
+    fileStream.on('error', sinkErr('fileStream'));
     const { payloadStream } = await parseShardHeaderFromStream(fileStream);
-    payloadStreams[shardIdx] = encKey
+    payloadStream.on('error', sinkErr('payloadStream'));
+    const stream = encKey
       ? decryptStream(
           payloadStream,
           encKey,
           deriveShardNonce(encKey, targetVersion, shardIdx),
         )
       : payloadStream;
+    stream.on('error', sinkErr('decryptStream'));
+    payloadStreams[shardIdx] = stream;
   }
   if (debugEnabled) {
     const active = payloadStreams
@@ -522,6 +551,13 @@ async function _decodeFromTempFiles(
         process.stderr.write(`[bfs:debug] ${msg}\n`);
       }
     : undefined;
+  // Create the output directory BEFORE starting the background decode, so there
+  // is no `await` between rsDecodeStriped() (which begins decoding on a future
+  // microtask) and pipeline() attaching its error handler. Otherwise a decode
+  // error (e.g. a wrong-key DecryptionError on the actively-read shard) could
+  // destroy blobStream during the mkdir await → 'error' emitted with no
+  // listener → unhandled exception crashing the process.
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
   const blobStream = rsDecodeStriped(
     payloadStreams,
     N,
@@ -530,7 +566,6 @@ async function _decodeFromTempFiles(
     blobSize,
     debugLog,
   );
-  await fs.mkdir(path.dirname(outputPath), { recursive: true });
   await pipeline(blobStream, createWriteStream(outputPath));
 }
 
@@ -891,14 +926,105 @@ export async function init(
 }
 
 /**
- * Full push pipeline: pack → [encrypt] → RS-encode → upload → write manifest → update state.
- * If any files could not be read, the blob is cached and PushSkippedError is thrown (non-interactive),
- * or the user is prompted to continue (interactive/REPL mode).
- * With `fromCache: true`, loads the cached blob instead of re-packing.
+ * Creates or refreshes .bfs/push.lock for the current push attempt.
+ * For fromCache=true: validates that both the lock and cached blob exist
+ * (throws PushCacheNoLockError otherwise), then resets uploaded/failed
+ * arrays for a fresh retry. For fromCache=false: writes a brand-new lock.
+ */
+async function _initPushLock(
+  rootDir: string,
+  fromCache: boolean,
+  cachePath: string,
+  targetVersion: number,
+  config: VaultConfig,
+): Promise<PushLock> {
+  const lockPath = pushLockPath(rootDir);
+
+  if (fromCache) {
+    const missing: string[] = [];
+    const [existing, blobStat] = await Promise.all([
+      readLock<PushLock>(lockPath),
+      fs.stat(cachePath).catch(() => null),
+    ]);
+    if (existing === null) missing.push('.bfs/push.lock');
+    if (blobStat === null) missing.push(cachePath);
+    if (missing.length > 0) throw new PushCacheNoLockError(missing);
+  }
+
+  const lock: PushLock = {
+    format_version: 1,
+    operation: 'push',
+    version: targetVersion,
+    pid: process.pid,
+    command: 'bfs push',
+    started_at: new Date().toISOString(),
+    scheme: { ...config.scheme },
+    uploaded: [],
+    failed: [],
+    blob_pending_path: cachePath,
+  };
+  await writeLockAtomic(lockPath, lock);
+  return lock;
+}
+
+/**
+ * Classifies an upload failure into a PushLockFailedReason + human detail.
+ * Exported for unit testing — callers should not depend on this directly.
+ * @internal
+ */
+export function _classifyUploadError(e: unknown): {
+  reason: PushLockFailedReason;
+  detail: string;
+} {
+  const detail = e instanceof Error ? e.message : String(e);
+  if (e instanceof ProviderError && /auth|530|login|password/i.test(detail)) {
+    return { reason: 'auth_failed', detail };
+  }
+  const code = (e as NodeJS.ErrnoException | null)?.code;
+  switch (code) {
+    case 'ENOENT':
+      return { reason: 'not_found', detail };
+    case 'ECONNREFUSED':
+    case 'ETIMEDOUT':
+    case 'ENOTFOUND':
+    case 'EAI_AGAIN':
+      return { reason: 'network_error', detail };
+    case 'EDQUOT':
+    case 'ENOSPC':
+      return { reason: 'quota_exceeded', detail };
+    default:
+      return { reason: 'unknown', detail };
+  }
+}
+
+/**
+ * Maps the uploaded shard count to a VersionHealth value.
+ * Throws BfsError when zero — caller must NOT write a manifest in that case.
+ */
+function _computeHealth(uploaded: number, N: number, K: number): VersionHealth {
+  if (uploaded === N + K) return VersionHealth.Healthy;
+  if (uploaded >= N) return VersionHealth.Degraded;
+  if (uploaded >= 1) return VersionHealth.Damaged;
+  throw new BfsError(
+    `push damaged: 0 shards uploaded (required at least ${N} of ${N + K}); .bfs/push.lock retains forensic state`,
+  );
+}
+
+/**
+ * Full push pipeline: pack → [encrypt] → RS-encode → upload → manifest → state.
  *
- * @returns PushResult with version, file_count, total_size, and any skipped files accepted by user
- * @throws BfsError if config missing, provider count invalid, or password missing for encrypted vault
- * @throws PushSkippedError (non-interactive) if any files could not be read
+ * Partial-commit semantics: shard upload failures are captured per shard in
+ * .bfs/push.lock and the manifest is written with whichever shards succeeded
+ * (health: Degraded when uploaded >= N, Damaged when 1 <= uploaded < N,
+ * throws when 0 uploaded). State.json is updated whenever at least one shard
+ * uploaded; lock + cached blob are removed only on full success.
+ *
+ * @returns PushResult with version, file_count, total_size, skipped, uploaded_count, failed, health
+ * @throws BfsError if config missing, password missing for encrypted vault, or zero shards uploaded
+ * @throws LockConcurrentActiveError if another push or repair operation is in progress
+ * @throws LockPartialStatePushError if a leftover push.lock from a crashed/dead run is detected
+ * @throws PushCacheNoLockError when fromCache=true but push.lock or cached blob is missing
+ * @throws PushSkippedError (non-interactive) if any source files could not be read
  */
 export async function push(
   rootDir: string,
@@ -909,6 +1035,11 @@ export async function push(
     throw new BfsError('No vault config found. Run `bfs init` first.');
 
   assertSchemeValid(config);
+  // --cache is by definition a retry over an existing partial-state lock;
+  // _initPushLock below enforces that both lock + cached blob are present.
+  if (options.fromCache !== true) {
+    await assertNoActiveLock(rootDir, 'push');
+  }
   const state = await readState(rootDir);
   const { data_shards: N, parity_shards: K } = config.scheme;
 
@@ -956,8 +1087,19 @@ export async function push(
     if (!cont) throw new BfsError('Push cancelled.');
   }
 
-  // ── Pack blob ──────────────────────────────────────────────────────────────
+  // ── Initialize push.lock (forensic state + concurrency marker) ─────────────
+  // cachePath declared here so the lock can record it under blob_pending_path;
+  // packing below reuses the same constant.
   const cachePath = path.join(cacheDir, 'push.blob.pending');
+  const lock = await _initPushLock(
+    rootDir,
+    options.fromCache === true,
+    cachePath,
+    targetVersion,
+    config,
+  );
+
+  // ── Pack blob ──────────────────────────────────────────────────────────────
   const filter = createIgnoreFilter(rootDir);
   const vaultIdBuf = uuidToBuffer(config.vault_id);
 
@@ -1204,26 +1346,44 @@ export async function push(
     const shardStream = buildShardStream(serializedHeader, payloadStream);
     const shardFileSize = serializedHeader.length + encPayloadSize + 32;
 
-    await providers[i]?.upload(
-      `shard_${i}.bfs.${targetVersion}`,
-      shardStream,
-      shardFileSize,
-    );
-    options.io.progress(
-      fmt('vault_upload_shard_progress', String(i + 1), String(N + K)),
-      ((i + 1) / (N + K)) * 100,
-    );
-    manifestShards.push({
-      shard_index: i,
-      provider_id: pc.id,
-      provider_type: pc.type,
-      remote_path: buildRemotePath(
-        pc,
-        config.vault_name,
+    try {
+      await providers[i]?.upload(
         `shard_${i}.bfs.${targetVersion}`,
-      ),
-      shard_hash: shardHashes[i] ?? '',
-    });
+        shardStream,
+        shardFileSize,
+      );
+      options.io.progress(
+        fmt('vault_upload_shard_progress', String(i + 1), String(N + K)),
+        ((i + 1) / (N + K)) * 100,
+      );
+      manifestShards.push({
+        shard_index: i,
+        provider_id: pc.id,
+        provider_type: pc.type,
+        remote_path: buildRemotePath(
+          pc,
+          config.vault_name,
+          `shard_${i}.bfs.${targetVersion}`,
+        ),
+        shard_hash: shardHashes[i] ?? '',
+      });
+      lock.uploaded.push({ shard_index: i, provider_id: pc.id });
+      await writeLockAtomic(pushLockPath(rootDir), lock);
+    } catch (e: unknown) {
+      const { reason, detail } = _classifyUploadError(e);
+      lock.failed.push({
+        shard_index: i,
+        provider_id: pc.id,
+        reason,
+        detail,
+        attempted_at: new Date().toISOString(),
+      });
+      await writeLockAtomic(pushLockPath(rootDir), lock);
+      options.io.warn(
+        fmt('vault_upload_shard_failed', String(i + 1), String(N + K), detail),
+      );
+      // Continue with the remaining shards — partial-commit semantics.
+    }
   }
 
   // ── Clean up temp parity files ─────────────────────────────────────────────
@@ -1231,7 +1391,12 @@ export async function push(
     await fs.unlink(pPath).catch(() => {});
   }
 
-  // ── Write manifest ─────────────────────────────────────────────────────────
+  // ── Compute health from uploaded count ─────────────────────────────────────
+  // Throws when zero shards uploaded — that case leaves push.lock for forensic
+  // analysis and skips manifest + state writes entirely.
+  const health = _computeHealth(manifestShards.length, N, K);
+
+  // ── Write manifest (partial-tolerant: shards may be < N+K) ─────────────────
   const manifest: VersionManifest = {
     version: targetVersion,
     pushed_at: new Date().toISOString(),
@@ -1247,21 +1412,38 @@ export async function push(
       ? { compressed: true as const, blob_size_uncompressed: total_size }
       : {}),
     shards: manifestShards,
-    health: VersionHealth.Healthy,
+    health,
   };
   await writeManifest(rootDir, manifest);
 
-  // ── Update state ───────────────────────────────────────────────────────────
-  await writeState(rootDir, {
-    latest_version: Math.max(state.latest_version, targetVersion),
-    working_version: targetVersion,
-  });
+  // ── Update state (only when at least one shard uploaded — _computeHealth ──
+  //    throws for zero, so this is always true here; guarded for clarity).
+  if (manifestShards.length >= 1) {
+    await writeState(rootDir, {
+      latest_version: Math.max(state.latest_version, targetVersion),
+      working_version: targetVersion,
+    });
+  }
 
-  // ── Clean up blob cache on success ─────────────────────────────────────────
-  untrackFile(cachePath);
-  await fs.unlink(cachePath).catch(() => {});
+  // ── Clean up blob cache + lock ONLY on full success ───────────────────────
+  // Anything less leaves them for `bfs push --cache` retry or `bfs clear`.
+  const fullSuccess =
+    lock.failed.length === 0 && lock.uploaded.length === N + K;
+  if (fullSuccess) {
+    untrackFile(cachePath);
+    await fs.unlink(cachePath).catch(() => {});
+    await removeLock(pushLockPath(rootDir));
+  }
 
-  return { version: targetVersion, file_count, total_size, skipped };
+  return {
+    version: targetVersion,
+    file_count,
+    total_size,
+    skipped,
+    uploaded_count: manifestShards.length,
+    failed: lock.failed,
+    health,
+  };
 }
 
 /**

@@ -98,6 +98,43 @@ describe('status', () => {
     expect(capture.logs.some((l) => l.includes('5'))).toBe(true);
   });
 
+  // ─── Push-disabled scheme warn ────────────────────────────────────────────
+
+  it('should NOT print push-disabled warn when scheme is 2/1', async () => {
+    mockStatus.mockResolvedValue(
+      makeStatusInfo({ scheme: { data_shards: 2, parity_shards: 1 } }) as never,
+    );
+
+    await runCmd(['status']);
+
+    const all = capture.logs.concat(capture.errors).join('\n');
+    expect(all).not.toMatch(/push disabled|push wyłączony/i);
+  });
+
+  it('should print push-disabled warn when scheme is 3/0', async () => {
+    mockStatus.mockResolvedValue(
+      makeStatusInfo({ scheme: { data_shards: 3, parity_shards: 0 } }) as never,
+    );
+
+    await runCmd(['status']);
+
+    const all = capture.logs.concat(capture.errors).join('\n');
+    expect(all).toMatch(/push disabled|push wyłączony/i);
+    expect(all).toMatch(/3\/0/);
+  });
+
+  it('should print push-disabled warn when scheme is 1/0', async () => {
+    mockStatus.mockResolvedValue(
+      makeStatusInfo({ scheme: { data_shards: 1, parity_shards: 0 } }) as never,
+    );
+
+    await runCmd(['status']);
+
+    const all = capture.logs.concat(capture.errors).join('\n');
+    expect(all).toMatch(/push disabled|push wyłączony/i);
+    expect(all).toMatch(/1\/0/);
+  });
+
   // ─── Błąd status ──────────────────────────────────────────────────────────
 
   it('should abort when vault config is missing', async () => {

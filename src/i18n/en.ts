@@ -125,6 +125,7 @@ export const en: Strings = {
   // ─── clear ────────────────────────────────────────────────────────────────
   cmd_clear_desc: 'Clear pending backup data cache',
   clear_done: 'Cache cleared.',
+  clear_removed_file: '%s removed',
 
   // ─── config ───────────────────────────────────────────────────────────────
   cmd_config_desc: 'View or update backup settings',
@@ -157,6 +158,12 @@ export const en: Strings = {
   push_skipped_header: '%s file(s) could not be read and were excluded:',
   push_cache_hint:
     'Backup data cached. Use `bfs push --cache` to upload without re-packing.',
+  push_completed_healthy:
+    'push completed, version %s healthy (%s of %s uploaded)',
+  push_partial_degraded:
+    'push partial, version %s degraded (%s of %s uploaded). See .bfs/push.lock for the list of failed providers. Backup is restorable via `bfs pull`.',
+  push_damaged:
+    'push damaged, version %s not recoverable (%s of %s required). Run `bfs prune --version %s` to remove it.',
   push_opt_new: 'Force a new version',
   push_opt_overwrite: 'Overwrite the current version',
   push_opt_password: 'Encryption password (skips interactive prompt)',
@@ -169,6 +176,13 @@ export const en: Strings = {
   vault_decompressing: 'Decompressing…',
   opt_temp_dir_desc: 'Directory for temporary files during push/pull',
   opt_cache_dir_desc: 'Directory for cached backup data (overrides .bfs/cache)',
+
+  // ─── lockfile / push partial ─────────────────────────────────────────────
+  lock_concurrent_active: 'another %s in progress (PID %s, started %s)',
+  lock_partial_state_push:
+    'push.lock exists from partial-state push of version %s. Run `bfs clear` to discard the leftover state.',
+  push_cache_no_lock:
+    '`--cache` requires both .bfs/push.lock and cached blob; missing: %s',
 
   // ─── pull ─────────────────────────────────────────────────────────────────
   pull_preparing: 'Preparing pull…',
@@ -201,6 +215,7 @@ export const en: Strings = {
   status_providers: 'Providers:',
   status_enc_enabled: 'enabled',
   status_enc_disabled: 'disabled',
+  status_push_disabled_warn: 'push disabled — scheme %s/%s below minimum 2/1',
 
   // ─── versions ─────────────────────────────────────────────────────────────
   versions_empty:
@@ -290,9 +305,9 @@ export const en: Strings = {
   scheme_missing:
     'Backup scheme is missing or corrupted in .bfs/config.json. Run `bfs scheme set` to fix.',
   scheme_invalid_data_shards:
-    'Invalid scheme: data_shards must be an integer >= 2, got "%s". Run `bfs scheme set` to fix.',
+    'Invalid scheme: data_shards must be an integer >= 2, got "%s". Use `bfs provider add` or `bfs scheme set` to fix.',
   scheme_invalid_parity_shards:
-    'Invalid scheme: parity_shards must be an integer >= 1, got "%s". Run `bfs scheme set` to fix.',
+    'Invalid scheme: parity_shards must be an integer >= 1, got "%s". Use `bfs provider add` or `bfs scheme set` to fix.',
   scheme_providers_mismatch:
     'Scheme requires %s providers, configured: %s. Use `bfs provider add` or `bfs scheme set`.',
 
@@ -419,6 +434,7 @@ export const en: Strings = {
   vault_encoding_rs: 'Encoding with Reed-Solomon…',
   vault_uploading_shards: 'Uploading shards…',
   vault_upload_shard_progress: 'Uploading shard %s/%s',
+  vault_upload_shard_failed: 'Upload of shard %s/%s failed: %s',
   vault_no_cached_blob_pull: 'No cached blob found — running full pull…',
   vault_pull_overwrite_confirm:
     'On disk: version %s. Restoring version %s will overwrite directory. Continue?',

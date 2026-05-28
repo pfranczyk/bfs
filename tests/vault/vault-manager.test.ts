@@ -1,17 +1,25 @@
+import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ProviderError, PushCacheNoLockError } from '../../src/core/errors.js';
 import { DEFAULT_BFSIGNORE_CONTENT } from '../../src/core/ignore-defaults.js';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
 import type { ProviderConfig, ProviderIO } from '../../src/types/index.js';
-import { PushMode } from '../../src/types/index.js';
+import { PushMode, VersionHealth } from '../../src/types/index.js';
 import { readConfig, writeConfig } from '../../src/vault/config.js';
+import {
+  type PushLock,
+  pushLockPath,
+  readLock,
+} from '../../src/vault/lockfile.js';
 import { listManifests, readManifest } from '../../src/vault/manifest.js';
 import { recover } from '../../src/vault/recovery.js';
 import { readState } from '../../src/vault/state.js';
 import {
+  _classifyUploadError,
   init,
   listVersions,
   prune,
@@ -289,6 +297,259 @@ describe('push', () => {
     await expect(push(root, { io: mockIO() })).rejects.toThrow(
       /bfs scheme set/,
     );
+  });
+});
+
+// ─── push — partial commit ───────────────────────────────────────────────────
+// Verifies that shard upload failures are captured per-shard in .bfs/push.lock
+// and the manifest is written with whichever shards succeeded (health derived
+// from uploaded count vs N+K). Pre-existing happy-path tests above stay green.
+
+describe('push — partial commit', () => {
+  let root: string;
+  let pdirs: string[];
+
+  beforeEach(async () => {
+    root = await tmp();
+    pdirs = [await tmp(), await tmp(), await tmp()];
+    await init(root, {
+      vault_name: 'vault',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+    await createTestFiles(root);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const d of [root, ...pdirs])
+      await fs.rm(d, { recursive: true, force: true });
+  });
+
+  it('should remove push.lock and cached blob on full success', async () => {
+    const result = await push(root, { io: mockIO() });
+
+    expect(result.health).toBe(VersionHealth.Healthy);
+    expect(result.uploaded_count).toBe(3);
+    expect(result.failed).toEqual([]);
+    expect(existsSync(pushLockPath(root))).toBe(false);
+    expect(
+      existsSync(path.join(root, '.bfs', 'cache', 'push.blob.pending')),
+    ).toBe(false);
+
+    const manifest = await readManifest(root, 1);
+    expect(manifest?.shards).toHaveLength(3);
+    expect(manifest?.health).toBe(VersionHealth.Healthy);
+  });
+
+  it('should commit partial manifest when one provider fails (degraded)', async () => {
+    const original = LocalFsProvider.prototype.upload;
+    let n = 0;
+    vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(
+      async function (
+        this: LocalFsProvider,
+        ...args: Parameters<typeof original>
+      ) {
+        n++;
+        if (n === 3) throw new ProviderError('Simulated 530 Login incorrect');
+        return original.apply(this, args);
+      },
+    );
+
+    const result = await push(root, { io: mockIO() });
+
+    expect(result.health).toBe(VersionHealth.Degraded);
+    expect(result.uploaded_count).toBe(2);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]?.reason).toBe('auth_failed');
+
+    const manifest = await readManifest(root, 1);
+    expect(manifest?.shards).toHaveLength(2);
+    expect(manifest?.health).toBe(VersionHealth.Degraded);
+
+    const state = await readState(root);
+    expect(state.latest_version).toBe(1);
+
+    const lock = await readLock<PushLock>(pushLockPath(root));
+    expect(lock?.failed).toHaveLength(1);
+    expect(lock?.uploaded).toHaveLength(2);
+  });
+
+  it('should mark version damaged when uploaded count is below data_shards', async () => {
+    // Switch vault to scheme 3/2 (5 providers) so we can fail 3 and uploaded < N.
+    const extraDirs = [await tmp(), await tmp()];
+    pdirs.push(...extraDirs);
+    const cfg = await readConfig(root);
+    if (!cfg) throw new Error('test setup: config missing');
+    await writeConfig(root, {
+      ...cfg,
+      scheme: { data_shards: 3, parity_shards: 2 },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+    });
+
+    const original = LocalFsProvider.prototype.upload;
+    let n = 0;
+    vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(
+      async function (
+        this: LocalFsProvider,
+        ...args: Parameters<typeof original>
+      ) {
+        n++;
+        if (n >= 3) throw new ProviderError('Simulated network failure');
+        return original.apply(this, args);
+      },
+    );
+
+    const result = await push(root, { io: mockIO() });
+
+    expect(result.health).toBe(VersionHealth.Damaged);
+    expect(result.uploaded_count).toBe(2);
+    expect(result.failed).toHaveLength(3);
+
+    const manifest = await readManifest(root, 1);
+    expect(manifest?.shards).toHaveLength(2);
+    expect(manifest?.health).toBe(VersionHealth.Damaged);
+
+    const state = await readState(root);
+    expect(state.latest_version).toBe(1);
+
+    expect(existsSync(pushLockPath(root))).toBe(true);
+  });
+
+  it('should throw BfsError and keep state unchanged when zero shards uploaded', async () => {
+    vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(
+      async () => {
+        throw new ProviderError('Simulated total outage');
+      },
+    );
+
+    await expect(push(root, { io: mockIO() })).rejects.toThrow(
+      /0 shards uploaded/,
+    );
+
+    const state = await readState(root);
+    expect(state.latest_version).toBe(0);
+
+    // Manifest must NOT be written for zero-upload runs.
+    expect(await readManifest(root, 1)).toBeNull();
+    // Lock retained for forensic analysis.
+    expect(existsSync(pushLockPath(root))).toBe(true);
+  });
+
+  it('should throw PushCacheNoLockError when --cache used without push.lock', async () => {
+    await expect(push(root, { io: mockIO(), fromCache: true })).rejects.toThrow(
+      PushCacheNoLockError,
+    );
+  });
+
+  it('should reset uploaded/failed arrays on --cache retry', async () => {
+    // Arrange: simulate a previous partial-state push by manually creating
+    // both lock (with stale uploaded entries) and a cached blob.
+    const cacheDir = path.join(root, '.bfs', 'cache');
+    await fs.mkdir(cacheDir, { recursive: true });
+    const cachePath = path.join(cacheDir, 'push.blob.pending');
+
+    // Real cached blob: run a normal push first, then move the result back
+    // into the cache (we just need any valid blob so packing is skipped).
+    await push(root, { io: mockIO() });
+    // After the first push, blob was cleaned up. Re-pack a tiny blob via push
+    // by failing partway, which leaves the blob in cache.
+    const original = LocalFsProvider.prototype.upload;
+    let n = 0;
+    const spy = vi
+      .spyOn(LocalFsProvider.prototype, 'upload')
+      .mockImplementation(async function (
+        this: LocalFsProvider,
+        ...args: Parameters<typeof original>
+      ) {
+        n++;
+        if (n >= 2) throw new ProviderError('Simulated outage');
+        return original.apply(this, args);
+      });
+    // Trigger a partial push to leave lock + cached blob behind.
+    await push(root, { io: mockIO() }).catch(() => {});
+    spy.mockRestore();
+
+    expect(existsSync(pushLockPath(root))).toBe(true);
+    expect(existsSync(cachePath)).toBe(true);
+
+    const lockBefore = await readLock<PushLock>(pushLockPath(root));
+    expect(
+      (lockBefore?.uploaded.length ?? 0) + (lockBefore?.failed.length ?? 0),
+    ).toBeGreaterThan(0);
+
+    // Act: retry with --cache. All providers OK this time.
+    const result = await push(root, { io: mockIO(), fromCache: true });
+
+    // Assert: full success → lock removed, blob removed, healthy.
+    expect(result.health).toBe(VersionHealth.Healthy);
+    expect(existsSync(pushLockPath(root))).toBe(false);
+    expect(existsSync(cachePath)).toBe(false);
+  });
+});
+
+// ─── _classifyUploadError unit tests ─────────────────────────────────────────
+
+describe('_classifyUploadError', () => {
+  it('should classify ProviderError with auth keywords as auth_failed', () => {
+    const result = _classifyUploadError(
+      new ProviderError('530 Login incorrect — bad password'),
+    );
+
+    expect(result.reason).toBe('auth_failed');
+    expect(result.detail).toContain('530');
+  });
+
+  it('should classify ENOENT as not_found', () => {
+    const err = Object.assign(new Error('file missing'), { code: 'ENOENT' });
+    const result = _classifyUploadError(err);
+
+    expect(result.reason).toBe('not_found');
+  });
+
+  it('should classify ECONNREFUSED as network_error', () => {
+    const err = Object.assign(new Error('refused'), { code: 'ECONNREFUSED' });
+    const result = _classifyUploadError(err);
+
+    expect(result.reason).toBe('network_error');
+  });
+
+  it('should classify ETIMEDOUT as network_error', () => {
+    const err = Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' });
+    const result = _classifyUploadError(err);
+
+    expect(result.reason).toBe('network_error');
+  });
+
+  it('should classify EDQUOT as quota_exceeded', () => {
+    const err = Object.assign(new Error('quota'), { code: 'EDQUOT' });
+    const result = _classifyUploadError(err);
+
+    expect(result.reason).toBe('quota_exceeded');
+  });
+
+  it('should classify ENOSPC as quota_exceeded', () => {
+    const err = Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    const result = _classifyUploadError(err);
+
+    expect(result.reason).toBe('quota_exceeded');
+  });
+
+  it('should default to unknown for unrecognized errors', () => {
+    const result = _classifyUploadError(new Error('something weird'));
+
+    expect(result.reason).toBe('unknown');
+    expect(result.detail).toBe('something weird');
+  });
+
+  it('should default to unknown for non-Error throw values', () => {
+    const result = _classifyUploadError('bare string thrown');
+
+    expect(result.reason).toBe('unknown');
+    expect(result.detail).toBe('bare string thrown');
   });
 });
 

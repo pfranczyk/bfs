@@ -2,25 +2,25 @@ import inquirer from 'inquirer';
 
 export { inquirer };
 
-// Typ pytań pobieramy z sygnatury inquirer.prompt — unikamy importu QuestionCollection
-// który nie jest eksportowany jako named member we wszystkich wersjach inquirer
+// Question type is taken from inquirer.prompt signature — avoids importing
+// QuestionCollection which is not exported as a named member in all inquirer versions.
 type InquirerQuestions = Parameters<(typeof inquirer)['prompt']>[0];
 
 /**
- * Wywołuje inquirer.prompt() i przywraca raw mode terminala po zakończeniu.
- * Inquirer przy zamknięciu swojego wewnętrznego readline wywołuje setRawMode(false),
- * co przełącza terminal w cooked mode z OS-level echo. Bez przywrócenia raw mode
- * znaki wpisywane w REPL podczas operacji asynchronicznych pojawiają się w złych
- * miejscach na ekranie.
+ * Calls inquirer.prompt() and restores terminal raw mode afterwards.
+ * When inquirer closes its internal readline it calls setRawMode(false),
+ * which flips the terminal back to cooked mode with OS-level echo. Without
+ * restoring raw mode, characters typed in the REPL during async operations
+ * end up in the wrong places on screen.
  *
- * Nasłuchuje na klawisz Escape (standalone 0x1b, 1 bajt) i anuluje prompt
- * przez AbortController (ui.close()). Daje to AbortPromptError zamiast
- * ExitPromptError — bez brzydkiego komunikatu "✗ User force closed...".
- * Ctrl+C nadal daje ExitPromptError z komunikatem (force close).
- * Arrow keys (\x1b[A etc.) przychodzą jako 3+ bajtów i są ignorowane.
+ * Listens for Escape (standalone 0x1b, 1 byte) and cancels the prompt via
+ * AbortController (ui.close()). That yields an AbortPromptError instead of
+ * ExitPromptError — no ugly "✗ User force closed..." message. Ctrl+C still
+ * produces ExitPromptError with the force-close message. Arrow keys
+ * (\x1b[A etc.) arrive as 3+ bytes and are ignored.
  *
- * @param questions - Kolekcja pytań Inquirer
- * @returns Odpowiedzi użytkownika
+ * @param questions - Inquirer question collection
+ * @returns User answers
  */
 export async function promptWithRawMode<T extends Record<string, unknown>>(
   questions: InquirerQuestions,

@@ -5,7 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-05-28
+
+### Added
+- **`bfs push` partial-commit semantics.** When a storage provider becomes
+  unreachable mid-push (auth failure, network drop, quota exhausted), the
+  upload now continues with the remaining providers instead of aborting the
+  whole transfer. The resulting backup version is committed with whatever
+  providers succeeded:
+  - **Healthy** — every provider received its piece. The success message
+    now reports "X of N uploaded" so the count is explicit.
+  - **Degraded** — at least N providers stored a piece (the backup is
+    still fully restorable via `bfs pull`). Exit code is non-zero so CI
+    scripts can detect partial state; a hint suggests how to complete it
+    once the offending provider is fixed.
+  - **Damaged** — fewer than N providers stored a piece. The version is
+    written so the user can investigate, but `bfs pull` will refuse it.
+    Exit code is non-zero with a hint suggesting `bfs prune --version <N>`.
+  Previously every provider failure scrapped the entire push and left the
+  already-uploaded pieces as orphans on the storage backends.
+- **`.bfs/push.lock` forensic state file.** Each `bfs push` writes
+  `.bfs/push.lock` recording every successful and failed upload
+  (provider name, reason, timestamp). The file is kept after partial
+  fails, crashes, or Ctrl+C so the user can inspect what happened, and
+  is removed only on a fully healthy push. Stale locks from dead
+  processes (PID gone, or lock older than 24 h) are detected on the
+  next push and refused with a hint pointing at `bfs clear`. Concurrent
+  `bfs push` invocations against the same backup are blocked while one
+  is in progress.
+- **`bfs push --cache` now requires both the cached backup data AND the
+  lock file.** If either is missing the command refuses with a clear
+  message listing what is gone. `bfs push` aborted due to skipped files
+  also writes `push.lock`, so the resume path is consistent regardless
+  of why the previous push stopped.
+- **`bfs clear` removes lock files too.** In addition to clearing the
+  cached backup data from previous interrupted operations, the command
+  now also removes `.bfs/push.lock` and `.bfs/repair.lock`. Each
+  removed file is reported individually on stdout.
+- **`bfs status` warns when the redundancy scheme drops below the safe
+  minimum.** If the scheme is below 2 data + 1 parity (e.g. after a
+  manual config edit), status now prints
+  "push disabled — scheme N/K below minimum 2/1" so the user knows new
+  pushes will be refused until the scheme is restored.
+
+### Changed
+- `bfs pull` against an encrypted backup with the wrong password now reports
+  a single clean "Decryption failed — wrong key or corrupted data" message.
+  Previously duplicate decryption errors could bleed into stderr — one per
+  internal data piece — looking like a crash even though the main error was
+  the same. Adding `--debug` restores the per-piece diagnostics, useful for
+  spotting partial corruption (where one piece fails differently from the
+  rest); without `--debug` the output stays as a single error.
+- Error messages for an invalid redundancy scheme (`data_shards < 2` or
+  `parity_shards < 1`) now suggest both `bfs provider add` and
+  `bfs scheme set` as recovery paths. Previously only `bfs scheme set` was
+  mentioned, which omitted the natural option of restoring the missing
+  provider instead of shrinking the scheme.
 
 ## [0.5.0] - 2026-05-08
 
@@ -307,7 +362,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/pfranczyk/bfs/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/pfranczyk/bfs/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/pfranczyk/bfs/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/pfranczyk/bfs/compare/v0.2.0...v0.3.0

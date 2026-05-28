@@ -1,10 +1,15 @@
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import ora from 'ora';
-import { PushSkippedError } from '../../core/errors.js';
+import {
+  LockConcurrentActiveError,
+  LockPartialStatePushError,
+  PushCacheNoLockError,
+  PushSkippedError,
+} from '../../core/errors.js';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO } from '../../providers/provider.js';
-import { PushMode } from '../../types/index.js';
+import { PushMode, VersionHealth } from '../../types/index.js';
 import { push } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { isReplMode } from '../repl-context.js';
@@ -115,7 +120,7 @@ export function registerPush(program: Command): void {
         spinner.start(t('push_preparing'));
 
         try {
-          await push(rootDir, {
+          const result = await push(rootDir, {
             ...(mode !== undefined ? { mode } : {}),
             ...(opts.password !== undefined ? { password: opts.password } : {}),
             ...(opts.tempDir !== undefined ? { tempDir: opts.tempDir } : {}),
@@ -128,9 +133,74 @@ export function registerPush(program: Command): void {
             interactive: isReplMode(),
             io: wrappedIo,
           });
-          spinner.succeed(t('push_completed'));
-          success(t('push_success'));
+
+          // Total shards expected by the scheme; derived from the result so
+          // we never disagree with what push() actually attempted.
+          const total = result.uploaded_count + result.failed.length;
+
+          switch (result.health) {
+            case VersionHealth.Healthy:
+              spinner.succeed(t('push_completed'));
+              success(
+                fmt(
+                  'push_completed_healthy',
+                  String(result.version),
+                  String(result.uploaded_count),
+                  String(total),
+                ),
+              );
+              break;
+            case VersionHealth.Degraded:
+              spinner.warn(t('push_failed'));
+              warn(
+                fmt(
+                  'push_partial_degraded',
+                  String(result.version),
+                  String(result.uploaded_count),
+                  String(total),
+                ),
+              );
+              throw new CommandAbort();
+            case VersionHealth.Damaged:
+              spinner.fail(t('push_failed'));
+              error(
+                fmt(
+                  'push_damaged',
+                  String(result.version),
+                  String(result.uploaded_count),
+                  String(total),
+                  String(result.version),
+                ),
+              );
+              throw new CommandAbort();
+            // VersionHealth.Unknown is never returned by push(); intentionally no default branch.
+          }
         } catch (err) {
+          // Re-throw CommandAbort so the outer harness sees the exit signal.
+          if (err instanceof CommandAbort) throw err;
+
+          if (err instanceof PushCacheNoLockError) {
+            spinner.fail(t('push_failed'));
+            error(fmt('push_cache_no_lock', err.missing.join(', ')));
+            throw new CommandAbort();
+          }
+          if (err instanceof LockConcurrentActiveError) {
+            spinner.fail(t('push_failed'));
+            error(
+              fmt(
+                'lock_concurrent_active',
+                err.operation,
+                String(err.pid),
+                err.started_at,
+              ),
+            );
+            throw new CommandAbort();
+          }
+          if (err instanceof LockPartialStatePushError) {
+            spinner.fail(t('push_failed'));
+            error(fmt('lock_partial_state_push', String(err.version)));
+            throw new CommandAbort();
+          }
           if (err instanceof PushSkippedError) {
             spinner.fail(t('push_failed'));
             warn(fmt('push_skipped_header', String(err.skipped.length)));

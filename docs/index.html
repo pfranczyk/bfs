@@ -32,7 +32,7 @@
   <section class="min-h-screen flex flex-col items-center justify-center px-6 text-center">
     <div class="max-w-3xl">
       <div class="inline-block mb-6 px-3 py-1 rounded-full border border-slate-700 text-xs text-slate-400 tracking-widest uppercase">
-        v0.5.0 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 23
+        v0.6.0 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 23
       </div>
 
       <h1 class="text-7xl font-black tracking-tight mb-4 bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
@@ -129,6 +129,16 @@
           </p>
         </div>
 
+        <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6">
+          <div class="text-3xl mb-3">🛡️</div>
+          <h3 class="text-lg font-semibold mb-2" data-i18n="feat6_title">Failures Don't Stop a Backup</h3>
+          <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat6_desc">
+            One drive offline mid-backup? BFS doesn't give up.
+            It keeps uploading to the rest and remembers exactly which ones failed —
+            so later you fix and retry only those, not the whole thing.
+          </p>
+        </div>
+
         <!-- Full-width card -->
         <div class="sm:col-span-2 bg-gradient-to-r from-slate-900 to-slate-800 border border-indigo-500/40 rounded-2xl p-6 flex gap-5 items-start">
           <div class="text-4xl mt-0.5 shrink-0">🕸️</div>
@@ -181,11 +191,13 @@
         <div>
           <div class="flex items-center gap-3 mb-3">
             <span class="w-7 h-7 rounded-full bg-slate-700 text-sm font-bold flex items-center justify-center text-white">3</span>
-            <span class="text-slate-300 font-medium" data-i18n="step3_label">Disaster recovery — one shard is enough</span>
+            <span class="text-slate-300 font-medium" data-i18n="step3_label">New machine? Recover from any one drive</span>
           </div>
-          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step3_comment"># Lost .bfs/? Any one surviving shard rebuilds the config, then `bfs pull`</span>
+          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step3_comment"># Plug in ANY ONE drive — BFS reads the shard map and finds the rest.
+# --name = backup name (same as `bfs init mybackup`); --bootstrap = same adapter flags.</span>
 <span class="code-cmd">bfs</span> recovery <span class="code-flag">--provider</span> local <span class="code-flag">--name</span> <span class="code-string">mybackup</span> \
-  <span class="code-flag">--bootstrap</span> <span class="code-string">"--path /mnt/disk1"</span></code></pre>
+  <span class="code-flag">--bootstrap</span> <span class="code-string">"--path /mnt/disk1"</span>
+<span class="code-cmd">bfs</span> pull  <span class="code-comment" data-i18n="step3_c1"># restore files as usual</span></code></pre>
         </div>
 
       </div>
@@ -247,7 +259,7 @@
   <footer class="border-t border-slate-800 py-10 px-6 text-center text-slate-500 text-sm">
     <p class="mb-2">
       <span class="text-white font-semibold">BFS</span>
-      &nbsp;v0.5.0
+      &nbsp;v0.6.0
       &nbsp;·&nbsp;
       <a href="https://github.com/pfranczyk/BFS/blob/master/LICENSE" class="hover:text-white transition-colors">AGPL-3.0</a>
       &nbsp;·&nbsp;
@@ -285,8 +297,9 @@
                                                 step2_comment: '# Each push creates a new versioned snapshot',
                                                 step2_c1:      '# backup → new version',
                                                 step2_c2:      '# restore latest version',
-                                                step3_label:   'Disaster recovery — one shard is enough',
-                                                step3_comment: '# Lost .bfs/? Any one surviving shard rebuilds the config, then `bfs pull`',
+                                                step3_label:   'New machine? Recover from any one drive',
+                                                step3_comment: '# Plug in ANY ONE drive — BFS reads the shard map and finds the rest.\n# --name = backup name (same as `bfs init mybackup`); --bootstrap = same adapter flags.',
+                                                step3_c1:      '# restore files as usual',
                                                 cmd_title:     'Commands',
                                                 cmd_th_cmd:    'Command',
                                                 cmd_th_desc:   'Description',
@@ -300,6 +313,8 @@
                                                 cmd_versions:  'List all versions with health status',
                                                 feat5_title:   'Lost Everything? One Shard Is Enough',
                                                 feat5_desc:    'Every piece of your backup carries a map to all the others. Find one surviving drive, run <span class="text-white font-mono">bfs recovery</span> — your config, your files, everything comes back.',
+                                                feat6_title:   'Failures Don\'t Stop a Backup',
+                                                feat6_desc:    'One drive offline mid-backup? BFS doesn\'t give up. It keeps uploading to the rest and remembers exactly which ones failed — so later you fix and retry only those, not the whole thing.',
                                               },
                                               pl: {
                                                 hero_subtitle: 'Twoje dyski padną. Twoje dane przetrwają.',
@@ -323,8 +338,9 @@
                                                 step2_comment: '# Każdy push tworzy nowy snapshot z numerem wersji',
                                                 step2_c1:      '# backup → nowa wersja',
                                                 step2_c2:      '# odtworzenie najnowszej wersji',
-                                                step3_label:   'Odzyskiwanie po awarii — wystarczy jeden shard',
-                                                step3_comment: '# Stracileś .bfs/? Każdy ocalały shard odbudowuje konfigurację, potem `bfs pull`',
+                                                step3_label:   'Nowa maszyna? Odtworzysz z jednego nośnika',
+                                                step3_comment: '# Podłącz JEDEN dowolny nośnik — BFS przeczyta mapę z jego sharda i znajdzie resztę.\n# --name = nazwa backupu (jak `bfs init mybackup`); --bootstrap = te same flagi adaptera.',
+                                                step3_c1:      '# odtworzenie plików jak zwykle',
                                                 cmd_title:     'Komendy',
                                                 cmd_th_cmd:    'Komenda',
                                                 cmd_th_desc:   'Opis',
@@ -338,6 +354,8 @@
                                                 cmd_versions:  'Wylistuj wszystkie wersje ze stanem zdrowia',
                                                 feat5_title:   'Straciłeś wszystko? Wystarczy jeden fragment',
                                                 feat5_desc:    'Każdy fragment backupu zawiera mapę do wszystkich pozostałych. Znajdź jeden ocalały dysk, uruchom <span class="text-white font-mono">bfs recovery</span> — konfiguracja, pliki, wszystko wraca.',
+                                                feat6_title:   'Awaria nie przerywa backupu',
+                                                feat6_desc:    'Jeden nośnik padł w trakcie? BFS nie poddaje się. Kończy upload na pozostałych i pamięta dokładnie, które padły — później naprawiasz i ponawiasz tylko te, nie cały backup.',
                                               },
                                             };
 

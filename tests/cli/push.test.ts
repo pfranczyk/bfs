@@ -1,7 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PushSkippedError } from '../../src/core/errors.js';
-import { PushMode } from '../../src/types/index.js';
+import {
+  LockConcurrentActiveError,
+  LockPartialStatePushError,
+  PushCacheNoLockError,
+  PushSkippedError,
+} from '../../src/core/errors.js';
+import type { PushResult } from '../../src/types/index.js';
+import { PushMode, VersionHealth } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
+
+function okResult(overrides: Partial<PushResult> = {}): PushResult {
+  return {
+    version: 1,
+    file_count: 2,
+    total_size: 100,
+    skipped: [],
+    uploaded_count: 3,
+    failed: [],
+    health: VersionHealth.Healthy,
+    ...overrides,
+  };
+}
 
 vi.mock('../../src/vault/vault-manager.js', () => ({
   push: vi.fn(),
@@ -38,13 +57,8 @@ describe('push', () => {
 
   // ─── Sukces ───────────────────────────────────────────────────────────────
 
-  it('should call push and print success message', async () => {
-    mockPush.mockResolvedValue({
-      version: 1,
-      file_count: 2,
-      total_size: 100,
-      skipped: [],
-    });
+  it('should call push and print healthy completion message with shard count', async () => {
+    mockPush.mockResolvedValue(okResult());
 
     const result = await runCmd(['push']);
 
@@ -54,16 +68,14 @@ describe('push', () => {
       expect.any(String),
       expect.objectContaining({ io: expect.any(Object) }),
     );
-    expect(capture.logs.some((l) => l.includes('Backup uploaded'))).toBe(true);
+    // Format from i18n `push_completed_healthy`: "version N healthy (X of Y uploaded)".
+    expect(capture.logs.some((l) => /healthy.*3 of 3 uploaded/i.test(l))).toBe(
+      true,
+    );
   });
 
   it('should pass mode=new_version when --new flag used', async () => {
-    mockPush.mockResolvedValue({
-      version: 1,
-      file_count: 2,
-      total_size: 100,
-      skipped: [],
-    });
+    mockPush.mockResolvedValue(okResult());
 
     await runCmd(['push', '--new']);
 
@@ -74,12 +86,7 @@ describe('push', () => {
   });
 
   it('should pass mode=overwrite when --overwrite flag used', async () => {
-    mockPush.mockResolvedValue({
-      version: 1,
-      file_count: 2,
-      total_size: 100,
-      skipped: [],
-    });
+    mockPush.mockResolvedValue(okResult());
 
     await runCmd(['push', '--overwrite']);
 
@@ -90,12 +97,7 @@ describe('push', () => {
   });
 
   it('should pass password option when --password flag used', async () => {
-    mockPush.mockResolvedValue({
-      version: 1,
-      file_count: 2,
-      total_size: 100,
-      skipped: [],
-    });
+    mockPush.mockResolvedValue(okResult());
 
     await runCmd(['push', '--password', 'secret123']);
 
@@ -106,12 +108,7 @@ describe('push', () => {
   });
 
   it('should not set mode when no flags given', async () => {
-    mockPush.mockResolvedValue({
-      version: 1,
-      file_count: 2,
-      total_size: 100,
-      skipped: [],
-    });
+    mockPush.mockResolvedValue(okResult());
 
     await runCmd(['push']);
 
@@ -164,12 +161,7 @@ describe('push', () => {
   });
 
   it('should pass fromCache=true when --cache flag given', async () => {
-    mockPush.mockResolvedValue({
-      version: 1,
-      file_count: 2,
-      total_size: 100,
-      skipped: [],
-    });
+    mockPush.mockResolvedValue(okResult());
 
     await runCmd(['push', '--cache']);
 
@@ -180,12 +172,7 @@ describe('push', () => {
   });
 
   it('should pass cacheDir when --cache-dir flag given', async () => {
-    mockPush.mockResolvedValue({
-      version: 1,
-      file_count: 0,
-      total_size: 0,
-      skipped: [],
-    });
+    mockPush.mockResolvedValue(okResult({ file_count: 0, total_size: 0 }));
 
     await runCmd(['push', '--cache-dir', '/custom/cache']);
 
@@ -208,7 +195,7 @@ describe('push', () => {
         ['New version (v1)', 'Overwrite (v0)'],
       );
       expect(choice).toBe('New version (v1)');
-      return { version: 1, file_count: 0, total_size: 0, skipped: [] };
+      return okResult({ file_count: 0, total_size: 0 });
     });
 
     const result = await runCmd(['push']);
@@ -229,7 +216,7 @@ describe('push', () => {
         ['New version (v1)', 'Overwrite (v0)'],
       );
       expect(choice).toBe('Overwrite (v0)');
-      return { version: 1, file_count: 0, total_size: 0, skipped: [] };
+      return okResult({ file_count: 0, total_size: 0 });
     });
 
     const result = await runCmd(['push']);
@@ -241,7 +228,7 @@ describe('push', () => {
     mockPush.mockImplementation(async (_dir, opts) => {
       const pw = await opts.io.askSecret('Podaj hasło szyfrowania:');
       expect(pw).toBe('mypassword');
-      return { version: 1, file_count: 0, total_size: 0, skipped: [] };
+      return okResult({ file_count: 0, total_size: 0 });
     });
 
     const result = await runCmd(['push']);
@@ -251,5 +238,118 @@ describe('push', () => {
         expect.objectContaining({ type: 'password', name: 'value' }),
       ]),
     );
+  });
+
+  // ─── Health-based result dispatch ─────────────────────────────────────────
+
+  it('should warn and abort when health is degraded', async () => {
+    mockPush.mockResolvedValue(
+      okResult({
+        version: 7,
+        health: VersionHealth.Degraded,
+        uploaded_count: 2,
+        failed: [
+          {
+            shard_index: 2,
+            provider_id: 'p2',
+            reason: 'auth_failed',
+            detail: '530 Login incorrect',
+            attempted_at: '2026-05-25T17:00:00Z',
+          },
+        ],
+      }),
+    );
+
+    const result = await runCmd(['push']);
+
+    expect(result).toBe('abort');
+    // i18n `push_partial_degraded`: "push partial, version 7 degraded (2 of 3 uploaded). ..."
+    expect(
+      capture.errors.some((e) => /version 7 degraded.*2 of 3/i.test(e)),
+    ).toBe(true);
+  });
+
+  it('should error and abort when health is damaged', async () => {
+    mockPush.mockResolvedValue(
+      okResult({
+        version: 9,
+        health: VersionHealth.Damaged,
+        uploaded_count: 1,
+        failed: [
+          {
+            shard_index: 1,
+            provider_id: 'p1',
+            reason: 'network_error',
+            detail: 'ECONNREFUSED',
+            attempted_at: '2026-05-25T17:00:00Z',
+          },
+          {
+            shard_index: 2,
+            provider_id: 'p2',
+            reason: 'network_error',
+            detail: 'ETIMEDOUT',
+            attempted_at: '2026-05-25T17:00:00Z',
+          },
+        ],
+      }),
+    );
+
+    const result = await runCmd(['push']);
+
+    expect(result).toBe('abort');
+    // i18n `push_damaged`: "push damaged, version 9 not recoverable (1 of 3 required). Run `bfs prune --version 9` ..."
+    expect(
+      capture.errors.some((e) => /version 9 not recoverable.*1 of 3/i.test(e)),
+    ).toBe(true);
+    expect(capture.errors.some((e) => /bfs prune --version 9/.test(e))).toBe(
+      true,
+    );
+  });
+
+  it('should print PushCacheNoLockError message with missing files list', async () => {
+    mockPush.mockRejectedValue(
+      new PushCacheNoLockError([
+        '.bfs/push.lock',
+        '.bfs/cache/push.blob.pending',
+      ]),
+    );
+
+    const result = await runCmd(['push', '--cache']);
+
+    expect(result).toBe('abort');
+    expect(
+      capture.errors.some((e) =>
+        /missing: .bfs\/push\.lock, .bfs\/cache\/push\.blob\.pending/.test(e),
+      ),
+    ).toBe(true);
+  });
+
+  it('should print LockConcurrentActiveError message with PID and timestamp', async () => {
+    mockPush.mockRejectedValue(
+      new LockConcurrentActiveError('push', 12345, '2026-05-25T17:00:00Z'),
+    );
+
+    const result = await runCmd(['push']);
+
+    expect(result).toBe('abort');
+    // i18n `lock_concurrent_active`: "another push in progress (PID 12345, started 2026-05-25T17:00:00Z)"
+    expect(
+      capture.errors.some((e) =>
+        /another push in progress.*PID 12345.*2026-05-25T17:00:00Z/.test(e),
+      ),
+    ).toBe(true);
+  });
+
+  it('should print LockPartialStatePushError with clear hint', async () => {
+    mockPush.mockRejectedValue(new LockPartialStatePushError(5));
+
+    const result = await runCmd(['push']);
+
+    expect(result).toBe('abort');
+    // i18n `lock_partial_state_push`: "push.lock exists from partial-state push of version 5. Run `bfs clear` to discard the leftover state."
+    expect(
+      capture.errors.some((e) => /partial-state push of version 5/.test(e)),
+    ).toBe(true);
+    expect(capture.errors.some((e) => /bfs clear/.test(e))).toBe(true);
   });
 });

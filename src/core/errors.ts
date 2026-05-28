@@ -79,3 +79,47 @@ export class PullSkippedError extends BfsError {
     this.cachePath = cachePath;
   }
 }
+
+/** Thrown when another live BFS operation already holds a lockfile for this vault. */
+export class LockConcurrentActiveError extends BfsError {
+  readonly operation: 'push' | 'repair';
+  readonly pid: number;
+  readonly started_at: string;
+  constructor(operation: 'push' | 'repair', pid: number, started_at: string) {
+    super(
+      `another ${operation} operation is in progress (PID ${pid}, started ${started_at})`,
+    );
+    this.name = 'LockConcurrentActiveError';
+    this.operation = operation;
+    this.pid = pid;
+    this.started_at = started_at;
+  }
+}
+
+/**
+ * Thrown when push detects a leftover push.lock from a crashed/dead operation.
+ * The vault is in partial state — user must `bfs repair --rebuild` (PR2) or
+ * `bfs clear` to discard.
+ */
+export class LockPartialStatePushError extends BfsError {
+  readonly version: number;
+  constructor(version: number) {
+    super(
+      `push.lock exists from partial-state push of version ${version}; run \`bfs repair --version ${version} ... --rebuild\` or \`bfs clear\` to discard`,
+    );
+    this.name = 'LockPartialStatePushError';
+    this.version = version;
+  }
+}
+
+/** Thrown when `bfs push --cache` is invoked without both push.lock and cache blob present. */
+export class PushCacheNoLockError extends BfsError {
+  readonly missing: string[];
+  constructor(missing: string[]) {
+    super(
+      `\`--cache\` requires both .bfs/push.lock and cached blob; missing: ${missing.join(', ')}`,
+    );
+    this.name = 'PushCacheNoLockError';
+    this.missing = missing;
+  }
+}

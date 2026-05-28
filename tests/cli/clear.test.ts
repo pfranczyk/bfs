@@ -115,4 +115,52 @@ describe('clear', () => {
     const all = capture.logs.join('\n');
     expect(all.toLowerCase()).toMatch(/cache cleared|cache wyczyszczony/i);
   });
+
+  // ─── Lockfile cleanup (PR1: push.lock + repair.lock) ──────────────────────
+
+  it('should delete .bfs/push.lock', async () => {
+    await runCmd(['clear']);
+
+    const calledPaths = unlinkSpy.mock.calls.map(([p]: [unknown]) => String(p));
+    expect(
+      calledPaths.some(
+        (p: string) =>
+          p.includes(`.bfs${path.sep}push.lock`) || p.endsWith('push.lock'),
+      ),
+    ).toBe(true);
+  });
+
+  it('should delete .bfs/repair.lock', async () => {
+    await runCmd(['clear']);
+
+    const calledPaths = unlinkSpy.mock.calls.map(([p]: [unknown]) => String(p));
+    expect(
+      calledPaths.some(
+        (p: string) =>
+          p.includes(`.bfs${path.sep}repair.lock`) || p.endsWith('repair.lock'),
+      ),
+    ).toBe(true);
+  });
+
+  it('should print clear_removed_file message for each removed file', async () => {
+    await runCmd(['clear']);
+
+    const all = capture.logs.join('\n');
+    // i18n `clear_removed_file`: "%s removed" / "%s usunięty"
+    expect(all).toMatch(/push\.blob\.pending (removed|usunięty)/);
+    expect(all).toMatch(/pull\.blob\.pending (removed|usunięty)/);
+    expect(all).toMatch(/push\.lock (removed|usunięty)/);
+    expect(all).toMatch(/repair\.lock (removed|usunięty)/);
+  });
+
+  it('should rethrow non-ENOENT errors (e.g. EPERM)', async () => {
+    const eperm = Object.assign(new Error('EPERM: operation not permitted'), {
+      code: 'EPERM',
+    });
+    unlinkSpy.mockRejectedValue(eperm);
+
+    const result = await runCmd(['clear']);
+
+    expect(result).toBe('abort');
+  });
 });

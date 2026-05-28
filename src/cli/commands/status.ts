@@ -1,9 +1,9 @@
 import chalk from 'chalk';
 import type { Command } from 'commander';
-import { t } from '../../i18n/index.js';
+import { fmt, t } from '../../i18n/index.js';
 import { status } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
-import { CommandAbort, error } from '../ui.js';
+import { CommandAbort, error, warn } from '../ui.js';
 
 /**
  * Registers the `bfs status` command on the given Commander program.
@@ -37,6 +37,15 @@ export function registerStatus(program: Command): void {
               `(${info.scheme.data_shards} data + ${info.scheme.parity_shards} parity)`,
             ),
         );
+        if (info.scheme.data_shards < 2 || info.scheme.parity_shards < 1) {
+          warn(
+            fmt(
+              'status_push_disabled_warn',
+              String(info.scheme.data_shards),
+              String(info.scheme.parity_shards),
+            ),
+          );
+        }
         console.log(
           `  ${t('status_encryption').padEnd(13)} ${info.encryption_enabled ? chalk.green(t('status_enc_enabled')) : chalk.dim(t('status_enc_disabled'))}`,
         );

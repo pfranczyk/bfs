@@ -131,6 +131,7 @@ export const pl: Strings = {
   cmd_clear_desc:
     'Wyczyść tymczasowe dane kopii zapasowej z przerwanego push/pull',
   clear_done: 'Cache wyczyszczony.',
+  clear_removed_file: '%s usunięty',
 
   // ─── config ───────────────────────────────────────────────────────────────
   cmd_config_desc: 'Wyświetl lub zmień ustawienia kopii zapasowej',
@@ -164,6 +165,12 @@ export const pl: Strings = {
     '%s plik(ów) nie można było odczytać i zostało pominięte:',
   push_cache_hint:
     'Dane kopii zapisane w cache. Użyj `bfs push --cache` aby wysłać bez ponownego pakowania.',
+  push_completed_healthy:
+    'push zakończony, wersja %s zdrowa (%s z %s wgranych)',
+  push_partial_degraded:
+    'push częściowy, wersja %s zdegradowana (%s z %s wgranych). Zobacz .bfs/push.lock — lista nośników, które się nie powiodły. Kopia jest możliwa do odtworzenia przez `bfs pull`.',
+  push_damaged:
+    'push uszkodzony, wersja %s nieodzyskiwalna (%s z %s wymaganych). Uruchom `bfs prune --version %s`, aby ją usunąć.',
   push_opt_new: 'Wymuś nową wersję',
   push_opt_overwrite: 'Nadpisz bieżącą wersję',
   push_opt_password: 'Hasło szyfrowania (pomija interaktywny prompt)',
@@ -179,6 +186,13 @@ export const pl: Strings = {
   opt_temp_dir_desc: 'Katalog dla plików tymczasowych podczas push/pull',
   opt_cache_dir_desc:
     'Katalog dla zbuforowanych danych kopii (zastępuje .bfs/cache)',
+
+  // ─── lockfile / push partial ─────────────────────────────────────────────
+  lock_concurrent_active: 'inna operacja %s w toku (PID %s, od %s)',
+  lock_partial_state_push:
+    'push.lock istnieje (stan częściowy z wersji %s). Uruchom `bfs clear`, aby porzucić ten stan.',
+  push_cache_no_lock:
+    '`--cache` wymaga obecności .bfs/push.lock oraz pliku cache; brakuje: %s',
 
   // ─── pull ─────────────────────────────────────────────────────────────────
   pull_preparing: 'Przygotowanie pull…',
@@ -211,6 +225,8 @@ export const pl: Strings = {
   status_providers: 'Providery:',
   status_enc_enabled: 'włączone',
   status_enc_disabled: 'wyłączone',
+  status_push_disabled_warn:
+    'push wyłączony — schemat %s/%s poniżej minimum 2/1',
 
   // ─── versions ─────────────────────────────────────────────────────────────
   versions_empty:
@@ -302,9 +318,9 @@ export const pl: Strings = {
   scheme_missing:
     'Schemat kopii zapasowej brakuje lub jest uszkodzony w .bfs/config.json. Uruchom `bfs scheme set`, aby naprawić.',
   scheme_invalid_data_shards:
-    'Nieprawidłowy schemat: data_shards musi być liczbą całkowitą >= 2, podano "%s". Uruchom `bfs scheme set`, aby naprawić.',
+    'Nieprawidłowy schemat: data_shards musi być liczbą całkowitą >= 2, podano "%s". Użyj `bfs provider add` lub `bfs scheme set`, aby naprawić.',
   scheme_invalid_parity_shards:
-    'Nieprawidłowy schemat: parity_shards musi być liczbą całkowitą >= 1, podano "%s". Uruchom `bfs scheme set`, aby naprawić.',
+    'Nieprawidłowy schemat: parity_shards musi być liczbą całkowitą >= 1, podano "%s". Użyj `bfs provider add` lub `bfs scheme set`, aby naprawić.',
   scheme_providers_mismatch:
     'Schemat wymaga %s providerów, skonfigurowano: %s. Użyj `bfs provider add` lub `bfs scheme set`.',
 
@@ -434,6 +450,7 @@ export const pl: Strings = {
   vault_encoding_rs: 'Kodowanie Reed-Solomon…',
   vault_uploading_shards: 'Przesyłanie shardów…',
   vault_upload_shard_progress: 'Przesyłanie sharda %s/%s',
+  vault_upload_shard_failed: 'Upload fragmentu %s/%s nieudany: %s',
   vault_no_cached_blob_pull:
     'Brak zbuforowanych danych — wykonuję pełne pobieranie…',
   vault_pull_overwrite_confirm:
