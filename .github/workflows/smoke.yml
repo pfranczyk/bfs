@@ -1,0 +1,56 @@
+name: Smoke
+on:
+  push:
+    branches: ['**']
+  pull_request:
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '23'
+          cache: 'npm'
+      - run: npm ci
+      - name: Start FTP server
+        run: |
+          docker run -d --name bfs-ftp-test \
+            -p 21:21 \
+            -p 21000-21010:21000-21010 \
+            -e "USERS=bfsuser|bfspass" \
+            --restart=always \
+            delfer/alpine-ftp-server
+      - name: Wait for FTP server ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl -s --connect-timeout 3 "ftp://bfsuser:bfspass@127.0.0.1/" > /dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "FTP server did not become ready within 30s"
+          docker logs bfs-ftp-test || true
+          exit 1
+      - name: Run smoke (FTP)
+        run: |
+          set -o pipefail
+          BFS_FTP_TEST=1 npx tsx scripts/smoke.ts 2>&1 | tee /tmp/smoke-ftp.log
+      - name: Job summary
+        if: always()
+        run: |
+          result=$(grep -oE '[0-9]+ PASS, [0-9]+ FAIL, [0-9]+ SKIP' /tmp/smoke-ftp.log 2>/dev/null | tail -1 || true)
+          pass=$(echo "$result" | grep -oE '^[0-9]+' || echo '?')
+          fail=$(echo "$result" | grep -oE '[0-9]+ FAIL' | grep -oE '^[0-9]+' || echo '?')
+          skip=$(echo "$result" | grep -oE '[0-9]+ SKIP' | grep -oE '^[0-9]+' || echo '?')
+          {
+            echo "## Smoke Report"
+            echo "| ✅ PASS | ❌ FAIL | ⏭ SKIP |"
+            echo "|---------|---------|--------|"
+            echo "| $pass | $fail | $skip |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Stop FTP server
+        if: always()
+        run: |
+          docker logs bfs-ftp-test 2>&1 | tail -50 || true
+          docker rm -f bfs-ftp-test || true

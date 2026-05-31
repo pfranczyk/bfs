@@ -5,6 +5,7 @@ import {
   LockConcurrentActiveError,
   LockPartialStatePushError,
   PushCacheNoLockError,
+  PushCacheUnavailableError,
   PushSkippedError,
 } from '../../core/errors.js';
 import { fmt, t } from '../../i18n/index.js';
@@ -182,6 +183,11 @@ export function registerPush(program: Command): void {
           if (err instanceof PushCacheNoLockError) {
             spinner.fail(t('push_failed'));
             error(fmt('push_cache_no_lock', err.missing.join(', ')));
+            throw new CommandAbort();
+          }
+          if (err instanceof PushCacheUnavailableError) {
+            spinner.fail(t('push_failed'));
+            error(t('push_cache_unavailable_in_lock'));
             throw new CommandAbort();
           }
           if (err instanceof LockConcurrentActiveError) {

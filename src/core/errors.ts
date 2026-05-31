@@ -123,3 +123,18 @@ export class PushCacheNoLockError extends BfsError {
     this.missing = missing;
   }
 }
+
+/**
+ * Thrown when `bfs push --cache` is invoked and the lock records
+ * `blob_pending_path: null`. Distinct from PushCacheNoLockError (which
+ * reports a missing file); this signals that the lock itself disowns the
+ * cache, so resume is impossible and `bfs clear` is the only recovery.
+ */
+export class PushCacheUnavailableError extends BfsError {
+  constructor() {
+    super(
+      '`push.lock` indicates the cached blob was not persisted; run `bfs clear` to discard the leftover state',
+    );
+    this.name = 'PushCacheUnavailableError';
+  }
+}

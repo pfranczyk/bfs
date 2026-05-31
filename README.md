@@ -102,18 +102,28 @@ Minimum scheme is **2 data + 1 parity**. Anything lower is refused by `bfs init`
 
 ## CI / cron usage
 
-All modifying commands support non-interactive flags:
+All modifying commands support non-interactive flags.
+
+**Initialize** — keep credentials in config files so they never appear on the command line:
+
+`ftp-remote1.json` (secure with `chmod 600`):
+```json
+{ "host": "192.168.1.10", "user": "backup", "password": "secret", "path": "/bfs" }
+```
 
 ```bash
-# Initialize
 bfs init --ci docs --data-shards 3 --parity-shards 2 \
-  --provider "local:nas1 --path /backup" \
-  --provider "local:nas2 --path /backup" \
-  --provider "local:usb1 --path /backup" \
-  --provider "local:usb2 --path /backup" \
-  --provider "local:usb3 --path /backup"
+  --provider "local:nas1 --path /mnt/nas1/backup" \
+  --provider "local:nas2 --path /mnt/nas2/backup" \
+  --provider "local:usb --path /media/usb/backup" \
+  --provider "ftp:remote1 --config-file ./ftp-remote1.json" \
+  --provider "ftp:remote2 --config-file ./ftp-remote2.json"
+```
 
-# Scheduled backup (crontab)
+**Scheduled backup and maintenance (crontab):**
+
+```bash
+# Back up — new version
 bfs push --new --password "$VAULT_PASS"
 
 # Prune — keep last 14 versions
@@ -130,6 +140,66 @@ Currently supported:
 | `ftp` | FTP/FTPS server (uses `basic-ftp`) |
 
 Planned: SSH/SFTP.
+
+### FTP provider
+
+Provider details can be given as inline flags, a JSON config file, or both — inline flags override file values.
+
+**Inline flags:**
+
+```bash
+bfs init --ci docs --data-shards 2 --parity-shards 1 \
+  --provider "ftp:nas1 --host ftp.example.com --user backup --password secret --path /backup" \
+  --provider "ftp:nas2 --host ftp2.example.com --user backup --password secret --path /backup" \
+  --provider "local:usb --path /media/usb"
+```
+
+**Config file** — recommended when credentials come from environment variables or a secrets manager:
+
+`nas.json` (secure with `chmod 600`):
+```json
+{
+  "host": "ftp.example.com",
+  "port": 21,
+  "user": "backup",
+  "password": "secret",
+  "path": "/backup"
+}
+```
+
+```bash
+bfs init --ci docs --data-shards 2 --parity-shards 1 \
+  --provider "ftp:nas1 --config-file ./nas.json" \
+  --provider "ftp:nas2 --config-file ./nas2.json" \
+  --provider "local:usb --path /media/usb"
+```
+
+FTP flag reference:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--host <hostname>` | — | FTP server hostname or IP (required) |
+| `--port <number>` | `21` | FTP server port |
+| `--user <username>` | — | FTP login user |
+| `--password <password>` | — | FTP login password |
+| `--path </absolute/path>` | — | Absolute base path on server, must start with `/` (required) |
+| `--secure <bool>` | `false` | Enable FTPS/TLS — accepts `true`/`false`/`yes`/`no` |
+| `--config-file <path>` | — | JSON file with any of the above fields; inline flags override file values |
+
+**Adding a provider to an existing vault:**
+
+```bash
+# Interactive
+bfs provider add
+
+# Non-interactive — inline
+bfs provider add --ci --name nas --type ftp \
+  --host ftp.example.com --user backup --password secret --path /backup
+
+# Non-interactive — config file
+bfs provider add --ci --name nas --type ftp \
+  --config-file ./nas.json
+```
 
 ## Versioning
 

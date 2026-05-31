@@ -193,6 +193,10 @@ export const pl: Strings = {
     'push.lock istnieje (stan częściowy z wersji %s). Uruchom `bfs clear`, aby porzucić ten stan.',
   push_cache_no_lock:
     '`--cache` wymaga obecności .bfs/push.lock oraz pliku cache; brakuje: %s',
+  push_cache_write_failed:
+    'Zapis cache nieudany: %s. Tego push nie da się wznowić przez `--cache`.',
+  push_cache_unavailable_in_lock:
+    '`push.lock` wskazuje, że dane cache nie zostały zapisane (np. brak miejsca na dysku). Uruchom `bfs clear`, aby porzucić ten stan.',
 
   // ─── pull ─────────────────────────────────────────────────────────────────
   pull_preparing: 'Przygotowanie pull…',

@@ -163,4 +163,46 @@ describe('clear', () => {
 
     expect(result).toBe('abort');
   });
+
+  // ─── --cwd × cache paths ──────────────────────────────────────────────────
+  // Guards against any regression where clear (or anything it calls)
+  // ignores --cwd and falls back to process.cwd() for the artifact paths.
+
+  it('should target push.lock + cache under --cwd, not under process.cwd()', async () => {
+    // path.resolve normalizes for the host OS (adds the drive letter on
+    // Windows). That's exactly what resolveCwd does inside the CLI, so the
+    // assertions need to live in the same coordinate system.
+    const vaultRoot = path.resolve(path.sep, 'some', 'vault');
+
+    await runCmd(['--cwd', vaultRoot, 'clear']);
+
+    const calledPaths = unlinkSpy.mock.calls.map(([p]: [unknown]) => String(p));
+    expect(calledPaths).toContain(path.join(vaultRoot, '.bfs', 'push.lock'));
+    expect(calledPaths).toContain(path.join(vaultRoot, '.bfs', 'repair.lock'));
+    expect(calledPaths).toContain(
+      path.join(vaultRoot, '.bfs', 'cache', 'push.blob.pending'),
+    );
+
+    // Nothing under the process cwd ought to be touched.
+    const cwdPrefix = path.resolve(process.cwd());
+    expect(calledPaths.every((p: string) => !p.startsWith(cwdPrefix))).toBe(
+      true,
+    );
+  });
+
+  it('should pair --cwd with --cache-dir: lock under --cwd, cache under --cache-dir', async () => {
+    const vaultRoot = path.resolve(path.sep, 'some', 'vault');
+    const cacheDir = path.resolve(path.sep, 'separate', 'cache');
+
+    await runCmd(['--cwd', vaultRoot, 'clear', '--cache-dir', cacheDir]);
+
+    const calledPaths = unlinkSpy.mock.calls.map(([p]: [unknown]) => String(p));
+    expect(calledPaths).toContain(path.join(vaultRoot, '.bfs', 'push.lock'));
+    expect(calledPaths).toContain(path.join(cacheDir, 'push.blob.pending'));
+    expect(calledPaths).toContain(path.join(cacheDir, 'pull.blob.pending'));
+    // Cache under vaultRoot would mean --cache-dir was ignored.
+    expect(calledPaths).not.toContain(
+      path.join(vaultRoot, '.bfs', 'cache', 'push.blob.pending'),
+    );
+  });
 });

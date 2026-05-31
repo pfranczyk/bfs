@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.6.1] - 2026-05-31
+
+### Changed
+- **`bfs push --cache` now works after a partial push even on small backups.**
+  Previously, when a backup was small enough for `bfs push` to keep the
+  backup data in memory during the pack stage, no cache file was ever
+  written to disk. If one provider then failed mid-push, the resulting
+  `push.lock` pointed at a cache file that never existed, and a follow-up
+  `bfs push --cache --overwrite` refused with a misleading "missing file"
+  message. The first upload failure during a partial push now writes the
+  backup data to `.bfs/cache/push.blob.pending` as a safety net, so the
+  resume command can heal the degraded version without re-packing.
+- **Clearer error when `bfs push --cache` cannot resume.** When the safety
+  net itself cannot land (e.g. the cache directory is on a disk that ran
+  out of space), `push.lock` now records that no cached data is available.
+  A subsequent `bfs push --cache` refuses with a new message stating that
+  the cache was not persisted and pointing at `bfs clear`, instead of the
+  generic "missing file" message that suggested the file was deleted.
+
 ## [0.6.0] - 2026-05-28
 
 ### Added
@@ -362,7 +383,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/pfranczyk/bfs/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/pfranczyk/bfs/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/pfranczyk/bfs/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/pfranczyk/bfs/compare/v0.3.0...v0.4.0

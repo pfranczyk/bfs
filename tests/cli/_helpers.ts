@@ -38,7 +38,13 @@ function applyExitOverride(cmd: Command): void {
 /** Builds a fresh Commander program with all commands registered. */
 export function buildTestProgram(): Command {
   const program = new Command();
-  program.name('bfs').allowUnknownOption(false);
+  program
+    .name('bfs')
+    .allowUnknownOption(false)
+    // Mirrors the global flags registered in src/index.ts:buildProgram so
+    // that command tests can exercise `--cwd` / `--lang` paths.
+    .option('--cwd <dir>', 'override working directory')
+    .option('--lang <code>', 'language code');
 
   registerInit(program);
   registerClear(program);

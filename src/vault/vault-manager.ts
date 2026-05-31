@@ -32,6 +32,7 @@ import {
   ProviderError,
   PullSkippedError,
   PushCacheNoLockError,
+  PushCacheUnavailableError,
   PushSkippedError,
 } from '../core/errors.js';
 import {
@@ -941,14 +942,26 @@ async function _initPushLock(
   const lockPath = pushLockPath(rootDir);
 
   if (fromCache) {
-    const missing: string[] = [];
-    const [existing, blobStat] = await Promise.all([
-      readLock<PushLock>(lockPath),
-      fs.stat(cachePath).catch(() => null),
-    ]);
-    if (existing === null) missing.push('.bfs/push.lock');
-    if (blobStat === null) missing.push(cachePath);
-    if (missing.length > 0) throw new PushCacheNoLockError(missing);
+    const existing = await readLock<PushLock>(lockPath);
+    if (existing === null) {
+      // Report cachePath alongside the missing lock so the message names
+      // every artifact the resume path needs.
+      const missing: string[] = ['.bfs/push.lock'];
+      const blobStat = await fs.stat(cachePath).catch(() => null);
+      if (blobStat === null) missing.push(cachePath);
+      throw new PushCacheNoLockError(missing);
+    }
+    if (existing.blob_pending_path === null) {
+      // Lock disowns the cache: distinct error so the CLI surfaces the
+      // "no resumable data" case instead of "missing file".
+      throw new PushCacheUnavailableError();
+    }
+    const blobStat = await fs
+      .stat(existing.blob_pending_path)
+      .catch(() => null);
+    if (blobStat === null) {
+      throw new PushCacheNoLockError([existing.blob_pending_path]);
+    }
   }
 
   const lock: PushLock = {
@@ -1306,6 +1319,8 @@ export async function push(
   // AES-GCM adds a 16-byte authentication tag at end of stream
   const encPayloadSize = encKey ? rawPayloadSize + 16 : rawPayloadSize;
 
+  // Guard so the emergency RAM→disk cache dump runs at most once per push.
+  let cacheDumpAttempted = false;
   for (let i = 0; i < N + K; i++) {
     const pc = config.providers[i];
     if (!pc)
@@ -1378,6 +1393,26 @@ export async function push(
         detail,
         attempted_at: new Date().toISOString(),
       });
+      // Promote the in-memory blob to cachePath so this lock's
+      // blob_pending_path holds and `bfs push --cache --overwrite` can heal
+      // without re-pack. Disk-path packs already wrote the file in
+      // packBlobToFile, so the Buffer.isBuffer check skips them.
+      if (Buffer.isBuffer(blobSource) && !cacheDumpAttempted) {
+        cacheDumpAttempted = true;
+        try {
+          await fs.mkdir(cacheDir, { recursive: true });
+          await fs.writeFile(cachePath, blobSource);
+          trackFile(cachePath);
+        } catch (writeErr: unknown) {
+          lock.blob_pending_path = null;
+          options.io.warn(
+            fmt(
+              'push_cache_write_failed',
+              writeErr instanceof Error ? writeErr.message : String(writeErr),
+            ),
+          );
+        }
+      }
       await writeLockAtomic(pushLockPath(rootDir), lock);
       options.io.warn(
         fmt('vault_upload_shard_failed', String(i + 1), String(N + K), detail),

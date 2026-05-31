@@ -3,7 +3,11 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ProviderError, PushCacheNoLockError } from '../../src/core/errors.js';
+import {
+  ProviderError,
+  PushCacheNoLockError,
+  PushCacheUnavailableError,
+} from '../../src/core/errors.js';
 import { DEFAULT_BFSIGNORE_CONTENT } from '../../src/core/ignore-defaults.js';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
@@ -442,6 +446,148 @@ describe('push — partial commit', () => {
   it('should throw PushCacheNoLockError when --cache used without push.lock', async () => {
     await expect(push(root, { io: mockIO(), fromCache: true })).rejects.toThrow(
       PushCacheNoLockError,
+    );
+  });
+
+  it('should throw PushCacheNoLockError when lock points at a missing cache blob', async () => {
+    // Arrange: lock present, blob_pending_path set to a path that does NOT
+    // exist on disk (e.g. user wiped .bfs/cache between attempts).
+    const cacheDir = path.join(root, '.bfs', 'cache');
+    const cachePath = path.join(cacheDir, 'push.blob.pending');
+    const lockDir = path.join(root, '.bfs');
+    await fs.mkdir(lockDir, { recursive: true });
+    const lock: PushLock = {
+      format_version: 1,
+      operation: 'push',
+      version: 1,
+      pid: process.pid,
+      command: 'bfs push',
+      started_at: new Date().toISOString(),
+      scheme: { data_shards: 2, parity_shards: 1 },
+      uploaded: [],
+      failed: [],
+      blob_pending_path: cachePath,
+    };
+    await fs.writeFile(pushLockPath(root), JSON.stringify(lock));
+
+    await expect(push(root, { io: mockIO(), fromCache: true })).rejects.toThrow(
+      PushCacheNoLockError,
+    );
+  });
+
+  it('should persist RAM-path blob to cache on first upload failure', async () => {
+    // Force RAM pack path (small fixture + no compression). Then make one
+    // upload fail so the emergency dump kicks in. After push, cache must be
+    // on disk and the lock must point at it — exactly the state that makes
+    // `bfs push --cache --overwrite` resume cleanly.
+    const cfg = await readConfig(root);
+    if (!cfg) throw new Error('test setup: config missing');
+    await writeConfig(root, {
+      ...cfg,
+      compression: { enabled: false, algorithm: 'deflate' },
+    });
+
+    const original = LocalFsProvider.prototype.upload;
+    let n = 0;
+    vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(
+      async function (
+        this: LocalFsProvider,
+        ...args: Parameters<typeof original>
+      ) {
+        n++;
+        if (n === 3) throw new ProviderError('Simulated outage on last shard');
+        return original.apply(this, args);
+      },
+    );
+
+    const result = await push(root, { io: mockIO() });
+
+    expect(result.health).toBe(VersionHealth.Degraded);
+
+    const cachePath = path.join(root, '.bfs', 'cache', 'push.blob.pending');
+    expect(existsSync(cachePath)).toBe(true);
+
+    const lock = await readLock<PushLock>(pushLockPath(root));
+    expect(lock?.blob_pending_path).toBe(cachePath);
+  });
+
+  it('should set blob_pending_path=null when emergency cache write fails', async () => {
+    // RAM pack path again, plus fs.writeFile mocked to reject for cachePath.
+    // This exercises the "even the safety net is gone" branch — lock must
+    // explicitly record that resume is impossible (null) instead of leaving
+    // a dangling string that misleads `bfs push --cache`.
+    const cfg = await readConfig(root);
+    if (!cfg) throw new Error('test setup: config missing');
+    await writeConfig(root, {
+      ...cfg,
+      compression: { enabled: false, algorithm: 'deflate' },
+    });
+
+    const cachePath = path.join(root, '.bfs', 'cache', 'push.blob.pending');
+    const originalWriteFile = fs.writeFile.bind(fs);
+    vi.spyOn(fs, 'writeFile').mockImplementation(
+      async (
+        file: Parameters<typeof fs.writeFile>[0],
+        data: Parameters<typeof fs.writeFile>[1],
+        options?: Parameters<typeof fs.writeFile>[2],
+      ) => {
+        if (file === cachePath) {
+          const err = Object.assign(new Error('no space left'), {
+            code: 'ENOSPC',
+          });
+          throw err;
+        }
+        return originalWriteFile(file, data, options);
+      },
+    );
+
+    const originalUpload = LocalFsProvider.prototype.upload;
+    let n = 0;
+    vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(
+      async function (
+        this: LocalFsProvider,
+        ...args: Parameters<typeof originalUpload>
+      ) {
+        n++;
+        if (n === 3) throw new ProviderError('Simulated outage on last shard');
+        return originalUpload.apply(this, args);
+      },
+    );
+
+    const { io, logs } = createMockProviderIO();
+    const result = await push(root, { io });
+
+    expect(result.health).toBe(VersionHealth.Degraded);
+    expect(existsSync(cachePath)).toBe(false);
+
+    const lock = await readLock<PushLock>(pushLockPath(root));
+    expect(lock?.blob_pending_path).toBeNull();
+
+    const warnedAboutCache = logs.some(
+      (e) => e.level === 'warn' && /cache write failed/i.test(e.message),
+    );
+    expect(warnedAboutCache).toBe(true);
+  });
+
+  it('should throw PushCacheUnavailableError when --cache used and lock has blob_pending_path=null', async () => {
+    const lockDir = path.join(root, '.bfs');
+    await fs.mkdir(lockDir, { recursive: true });
+    const lock: PushLock = {
+      format_version: 1,
+      operation: 'push',
+      version: 1,
+      pid: process.pid,
+      command: 'bfs push',
+      started_at: new Date().toISOString(),
+      scheme: { data_shards: 2, parity_shards: 1 },
+      uploaded: [],
+      failed: [],
+      blob_pending_path: null,
+    };
+    await fs.writeFile(pushLockPath(root), JSON.stringify(lock));
+
+    await expect(push(root, { io: mockIO(), fromCache: true })).rejects.toThrow(
+      PushCacheUnavailableError,
     );
   });
 

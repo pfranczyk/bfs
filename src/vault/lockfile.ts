@@ -55,7 +55,13 @@ export interface PushLock {
   };
   uploaded: PushLockUploadedEntry[];
   failed: PushLockFailedEntry[];
-  blob_pending_path: string;
+  /**
+   * Path of the cached blob this lock promises, or `null` when no resumable
+   * cache exists. `bfs push --cache` consults this field: a string means
+   * the resume path expects to find the blob at that path; `null` means
+   * resume is impossible and the lock can only be discarded via `bfs clear`.
+   */
+  blob_pending_path: Nullable<string>;
 }
 
 /** Pair successfully migrated by `bfs repair` (PR2 — schema only in PR1). */

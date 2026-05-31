@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LockConcurrentActiveError,
@@ -178,6 +179,51 @@ describe('push', () => {
 
     expect(mockPush).toHaveBeenCalledWith(
       expect.any(String),
+      expect.objectContaining({ cacheDir: '/custom/cache' }),
+    );
+  });
+
+  // ─── --cwd × cache flows ──────────────────────────────────────────────────
+  // Guard against regressions where any path in the push pipeline silently
+  // falls back to process.cwd() instead of respecting `--cwd`. The cache
+  // dir, push.lock, push.blob.pending and shard files all live under
+  // rootDir, so passing `--cwd` must drive every one of them.
+
+  it('should pass --cwd value as rootDir to push()', async () => {
+    mockPush.mockResolvedValue(okResult());
+
+    await runCmd(['--cwd', '/some/vault', 'push']);
+
+    expect(mockPush).toHaveBeenCalledWith(
+      path.resolve('/some/vault'),
+      expect.anything(),
+    );
+  });
+
+  it('should combine --cwd with --cache so resume reads cache from the cwd vault', async () => {
+    mockPush.mockResolvedValue(okResult());
+
+    await runCmd(['--cwd', '/some/vault', 'push', '--cache']);
+
+    expect(mockPush).toHaveBeenCalledWith(
+      path.resolve('/some/vault'),
+      expect.objectContaining({ fromCache: true }),
+    );
+  });
+
+  it('should let --cache-dir override the default while --cwd still drives rootDir', async () => {
+    mockPush.mockResolvedValue(okResult());
+
+    await runCmd([
+      '--cwd',
+      '/some/vault',
+      'push',
+      '--cache-dir',
+      '/custom/cache',
+    ]);
+
+    expect(mockPush).toHaveBeenCalledWith(
+      path.resolve('/some/vault'),
       expect.objectContaining({ cacheDir: '/custom/cache' }),
     );
   });

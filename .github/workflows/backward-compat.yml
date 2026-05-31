@@ -1,0 +1,35 @@
+name: Backward Compatibility
+
+on:
+  push:
+    branches: ['**']
+
+jobs:
+  backward-compat:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        old-version:
+          - '0.1.0'
+          - '0.2.0'
+          - '0.3.0'
+          - '0.4.0'
+          - '0.5.0'
+          # When releasing a new version, add the previous version here.
+
+    name: bfs@${{ matrix.old-version }} → current
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Build and link current BFS
+        run: npm ci && npm run build && npm link
+
+      - name: Test bfs@${{ matrix.old-version }} → current
+        run: bash scripts/compat-fixtures/run.sh "${{ matrix.old-version }}"

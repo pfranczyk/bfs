@@ -191,6 +191,9 @@ export interface Strings {
   lock_partial_state_push: string;
   /** %s = comma-separated list of missing files */
   push_cache_no_lock: string;
+  /** %s = error message from the failed write */
+  push_cache_write_failed: string;
+  push_cache_unavailable_in_lock: string;
 
   // ─── pull ─────────────────────────────────────────────────────────────────
   pull_preparing: string;

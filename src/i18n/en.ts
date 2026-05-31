@@ -183,6 +183,10 @@ export const en: Strings = {
     'push.lock exists from partial-state push of version %s. Run `bfs clear` to discard the leftover state.',
   push_cache_no_lock:
     '`--cache` requires both .bfs/push.lock and cached blob; missing: %s',
+  push_cache_write_failed:
+    'Cache write failed: %s. This push cannot be resumed with `--cache`.',
+  push_cache_unavailable_in_lock:
+    '`push.lock` indicates the cached blob was not persisted (e.g. out of disk space). Run `bfs clear` to discard the leftover state.',
 
   // ─── pull ─────────────────────────────────────────────────────────────────
   pull_preparing: 'Preparing pull…',

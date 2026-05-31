@@ -1,0 +1,59 @@
+name: CLI e2e
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '23'
+          cache: 'npm'
+      - run: npm ci
+
+      - name: Start FTP server
+        run: |
+          docker run -d --name bfs-ftp-test \
+            -p 21:21 \
+            -p 21000-21010:21000-21010 \
+            -e "USERS=bfsuser|bfspass" \
+            --restart=always \
+            delfer/alpine-ftp-server
+          for i in $(seq 1 30); do
+            if curl -s --connect-timeout 3 "ftp://bfsuser:bfspass@127.0.0.1/" > /dev/null 2>&1; then
+              echo "FTP server ready"; exit 0
+            fi
+            sleep 1
+          done
+          echo "FTP server did not become ready within 30s"
+          docker logs bfs-ftp-test || true
+          exit 1
+
+      - name: Run CLI e2e
+        run: |
+          set -o pipefail
+          bash scripts/cli-e2e/run.sh --ftp "ftp://bfsuser:bfspass@127.0.0.1/ftp/bfsuser" 2>&1 | tee /tmp/e2e.log
+
+      - name: Job summary
+        if: always()
+        run: |
+          result=$(grep -oE '[0-9]+ passed, [0-9]+ failed' /tmp/e2e.log 2>/dev/null | tail -1 || true)
+          passed=$(echo "$result" | grep -oE '^[0-9]+' || echo '?')
+          failed=$(echo "$result" | grep -oE '[0-9]+$' || echo '?')
+          {
+            echo "## CLI e2e Report"
+            echo "| ✅ Passed | ❌ Failed |"
+            echo "|-----------|-----------|"
+            echo "| $passed | $failed |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stop FTP server
+        if: always()
+        run: |
+          docker logs bfs-ftp-test 2>&1 | tail -50 || true
+          docker rm -f bfs-ftp-test || true
