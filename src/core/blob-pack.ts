@@ -3,14 +3,11 @@ import type { FileHandle } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
-import {
-  BLOB_FLAGS,
-  type FileEntry,
-  type IgnoreFilter,
-} from '../types/index.js';
+import { BLOB_FLAGS, type FileEntry, type IgnoreFilter } from '../types/index.js';
 import { createStreamingZipPacker, createZipPacker } from './compression.js';
 import type { SkippedFile } from './errors.js';
-import { hashBuffer, hashStream } from './hash.js';
+import { BfsError } from './errors.js';
+import { hashBuffer, hashStream, SHA256_BYTES } from './hash.js';
 
 // BFS Blob header: 70 bytes
 // 0x00  4  Magic: "BFS\0"
@@ -32,10 +29,7 @@ interface FileMeta {
   relativePath: string;
 }
 
-async function scanDir(
-  rootDir: string,
-  ignoreFilter: IgnoreFilter,
-): Promise<FileMeta[]> {
+async function scanDir(rootDir: string, ignoreFilter: IgnoreFilter): Promise<FileMeta[]> {
   const results: FileMeta[] = [];
 
   async function recurse(dir: string, prefix: string): Promise<void> {
@@ -57,7 +51,8 @@ async function scanDir(
 
 function buildFileTableEntry(entry: FileEntry, hashBytes: Buffer): Buffer {
   const pathBuf = Buffer.from(entry.path, 'utf8');
-  const buf = Buffer.allocUnsafe(2 + pathBuf.length + 8 + 8 + 32 + 4 + 8);
+  const entrySize = 2 + pathBuf.length + 8 + 8 + SHA256_BYTES + 4 + 8;
+  const buf = Buffer.alloc(entrySize);
   let pos = 0;
 
   buf.writeUInt16LE(pathBuf.length, pos);
@@ -69,11 +64,15 @@ function buildFileTableEntry(entry: FileEntry, hashBytes: Buffer): Buffer {
   buf.writeBigUInt64LE(entry.data_offset, pos);
   pos += 8;
   hashBytes.copy(buf, pos);
-  pos += 32;
+  pos += SHA256_BYTES;
   buf.writeUInt32LE(entry.mode, pos);
   pos += 4;
   buf.writeBigUInt64LE(entry.modified_at, pos);
   pos += 8;
+
+  if (pos !== entrySize) {
+    throw new BfsError(`buildFileTableEntry offset mismatch: wrote ${pos} B, expected ${entrySize} B`);
+  }
 
   return buf;
 }
@@ -89,12 +88,7 @@ function buildFileTableEntry(entry: FileEntry, hashBytes: Buffer): Buffer {
  * @param compressed   - When true, deflate-compress all files into a ZIP data section
  * @returns `{ blob, skipped }` — the packed buffer and any files that could not be read
  */
-export async function packBlob(
-  rootDir: string,
-  ignoreFilter: IgnoreFilter,
-  vaultId?: Buffer,
-  compressed?: boolean,
-): Promise<{ blob: Buffer; skipped: SkippedFile[] }> {
+export async function packBlob(rootDir: string, ignoreFilter: IgnoreFilter, vaultId?: Buffer, compressed?: boolean): Promise<{ blob: Buffer; skipped: SkippedFile[] }> {
   // 1. Scan directory recursively
   const metas = await scanDir(rootDir, ignoreFilter);
   metas.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
@@ -108,12 +102,7 @@ export async function packBlob(
 }
 
 /** Raw (uncompressed) RAM path — multiple file table entries, surowe dane. */
-async function _packBlobRaw(
-  metas: FileMeta[],
-  rootDir: string,
-  vaultId: Buffer | undefined,
-  skipped: SkippedFile[],
-): Promise<{ blob: Buffer; skipped: SkippedFile[] }> {
+async function _packBlobRaw(metas: FileMeta[], rootDir: string, vaultId: Buffer | undefined, skipped: SkippedFile[]): Promise<{ blob: Buffer; skipped: SkippedFile[] }> {
   const fileDataList: Buffer[] = [];
   const fileEntries: FileEntry[] = [];
   const hashBuffers: Buffer[] = [];
@@ -122,57 +111,30 @@ async function _packBlobRaw(
   for (const meta of metas) {
     const absPath = path.join(rootDir, meta.relativePath);
     try {
-      const [data, stat] = await Promise.all([
-        fs.readFile(absPath),
-        fs.stat(absPath),
-      ]);
+      const [data, stat] = await Promise.all([fs.readFile(absPath), fs.stat(absPath)]);
       const hashHex = hashBuffer(data);
-      fileEntries.push({
-        path: meta.relativePath,
-        size: BigInt(data.length),
-        data_offset: currentDataOffset,
-        hash: hashHex,
-        mode: stat.mode,
-        modified_at: BigInt(Math.round(stat.mtimeMs)),
-      });
+      fileEntries.push({ path: meta.relativePath, size: BigInt(data.length), data_offset: currentDataOffset, hash: hashHex, mode: stat.mode, modified_at: BigInt(Math.round(stat.mtimeMs)) });
       hashBuffers.push(Buffer.from(hashHex, 'hex'));
       fileDataList.push(data);
       currentDataOffset += BigInt(data.length);
     } catch (e: unknown) {
-      skipped.push({
-        path: meta.relativePath,
-        reason: e instanceof Error ? e.message : String(e),
-      });
+      skipped.push({ path: meta.relativePath, reason: e instanceof Error ? e.message : String(e) });
     }
   }
 
   const fileTableParts = fileEntries.map((fe, i) => {
     const hashBuf = hashBuffers[i];
-    if (hashBuf === undefined)
-      throw new Error(`Missing hash buffer at index ${i}`);
+    if (hashBuf === undefined) throw new BfsError(`Missing hash buffer at index ${i}`);
     return buildFileTableEntry(fe, hashBuf);
   });
-  const fileTable =
-    fileTableParts.length > 0 ? Buffer.concat(fileTableParts) : Buffer.alloc(0);
-  const dataSection =
-    fileDataList.length > 0 ? Buffer.concat(fileDataList) : Buffer.alloc(0);
-  const blob = _assembleBlobBuffer(
-    fileEntries.length,
-    0,
-    fileTable,
-    dataSection,
-    vaultId,
-  );
+  const fileTable = fileTableParts.length > 0 ? Buffer.concat(fileTableParts) : Buffer.alloc(0);
+  const dataSection = fileDataList.length > 0 ? Buffer.concat(fileDataList) : Buffer.alloc(0);
+  const blob = _assembleBlobBuffer(fileEntries.length, 0, fileTable, dataSection, vaultId);
   return { blob, skipped };
 }
 
 /** Compressed RAM path — builds ZIP, single file table entry "bfs.pack.zip". */
-async function _packBlobCompressed(
-  metas: FileMeta[],
-  rootDir: string,
-  vaultId: Buffer | undefined,
-  skipped: SkippedFile[],
-): Promise<{ blob: Buffer; skipped: SkippedFile[] }> {
+async function _packBlobCompressed(metas: FileMeta[], rootDir: string, vaultId: Buffer | undefined, skipped: SkippedFile[]): Promise<{ blob: Buffer; skipped: SkippedFile[] }> {
   const packer = createZipPacker();
 
   for (const meta of metas) {
@@ -181,34 +143,15 @@ async function _packBlobCompressed(
       const data = await fs.readFile(absPath);
       packer.addFile(meta.relativePath, data);
     } catch (e: unknown) {
-      skipped.push({
-        path: meta.relativePath,
-        reason: e instanceof Error ? e.message : String(e),
-      });
+      skipped.push({ path: meta.relativePath, reason: e instanceof Error ? e.message : String(e) });
     }
   }
 
   const zipBuffer = packer.finalize();
   const zipHashHex = hashBuffer(zipBuffer);
-  const zipEntry: FileEntry = {
-    path: 'bfs.pack.zip',
-    size: BigInt(zipBuffer.length),
-    data_offset: 0n,
-    hash: zipHashHex,
-    mode: 0,
-    modified_at: BigInt(Date.now()),
-  };
-  const fileTable = buildFileTableEntry(
-    zipEntry,
-    Buffer.from(zipHashHex, 'hex'),
-  );
-  const blob = _assembleBlobBuffer(
-    1,
-    BLOB_FLAGS.COMPRESSED,
-    fileTable,
-    zipBuffer,
-    vaultId,
-  );
+  const zipEntry: FileEntry = { path: 'bfs.pack.zip', size: BigInt(zipBuffer.length), data_offset: 0n, hash: zipHashHex, mode: 0, modified_at: BigInt(Date.now()) };
+  const fileTable = buildFileTableEntry(zipEntry, Buffer.from(zipHashHex, 'hex'));
+  const blob = _assembleBlobBuffer(1, BLOB_FLAGS.COMPRESSED, fileTable, zipBuffer, vaultId);
   return { blob, skipped };
 }
 
@@ -216,13 +159,7 @@ async function _packBlobCompressed(
  * Assembles a complete BFS blob: header + fileTable + dataSection + trailing SHA-256.
  * Mutation note: header Buffer is built inline for performance — no external state.
  */
-function _assembleBlobBuffer(
-  fileCount: number,
-  flags: number,
-  fileTable: Buffer,
-  dataSection: Buffer,
-  vaultId?: Buffer,
-): Buffer {
+function _assembleBlobBuffer(fileCount: number, flags: number, fileTable: Buffer, dataSection: Buffer, vaultId?: Buffer): Buffer {
   const fileTableOffset = BigInt(HEADER_SIZE);
   const dataSectionOffset = fileTableOffset + BigInt(fileTable.length);
   const header = Buffer.alloc(HEADER_SIZE);
@@ -249,6 +186,9 @@ function _assembleBlobBuffer(
   pos += 8;
   header.writeBigUInt64LE(BigInt(dataSection.length), pos);
   pos += 8;
+  if (pos !== HEADER_SIZE) {
+    throw new BfsError(`_assembleBlobBuffer header offset mismatch: wrote ${pos} B, expected ${HEADER_SIZE} B`);
+  }
   const blobBody = Buffer.concat([header, fileTable, dataSection]);
   const checksum = Buffer.from(hashBuffer(blobBody), 'hex');
   return Buffer.concat([blobBody, checksum]);
@@ -260,12 +200,9 @@ function _assembleBlobBuffer(
  * Used to decide between RAM path (packBlob) and disk path (packBlobToFile).
  * @returns Estimated blob size in bytes (exact: based on paths + stat sizes)
  */
-export async function estimateBlobSize(
-  rootDir: string,
-  ignoreFilter: IgnoreFilter,
-): Promise<number> {
+export async function estimateBlobSize(rootDir: string, ignoreFilter: IgnoreFilter): Promise<number> {
   const metas = await scanDir(rootDir, ignoreFilter);
-  let total = HEADER_SIZE + 32; // header + trailing SHA-256 checksum
+  let total = HEADER_SIZE + SHA256_BYTES; // header + trailing SHA-256 checksum
   for (const meta of metas) {
     const absPath = path.join(rootDir, meta.relativePath);
     try {
@@ -292,49 +229,21 @@ export async function estimateBlobSize(
  * @param vaultId      - Optional 16-byte vault UUID (defaults to zeros)
  * @returns blobSize in bytes, fileCount of included files, and any skipped entries
  */
-export async function packBlobToFile(
-  rootDir: string,
-  outputPath: string,
-  ignoreFilter: IgnoreFilter,
-  vaultId?: Buffer,
-): Promise<{
-  blobSize: number;
-  fileCount: number;
-  totalSize: number;
-  skipped: SkippedFile[];
-}> {
+export async function packBlobToFile(rootDir: string, outputPath: string, ignoreFilter: IgnoreFilter, vaultId?: Buffer): Promise<{ blobSize: number; fileCount: number; totalSize: number; skipped: SkippedFile[] }> {
   // ── Pass 1: scan + stat + compute per-file SHA-256 hashes ──────────────
   const metas = await scanDir(rootDir, ignoreFilter);
   metas.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 
   const skipped: SkippedFile[] = [];
-  const entries: Array<{
-    relativePath: string;
-    size: bigint;
-    mode: number;
-    modifiedAt: bigint;
-    hashHex: string;
-  }> = [];
+  const entries: Array<{ relativePath: string; size: bigint; mode: number; modifiedAt: bigint; hashHex: string }> = [];
 
   for (const meta of metas) {
     const absPath = path.join(rootDir, meta.relativePath);
     try {
-      const [stat, hashHex] = await Promise.all([
-        fs.stat(absPath),
-        _hashFileByStream(absPath),
-      ]);
-      entries.push({
-        relativePath: meta.relativePath,
-        size: BigInt(stat.size),
-        mode: stat.mode,
-        modifiedAt: BigInt(Math.round(stat.mtimeMs)),
-        hashHex,
-      });
+      const [stat, hashHex] = await Promise.all([fs.stat(absPath), _hashFileByStream(absPath)]);
+      entries.push({ relativePath: meta.relativePath, size: BigInt(stat.size), mode: stat.mode, modifiedAt: BigInt(Math.round(stat.mtimeMs)), hashHex });
     } catch (e: unknown) {
-      skipped.push({
-        path: meta.relativePath,
-        reason: e instanceof Error ? e.message : String(e),
-      });
+      skipped.push({ path: meta.relativePath, reason: e instanceof Error ? e.message : String(e) });
     }
   }
 
@@ -343,19 +252,11 @@ export async function packBlobToFile(
   let currentDataOffset = 0n;
   for (const entry of entries) {
     const hashBytes = Buffer.from(entry.hashHex, 'hex');
-    const fe: FileEntry = {
-      path: entry.relativePath,
-      size: entry.size,
-      data_offset: currentDataOffset,
-      hash: entry.hashHex,
-      mode: entry.mode,
-      modified_at: entry.modifiedAt,
-    };
+    const fe: FileEntry = { path: entry.relativePath, size: entry.size, data_offset: currentDataOffset, hash: entry.hashHex, mode: entry.mode, modified_at: entry.modifiedAt };
     fileTableParts.push(buildFileTableEntry(fe, hashBytes));
     currentDataOffset += entry.size;
   }
-  const fileTable =
-    fileTableParts.length > 0 ? Buffer.concat(fileTableParts) : Buffer.alloc(0);
+  const fileTable = fileTableParts.length > 0 ? Buffer.concat(fileTableParts) : Buffer.alloc(0);
 
   const fileTableOffset = BigInt(HEADER_SIZE);
   const dataSectionOffset = fileTableOffset + BigInt(fileTable.length);
@@ -387,6 +288,9 @@ export async function packBlobToFile(
   pos += 8;
   header.writeBigUInt64LE(dataSectionLength, pos);
   pos += 8;
+  if (pos !== HEADER_SIZE) {
+    throw new BfsError(`packBlobToFile header offset mismatch: wrote ${pos} B, expected ${HEADER_SIZE} B`);
+  }
 
   // ── Pass 2: write header + file table + data section + checksum ────────
   const hasher = createHash('sha256');
@@ -404,14 +308,8 @@ export async function packBlobToFile(
     await outputHandle.close();
   }
 
-  const blobSize =
-    HEADER_SIZE + fileTable.length + Number(dataSectionLength) + 32;
-  return {
-    blobSize,
-    fileCount: entries.length,
-    totalSize: Number(dataSectionLength),
-    skipped,
-  };
+  const blobSize = HEADER_SIZE + fileTable.length + Number(dataSectionLength) + SHA256_BYTES;
+  return { blobSize, fileCount: entries.length, totalSize: Number(dataSectionLength), skipped };
 }
 
 /**
@@ -427,17 +325,7 @@ export async function packBlobToFile(
  * @param vaultId      - Optional 16-byte vault UUID (defaults to zeros)
  * @returns blobSize, fileCount (actual directory files), totalSize (uncompressed sum), skipped
  */
-export async function packBlobToFileZipped(
-  rootDir: string,
-  outputPath: string,
-  ignoreFilter: IgnoreFilter,
-  vaultId?: Buffer,
-): Promise<{
-  blobSize: number;
-  fileCount: number;
-  totalSize: number;
-  skipped: SkippedFile[];
-}> {
+export async function packBlobToFileZipped(rootDir: string, outputPath: string, ignoreFilter: IgnoreFilter, vaultId?: Buffer): Promise<{ blobSize: number; fileCount: number; totalSize: number; skipped: SkippedFile[] }> {
   const metas = await scanDir(rootDir, ignoreFilter);
   metas.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 
@@ -465,28 +353,15 @@ export async function packBlobToFileZipped(
         totalSize += data.length;
         fileCount++;
       } catch (e: unknown) {
-        skipped.push({
-          path: meta.relativePath,
-          reason: e instanceof Error ? e.message : String(e),
-        });
+        skipped.push({ path: meta.relativePath, reason: e instanceof Error ? e.message : String(e) });
       }
     }
 
     const { totalSize: zipSize, hash: zipHashHex } = await packer.finalize();
 
     // Build file table entry for "bfs.pack.zip"
-    const zipEntry: FileEntry = {
-      path: 'bfs.pack.zip',
-      size: BigInt(zipSize),
-      data_offset: 0n,
-      hash: zipHashHex,
-      mode: 0,
-      modified_at: BigInt(Date.now()),
-    };
-    const fileTable = buildFileTableEntry(
-      zipEntry,
-      Buffer.from(zipHashHex, 'hex'),
-    );
+    const zipEntry: FileEntry = { path: 'bfs.pack.zip', size: BigInt(zipSize), data_offset: 0n, hash: zipHashHex, mode: 0, modified_at: BigInt(Date.now()) };
+    const fileTable = buildFileTableEntry(zipEntry, Buffer.from(zipHashHex, 'hex'));
 
     // Build BFS header with known data_section_length
     const fileTableOffset = BigInt(HEADER_SIZE);
@@ -515,23 +390,21 @@ export async function packBlobToFileZipped(
     pos += 8;
     header.writeBigUInt64LE(BigInt(zipSize), pos);
     pos += 8;
+    if (pos !== HEADER_SIZE) {
+      throw new BfsError(`packBlobToFileZipped header offset mismatch: wrote ${pos} B, expected ${HEADER_SIZE} B`);
+    }
 
     // Seek to start, overwrite placeholder with real header + file table
     await outputHandle.write(header, 0, header.length, 0);
     await outputHandle.write(fileTable, 0, fileTable.length, HEADER_SIZE);
 
     // Compute blob checksum: re-read entire file (header + file table + ZIP data)
-    const blobSize = dataStartOffset + zipSize + 32;
+    const blobSize = dataStartOffset + zipSize + SHA256_BYTES;
     const blobHasher = createHash('sha256');
     const readHandle = await fs.open(outputPath, 'r');
     try {
-      for await (const chunk of readHandle.createReadStream({
-        start: 0,
-        end: dataStartOffset + zipSize - 1,
-      })) {
-        blobHasher.update(
-          Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array),
-        );
+      for await (const chunk of readHandle.createReadStream({ start: 0, end: dataStartOffset + zipSize - 1 })) {
+        blobHasher.update(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
       }
     } finally {
       await readHandle.close();
@@ -558,27 +431,17 @@ async function _hashFileByStream(absPath: string): Promise<string> {
 }
 
 /** Writes a buffer to a file handle and updates the running SHA-256 hasher. */
-async function _writeAndHash(
-  handle: FileHandle,
-  hasher: Hash,
-  data: Buffer,
-): Promise<void> {
+async function _writeAndHash(handle: FileHandle, hasher: Hash, data: Buffer): Promise<void> {
   await handle.write(data);
   hasher.update(data);
 }
 
 /** Streams a source file to an output handle while updating the running hasher. */
-async function _streamFileToHandle(
-  absPath: string,
-  outHandle: FileHandle,
-  hasher: Hash,
-): Promise<void> {
+async function _streamFileToHandle(absPath: string, outHandle: FileHandle, hasher: Hash): Promise<void> {
   const inHandle = await fs.open(absPath, 'r');
   try {
     for await (const chunk of inHandle.createReadStream()) {
-      const buf = Buffer.isBuffer(chunk)
-        ? chunk
-        : Buffer.from(chunk as Uint8Array);
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
       await _writeAndHash(outHandle, hasher, buf);
     }
   } finally {

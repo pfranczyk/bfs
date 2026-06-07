@@ -45,13 +45,8 @@ export interface VersionMismatch {
  * without them — a pathological case indicating a broken installation, not
  * a plugin gap.
  */
-export function detectMissingAdapters(
-  providers: readonly ProviderConfig[],
-): MissingAdapter[] {
-  const missing = new Map<
-    string,
-    { adapterPackage: Nullable<string>; providerIds: string[] }
-  >();
+export function detectMissingAdapters(providers: readonly ProviderConfig[]): MissingAdapter[] {
+  const missing = new Map<string, { adapterPackage: Nullable<string>; providerIds: string[] }>();
   for (const p of providers) {
     if (providerRegistry.has(p.type)) continue;
     const entry = missing.get(p.type);
@@ -59,39 +54,23 @@ export function detectMissingAdapters(
       entry.providerIds.push(p.id);
       continue;
     }
-    missing.set(p.type, {
-      adapterPackage: p.adapterPackage,
-      providerIds: [p.id],
-    });
+    missing.set(p.type, { adapterPackage: p.adapterPackage, providerIds: [p.id] });
   }
-  return [...missing.entries()].map(
-    ([type, { adapterPackage, providerIds }]) => ({
-      type,
-      adapterPackage,
-      providerIds,
-    }),
-  );
+  return [...missing.entries()].map(([type, { adapterPackage, providerIds }]) => ({ type, adapterPackage, providerIds }));
 }
 
 /**
  * Renders a human-readable install script for a set of missing adapters.
  * Skips built-in misses (they deserve a separate hard error, not a hint).
  */
-export function formatMissingAdaptersMessage(
-  missing: readonly MissingAdapter[],
-): string {
+export function formatMissingAdaptersMessage(missing: readonly MissingAdapter[]): string {
   const external = missing.filter((m) => m.adapterPackage !== null);
   if (external.length === 0) return '';
   const lines: string[] = [t('adapter_preflight_missing_header'), ''];
-  const maxTypeLen = external.reduce(
-    (max, m) => Math.max(max, m.type.length),
-    0,
-  );
+  const maxTypeLen = external.reduce((max, m) => Math.max(max, m.type.length), 0);
   const installLabel = t('adapter_preflight_install_label');
   for (const m of external) {
-    lines.push(
-      `  ${m.type.padEnd(maxTypeLen)}   — ${installLabel} npm install -g ${m.adapterPackage}`,
-    );
+    lines.push(`  ${m.type.padEnd(maxTypeLen)}   — ${installLabel} npm install -g ${m.adapterPackage}`);
   }
   lines.push('', t('adapter_preflight_retry_hint'));
   return lines.join('\n');
@@ -102,21 +81,11 @@ export function formatMissingAdaptersMessage(
  * call sites that encounter an unknown type outside the pull/recovery
  * preflight (where a batch report is preferred).
  */
-export function missingAdapterError(
-  type: string,
-  adapterPackage: Nullable<string>,
-): ProviderError {
+export function missingAdapterError(type: string, adapterPackage: Nullable<string>): ProviderError {
   if (adapterPackage === null) {
     return new ProviderError(fmt('adapter_preflight_builtin_broken_one', type));
   }
-  return new ProviderError(
-    fmt(
-      'adapter_preflight_external_install_hint',
-      type,
-      adapterPackage,
-      adapterPackage,
-    ),
-  );
+  return new ProviderError(fmt('adapter_preflight_external_install_hint', type, adapterPackage, adapterPackage));
 }
 
 /**
@@ -125,13 +94,8 @@ export function missingAdapterError(
  * (built-ins) and providers whose type is missing from the registry (those
  * are reported by {@link detectMissingAdapters}).
  */
-export function checkVersionMismatch(
-  providers: readonly ProviderConfig[],
-): VersionMismatch[] {
-  const grouped = new Map<
-    string,
-    { recorded: string; providerIds: string[] }
-  >();
+export function checkVersionMismatch(providers: readonly ProviderConfig[]): VersionMismatch[] {
+  const grouped = new Map<string, { recorded: string; providerIds: string[] }>();
   for (const p of providers) {
     if (p.adapterPackage === null) continue;
     if (!providerRegistry.has(p.type)) continue;
@@ -154,13 +118,7 @@ export function checkVersionMismatch(
     if (installedMeta === null) continue;
     const installed = `${installedMeta.packageName}@${installedMeta.packageVersion}`;
     const severity = compareSeverity(recorded, installed);
-    mismatches.push({
-      type,
-      recordedPackage: recorded,
-      installedPackage: installed,
-      severity,
-      providerIds,
-    });
+    mismatches.push({ type, recordedPackage: recorded, installedPackage: installed, severity, providerIds });
   }
   return mismatches;
 }
@@ -172,10 +130,7 @@ export function checkVersionMismatch(
  * Minor/patch difference → `soft` (should be backwards compatible under semver).
  * Unparseable versions → `strong` (fail loud rather than silently downgrade).
  */
-function compareSeverity(
-  recorded: string,
-  installed: string,
-): 'soft' | 'strong' {
+function compareSeverity(recorded: string, installed: string): 'soft' | 'strong' {
   const r = splitSpec(recorded);
   const i = splitSpec(installed);
   if (r === null || i === null) return 'strong';

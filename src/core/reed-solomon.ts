@@ -27,19 +27,11 @@ export const SHARD_ALIGNMENT = 8;
 // Fix: read WASM bytes once at module load, then call fromBytes() to get a
 // fresh WASM instance per operation (re-instantiation is ~0.06 ms, negligible).
 
-const { ReedSolomonErasure: _RSClass } =
-  require('@subspace/reed-solomon-erasure.wasm') as {
-    ReedSolomonErasure: typeof import('@subspace/reed-solomon-erasure.wasm').ReedSolomonErasure;
-  };
+const { ReedSolomonErasure: _RSClass } = require('@subspace/reed-solomon-erasure.wasm') as { ReedSolomonErasure: typeof import('@subspace/reed-solomon-erasure.wasm').ReedSolomonErasure };
 
 const _wasmBytes: ArrayBuffer = (() => {
-  const indexPath = require.resolve(
-    '@subspace/reed-solomon-erasure.wasm',
-  ) as string;
-  const wasmPath = indexPath.replace(
-    /index\.js$/,
-    'reed_solomon_erasure_bg.wasm',
-  );
+  const indexPath = require.resolve('@subspace/reed-solomon-erasure.wasm') as string;
+  const wasmPath = indexPath.replace(/index\.js$/, 'reed_solomon_erasure_bg.wasm');
   return readFileSync(wasmPath).buffer as ArrayBuffer;
 })();
 
@@ -59,20 +51,14 @@ function alignUp(n: number): number {
  * Calculates the payload size (bytes) for each shard when encoding `dataLen` bytes
  * across `dataShards` shards.
  */
-export function calcShardPayloadSize(
-  dataLen: number,
-  dataShards: number,
-): number {
+export function calcShardPayloadSize(dataLen: number, dataShards: number): number {
   return alignUp(Math.ceil(dataLen / dataShards));
 }
 
 function validateParams(dataShards: number, parityShards: number): void {
-  if (dataShards < 2)
-    throw new BfsError(`dataShards must be >= 2, got ${dataShards}`);
-  if (parityShards < 1)
-    throw new BfsError(`parityShards must be >= 1, got ${parityShards}`);
-  if (dataShards + parityShards > 256)
-    throw new BfsError(`N+K must be <= 256, got ${dataShards + parityShards}`);
+  if (dataShards < 2) throw new BfsError(`dataShards must be >= 2, got ${dataShards}`);
+  if (parityShards < 1) throw new BfsError(`parityShards must be >= 1, got ${parityShards}`);
+  if (dataShards + parityShards > 256) throw new BfsError(`N+K must be <= 256, got ${dataShards + parityShards}`);
 }
 
 // ─── Public API ────────────────────────────────────────────────────────────
@@ -86,11 +72,7 @@ function validateParams(dataShards: number, parityShards: number): void {
  * @returns array of N+K Buffers — each is one shard payload
  * @throws BfsError on invalid parameters
  */
-export function rsEncode(
-  data: Buffer,
-  dataShards: number,
-  parityShards: number,
-): Buffer[] {
+export function rsEncode(data: Buffer, dataShards: number, parityShards: number): Buffer[] {
   validateParams(dataShards, parityShards);
 
   const rs = newRs();
@@ -125,19 +107,12 @@ export function rsEncode(
  * @returns reconstructed blob (padding removed)
  * @throws BfsError when fewer than N shards are available or RS fails
  */
-export function rsDecode(
-  shards: Nullable<Buffer>[],
-  dataShards: number,
-  parityShards: number,
-  originalSize: number,
-): Buffer {
+export function rsDecode(shards: Nullable<Buffer>[], dataShards: number, parityShards: number, originalSize: number): Buffer {
   validateParams(dataShards, parityShards);
 
   const present = shards.filter((s) => s !== null);
   if (present.length < dataShards) {
-    throw new BfsError(
-      `Not enough shards to reconstruct: need ${dataShards}, got ${present.length}`,
-    );
+    throw new BfsError(`Not enough shards to reconstruct: need ${dataShards}, got ${present.length}`);
   }
 
   const shardSize = present[0]?.length;
@@ -169,18 +144,12 @@ export function rsDecode(
  * @returns complete array of N+K Buffers (originals + repaired nulls)
  * @throws BfsError when fewer than N shards are available or RS fails
  */
-export function rsRepair(
-  shards: Nullable<Buffer>[],
-  dataShards: number,
-  parityShards: number,
-): Buffer[] {
+export function rsRepair(shards: Nullable<Buffer>[], dataShards: number, parityShards: number): Buffer[] {
   validateParams(dataShards, parityShards);
 
   const present = shards.filter((s) => s !== null);
   if (present.length < dataShards) {
-    throw new BfsError(
-      `Not enough shards to repair: need ${dataShards}, got ${present.length}`,
-    );
+    throw new BfsError(`Not enough shards to repair: need ${dataShards}, got ${present.length}`);
   }
 
   const shardSize = present[0]?.length;
@@ -207,9 +176,7 @@ export function rsRepair(
   const totalShards = dataShards + parityShards;
   const repaired: Buffer[] = [];
   for (let i = 0; i < totalShards; i++) {
-    repaired.push(
-      Buffer.from(flat.subarray(i * shardSize, (i + 1) * shardSize)),
-    );
+    repaired.push(Buffer.from(flat.subarray(i * shardSize, (i + 1) * shardSize)));
   }
   return repaired;
 }
@@ -238,34 +205,22 @@ export interface RsEncodeStripedResult {
  * @param stripeSize  - bytes per shard per stripe (e.g. 64 MiB)
  * @returns SHA-256 hashes for all N data + K parity shards
  */
-export async function rsEncodeStriped(
-  source: Readable,
-  parityPaths: string[],
-  N: number,
-  K: number,
-  stripeSize: number,
-): Promise<RsEncodeStripedResult> {
+export async function rsEncodeStriped(source: Readable, parityPaths: string[], N: number, K: number, stripeSize: number): Promise<RsEncodeStripedResult> {
   validateParams(N, K);
   if (parityPaths.length !== K) {
-    throw new BfsError(
-      `parityPaths must have K=${K} entries, got ${parityPaths.length}`,
-    );
+    throw new BfsError(`parityPaths must have K=${K} entries, got ${parityPaths.length}`);
   }
   const flat = new Uint8Array((N + K) * stripeSize); // reused per stripe
   const inputBlock = Buffer.alloc(N * stripeSize); // preallocated input buffer
   let inputFilled = 0;
 
   // N+K hash contexts — mutation OK for performance (streaming hash)
-  const hashers: Hash[] = Array.from({ length: N + K }, () =>
-    createHash('sha256'),
-  );
+  const hashers: Hash[] = Array.from({ length: N + K }, () => createHash('sha256'));
 
   const parityHandles = await Promise.all(parityPaths.map((p) => open(p, 'w')));
   try {
     for await (const rawChunk of source) {
-      const chunk = Buffer.isBuffer(rawChunk)
-        ? rawChunk
-        : Buffer.from(rawChunk as Uint8Array);
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk as Uint8Array);
       let off = 0;
       while (off < chunk.length) {
         const space = inputBlock.length - inputFilled;
@@ -274,15 +229,7 @@ export async function rsEncodeStriped(
         inputFilled += toCopy;
         off += toCopy;
         if (inputFilled === inputBlock.length) {
-          await _encodeStripeWithHash({
-            inputBlock,
-            flat,
-            N,
-            K,
-            stripeSize,
-            parityHandles,
-            hashers,
-          });
+          await _encodeStripeWithHash({ inputBlock, flat, N, K, stripeSize, parityHandles, hashers });
           inputFilled = 0;
         }
       }
@@ -290,24 +237,13 @@ export async function rsEncodeStriped(
     if (inputFilled > 0) {
       // Zero-pad the last partial stripe before encoding
       inputBlock.fill(0, inputFilled);
-      await _encodeStripeWithHash({
-        inputBlock,
-        flat,
-        N,
-        K,
-        stripeSize,
-        parityHandles,
-        hashers,
-      });
+      await _encodeStripeWithHash({ inputBlock, flat, N, K, stripeSize, parityHandles, hashers });
     }
   } finally {
     await Promise.all(parityHandles.map((h) => h.close()));
   }
 
-  return {
-    dataShardHashes: hashers.slice(0, N).map((h) => h.digest('hex')),
-    parityShardHashes: hashers.slice(N).map((h) => h.digest('hex')),
-  };
+  return { dataShardHashes: hashers.slice(0, N).map((h) => h.digest('hex')), parityShardHashes: hashers.slice(N).map((h) => h.digest('hex')) };
 }
 
 /**
@@ -322,31 +258,14 @@ export async function rsEncodeStriped(
  * @param blobSize    - exact blob size before RS encode (for padding removal)
  * @returns Readable stream of the reconstructed blob
  */
-export function rsDecodeStriped(
-  shardStreams: Nullable<Readable>[],
-  N: number,
-  K: number,
-  stripeSize: number,
-  blobSize: number,
-  debugLog?: (msg: string) => void,
-): Readable {
+export function rsDecodeStriped(shardStreams: Nullable<Readable>[], N: number, K: number, stripeSize: number, blobSize: number, debugLog?: (msg: string) => void): Readable {
   validateParams(N, K);
   const totalShards = N + K;
   const shardSize = calcShardPayloadSize(blobSize, N);
   const numStripes = Math.ceil(shardSize / stripeSize);
   const output = new PassThrough();
 
-  void _runStripedDecode(
-    shardStreams,
-    N,
-    K,
-    totalShards,
-    stripeSize,
-    numStripes,
-    blobSize,
-    output,
-    debugLog,
-  );
+  void _runStripedDecode(shardStreams, N, K, totalShards, stripeSize, numStripes, blobSize, output, debugLog);
   return output;
 }
 
@@ -381,10 +300,7 @@ interface EncodeStripeCtx {
 async function _encodeStripeWithHash(ctx: EncodeStripeCtx): Promise<void> {
   const { inputBlock, flat, N, K, stripeSize, parityHandles, hashers } = ctx;
   // Copy data into flat; zero parity portion before encode
-  flat.set(
-    new Uint8Array(inputBlock.buffer, inputBlock.byteOffset, N * stripeSize),
-    0,
-  );
+  flat.set(new Uint8Array(inputBlock.buffer, inputBlock.byteOffset, N * stripeSize), 0);
   flat.fill(0, N * stripeSize); // zero parity region
   const rs = newRs();
   const result = rs.encode(flat, N, K);
@@ -394,22 +310,12 @@ async function _encodeStripeWithHash(ctx: EncodeStripeCtx): Promise<void> {
 
   // Feed data shard slices to hashers (from inputBlock — original data incl. zero-padding)
   for (let i = 0; i < N; i++) {
-    hashers[i].update(
-      Buffer.from(
-        inputBlock.buffer,
-        inputBlock.byteOffset + i * stripeSize,
-        stripeSize,
-      ),
-    );
+    hashers[i].update(Buffer.from(inputBlock.buffer, inputBlock.byteOffset + i * stripeSize, stripeSize));
   }
 
   // Write parity and feed parity shard slices to hashers
   for (let j = 0; j < K; j++) {
-    const paritySlice = Buffer.from(
-      flat.buffer,
-      flat.byteOffset + (N + j) * stripeSize,
-      stripeSize,
-    );
+    const paritySlice = Buffer.from(flat.buffer, flat.byteOffset + (N + j) * stripeSize, stripeSize);
     await parityHandles[j].write(paritySlice);
     hashers[N + j].update(paritySlice);
   }
@@ -430,20 +336,13 @@ async function _runStripedDecode(
   output: PassThrough,
   debugLog: ((msg: string) => void) | undefined,
 ): Promise<void> {
-  const readers = shardStreams.map((s) =>
-    s !== null ? new _ShardReader(s) : null,
-  );
+  const readers = shardStreams.map((s) => (s !== null ? new _ShardReader(s) : null));
   const flat = new Uint8Array(totalShards * stripeSize);
   let bytesEmitted = 0;
 
   if (debugLog) {
-    const readerInfo = readers
-      .map((r, i) => `[${i}]=${r !== null ? 'active' : 'null'}`)
-      .join(' ');
-    debugLog(
-      `_runStripedDecode: blobSize=${blobSize} N=${N} K=${K}` +
-        ` stripeSize=${stripeSize} numStripes=${numStripes} readers: ${readerInfo}`,
-    );
+    const readerInfo = readers.map((r, i) => `[${i}]=${r !== null ? 'active' : 'null'}`).join(' ');
+    debugLog(`_runStripedDecode: blobSize=${blobSize} N=${N} K=${K}` + ` stripeSize=${stripeSize} numStripes=${numStripes} readers: ${readerInfo}`);
   }
 
   try {
@@ -469,28 +368,16 @@ async function _runStripedDecode(
       // Log last 3 stripes, any stripe with a missing/empty reader, or any
       // stripe where a shard returned 0 bytes (helps diagnose stream issues)
       const anyZero = gotValues.some((g) => g === 0);
-      if (
-        debugLog &&
-        (stripe >= numStripes - 3 || present < totalShards || anyZero)
-      ) {
+      if (debugLog && (stripe >= numStripes - 3 || present < totalShards || anyZero)) {
         const isLast = stripe === numStripes - 1;
-        debugLog(
-          `stripe ${stripe}/${numStripes - 1}${isLast ? ' (LAST)' : ''}:` +
-            ` got=[${gotValues.join(',')}]` +
-            ` avail=[${available.map((a) => (a ? 'T' : 'F')).join(',')}]` +
-            ` present=${present}/${totalShards}`,
-        );
+        debugLog(`stripe ${stripe}/${numStripes - 1}${isLast ? ' (LAST)' : ''}:` + ` got=[${gotValues.join(',')}]` + ` avail=[${available.map((a) => (a ? 'T' : 'F')).join(',')}]` + ` present=${present}/${totalShards}`);
       }
       const anyMissing = available.some((a) => !a);
       if (anyMissing) {
-        if (present < N)
-          throw new BfsError(
-            `Not enough shards for stripe ${stripe}: need ${N}, got ${present}`,
-          );
+        if (present < N) throw new BfsError(`Not enough shards for stripe ${stripe}: need ${N}, got ${present}`);
         const rs = newRs();
         const result = rs.reconstruct(flat, N, K, available);
-        if (result !== 0)
-          throw new BfsError(`RS stripe reconstruct failed: code ${result}`);
+        if (result !== 0) throw new BfsError(`RS stripe reconstruct failed: code ${result}`);
       }
       const remaining = blobSize - bytesEmitted;
       const toEmit = Math.min(N * stripeSize, remaining);
@@ -511,20 +398,14 @@ class _ShardReader {
   private leftover: Buffer = Buffer.alloc(0);
 
   constructor(stream: Readable) {
-    this.iter = stream[Symbol.asyncIterator]() as AsyncIterator<
-      Buffer | Uint8Array
-    >;
+    this.iter = stream[Symbol.asyncIterator]() as AsyncIterator<Buffer | Uint8Array>;
   }
 
   /**
    * Reads up to `n` bytes into `outBuf` at `outOffset`.
    * @returns number of bytes actually read (< n only at end of stream)
    */
-  async readInto(
-    outBuf: Uint8Array,
-    outOffset: number,
-    n: number,
-  ): Promise<number> {
+  async readInto(outBuf: Uint8Array, outOffset: number, n: number): Promise<number> {
     let filled = 0;
     if (this.leftover.length > 0) {
       const take = Math.min(this.leftover.length, n);
@@ -535,9 +416,7 @@ class _ShardReader {
     while (filled < n) {
       const { done, value } = await this.iter.next();
       if (done) break;
-      const chunk = Buffer.isBuffer(value)
-        ? value
-        : Buffer.from(value as Uint8Array);
+      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value as Uint8Array);
       const take = Math.min(chunk.length, n - filled);
       chunk.copy(outBuf, outOffset + filled, 0, take);
       filled += take;

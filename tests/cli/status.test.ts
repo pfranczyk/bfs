@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureConsole, runCmd } from './_helpers.js';
 
-vi.mock('../../src/vault/vault-manager.js', () => ({
-  status: vi.fn(),
-}));
+vi.mock('../../src/vault/vault-manager.js', () => ({ status: vi.fn() }));
 
 import { status } from '../../src/vault/vault-manager.js';
 
@@ -11,15 +9,7 @@ const mockStatus = vi.mocked(status);
 
 /** Minimal StatusInfo fixture. */
 function makeStatusInfo(overrides: object = {}) {
-  return {
-    vault_name: 'test-vault',
-    latest_version: 3,
-    working_version: 3,
-    scheme: { data_shards: 2, parity_shards: 1 },
-    encryption_enabled: false,
-    provider_count: 3,
-    ...overrides,
-  };
+  return { vault_name: 'test-vault', latest_version: 3, working_version: 3, scheme: { data_shards: 2, parity_shards: 1 }, encryption_enabled: false, provider_count: 3, ...overrides };
 }
 
 describe('status', () => {
@@ -45,9 +35,7 @@ describe('status', () => {
   });
 
   it('should display latest_version and working_version', async () => {
-    mockStatus.mockResolvedValue(
-      makeStatusInfo({ latest_version: 7, working_version: 5 }) as never,
-    );
+    mockStatus.mockResolvedValue(makeStatusInfo({ latest_version: 7, working_version: 5 }) as never);
 
     await runCmd(['status']);
 
@@ -57,9 +45,7 @@ describe('status', () => {
   });
 
   it('should display scheme N/K', async () => {
-    mockStatus.mockResolvedValue(
-      makeStatusInfo({ scheme: { data_shards: 3, parity_shards: 2 } }) as never,
-    );
+    mockStatus.mockResolvedValue(makeStatusInfo({ scheme: { data_shards: 3, parity_shards: 2 } }) as never);
 
     await runCmd(['status']);
 
@@ -69,9 +55,7 @@ describe('status', () => {
   });
 
   it('should display encryption as disabled when encryption_enabled=false', async () => {
-    mockStatus.mockResolvedValue(
-      makeStatusInfo({ encryption_enabled: false }) as never,
-    );
+    mockStatus.mockResolvedValue(makeStatusInfo({ encryption_enabled: false }) as never);
 
     await runCmd(['status']);
 
@@ -79,9 +63,7 @@ describe('status', () => {
   });
 
   it('should display encryption as enabled when encryption_enabled=true', async () => {
-    mockStatus.mockResolvedValue(
-      makeStatusInfo({ encryption_enabled: true }) as never,
-    );
+    mockStatus.mockResolvedValue(makeStatusInfo({ encryption_enabled: true }) as never);
 
     await runCmd(['status']);
 
@@ -89,9 +71,7 @@ describe('status', () => {
   });
 
   it('should display provider count', async () => {
-    mockStatus.mockResolvedValue(
-      makeStatusInfo({ provider_count: 5 }) as never,
-    );
+    mockStatus.mockResolvedValue(makeStatusInfo({ provider_count: 5 }) as never);
 
     await runCmd(['status']);
 
@@ -101,9 +81,7 @@ describe('status', () => {
   // ─── Push-disabled scheme warn ────────────────────────────────────────────
 
   it('should NOT print push-disabled warn when scheme is 2/1', async () => {
-    mockStatus.mockResolvedValue(
-      makeStatusInfo({ scheme: { data_shards: 2, parity_shards: 1 } }) as never,
-    );
+    mockStatus.mockResolvedValue(makeStatusInfo({ scheme: { data_shards: 2, parity_shards: 1 } }) as never);
 
     await runCmd(['status']);
 
@@ -112,9 +90,7 @@ describe('status', () => {
   });
 
   it('should print push-disabled warn when scheme is 3/0', async () => {
-    mockStatus.mockResolvedValue(
-      makeStatusInfo({ scheme: { data_shards: 3, parity_shards: 0 } }) as never,
-    );
+    mockStatus.mockResolvedValue(makeStatusInfo({ scheme: { data_shards: 3, parity_shards: 0 } }) as never);
 
     await runCmd(['status']);
 
@@ -124,9 +100,7 @@ describe('status', () => {
   });
 
   it('should print push-disabled warn when scheme is 1/0', async () => {
-    mockStatus.mockResolvedValue(
-      makeStatusInfo({ scheme: { data_shards: 1, parity_shards: 0 } }) as never,
-    );
+    mockStatus.mockResolvedValue(makeStatusInfo({ scheme: { data_shards: 1, parity_shards: 0 } }) as never);
 
     await runCmd(['status']);
 
@@ -143,9 +117,7 @@ describe('status', () => {
     const result = await runCmd(['status']);
 
     expect(result).toBe('abort');
-    expect(
-      capture.errors.some((e) => e.includes('No vault config found')),
-    ).toBe(true);
+    expect(capture.errors.some((e) => e.includes('No vault config found'))).toBe(true);
   });
 
   it('should abort on any unexpected error', async () => {

@@ -15,13 +15,7 @@ import type { SpawnResult, SuiteResult, TestResult } from './smoke-types.js';
  *                       reads from process.cwd instead of --cwd" from the correct flow.
  * @returns       Result: status, stdout, stderr
  */
-export function runBfs(
-  bfsArgs: string[],
-  cwd: string,
-  stdin?: string,
-  env?: NodeJS.ProcessEnv,
-  withCwdFlag?: boolean,
-): SpawnResult {
+export function runBfs(bfsArgs: string[], cwd: string, stdin?: string, env?: NodeJS.ProcessEnv, withCwdFlag?: boolean): SpawnResult {
   const isWin = process.platform === 'win32';
   const finalArgs = withCwdFlag === true ? ['--cwd', cwd, ...bfsArgs] : bfsArgs;
   // When the flag drives rootDir, spawn from a vault-unrelated cwd so any
@@ -33,12 +27,7 @@ export function runBfs(
 
   if (bin.endsWith('.ts')) {
     // TS file: run via tsx (on Windows tsx.cmd through cmd /c)
-    const tsxBin = path.join(
-      PROJECT_ROOT,
-      'node_modules',
-      '.bin',
-      isWin ? 'tsx.cmd' : 'tsx',
-    );
+    const tsxBin = path.join(PROJECT_ROOT, 'node_modules', '.bin', isWin ? 'tsx.cmd' : 'tsx');
     if (isWin) {
       exe = 'cmd.exe';
       spawnArgs = ['/c', tsxBin, bin, ...finalArgs];
@@ -52,19 +41,9 @@ export function runBfs(
     spawnArgs = [bin, ...finalArgs];
   }
 
-  const result = spawnSync(exe, spawnArgs, {
-    cwd: spawnCwd,
-    encoding: 'utf8',
-    timeout: 30_000,
-    input: stdin,
-    ...(env !== undefined ? { env } : {}),
-  });
+  const result = spawnSync(exe, spawnArgs, { cwd: spawnCwd, encoding: 'utf8', timeout: 30_000, input: stdin, ...(env !== undefined ? { env } : {}) });
 
-  return {
-    status: result.status,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-  };
+  return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
 }
 
 /**
@@ -75,23 +54,13 @@ export function runBfs(
  * @param fn          - Test function — throws on failure or returns normally
  * @returns           Test result
  */
-export async function runTest(
-  id: string,
-  description: string,
-  fn: () => Promise<void> | void,
-): Promise<TestResult> {
+export async function runTest(id: string, description: string, fn: () => Promise<void> | void): Promise<TestResult> {
   const start = Date.now();
   try {
     await fn();
     return { id, description, passed: true, ms: Date.now() - start };
   } catch (err) {
-    return {
-      id,
-      description,
-      passed: false,
-      error: err instanceof Error ? err.message : String(err),
-      ms: Date.now() - start,
-    };
+    return { id, description, passed: false, error: err instanceof Error ? err.message : String(err), ms: Date.now() - start };
   }
 }
 
@@ -107,11 +76,7 @@ export function assert(condition: boolean, message: string): void {
  * @param reason      - Why the test was skipped
  * @returns TestResult with skipped=true
  */
-export function skipTest(
-  id: string,
-  description: string,
-  reason: string,
-): TestResult {
+export function skipTest(id: string, description: string, reason: string): TestResult {
   return { id, description, passed: true, skipped: true, error: reason, ms: 0 };
 }
 
@@ -121,10 +86,7 @@ export function skipTest(
  * @param suite - Suite to print
  * @returns Object with failure and skipped counts
  */
-export function printSuite(suite: SuiteResult): {
-  failures: number;
-  skipped: number;
-} {
+export function printSuite(suite: SuiteResult): { failures: number; skipped: number } {
   console.log(`\n[SMOKE] ${suite.name}`);
   let failures = 0;
   let skipped = 0;
@@ -152,9 +114,7 @@ export function printSuite(suite: SuiteResult): {
 export function denyRead(filePath: string): void {
   if (process.platform === 'win32') {
     const user = process.env.USERNAME ?? 'Everyone';
-    spawnSync('icacls', [filePath, '/deny', `${user}:(R,RX)`], {
-      stdio: 'ignore',
-    });
+    spawnSync('icacls', [filePath, '/deny', `${user}:(R,RX)`], { stdio: 'ignore' });
   } else {
     spawnSync('chmod', ['000', filePath], { stdio: 'ignore' });
   }

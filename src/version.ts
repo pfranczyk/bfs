@@ -2,7 +2,7 @@
  * Current BFS release version. Must stay in sync with package.json — update
  * both together for a release. Used for diagnostic display ("BFS x.y.z").
  */
-export const BFS_VERSION = '0.6.2';
+export const BFS_VERSION = '0.7.0-beta.1';
 
 /**
  * Provider contract API version.
@@ -71,5 +71,19 @@ export const BFS_VERSION = '0.6.2';
  *           pass-through: BFS recognizes only --ci, --name, --type (plus
  *           `type:name` in the init spec) and forwards every other token
  *           to the provider via rawArgs.
+ *   2 — header storage strategy + shard verification on StorageProvider.
+ *       Adds four methods every adapter must implement; an adapter compiled
+ *       against version 1 no longer satisfies the interface, hence the bump:
+ *         • usesSidecar(): boolean — reports whether the adapter keeps an
+ *           updated header in a sidecar file (true) or rewrites it in place
+ *           inside the shard (false; built-in local/ftp).
+ *         • uploadHeaderSidecar(ref, sidecarBytes) / downloadHeaderSidecar(ref,
+ *           maxBytes) — sidecar I/O in the standard BFSH binary format. Called
+ *           only when usesSidecar() === true; MUST throw otherwise. On the
+ *           read-path a present sidecar wins over the in-shard header.
+ *         • verifyShard(ref, expected: ShardIdentity) — returns a
+ *           VerifyShardResult classifying the shard identity check
+ *           (ok / not_found / mismatch / auth_failed / corrupted /
+ *           unverifiable) without requiring the vault key.
  */
-export const BFS_PROVIDER_API_VERSION = 1;
+export const BFS_PROVIDER_API_VERSION = 2;

@@ -1,6 +1,6 @@
 {
   "name": "bfs-vault",
-  "version": "0.6.2",
+  "version": "0.7.0-beta.1",
   "description": "Backup File System — distributed backup with Reed-Solomon erasure coding",
   "type": "module",
   "preferGlobal": true,
@@ -20,7 +20,7 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=23"
+    "node": ">=24"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -64,10 +64,11 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",
-    "@types/node": "^25.9.1",
+    "@lydell/node-pty": "^1.2.0-beta.12",
+    "@types/node": "^25.9.2",
     "tsup": "^8.5.1",
     "tsx": "^4.22.4",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.7"
+    "vitest": "^4.1.8"
   }
 }

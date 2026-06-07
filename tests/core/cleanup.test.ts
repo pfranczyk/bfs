@@ -10,10 +10,7 @@
 import fs from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-type CleanupModule = {
-  trackFile: (filePath: string) => void;
-  untrackFile: (filePath: string) => void;
-};
+type CleanupModule = { trackFile: (filePath: string) => void; untrackFile: (filePath: string) => void };
 
 describe('cleanup', () => {
   let trackFile: CleanupModule['trackFile'];
@@ -23,11 +20,9 @@ describe('cleanup', () => {
     // Reset module state before each test so pendingFiles and registered start fresh
     vi.resetModules();
     vi.spyOn(process, 'on').mockImplementation(() => process);
-    vi.spyOn(process, 'exit').mockImplementation(
-      (_code?: string | number | null) => {
-        throw new Error('process.exit called');
-      },
-    );
+    vi.spyOn(process, 'exit').mockImplementation((_code?: string | number | null) => {
+      throw new Error('process.exit called');
+    });
     vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
 
     const mod = (await import('../../src/core/cleanup.js')) as CleanupModule;
@@ -44,10 +39,7 @@ describe('cleanup', () => {
   it('should register SIGINT handler on first trackFile call', () => {
     trackFile('/tmp/file.bin');
 
-    expect(vi.mocked(process.on)).toHaveBeenCalledWith(
-      'SIGINT',
-      expect.any(Function),
-    );
+    expect(vi.mocked(process.on)).toHaveBeenCalledWith('SIGINT', expect.any(Function));
   });
 
   it('should register SIGINT handler only once across multiple trackFile calls', () => {
@@ -99,9 +91,7 @@ describe('cleanup', () => {
     const [[, handler]] = vi.mocked(process.on).mock.calls;
     expect(() => (handler as () => void)()).toThrow('process.exit called');
 
-    expect(vi.mocked(fs.unlinkSync)).not.toHaveBeenCalledWith(
-      '/tmp/tracked.bin',
-    );
+    expect(vi.mocked(fs.unlinkSync)).not.toHaveBeenCalledWith('/tmp/tracked.bin');
   });
 
   it('should call process.exit(130) on SIGINT', () => {

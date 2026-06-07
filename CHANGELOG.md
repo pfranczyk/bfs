@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0-beta.1] - 2026-06-07
+
+### Changed
+- **Backups created with `bfs init` are now encrypted by default.** Both the
+  interactive setup and the non-interactive `bfs init --ci` enable encryption
+  unless you pass the new `--no-enc` flag to store the backup unencrypted. The
+  encryption password is still chosen on the first `bfs push`, so a
+  non-interactive push on a default (encrypted) backup now fails loudly when no
+  password is supplied, instead of silently writing plaintext. Existing backups
+  are unaffected — their encryption setting is read from their own
+  configuration. The `--enc` flag is still accepted for script compatibility
+  but is no longer needed.
+- **Storage passwords are no longer copied into your backup.** A provider's
+  password (and any other credential it marks as secret) is now kept only in
+  the local backup configuration and is no longer written into the data
+  distributed to your storage. This takes effect from the next `bfs push`;
+  data written by earlier versions keeps the old credentials until pushed
+  again. When you recover a backup on a fresh machine, BFS asks for the
+  storage password only when it is actually needed — and a shared password
+  entered once via `--bootstrap` is reused for every storage location that
+  uses it, so a typical single-server setup recovers without extra prompts.
+
+### Added
+- **Warning when a backup is not encrypted.** `bfs init --no-enc` and every
+  `bfs push` of an unencrypted backup now print a warning: part of your data
+  is directly readable on a single storage device, and the addresses and
+  usernames of all your storage are visible on every device. Encryption (the
+  default) avoids both.
+- **Encrypted backups that are too large are now refused with a clear error.**
+  A single encryption key can only safely protect a limited amount of data, so
+  `bfs push` on an encrypted backup now stops with an explanatory message when
+  the per-unit data size would exceed that limit, suggesting you raise the data
+  count in the scheme (`bfs scheme set`) or back up a smaller directory —
+  instead of silently weakening the encryption.
+- **Security policy published (`SECURITY.md`).** The repository now documents how
+  to report a vulnerability privately, which versions receive security updates,
+  and a threat model: what each storage provider can and cannot see with and
+  without encryption, the metadata that stays in cleartext, how storage
+  credentials are handled, the per-key encryption size limit, and the
+  interactive nature of disaster recovery.
+- **Provider adapter contract v2 (`bfs-vault/provider`) — BREAKING for third-party adapters.** `BFS_PROVIDER_API_VERSION` is now `2`. `StorageProvider` gained four required methods — `usesSidecar`, `uploadHeaderSidecar`, `downloadHeaderSidecar` and `verifyShard` — so an adapter compiled against version 1 no longer satisfies the interface: it must implement all four methods and declare `requiresApiVersion: 2`. An adapter missing the methods is rejected with a clear incompatibility error when BFS instantiates it — so even a precompiled adapter that slips past registration fails loudly rather than silently. The built-in local disk and FTP adapters are already updated. A provider whose medium cannot rewrite a shard header in place (append-only object stores, APIs without partial writes) returns `usesSidecar() === true` and stores the updated header in a sidecar file using the standard **BFSH** binary format (magic + version + serialized header + SHA-256); providers that rewrite in place (the built-in local disk and FTP adapters) return `false` and are otherwise unchanged. The sidecar read-path is already active in `bfs verify`: when an adapter reports `usesSidecar() === true`, a present sidecar is read in preference to the in-shard header, so its `downloadHeaderSidecar` must work from this release. `verifyShard` lets a provider confirm a shard's identity (vault id, index, version) on its own medium; it has no consumer yet and is wired into the upcoming repair and recovery flows.
+
 ## [0.6.2] - 2026-06-07
 
 ### Security
@@ -401,7 +443,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.7.0-beta.1...HEAD
+[0.7.0-beta.1]: https://github.com/pfranczyk/bfs/compare/v0.6.2...v0.7.0-beta.1
 [0.6.2]: https://github.com/pfranczyk/bfs/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/pfranczyk/bfs/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/pfranczyk/bfs/compare/v0.5.0...v0.6.0

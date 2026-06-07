@@ -16,7 +16,11 @@ jobs:
           - '0.3.0'
           - '0.4.0'
           - '0.5.0'
-          # When releasing a new version, add the previous version here.
+          - '0.6.2'
+          # On release, add the latest patch of the previous release line.
+          # Patches within a line share the on-disk format, and users are
+          # expected to run the newest patch, so the latest patch represents
+          # the whole line (e.g. 0.6.2 covers 0.6.0/0.6.1).
 
     name: bfs@${{ matrix.old-version }} → current
 

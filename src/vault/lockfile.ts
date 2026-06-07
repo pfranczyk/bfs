@@ -1,9 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import {
-  LockConcurrentActiveError,
-  LockPartialStatePushError,
-} from '../core/errors.js';
+import { LockConcurrentActiveError, LockPartialStatePushError } from '../core/errors.js';
 import { isEnoent, writeJsonAtomic } from '../core/fs-utils.js';
 
 /** Schema version of push.lock / repair.lock JSON. */
@@ -16,15 +13,7 @@ export const LOCK_STALE_MS = 24 * 60 * 60 * 1000;
 export type LockOperation = 'push' | 'repair';
 
 /** Reason a shard failed to upload, recorded in push.lock and used in CLI exit messages. */
-export type PushLockFailedReason =
-  | 'not_found'
-  | 'mismatch'
-  | 'auth_failed'
-  | 'corrupted'
-  | 'unverifiable'
-  | 'network_error'
-  | 'quota_exceeded'
-  | 'unknown';
+export type PushLockFailedReason = 'not_found' | 'mismatch' | 'auth_failed' | 'corrupted' | 'unverifiable' | 'network_error' | 'quota_exceeded' | 'unknown';
 
 /** Entry appended to push.lock.uploaded after each successful shard upload. */
 export interface PushLockUploadedEntry {
@@ -49,10 +38,7 @@ export interface PushLock {
   pid: number;
   command: string;
   started_at: string;
-  scheme: {
-    data_shards: number;
-    parity_shards: number;
-  };
+  scheme: { data_shards: number; parity_shards: number };
   uploaded: PushLockUploadedEntry[];
   failed: PushLockFailedEntry[];
   /**
@@ -131,10 +117,7 @@ export async function readLock<T>(filePath: string): Promise<T | null> {
 }
 
 /** Atomically writes a lockfile (via .tmp + rename in `writeJsonAtomic`). */
-export async function writeLockAtomic<T>(
-  filePath: string,
-  lock: T,
-): Promise<void> {
+export async function writeLockAtomic<T>(filePath: string, lock: T): Promise<void> {
   await writeJsonAtomic(filePath, lock);
 }
 
@@ -184,10 +167,7 @@ export function isLockStale(started_at: string): boolean {
  *   is left for idempotent retry; any push.lock (live or stale) is left
  *   for repair itself to consume.
  */
-export async function assertNoActiveLock(
-  rootDir: string,
-  operation: LockOperation,
-): Promise<void> {
+export async function assertNoActiveLock(rootDir: string, operation: LockOperation): Promise<void> {
   const pushLock = await readLock<PushLock>(pushLockPath(rootDir));
   const repairLock = await readLock<RepairLock>(repairLockPath(rootDir));
 
@@ -195,21 +175,13 @@ export async function assertNoActiveLock(
     case 'push': {
       if (repairLock !== null) {
         if (isPidAlive(repairLock.pid) && !isLockStale(repairLock.started_at)) {
-          throw new LockConcurrentActiveError(
-            'repair',
-            repairLock.pid,
-            repairLock.started_at,
-          );
+          throw new LockConcurrentActiveError('repair', repairLock.pid, repairLock.started_at);
         }
         throw new LockPartialStatePushError(0);
       }
       if (pushLock !== null) {
         if (isPidAlive(pushLock.pid) && !isLockStale(pushLock.started_at)) {
-          throw new LockConcurrentActiveError(
-            'push',
-            pushLock.pid,
-            pushLock.started_at,
-          );
+          throw new LockConcurrentActiveError('push', pushLock.pid, pushLock.started_at);
         }
         throw new LockPartialStatePushError(pushLock.version);
       }
@@ -218,11 +190,7 @@ export async function assertNoActiveLock(
     case 'repair': {
       if (repairLock !== null) {
         if (isPidAlive(repairLock.pid) && !isLockStale(repairLock.started_at)) {
-          throw new LockConcurrentActiveError(
-            'repair',
-            repairLock.pid,
-            repairLock.started_at,
-          );
+          throw new LockConcurrentActiveError('repair', repairLock.pid, repairLock.started_at);
         }
         return;
       }

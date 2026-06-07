@@ -10,9 +10,7 @@ import type { VaultConfig } from '../types/index.js';
  * @returns VaultConfig or null if the file does not exist.
  * @throws on read/parse errors other than ENOENT.
  */
-export async function readConfig(
-  rootDir: string,
-): Promise<Nullable<VaultConfig>> {
+export async function readConfig(rootDir: string): Promise<Nullable<VaultConfig>> {
   const filePath = path.join(rootDir, '.bfs', 'config.json');
   try {
     const content = await fs.readFile(filePath, 'utf-8');
@@ -24,16 +22,19 @@ export async function readConfig(
 }
 
 /**
- * Writes VaultConfig to .bfs/config.json (pretty-printed JSON).
+ * Writes VaultConfig to .bfs/config.json (pretty-printed JSON), restricted to
+ * owner-only permissions because it holds provider connection secrets.
  * The .bfs directory must already exist.
  * @throws on write failure.
  */
-export async function writeConfig(
-  rootDir: string,
-  config: VaultConfig,
-): Promise<void> {
+export async function writeConfig(rootDir: string, config: VaultConfig): Promise<void> {
   const filePath = path.join(rootDir, '.bfs', 'config.json');
-  await fs.writeFile(filePath, JSON.stringify(config, null, 2), 'utf-8');
+  // config.json holds provider connection secrets (e.g. FTP password), so keep
+  // it readable only by the owner. writeFile's mode applies when the file is
+  // created; chmod also covers overwriting an existing inode. POSIX enforces
+  // 0600; Windows NTFS ignores POSIX mode bits, so chmod is a best-effort no-op.
+  await fs.writeFile(filePath, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  await fs.chmod(filePath, 0o600).catch(() => {});
 }
 
 /**
@@ -55,18 +56,10 @@ export function assertSchemeValid(config: VaultConfig): void {
     throw new BfsError(fmt('scheme_invalid_data_shards', String(data_shards)));
   }
   if (!Number.isInteger(parity_shards) || (parity_shards as number) < 1) {
-    throw new BfsError(
-      fmt('scheme_invalid_parity_shards', String(parity_shards)),
-    );
+    throw new BfsError(fmt('scheme_invalid_parity_shards', String(parity_shards)));
   }
   const required = data_shards + parity_shards;
   if (config.providers.length !== required) {
-    throw new BfsError(
-      fmt(
-        'scheme_providers_mismatch',
-        String(required),
-        String(config.providers.length),
-      ),
-    );
+    throw new BfsError(fmt('scheme_providers_mismatch', String(required), String(config.providers.length)));
   }
 }

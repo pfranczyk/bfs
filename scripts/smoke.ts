@@ -31,14 +31,7 @@ import { suiteN } from './suites/suite-n.js';
 async function main(): Promise<void> {
   const tmpBase = path.join(os.tmpdir(), `bfs-smoke-${Date.now()}`);
 
-  const ctx: SmokeContext = {
-    sourceDir: tmpBase,
-    vaultDir: path.join(tmpBase, 'vault'),
-    provider1Dir: path.join(tmpBase, 'p1'),
-    provider2Dir: path.join(tmpBase, 'p2'),
-    provider3Dir: path.join(tmpBase, 'p3'),
-    originalHashes: new Map(),
-  };
+  const ctx: SmokeContext = { sourceDir: tmpBase, vaultDir: path.join(tmpBase, 'vault'), provider1Dir: path.join(tmpBase, 'p1'), provider2Dir: path.join(tmpBase, 'p2'), provider3Dir: path.join(tmpBase, 'p3'), originalHashes: new Map() };
 
   console.log(`[SMOKE] bin: ${bin}`);
   console.log(`[SMOKE] tmp: ${tmpBase}`);
@@ -80,9 +73,7 @@ async function main(): Promise<void> {
       totalPass += suite.tests.length - failures - skipped;
     }
 
-    console.log(
-      `\n[SMOKE] Results: ${totalPass} PASS, ${totalFail} FAIL, ${totalSkipped} SKIP`,
-    );
+    console.log(`\n[SMOKE] Results: ${totalPass} PASS, ${totalFail} FAIL, ${totalSkipped} SKIP`);
   } finally {
     await fs.rm(tmpBase, { recursive: true, force: true }).catch(() => {});
   }
@@ -91,9 +82,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error(
-    '[SMOKE] Fatal error:',
-    err instanceof Error ? err.message : String(err),
-  );
+  console.error('[SMOKE] Fatal error:', err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

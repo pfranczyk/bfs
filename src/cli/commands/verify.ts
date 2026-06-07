@@ -37,32 +37,14 @@ export function registerVerify(program: Command): void {
 
         const rows = report.versions.map((v) => {
           const manifest = manifestMap.get(v.version);
-          const schemeTxt = manifest
-            ? `${manifest.scheme.data_shards}/${manifest.scheme.parity_shards}`
-            : '?';
+          const schemeTxt = manifest ? `${manifest.scheme.data_shards}/${manifest.scheme.parity_shards}` : '?';
           const dataN = manifest?.scheme.data_shards ?? v.available_shards;
-          const tolerance =
-            v.available_shards >= dataN ? v.available_shards - dataN : 0;
-          return [
-            `v${String(v.version).padStart(3, '0')}`,
-            formatHealth(v.health),
-            `${v.available_shards}/${v.total_shards}`,
-            schemeTxt,
-            tolerance.toString(),
-          ];
+          const tolerance = v.available_shards >= dataN ? v.available_shards - dataN : 0;
+          return [`v${String(v.version).padStart(3, '0')}`, formatHealth(v.health), `${v.available_shards}/${v.total_shards}`, schemeTxt, tolerance.toString()];
         });
 
         console.log();
-        table(
-          [
-            t('verify_col_version'),
-            t('verify_col_status'),
-            t('verify_col_available'),
-            t('verify_col_scheme'),
-            t('verify_col_tolerance'),
-          ],
-          rows,
-        );
+        table([t('verify_col_version'), t('verify_col_status'), t('verify_col_available'), t('verify_col_scheme'), t('verify_col_tolerance')], rows);
         console.log();
       } catch (err) {
         spinner.fail(t('verify_failed'));

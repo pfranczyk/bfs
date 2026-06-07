@@ -69,7 +69,7 @@ scenario_run() {
   assert_spawn_cwd_empty "$spawn_cwd"
 
   # ── init from unrelated cwd ────────────────────────────────────────────────
-  run_bfs_from "$spawn_cwd" "$vault" init "$name" --ci --no-compress \
+  run_bfs_from "$spawn_cwd" "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 3 --parity-shards 1 "${PROVIDER_ARGS[@]}"
   assert_ok
   assert_file "$vault/.bfs/config.json"

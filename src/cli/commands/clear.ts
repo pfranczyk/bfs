@@ -30,21 +30,12 @@ export function registerClear(program: Command): void {
     .action(async (opts: { cacheDir?: string }, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
       const config = await readConfig(rootDir);
-      const cacheDir =
-        opts.cacheDir ??
-        config?.cache_dir ??
-        path.join(rootDir, '.bfs', 'cache');
+      const cacheDir = opts.cacheDir ?? config?.cache_dir ?? path.join(rootDir, '.bfs', 'cache');
 
       // Note: variable name `entry` (not `t`) to avoid shadowing the i18n helper.
       const targets: Array<{ label: string; path: string }> = [
-        {
-          label: 'push.blob.pending',
-          path: path.join(cacheDir, 'push.blob.pending'),
-        },
-        {
-          label: 'pull.blob.pending',
-          path: path.join(cacheDir, 'pull.blob.pending'),
-        },
+        { label: 'push.blob.pending', path: path.join(cacheDir, 'push.blob.pending') },
+        { label: 'pull.blob.pending', path: path.join(cacheDir, 'pull.blob.pending') },
         { label: 'push.lock', path: pushLockPath(rootDir) },
         { label: 'repair.lock', path: repairLockPath(rootDir) },
       ];

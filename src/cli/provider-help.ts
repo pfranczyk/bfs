@@ -45,10 +45,7 @@ export function buildProviderHelpSection(): string {
  *      per provider instance).
  *   3. null for built-ins without meta.
  */
-function resolveInstallHint(
-  type: string,
-  help: ProviderHelp,
-): Nullable<string> {
+function resolveInstallHint(type: string, help: ProviderHelp): Nullable<string> {
   if (typeof help.installation === 'string' && help.installation.length > 0) {
     return help.installation;
   }
@@ -61,16 +58,8 @@ function resolveInstallHint(
  * Assembles one provider block: heading, Usage line, description, Options
  * table, Examples. Sections with empty content are omitted.
  */
-function renderProviderSection(
-  type: string,
-  displayName: string,
-  help: ProviderHelp,
-  installHint: Nullable<string>,
-): string {
-  const headingSuffix =
-    installHint !== null
-      ? `  ${fmt('provider_help_install_hint', installHint)}`
-      : '';
+function renderProviderSection(type: string, displayName: string, help: ProviderHelp, installHint: Nullable<string>): string {
+  const headingSuffix = installHint !== null ? `  ${fmt('provider_help_install_hint', installHint)}` : '';
   const heading = `${INDENT_HEADING}${type} — ${displayName}${headingSuffix}`;
 
   const usageSuffix = help.usage.length > 0 ? ` ${help.usage}` : '';
@@ -80,17 +69,11 @@ function renderProviderSection(
 
   const sections: string[] = [heading, usageLine, description];
   if (help.flags.length > 0) {
-    sections.push(
-      `${INDENT_BODY}${t('provider_help_options_label')}\n${renderFlagsTable(help.flags)}`,
-    );
+    sections.push(`${INDENT_BODY}${t('provider_help_options_label')}\n${renderFlagsTable(help.flags)}`);
   }
   if (help.examples.length > 0) {
-    const examples = help.examples
-      .map((e) => indent(e, INDENT_ITEM))
-      .join('\n');
-    sections.push(
-      `${INDENT_BODY}${t('provider_help_example_label')}\n${examples}`,
-    );
+    const examples = help.examples.map((e) => indent(e, INDENT_ITEM)).join('\n');
+    sections.push(`${INDENT_BODY}${t('provider_help_example_label')}\n${examples}`);
   }
   return sections.join('\n\n');
 }
@@ -103,9 +86,7 @@ function renderProviderSection(
 function renderFlagsTable(flags: readonly ProviderHelpFlag[]): string {
   const maxFlagLen = flags.reduce((max, f) => Math.max(max, f.flag.length), 0);
   const columnWidth = maxFlagLen + FLAG_COLUMN_GAP;
-  return flags
-    .map((f) => `${INDENT_ITEM}${f.flag.padEnd(columnWidth)}${f.description}`)
-    .join('\n');
+  return flags.map((f) => `${INDENT_ITEM}${f.flag.padEnd(columnWidth)}${f.description}`).join('\n');
 }
 
 /**

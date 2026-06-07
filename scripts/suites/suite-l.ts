@@ -12,8 +12,7 @@ import { readJson } from '../smoke-vault.js';
 // ─── Suite L — FTP provider (requires BFS_FTP_TEST=1 + Docker FTP server) ──
 
 const FTP_ENABLED = process.env.BFS_FTP_TEST === '1';
-const SKIP_REASON =
-  'BFS_FTP_TEST not set. Run: npm run smoke:ftp (starts Docker FTP server automatically)';
+const SKIP_REASON = 'BFS_FTP_TEST not set. Run: npm run smoke:ftp (starts Docker FTP server automatically)';
 
 // FTP connection params — Docker defaults override-able via env vars for
 // running against an external FTP server.
@@ -32,30 +31,10 @@ export async function suiteL(): Promise<SuiteResult> {
     tests.push(skipTest('L1', 'bfs init z FTP providerem', SKIP_REASON));
     tests.push(skipTest('L2', 'bfs push do FTP', SKIP_REASON));
     tests.push(skipTest('L3', 'bfs pull z FTP', SKIP_REASON));
-    tests.push(
-      skipTest(
-        'L4',
-        'FTP binary integrity — 8 MB CR/LF/CRLF pattern roundtrip',
-        SKIP_REASON,
-      ),
-    );
-    tests.push(
-      skipTest(
-        'L5',
-        'bfs verify — connection chatter silent without --debug',
-        SKIP_REASON,
-      ),
-    );
-    tests.push(
-      skipTest(
-        'L6',
-        'bfs verify --debug — connection chatter visible on stderr',
-        SKIP_REASON,
-      ),
-    );
-    tests.push(
-      skipTest('L7', 'bfs recovery z FTP via --bootstrap', SKIP_REASON),
-    );
+    tests.push(skipTest('L4', 'FTP binary integrity — 8 MB CR/LF/CRLF pattern roundtrip', SKIP_REASON));
+    tests.push(skipTest('L5', 'bfs verify — connection chatter silent without --debug', SKIP_REASON));
+    tests.push(skipTest('L6', 'bfs verify --debug — connection chatter visible on stderr', SKIP_REASON));
+    tests.push(skipTest('L7', 'bfs recovery z FTP via --bootstrap', SKIP_REASON));
     return { name: 'Suite L — FTP provider', tests };
   }
 
@@ -67,11 +46,7 @@ export async function suiteL(): Promise<SuiteResult> {
   const localP2 = path.join(tmpBase, 'p2');
 
   try {
-    await Promise.all(
-      [vaultDir, restoreDir, localP1, localP2].map((d) =>
-        fs.mkdir(d, { recursive: true }),
-      ),
-    );
+    await Promise.all([vaultDir, restoreDir, localP1, localP2].map((d) => fs.mkdir(d, { recursive: true })));
 
     // Create test files
     await fs.writeFile(path.join(vaultDir, 'hello.txt'), 'Hello FTP!');
@@ -94,21 +69,14 @@ export async function suiteL(): Promise<SuiteResult> {
           `local:p2 --path ${localP2}`,
           '--provider',
           `ftp:ftp1 ${FTP_FLAGS}`,
+          '--no-enc',
         ];
         const r = runBfs(args, vaultDir);
-        assert(
-          r.status === 0,
-          `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`,
-        );
+        assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
 
-        const cfg = await readJson<{ providers: Array<{ type: string }> }>(
-          path.join(vaultDir, '.bfs', 'config.json'),
-        );
+        const cfg = await readJson<{ providers: Array<{ type: string }> }>(path.join(vaultDir, '.bfs', 'config.json'));
         const ftpProviders = cfg.providers.filter((p) => p.type === 'ftp');
-        assert(
-          ftpProviders.length === 1,
-          `Expected 1 FTP provider, got ${ftpProviders.length}`,
-        );
+        assert(ftpProviders.length === 1, `Expected 1 FTP provider, got ${ftpProviders.length}`);
       }),
     );
 
@@ -116,10 +84,7 @@ export async function suiteL(): Promise<SuiteResult> {
     tests.push(
       await runTest('L2', 'bfs push do FTP', async () => {
         const r = runBfs(['push'], vaultDir);
-        assert(
-          r.status === 0,
-          `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`,
-        );
+        assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
       }),
     );
 
@@ -130,24 +95,15 @@ export async function suiteL(): Promise<SuiteResult> {
         const entries = await fs.readdir(vaultDir);
         for (const e of entries) {
           if (e !== '.bfs') {
-            await fs.rm(path.join(vaultDir, e), {
-              recursive: true,
-              force: true,
-            });
+            await fs.rm(path.join(vaultDir, e), { recursive: true, force: true });
           }
         }
 
         const r = runBfs(['pull', '--force'], vaultDir);
-        assert(
-          r.status === 0,
-          `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`,
-        );
+        assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
 
         // Verify files restored
-        const hello = await fs.readFile(
-          path.join(vaultDir, 'hello.txt'),
-          'utf8',
-        );
+        const hello = await fs.readFile(path.join(vaultDir, 'hello.txt'), 'utf8');
         assert(hello === 'Hello FTP!', `hello.txt content: ${hello}`);
       }),
     );
@@ -159,61 +115,29 @@ export async function suiteL(): Promise<SuiteResult> {
     // a real FTP server can. If TYPE I isn't active or the server transforms
     // content, the post-upload verify in FtpProvider.upload() now throws.
     tests.push(
-      await runTest(
-        'L4',
-        'FTP binary integrity — 8 MB CR/LF/CRLF pattern roundtrip',
-        async () => {
-          const size = 8 * 1024 * 1024;
-          const payload = Buffer.alloc(size);
-          const pattern = [0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0xff, 0x7f, 0x80];
-          for (let i = 0; i < size; i++) {
-            payload[i] = pattern[i % pattern.length];
-          }
+      await runTest('L4', 'FTP binary integrity — 8 MB CR/LF/CRLF pattern roundtrip', async () => {
+        const size = 8 * 1024 * 1024;
+        const payload = Buffer.alloc(size);
+        const pattern = [0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0xff, 0x7f, 0x80];
+        for (let i = 0; i < size; i++) {
+          payload[i] = pattern[i % pattern.length];
+        }
 
-          const { io } = createMockProviderIO();
-          const provider = new FtpProvider(
-            {
-              id: 'smoke-l4',
-              type: 'ftp',
-              adapterPackage: null,
-              config: {
-                host: FTP_HOST,
-                port: FTP_PORT,
-                user: FTP_USER,
-                password: FTP_PASSWORD,
-                path: FTP_PATH,
-                secure: FTP_SECURE,
-              },
-            },
-            io,
-          );
-          provider.setVaultName('ftp-integrity-smoke');
+        const { io } = createMockProviderIO();
+        const provider = new FtpProvider({ id: 'smoke-l4', type: 'ftp', adapterPackage: null, config: { host: FTP_HOST, port: FTP_PORT, user: FTP_USER, password: FTP_PASSWORD, path: FTP_PATH, secure: FTP_SECURE } }, io);
+        provider.setVaultName('ftp-integrity-smoke');
 
-          const fileName = `probe_${Date.now()}.bin`;
-          const ref = await provider.upload(
-            fileName,
-            Readable.from(payload),
-            payload.length,
-          );
+        const fileName = `probe_${Date.now()}.bin`;
+        const ref = await provider.upload(fileName, Readable.from(payload), payload.length);
 
-          try {
-            const downloaded = await streamToBuffer(
-              await provider.download(ref),
-            );
-            assert(
-              downloaded.length === payload.length,
-              `size mismatch: uploaded ${payload.length} B, downloaded ${downloaded.length} B`,
-            );
-            assert(
-              downloaded.equals(payload),
-              'byte-for-byte mismatch after FTP roundtrip — ' +
-                'server is likely running ASCII mode or some transform',
-            );
-          } finally {
-            await provider.delete(ref).catch(() => {});
-          }
-        },
-      ),
+        try {
+          const downloaded = await streamToBuffer(await provider.download(ref));
+          assert(downloaded.length === payload.length, `size mismatch: uploaded ${payload.length} B, downloaded ${downloaded.length} B`);
+          assert(downloaded.equals(payload), 'byte-for-byte mismatch after FTP roundtrip — ' + 'server is likely running ASCII mode or some transform');
+        } finally {
+          await provider.delete(ref).catch(() => {});
+        }
+      }),
     );
 
     // L5 — verify must stay quiet without --debug.
@@ -222,47 +146,22 @@ export async function suiteL(): Promise<SuiteResult> {
     // before showing the result table. The connect log now routes through
     // io.debug() and stays silenced unless --debug is on.
     tests.push(
-      await runTest(
-        'L5',
-        'bfs verify — connection chatter silent without --debug',
-        async () => {
-          const r = runBfs(['verify'], vaultDir);
-          assert(
-            r.status === 0,
-            `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`,
-          );
-          const combined = r.stdout + r.stderr;
-          assert(
-            !combined.includes('FTP connecting'),
-            `Expected no "FTP connecting" output, got:\n${combined}`,
-          );
-        },
-      ),
+      await runTest('L5', 'bfs verify — connection chatter silent without --debug', async () => {
+        const r = runBfs(['verify'], vaultDir);
+        assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+        const combined = r.stdout + r.stderr;
+        assert(!combined.includes('FTP connecting'), `Expected no "FTP connecting" output, got:\n${combined}`);
+      }),
     );
 
     // L6 — verify with --debug surfaces the connection chatter on stderr.
     tests.push(
-      await runTest(
-        'L6',
-        'bfs verify --debug — connection chatter visible on stderr',
-        async () => {
-          const r = runBfs(['--debug', 'verify'], vaultDir);
-          assert(
-            r.status === 0,
-            `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`,
-          );
-          assert(
-            r.stderr.includes('FTP connecting'),
-            `Expected "FTP connecting" on stderr with --debug.\n` +
-              `stdout: ${r.stdout}\nstderr: ${r.stderr}`,
-          );
-          assert(
-            !r.stdout.includes('FTP connecting'),
-            `"FTP connecting" must go to stderr, not stdout.\n` +
-              `stdout: ${r.stdout}`,
-          );
-        },
-      ),
+      await runTest('L6', 'bfs verify --debug — connection chatter visible on stderr', async () => {
+        const r = runBfs(['--debug', 'verify'], vaultDir);
+        assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+        assert(r.stderr.includes('FTP connecting'), `Expected "FTP connecting" on stderr with --debug.\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+        assert(!r.stdout.includes('FTP connecting'), `"FTP connecting" must go to stderr, not stdout.\nstdout: ${r.stdout}`);
+      }),
     );
 
     // L7 — Recovery via --bootstrap with FTP credentials.
@@ -277,37 +176,15 @@ export async function suiteL(): Promise<SuiteResult> {
         await fs.rm(restoreDir, { recursive: true, force: true });
         await fs.mkdir(restoreDir, { recursive: true });
 
-        const r = runBfs(
-          [
-            'recovery',
-            '--provider',
-            'ftp',
-            '--name',
-            'ftp-test-vault',
-            '--bootstrap',
-            FTP_FLAGS,
-          ],
-          restoreDir,
-        );
-        assert(
-          r.status === 0,
-          `recovery exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`,
-        );
+        const r = runBfs(['recovery', '--provider', 'ftp', '--name', 'ftp-test-vault', '--bootstrap', FTP_FLAGS], restoreDir);
+        assert(r.status === 0, `recovery exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
 
-        const manifestPath = path.join(
-          restoreDir,
-          '.bfs',
-          'manifests',
-          'v001.json',
-        );
+        const manifestPath = path.join(restoreDir, '.bfs', 'manifests', 'v001.json');
         const manifestExists = await fs
           .stat(manifestPath)
           .then(() => true)
           .catch(() => false);
-        assert(
-          manifestExists,
-          `expected .bfs/manifests/v001.json after recovery, missing in:\n${r.stdout}\n${r.stderr}`,
-        );
+        assert(manifestExists, `expected .bfs/manifests/v001.json after recovery, missing in:\n${r.stdout}\n${r.stderr}`);
       }),
     );
   } finally {

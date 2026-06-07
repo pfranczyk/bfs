@@ -10,10 +10,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureConsole, makeConfig, runCmd } from './_helpers.js';
 
-vi.mock('../../src/vault/config.js', () => ({
-  readConfig: vi.fn(),
-  writeConfig: vi.fn(),
-}));
+vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn(), writeConfig: vi.fn() }));
 
 import { readConfig } from '../../src/vault/config.js';
 
@@ -42,31 +39,21 @@ describe('clear', () => {
 
     expect(result).toBe('ok');
     const calledPaths = unlinkSpy.mock.calls.map(([p]: [unknown]) => String(p));
-    expect(
-      calledPaths.some(
-        (p: string) => p.includes('.bfs') && p.endsWith('push.blob.pending'),
-      ),
-    ).toBe(true);
+    expect(calledPaths.some((p: string) => p.includes('.bfs') && p.endsWith('push.blob.pending'))).toBe(true);
   });
 
   it('should delete pull.blob.pending from default cache dir when no config', async () => {
     await runCmd(['clear']);
 
     const calledPaths = unlinkSpy.mock.calls.map(([p]: [unknown]) => String(p));
-    expect(
-      calledPaths.some(
-        (p: string) => p.includes('.bfs') && p.endsWith('pull.blob.pending'),
-      ),
-    ).toBe(true);
+    expect(calledPaths.some((p: string) => p.includes('.bfs') && p.endsWith('pull.blob.pending'))).toBe(true);
   });
 
   // ─── config.cache_dir fallback ────────────────────────────────────────────
 
   it('should use config.cache_dir when set in config.json', async () => {
     const customDir = path.join(path.sep, 'custom', 'cache');
-    mockReadConfig.mockResolvedValue(
-      makeConfig({ cache_dir: customDir }) as never,
-    );
+    mockReadConfig.mockResolvedValue(makeConfig({ cache_dir: customDir }) as never);
 
     await runCmd(['clear']);
 
@@ -80,9 +67,7 @@ describe('clear', () => {
   it('should use --cache-dir flag over config.cache_dir', async () => {
     const configDir = path.join(path.sep, 'config', 'cache');
     const flagDir = path.join(path.sep, 'flag', 'cache');
-    mockReadConfig.mockResolvedValue(
-      makeConfig({ cache_dir: configDir }) as never,
-    );
+    mockReadConfig.mockResolvedValue(makeConfig({ cache_dir: configDir }) as never);
 
     await runCmd(['clear', '--cache-dir', flagDir]);
 
@@ -91,9 +76,7 @@ describe('clear', () => {
     const expectedPull = path.join(flagDir, 'pull.blob.pending');
     expect(calledPaths).toContain(expectedPush);
     expect(calledPaths).toContain(expectedPull);
-    expect(calledPaths.every((p: string) => !p.startsWith(configDir))).toBe(
-      true,
-    );
+    expect(calledPaths.every((p: string) => !p.startsWith(configDir))).toBe(true);
   });
 
   // ─── Toleruje brakujące pliki ─────────────────────────────────────────────
@@ -122,24 +105,14 @@ describe('clear', () => {
     await runCmd(['clear']);
 
     const calledPaths = unlinkSpy.mock.calls.map(([p]: [unknown]) => String(p));
-    expect(
-      calledPaths.some(
-        (p: string) =>
-          p.includes(`.bfs${path.sep}push.lock`) || p.endsWith('push.lock'),
-      ),
-    ).toBe(true);
+    expect(calledPaths.some((p: string) => p.includes(`.bfs${path.sep}push.lock`) || p.endsWith('push.lock'))).toBe(true);
   });
 
   it('should delete .bfs/repair.lock', async () => {
     await runCmd(['clear']);
 
     const calledPaths = unlinkSpy.mock.calls.map(([p]: [unknown]) => String(p));
-    expect(
-      calledPaths.some(
-        (p: string) =>
-          p.includes(`.bfs${path.sep}repair.lock`) || p.endsWith('repair.lock'),
-      ),
-    ).toBe(true);
+    expect(calledPaths.some((p: string) => p.includes(`.bfs${path.sep}repair.lock`) || p.endsWith('repair.lock'))).toBe(true);
   });
 
   it('should print clear_removed_file message for each removed file', async () => {
@@ -154,9 +127,7 @@ describe('clear', () => {
   });
 
   it('should rethrow non-ENOENT errors (e.g. EPERM)', async () => {
-    const eperm = Object.assign(new Error('EPERM: operation not permitted'), {
-      code: 'EPERM',
-    });
+    const eperm = Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
     unlinkSpy.mockRejectedValue(eperm);
 
     const result = await runCmd(['clear']);
@@ -179,15 +150,11 @@ describe('clear', () => {
     const calledPaths = unlinkSpy.mock.calls.map(([p]: [unknown]) => String(p));
     expect(calledPaths).toContain(path.join(vaultRoot, '.bfs', 'push.lock'));
     expect(calledPaths).toContain(path.join(vaultRoot, '.bfs', 'repair.lock'));
-    expect(calledPaths).toContain(
-      path.join(vaultRoot, '.bfs', 'cache', 'push.blob.pending'),
-    );
+    expect(calledPaths).toContain(path.join(vaultRoot, '.bfs', 'cache', 'push.blob.pending'));
 
     // Nothing under the process cwd ought to be touched.
     const cwdPrefix = path.resolve(process.cwd());
-    expect(calledPaths.every((p: string) => !p.startsWith(cwdPrefix))).toBe(
-      true,
-    );
+    expect(calledPaths.every((p: string) => !p.startsWith(cwdPrefix))).toBe(true);
   });
 
   it('should pair --cwd with --cache-dir: lock under --cwd, cache under --cache-dir', async () => {
@@ -201,8 +168,6 @@ describe('clear', () => {
     expect(calledPaths).toContain(path.join(cacheDir, 'push.blob.pending'));
     expect(calledPaths).toContain(path.join(cacheDir, 'pull.blob.pending'));
     // Cache under vaultRoot would mean --cache-dir was ignored.
-    expect(calledPaths).not.toContain(
-      path.join(vaultRoot, '.bfs', 'cache', 'push.blob.pending'),
-    );
+    expect(calledPaths).not.toContain(path.join(vaultRoot, '.bfs', 'cache', 'push.blob.pending'));
   });
 });

@@ -3,25 +3,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  LockConcurrentActiveError,
-  LockPartialStatePushError,
-} from '../../src/core/errors.js';
+import { LockConcurrentActiveError, LockPartialStatePushError } from '../../src/core/errors.js';
 import { writeJsonAtomic } from '../../src/core/fs-utils.js';
-import {
-  assertNoActiveLock,
-  isLockStale,
-  isPidAlive,
-  LOCK_FORMAT_VERSION,
-  LOCK_STALE_MS,
-  type PushLock,
-  pushLockPath,
-  type RepairLock,
-  readLock,
-  removeLock,
-  repairLockPath,
-  writeLockAtomic,
-} from '../../src/vault/lockfile.js';
+import { assertNoActiveLock, isLockStale, isPidAlive, LOCK_FORMAT_VERSION, LOCK_STALE_MS, type PushLock, pushLockPath, type RepairLock, readLock, removeLock, repairLockPath, writeLockAtomic } from '../../src/vault/lockfile.js';
 
 function makePushLock(overrides: Partial<PushLock> = {}): PushLock {
   return {
@@ -203,17 +187,11 @@ describe('assertNoActiveLock — push operation', () => {
   it('should throw LockConcurrentActiveError when a live push.lock exists', async () => {
     await writeLockAtomic(pushLockPath(tmpDir), makePushLock());
 
-    await expect(assertNoActiveLock(tmpDir, 'push')).rejects.toThrow(
-      LockConcurrentActiveError,
-    );
+    await expect(assertNoActiveLock(tmpDir, 'push')).rejects.toThrow(LockConcurrentActiveError);
   });
 
   it('should throw LockPartialStatePushError when a stale push.lock exists', async () => {
-    const stale = makePushLock({
-      pid: 0x7fffffff,
-      started_at: new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString(),
-      version: 42,
-    });
+    const stale = makePushLock({ pid: 0x7fffffff, started_at: new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString(), version: 42 });
     await writeLockAtomic(pushLockPath(tmpDir), stale);
 
     const promise = assertNoActiveLock(tmpDir, 'push');
@@ -225,21 +203,14 @@ describe('assertNoActiveLock — push operation', () => {
   it('should throw LockConcurrentActiveError when a live repair.lock exists', async () => {
     await writeLockAtomic(repairLockPath(tmpDir), makeRepairLock());
 
-    await expect(assertNoActiveLock(tmpDir, 'push')).rejects.toThrow(
-      LockConcurrentActiveError,
-    );
+    await expect(assertNoActiveLock(tmpDir, 'push')).rejects.toThrow(LockConcurrentActiveError);
   });
 
   it('should throw LockPartialStatePushError when a stale repair.lock exists', async () => {
-    const stale = makeRepairLock({
-      pid: 0x7fffffff,
-      started_at: new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString(),
-    });
+    const stale = makeRepairLock({ pid: 0x7fffffff, started_at: new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString() });
     await writeLockAtomic(repairLockPath(tmpDir), stale);
 
-    await expect(assertNoActiveLock(tmpDir, 'push')).rejects.toThrow(
-      LockPartialStatePushError,
-    );
+    await expect(assertNoActiveLock(tmpDir, 'push')).rejects.toThrow(LockPartialStatePushError);
   });
 });
 
@@ -262,16 +233,11 @@ describe('assertNoActiveLock — repair operation', () => {
   it('should throw LockConcurrentActiveError when a live repair.lock exists', async () => {
     await writeLockAtomic(repairLockPath(tmpDir), makeRepairLock());
 
-    await expect(assertNoActiveLock(tmpDir, 'repair')).rejects.toThrow(
-      LockConcurrentActiveError,
-    );
+    await expect(assertNoActiveLock(tmpDir, 'repair')).rejects.toThrow(LockConcurrentActiveError);
   });
 
   it('should pass when a stale repair.lock exists (idempotent retry semantics)', async () => {
-    const stale = makeRepairLock({
-      pid: 0x7fffffff,
-      started_at: new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString(),
-    });
+    const stale = makeRepairLock({ pid: 0x7fffffff, started_at: new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString() });
     await writeLockAtomic(repairLockPath(tmpDir), stale);
 
     await expect(assertNoActiveLock(tmpDir, 'repair')).resolves.toBeUndefined();
@@ -284,10 +250,7 @@ describe('assertNoActiveLock — repair operation', () => {
   });
 
   it('should pass when a stale push.lock exists (repair cleans up after push)', async () => {
-    const stale = makePushLock({
-      pid: 0x7fffffff,
-      started_at: new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString(),
-    });
+    const stale = makePushLock({ pid: 0x7fffffff, started_at: new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString() });
     await writeLockAtomic(pushLockPath(tmpDir), stale);
 
     await expect(assertNoActiveLock(tmpDir, 'repair')).resolves.toBeUndefined();

@@ -3,29 +3,12 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { deriveKey } from '../core/crypto.js';
 import { BfsError } from '../core/errors.js';
-import { parseShardHeaderFromStream } from '../core/shard-io.js';
+import { parseShardHeaderFromStream, SHARD_HEADER_READ_BYTES } from '../core/shard-io.js';
 import { fmt, t } from '../i18n/index.js';
-import type {
-  ManifestShard,
-  ProviderConfig,
-  ProviderIO,
-  ShardHeader,
-  ShardLocation,
-  StorageProvider,
-  VaultConfig,
-  VersionManifest,
-} from '../types/index.js';
+import type { ManifestShard, ProviderConfig, ProviderIO, ShardHeader, ShardLocation, StorageProvider, VaultConfig, VersionManifest } from '../types/index.js';
 import { PushMode, VersionHealth } from '../types/index.js';
-import {
-  checkVersionMismatch,
-  detectMissingAdapters,
-  formatMissingAdaptersMessage,
-} from './adapter-preflight.js';
-import {
-  type BootstrapResult,
-  bootstrapFromProvider,
-  parseVersionFromFilename,
-} from './bootstrap.js';
+import { checkVersionMismatch, detectMissingAdapters, formatMissingAdaptersMessage } from './adapter-preflight.js';
+import { type BootstrapResult, bootstrapFromProvider, parseVersionFromFilename } from './bootstrap.js';
 import { writeConfig } from './config.js';
 import { readManifest, writeManifest } from './manifest.js';
 import { writeState } from './state.js';
@@ -42,6 +25,12 @@ export interface RecoveryOptions {
   io: ProviderIO;
   /** Known passwords for encrypted vaults (all added to the password pool) */
   passwords?: string[];
+  /**
+   * Transport secrets the operator already supplied for the bootstrap provider
+   * (field name → value, e.g. `{ password: '...' }`). They seed the input pool
+   * so other providers sharing the same credential connect without re-prompting.
+   */
+  bootstrapInputs?: Record<string, string>;
   /** Overrides cache directory for recovered shards. Defaults to {rootDir}/.bfs/cache. */
   cacheDir?: string;
   /**
@@ -56,11 +45,7 @@ export interface RecoveryOptions {
 export interface RecoveryReport {
   manifests_rebuilt: number;
   provider_count: number;
-  versions: Array<{
-    version: number;
-    health: VersionHealth;
-    consensus: boolean;
-  }>;
+  versions: Array<{ version: number; health: VersionHealth; consensus: boolean }>;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -73,25 +58,8 @@ interface ProcessVersionContext {
   readonly io: ProviderIO;
 }
 
-const MAX_PASSWORD_ATTEMPTS = 3;
-
-/**
- * Maximum bytes pulled from a shard for header inspection during recovery.
- * The shard header (magic, common fields, kdf_salt, location_map) is bounded
- * by the number of providers (N+K) and a JSON location map. 16 KB
- * comfortably covers realistic schemes (≤ 32 providers) without forcing
- * adapters to stream the full multi-MB payload.
- */
-const SHARD_HEADER_READ_BYTES = 16384;
-
 /** Attempts to decrypt a location map from a shard using the provided password pool (MRU order). */
-async function tryDecryptLocationMap(
-  header: ShardHeader,
-  headerBytes: Buffer,
-  version: number,
-  passwordPool: string[],
-  io: ProviderIO,
-): Promise<Nullable<{ location_map: ShardLocation[]; encKey: Buffer }>> {
+async function tryDecryptLocationMap(header: ShardHeader, headerBytes: Buffer, version: number, passwordPool: string[], io: ProviderIO): Promise<Nullable<{ location_map: ShardLocation[]; encKey: Buffer }>> {
   if (!header.encrypted || !header.kdf_salt) return null;
 
   // Try all known passwords from pool (MRU order)
@@ -100,8 +68,7 @@ async function tryDecryptLocationMap(
     if (pwd === undefined) continue;
     try {
       const key = await deriveKey(pwd, header.kdf_salt);
-      const { header: h1, payloadStream: ps1 } =
-        await parseShardHeaderFromStream(Readable.from(headerBytes), key);
+      const { header: h1, payloadStream: ps1 } = await parseShardHeaderFromStream(Readable.from(headerBytes), key);
       ps1.on('error', () => {}).destroy();
       return { location_map: h1.location_map, encKey: key };
     } catch {
@@ -115,23 +82,24 @@ async function tryDecryptLocationMap(
     io.warn(fmt('recovery_pool_password_failed', ver));
   }
 
-  for (let attempt = 0; attempt < MAX_PASSWORD_ATTEMPTS; attempt++) {
+  // Ask the operator, retrying until a password decrypts the map or they give
+  // up. Unbounded: at this critical recovery moment they keep trying; a blank
+  // entry (or no interactive TTY) skips this version.
+  let firstTry = true;
+  for (;;) {
     let newPassword: Nullable<string> = null;
     try {
-      const prompt =
-        attempt === 0
-          ? fmt('recovery_ask_version_password', ver)
-          : fmt('recovery_wrong_password_retry', ver);
+      const prompt = firstTry ? fmt('recovery_ask_version_password', ver) : fmt('recovery_wrong_password_retry', ver);
       newPassword = await io.askSecret(prompt);
     } catch {
       return null;
     }
+    firstTry = false;
     if (!newPassword) return null;
 
     try {
       const key = await deriveKey(newPassword, header.kdf_salt);
-      const { header: h2, payloadStream: ps2 } =
-        await parseShardHeaderFromStream(Readable.from(headerBytes), key);
+      const { header: h2, payloadStream: ps2 } = await parseShardHeaderFromStream(Readable.from(headerBytes), key);
       ps2.on('error', () => {}).destroy();
       passwordPool.push(newPassword);
       return { location_map: h2.location_map, encKey: key };
@@ -139,8 +107,6 @@ async function tryDecryptLocationMap(
       // wrong password — retry
     }
   }
-
-  return null;
 }
 
 /**
@@ -149,16 +115,8 @@ async function tryDecryptLocationMap(
  *
  * @returns Map of version → { provider_id → { shardIndex, provider } }
  */
-async function discoverAllVersions(
-  allProviders: StorageProvider[],
-  vaultName: string,
-): Promise<
-  Map<number, Map<string, { shardIndex: number; provider: StorageProvider }>>
-> {
-  const versionProviderMap = new Map<
-    number,
-    Map<string, { shardIndex: number; provider: StorageProvider }>
-  >();
+async function discoverAllVersions(allProviders: StorageProvider[], vaultName: string): Promise<Map<number, Map<string, { shardIndex: number; provider: StorageProvider }>>> {
+  const versionProviderMap = new Map<number, Map<string, { shardIndex: number; provider: StorageProvider }>>();
 
   for (const p of allProviders) {
     try {
@@ -170,9 +128,7 @@ async function discoverAllVersions(
         if (!versionProviderMap.has(parsed.version)) {
           versionProviderMap.set(parsed.version, new Map());
         }
-        versionProviderMap
-          .get(parsed.version)
-          ?.set(p.id, { shardIndex: parsed.shardIndex, provider: p });
+        versionProviderMap.get(parsed.version)?.set(p.id, { shardIndex: parsed.shardIndex, provider: p });
       }
     } catch {
       // provider unavailable — skip
@@ -187,41 +143,25 @@ async function discoverAllVersions(
  *
  * @returns { manifest, consensusOk } on success, or null if the version should be skipped
  */
-async function processVersion(
-  version: number,
-  entries: Array<{ shardIndex: number; provider: StorageProvider }>,
-  ctx: ProcessVersionContext,
-): Promise<Nullable<{ manifest: VersionManifest; consensusOk: boolean }>> {
+async function processVersion(version: number, entries: Array<{ shardIndex: number; provider: StorageProvider }>, ctx: ProcessVersionContext): Promise<Nullable<{ manifest: VersionManifest; consensusOk: boolean }>> {
   const { vaultName, bootstrapVaultId, passwordPool, io } = ctx;
 
   // Pull up to 2 shard headers from different providers for consensus.
   // Providers MUST honor `downloadHeader` and avoid pulling the full payload
   // over the wire (FTP issues SIZE + aborts after maxBytes; LocalFS uses a
   // bounded createReadStream).
-  const shardDataList: Array<{
-    header: ShardHeader;
-    headerBytes: Buffer;
-    providerId: string;
-  }> = [];
+  const shardDataList: Array<{ header: ShardHeader; headerBytes: Buffer; providerId: string }> = [];
   for (const entry of entries) {
     if (shardDataList.length >= 2) break;
     try {
       const filename = `shard_${entry.shardIndex}.bfs.${version}`;
       entry.provider.setVaultName(vaultName);
-      const headerBytes = await entry.provider.downloadHeader(
-        { provider_id: entry.provider.id, path: filename },
-        SHARD_HEADER_READ_BYTES,
-      );
+      const headerBytes = await entry.provider.downloadHeader({ provider_id: entry.provider.id, path: filename }, SHARD_HEADER_READ_BYTES);
 
       // Parse header from buffered bytes; payload stream errors are expected (truncated data)
-      const { header: shardHeader, payloadStream } =
-        await parseShardHeaderFromStream(Readable.from(headerBytes));
+      const { header: shardHeader, payloadStream } = await parseShardHeaderFromStream(Readable.from(headerBytes));
       payloadStream.on('error', () => {}).destroy();
-      shardDataList.push({
-        header: shardHeader,
-        headerBytes,
-        providerId: entry.provider.id,
-      });
+      shardDataList.push({ header: shardHeader, headerBytes, providerId: entry.provider.id });
     } catch {
       /* skip */
     }
@@ -237,14 +177,8 @@ async function processVersion(
     return null;
   }
 
-  const parsedFilename = parseVersionFromFilename(
-    `shard_${entries[0]?.shardIndex}.bfs.${version}`,
-  );
-  if (
-    !parsedFilename ||
-    parsedFilename.shardIndex !== primaryMeta.shard_index ||
-    parsedFilename.version !== primaryMeta.version
-  ) {
+  const parsedFilename = parseVersionFromFilename(`shard_${entries[0]?.shardIndex}.bfs.${version}`);
+  if (!parsedFilename || parsedFilename.shardIndex !== primaryMeta.shard_index || parsedFilename.version !== primaryMeta.version) {
     io.warn(fmt('recovery_consensus_filename_mismatch', String(version)));
     return null;
   }
@@ -254,19 +188,13 @@ async function processVersion(
   if (shardDataList.length >= 2) {
     const secondaryMeta = shardDataList[1]?.header ?? primaryMeta;
     const mismatch: string[] = [];
-    if (secondaryMeta.vault_id !== primaryMeta.vault_id)
-      mismatch.push('vault_id');
-    if (secondaryMeta.blob_hash !== primaryMeta.blob_hash)
-      mismatch.push('blob_hash');
+    if (secondaryMeta.vault_id !== primaryMeta.vault_id) mismatch.push('vault_id');
+    if (secondaryMeta.blob_hash !== primaryMeta.blob_hash) mismatch.push('blob_hash');
     if (secondaryMeta.version !== primaryMeta.version) mismatch.push('version');
-    if (secondaryMeta.data_shards !== primaryMeta.data_shards)
-      mismatch.push('data_shards');
-    if (secondaryMeta.parity_shards !== primaryMeta.parity_shards)
-      mismatch.push('parity_shards');
+    if (secondaryMeta.data_shards !== primaryMeta.data_shards) mismatch.push('data_shards');
+    if (secondaryMeta.parity_shards !== primaryMeta.parity_shards) mismatch.push('parity_shards');
     if (mismatch.length > 0) {
-      io.warn(
-        fmt('recovery_consensus_failed', String(version), mismatch.join(', ')),
-      );
+      io.warn(fmt('recovery_consensus_failed', String(version), mismatch.join(', ')));
       consensusOk = false;
     }
   }
@@ -274,13 +202,7 @@ async function processVersion(
   // Resolve location map (decrypt if needed)
   let location_map: Nullable<ShardLocation[]> = null;
   if (primaryMeta.encrypted) {
-    const result = await tryDecryptLocationMap(
-      primaryData.header,
-      primaryData.headerBytes,
-      version,
-      passwordPool,
-      io,
-    );
+    const result = await tryDecryptLocationMap(primaryData.header, primaryData.headerBytes, version, passwordPool, io);
     if (result) location_map = result.location_map;
   } else {
     location_map = primaryData.header.location_map;
@@ -291,23 +213,14 @@ async function processVersion(
   }
 
   // Build manifest from the location map and header metadata
-  const manifestShards: ManifestShard[] = location_map.map((loc) => ({
-    shard_index: loc.shard_index,
-    provider_id: loc.provider_id,
-    provider_type: loc.provider_type,
-    remote_path: loc.remote_path,
-    shard_hash: loc.shard_hash,
-  }));
+  const manifestShards: ManifestShard[] = location_map.map((loc) => ({ shard_index: loc.shard_index, provider_id: loc.provider_id, provider_type: loc.provider_type, remote_path: loc.remote_path, shard_hash: loc.shard_hash }));
   const manifest: VersionManifest = {
     version,
     pushed_at: null,
     file_count: null,
     total_size: null,
     blob_hash: primaryMeta.blob_hash,
-    scheme: {
-      data_shards: primaryMeta.data_shards,
-      parity_shards: primaryMeta.parity_shards,
-    },
+    scheme: { data_shards: primaryMeta.data_shards, parity_shards: primaryMeta.parity_shards },
     encrypted: primaryMeta.encrypted,
     shards: manifestShards,
     health: VersionHealth.Degraded,
@@ -329,31 +242,17 @@ async function processVersion(
  * Builds a VaultConfig from the bootstrap result and the latest verified manifest.
  * Connection configs are sourced from the bootstrap location map.
  */
-function reconstructConfig(
-  bootstrap: BootstrapResult,
-  latestManifest: VersionManifest,
-): VaultConfig {
+function reconstructConfig(bootstrap: BootstrapResult, latestManifest: VersionManifest): VaultConfig {
   const providerConfigs: ProviderConfig[] = latestManifest.shards.map((ms) => {
-    const loc = bootstrap.location_map.find(
-      (l) => l.provider_id === ms.provider_id,
-    );
-    return {
-      id: ms.provider_id,
-      type: ms.provider_type,
-      adapterPackage: loc?.adapterPackage ?? null,
-      config: loc?.connection_config ?? {},
-    };
+    const loc = bootstrap.location_map.find((l) => l.provider_id === ms.provider_id);
+    return { id: ms.provider_id, type: ms.provider_type, adapterPackage: loc?.adapterPackage ?? null, config: loc?.connection_config ?? {} };
   });
   return {
     vault_id: bootstrap.vault_id,
     vault_name: bootstrap.vault_name,
     version: 1,
     scheme: latestManifest.scheme,
-    encryption: {
-      enabled: latestManifest.encrypted,
-      algorithm: 'aes-256-gcm',
-      kdf: 'argon2id',
-    },
+    encryption: { enabled: latestManifest.encrypted, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
     compression: { enabled: true, algorithm: 'deflate' as const },
     push_mode: PushMode.NewVersion,
     providers: providerConfigs,
@@ -378,14 +277,13 @@ function reconstructConfig(
  * @throws BfsError if bootstrap fails
  * @throws TamperDetectedError if consensus check fails during bootstrap
  */
-export async function recover(
-  rootDir: string,
-  options: RecoveryOptions,
-): Promise<RecoveryReport> {
+export async function recover(rootDir: string, options: RecoveryOptions): Promise<RecoveryReport> {
   const { vaultName, provider: bootstrapProvider, io } = options;
 
   // ── 1. Create / reset .bfs/ and .bfs/cache/ ──────────────────────────────
-  await fs.mkdir(path.join(rootDir, '.bfs', 'manifests'), { recursive: true });
+  // 0700: .bfs/ holds config.json (provider secrets) and cached plaintext
+  // blobs, so keep the whole tree owner-only on POSIX (no-op on Windows NTFS).
+  await fs.mkdir(path.join(rootDir, '.bfs', 'manifests'), { recursive: true, mode: 0o700 });
   const cacheDir = path.join(rootDir, '.bfs', 'cache');
   await fs.mkdir(cacheDir, { recursive: true });
   // Clear existing cache (recovery starts fresh)
@@ -399,17 +297,9 @@ export async function recover(
   }
 
   // ── 2. Bootstrap ──────────────────────────────────────────────────────────
-  const passwordPool: string[] = options.passwords
-    ? [...options.passwords]
-    : [];
+  const passwordPool: string[] = options.passwords ? [...options.passwords] : [];
 
-  const bootstrap = await bootstrapFromProvider(
-    bootstrapProvider,
-    vaultName,
-    io,
-    undefined,
-    passwordPool,
-  );
+  const bootstrap = await bootstrapFromProvider(bootstrapProvider, vaultName, io, undefined, passwordPool, options.bootstrapInputs);
 
   // Save bootstrap shard to cache
   bootstrapProvider.setVaultName(vaultName);
@@ -420,14 +310,7 @@ export async function recover(
   // built-in = hard abort ("BFS installation broken"). Missing external
   // adapter = batched report with install commands, respecting
   // allowMissingAdapters so Reed-Solomon can still decode from what remains.
-  const recoveredProviders: ProviderConfig[] = bootstrap.location_map.map(
-    (loc) => ({
-      id: loc.provider_id,
-      type: loc.provider_type,
-      adapterPackage: loc.adapterPackage,
-      config: loc.connection_config,
-    }),
-  );
+  const recoveredProviders: ProviderConfig[] = bootstrap.location_map.map((loc) => ({ id: loc.provider_id, type: loc.provider_type, adapterPackage: loc.adapterPackage, config: loc.connection_config }));
   const missing = detectMissingAdapters(recoveredProviders);
   const builtInMissing = missing.filter((m) => m.adapterPackage === null);
   if (builtInMissing.length > 0) {
@@ -443,44 +326,17 @@ export async function recover(
   }
   const versionMismatches = checkVersionMismatch(recoveredProviders);
   for (const vm of versionMismatches) {
-    io.warn(
-      vm.severity === 'strong'
-        ? fmt(
-            'adapter_version_mismatch_strong',
-            vm.type,
-            vm.recordedPackage,
-            vm.installedPackage,
-            vm.recordedPackage,
-          )
-        : fmt(
-            'adapter_version_mismatch_soft',
-            vm.type,
-            vm.recordedPackage,
-            vm.installedPackage,
-          ),
-    );
+    io.warn(vm.severity === 'strong' ? fmt('adapter_version_mismatch_strong', vm.type, vm.recordedPackage, vm.installedPackage, vm.recordedPackage) : fmt('adapter_version_mismatch_soft', vm.type, vm.recordedPackage, vm.installedPackage));
   }
 
   // ── 3. Discover all versions across all providers ─────────────────────────
-  const allProviders: StorageProvider[] = [
-    bootstrapProvider,
-    ...bootstrap.providers,
-  ];
+  const allProviders: StorageProvider[] = [bootstrapProvider, ...bootstrap.providers];
   const versionProviderMap = await discoverAllVersions(allProviders, vaultName);
 
   // ── 4. Process each version — build and write its manifest ────────────────
-  const reportVersions: Array<{
-    version: number;
-    health: VersionHealth;
-    consensus: boolean;
-  }> = [];
+  const reportVersions: Array<{ version: number; health: VersionHealth; consensus: boolean }> = [];
   let latestVerified = 0;
-  const processCtx: ProcessVersionContext = {
-    vaultName,
-    bootstrapVaultId: bootstrap.vault_id,
-    passwordPool,
-    io,
-  };
+  const processCtx: ProcessVersionContext = { vaultName, bootstrapVaultId: bootstrap.vault_id, passwordPool, io };
 
   // Process newest versions first — bootstrap password is most likely to match
   // recent versions, minimizing interactive password prompts when passwords change.
@@ -488,20 +344,12 @@ export async function recover(
     const providerEntries = versionProviderMap.get(version);
     if (!providerEntries || providerEntries.size === 0) continue;
 
-    const result = await processVersion(
-      version,
-      [...providerEntries.values()],
-      processCtx,
-    );
+    const result = await processVersion(version, [...providerEntries.values()], processCtx);
     if (!result) continue;
 
     await writeManifest(rootDir, result.manifest);
     latestVerified = Math.max(latestVerified, version);
-    reportVersions.push({
-      version,
-      health: VersionHealth.Degraded,
-      consensus: result.consensusOk,
-    });
+    reportVersions.push({ version, health: VersionHealth.Degraded, consensus: result.consensusOk });
   }
 
   if (reportVersions.length === 0) {
@@ -509,15 +357,11 @@ export async function recover(
   }
 
   // Find the actual latest verified version
-  const allSortedVersions = reportVersions
-    .map((v) => v.version)
-    .sort((a, b) => a - b);
+  const allSortedVersions = reportVersions.map((v) => v.version).sort((a, b) => a - b);
   latestVerified = allSortedVersions[allSortedVersions.length - 1] ?? 0;
   const latestManifest = await readManifest(rootDir, latestVerified);
   if (!latestManifest) {
-    throw new BfsError(
-      fmt('recovery_manifest_unreadable', String(latestVerified)),
-    );
+    throw new BfsError(fmt('recovery_manifest_unreadable', String(latestVerified)));
   }
 
   // ── 5. Reconstruct config.json from the latest manifest ───────────────────
@@ -525,10 +369,7 @@ export async function recover(
   await writeConfig(rootDir, config);
 
   // ── 6. Reconstruct state.json ─────────────────────────────────────────────
-  await writeState(rootDir, {
-    latest_version: latestVerified,
-    working_version: 0,
-  });
+  await writeState(rootDir, { latest_version: latestVerified, working_version: 0 });
 
   // ── 7. Run verify to update health ────────────────────────────────────────
   const verifyReport = await verifyAll(rootDir, io);
@@ -537,9 +378,5 @@ export async function recover(
     if (rv) rv.health = vs.health;
   }
 
-  return {
-    manifests_rebuilt: reportVersions.length,
-    provider_count: config.providers.length,
-    versions: reportVersions,
-  };
+  return { manifests_rebuilt: reportVersions.length, provider_count: config.providers.length, versions: reportVersions };
 }

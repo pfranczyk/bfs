@@ -2,25 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VersionHealth } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
-vi.mock('../../src/vault/vault-manager.js', () => ({
-  listVersions: vi.fn(),
-}));
+vi.mock('../../src/vault/vault-manager.js', () => ({ listVersions: vi.fn() }));
 
 import { listVersions } from '../../src/vault/vault-manager.js';
 
 const mockListVersions = vi.mocked(listVersions);
 
 function makeManifest(version: number, overrides: object = {}) {
-  return {
-    version,
-    health: VersionHealth.Healthy,
-    shards: [],
-    scheme: { data_shards: 2, parity_shards: 1 },
-    file_count: 10,
-    total_size: 1024,
-    pushed_at: '2024-01-01T00:00:00.000Z',
-    ...overrides,
-  };
+  return { version, health: VersionHealth.Healthy, shards: [], scheme: { data_shards: 2, parity_shards: 1 }, file_count: 10, total_size: 1024, pushed_at: '2024-01-01T00:00:00.000Z', ...overrides };
 }
 
 describe('versions', () => {
@@ -50,10 +39,7 @@ describe('versions', () => {
   // ─── Tabela wersji ────────────────────────────────────────────────────────
 
   it('should display version numbers in output', async () => {
-    mockListVersions.mockResolvedValue([
-      makeManifest(1),
-      makeManifest(5),
-    ] as never);
+    mockListVersions.mockResolvedValue([makeManifest(1), makeManifest(5)] as never);
 
     await runCmd(['versions']);
 
@@ -72,9 +58,7 @@ describe('versions', () => {
   });
 
   it('should display scheme N/K in output', async () => {
-    mockListVersions.mockResolvedValue([
-      makeManifest(1, { scheme: { data_shards: 3, parity_shards: 2 } }),
-    ] as never);
+    mockListVersions.mockResolvedValue([makeManifest(1, { scheme: { data_shards: 3, parity_shards: 2 } })] as never);
 
     await runCmd(['versions']);
 
@@ -85,9 +69,7 @@ describe('versions', () => {
   it('should display "?" for file_count when null (pipeline: manifest from recovery)', async () => {
     // Per pipeline: po recovery pushed_at=null, file_count=null, total_size=null
     // uzupełniane automatycznie po pierwszym pull
-    mockListVersions.mockResolvedValue([
-      makeManifest(1, { file_count: null, total_size: null }),
-    ] as never);
+    mockListVersions.mockResolvedValue([makeManifest(1, { file_count: null, total_size: null })] as never);
 
     await runCmd(['versions']);
 
@@ -96,9 +78,7 @@ describe('versions', () => {
   });
 
   it('should display "—" for pushed_at when null (manifest from recovery)', async () => {
-    mockListVersions.mockResolvedValue([
-      makeManifest(1, { pushed_at: null }),
-    ] as never);
+    mockListVersions.mockResolvedValue([makeManifest(1, { pushed_at: null })] as never);
 
     await runCmd(['versions']);
 
@@ -113,7 +93,7 @@ describe('versions', () => {
     const output = capture.logs.join('\n');
     expect(output).toContain('Version');
     expect(output).toContain('Scheme');
-    expect(output).toContain('Shards');
+    expect(output).toContain('Copies');
     expect(output).toContain('Files');
     expect(output).toContain('Size');
   });
@@ -126,8 +106,6 @@ describe('versions', () => {
     const result = await runCmd(['versions']);
 
     expect(result).toBe('abort');
-    expect(
-      capture.errors.some((e) => e.includes('No vault config found')),
-    ).toBe(true);
+    expect(capture.errors.some((e) => e.includes('No vault config found'))).toBe(true);
   });
 });

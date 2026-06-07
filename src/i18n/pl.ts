@@ -12,18 +12,19 @@ export const pl: Strings = {
   repl_help_cmd_status: 'Pokaż status kopii zapasowej',
   repl_help_cmd_versions: 'Wylistuj wersje kopii zapasowych',
   repl_help_cmd_prune: 'Usuń stare wersje (np. 1-5, --keep-last 3)',
-  repl_help_cmd_verify: 'Sprawdź dostępność i stan shardów',
+  repl_help_cmd_verify: 'Sprawdź dostępność i stan nośników',
   repl_help_cmd_recovery: 'Odbudowa po awarii',
   repl_help_cmd_provider_add: 'Dodaj provider',
   repl_help_cmd_provider_list: 'Wylistuj providery',
   repl_help_cmd_provider_remove: 'Usuń provider',
-  repl_help_cmd_scheme_set:
-    'Zmień schemat Reed-Solomon (N danych + K parzystości)',
+  repl_help_cmd_scheme_set: 'Zmień schemat Reed-Solomon (N danych + K parzystości)',
   repl_help_cmd_clear: 'Usuń zbuforowane dane po przerwanym push/pull',
   repl_help_cmd_help: 'Pokaż tę pomoc',
   repl_help_cmd_exit: 'Wyjdź',
   repl_goodbye: 'Do widzenia!',
   repl_cancelled: 'Anulowano.',
+  repl_banner_providers: '(%s nośników)',
+  repl_error_prefix: 'Błąd: %s',
 
   // ─── Health ──────────────────────────────────────────────────────────────
   health_healthy: '✓ zdrowy',
@@ -32,25 +33,22 @@ export const pl: Strings = {
   health_unknown: '? nieznany',
 
   // ─── Command descriptions (bfs --help) ───────────────────────────────────
-  cmd_bfs_desc:
-    'Backup File System — rozproszony backup z kodowaniem Reed-Solomon',
+  cmd_bfs_desc: 'Backup File System — rozproszony backup z kodowaniem Reed-Solomon',
   cmd_version_flag: 'Pokaż wersję programu',
   cmd_help_flag: 'Wyświetl pomoc dla komendy',
   cmd_help_cmd: 'Wyświetl pomoc dla komendy',
   cmd_cwd_desc: 'Katalog roboczy kopii zapasowej (nadpisuje bieżący katalog)',
   cmd_lang_desc: 'Ustaw język UI na stałe (np. en, pl)',
   cmd_init_desc: 'Skonfiguruj nową kopię zapasową w bieżącym katalogu',
-  cmd_push_desc:
-    'Utwórz kopię zapasową bieżącego katalogu (nowa wersja lub nadpisanie)',
+  cmd_push_desc: 'Utwórz kopię zapasową bieżącego katalogu (nowa wersja lub nadpisanie)',
   cmd_pull_desc: 'Przywróć pliki z kopii zapasowej',
   cmd_status_desc: 'Pokaż status kopii zapasowej',
   cmd_versions_desc: 'Wylistuj wszystkie wersje kopii zapasowych',
   cmd_prune_desc: 'Usuń stare wersje kopii zapasowych z providerów',
-  cmd_verify_desc: 'Sprawdź dostępność i stan shardów dla wszystkich wersji',
+  cmd_verify_desc: 'Sprawdź dostępność i stan nośników dla wszystkich wersji',
   cmd_recovery_desc: 'Odbuduj .bfs/ z providerów (odtwarzanie po awarii)',
   cmd_scheme_desc: 'Zarządzaj schematem Reed-Solomon',
-  cmd_scheme_set_desc:
-    'Zmień schemat N/K (liczba providerów musi być równa data+parity)',
+  cmd_scheme_set_desc: 'Zmień schemat N/K (liczba providerów musi być równa data+parity)',
   cmd_provider_desc: 'Zarządzaj providerami',
   cmd_provider_add_desc: 'Dodaj nowy nośnik do konfiguracji kopii zapasowej',
   cmd_provider_list_desc: 'Wylistuj skonfigurowane providery',
@@ -59,8 +57,7 @@ export const pl: Strings = {
   // ─── Global / shared ─────────────────────────────────────────────────────
   global_settings_group: 'Ustawienia BFS (globalne)',
   lang_set: 'Język ustawiony na: %s',
-  no_config:
-    'Brak kopii zapasowej w tym katalogu. Uruchom najpierw `bfs init`.',
+  no_config: 'Brak kopii zapasowej w tym katalogu. Uruchom najpierw `bfs init`.',
   cancel: 'Anuluj',
   cancelled: 'Anulowano.',
   required: 'Wymagane',
@@ -76,14 +73,13 @@ export const pl: Strings = {
   init_provider_type_prompt: 'Typ providera:',
   init_dir_path_prompt: 'Ścieżka do katalogu:',
   init_opt_ci: 'Tryb nieinteraktywny (CI/skrypty): pomija prompty',
-  init_opt_enc:
-    'Włącz szyfrowanie AES-256-GCM (tylko z --ci, domyślnie wyłączone)',
+  init_opt_enc: 'Szyfrowanie jest domyślnie włączone; flaga zachowana dla zgodności',
+  init_opt_no_enc: 'Wyłącz szyfrowanie — zapisz kopię zapasową bez szyfrowania',
   init_opt_no_compress: 'Wyłącz kompresję ZIP (domyślnie włączona)',
   init_opt_compress: 'Włącz kompresję ZIP (nadpisuje auto-detekcję)',
-  init_opt_data_shards: 'Liczba shardów danych N (tryb CI)',
-  init_opt_parity_shards: 'Liczba shardów parzystości K (tryb CI)',
-  init_opt_provider:
-    'Provider w formacie "typ:nazwa [flagi-adaptera]", np. "local:usb1 --path /mnt/usb". Flagi per adapter: `bfs provider -h`. Wielokrotny.',
+  init_opt_data_shards: 'Liczba kopii danych N (tryb CI)',
+  init_opt_parity_shards: 'Liczba kopii nadmiarowych K (tryb CI)',
+  init_opt_provider: 'Provider w formacie "typ:nazwa [flagi-adaptera]", np. "local:usb1 --path /mnt/usb". Flagi per adapter: `bfs provider -h`. Wielokrotny.',
   init_opt_push_mode: 'Tryb push: new_version|overwrite|ask (tryb CI)',
   init_vault_name_arg: 'Nazwa kopii zapasowej (podfolder na nośnikach)',
   init_vault_name_prompt: 'Nazwa kopii zapasowej (= podfolder na nośnikach):',
@@ -93,43 +89,31 @@ export const pl: Strings = {
   init_enc_prompt: 'Włączyć szyfrowanie AES-256-GCM?',
   init_compress_prompt: 'Włączyć kompresję ZIP?',
   init_compress_scanning: 'Analiza kompresji…',
-  init_compress_skip_suggest:
-    'Wykryto %s% danych w formatach skompresowanych (%s). Kompresja nie zmniejszy rozmiaru kopii.',
+  init_compress_skip_suggest: 'Wykryto %s% danych w formatach skompresowanych (%s). Kompresja nie zmniejszy rozmiaru kopii.',
   init_compress_auto_on: 'Wykryto dane nadające się do kompresji',
-  init_data_shards_prompt: 'Liczba shardów danych N (min. 2):',
-  init_data_shards_min: 'Minimum 2 shardy danych',
-  init_parity_shards_prompt: 'Liczba shardów parzystości K (min. 1):',
-  init_parity_shard_min: 'Minimum 1 shard parzystości',
-  init_providers_needed:
-    '\nPotrzeba %s providerów (%s danych + %s parzystości)\n',
+  init_data_shards_prompt: 'Liczba kopii danych N (min. 2):',
+  init_data_shards_min: 'Minimum 2 kopie danych',
+  init_parity_shards_prompt: 'Liczba kopii nadmiarowych K (min. 1):',
+  init_parity_shard_min: 'Minimum 1 kopia nadmiarowa',
+  init_providers_needed: '\nPotrzeba %s providerów (%s danych + %s parzystości)\n',
   init_push_mode_prompt: 'Tryb push:',
   init_push_mode_new: 'new_version — każdy push tworzy nową wersję (domyślnie)',
   init_push_mode_overwrite: 'overwrite — nadpisz bieżącą wersję',
   init_push_mode_ask: 'ask — pytaj za każdym razem',
-  init_push_mode_invalid:
-    'Nieprawidłowy --push-mode: "%s". Dozwolone: new_version|overwrite|ask',
-  init_provider_format_invalid:
-    'Nieprawidłowy format --provider: "%s". Oczekiwany: "typ:nazwa [flagi-adaptera]" (np. "local:usb1 --path /mnt/usb" lub "ftp:nas --config-file ./nas.json"). Flagi per adapter: `bfs provider -h`.',
+  init_push_mode_invalid: 'Nieprawidłowy --push-mode: "%s". Dozwolone: new_version|overwrite|ask',
+  init_provider_format_invalid: 'Nieprawidłowy format --provider: "%s". Oczekiwany: "typ:nazwa [flagi-adaptera]" (np. "local:usb1 --path /mnt/usb" lub "ftp:nas --config-file ./nas.json"). Flagi per adapter: `bfs provider -h`.',
   init_provider_config_invalid: 'Konfiguracja providera jest nieprawidłowa: %s',
-  init_max_ram_prompt:
-    'Limit RAM do kodowania (MB, wykryto: %sMB, 4096MB wystarczy):',
+  init_max_ram_prompt: 'Limit RAM do kodowania (MB, wykryto: %sMB, 4096MB wystarczy):',
   init_opt_max_ram: 'Limit RAM do kodowania w MB (tryb CI)',
-  init_success:
-    'Kopia zapasowa "%s" gotowa. Użyj `bfs push`, aby wykonać pierwszą kopię.',
-  init_ci_name_required:
-    'Tryb --ci wymaga podania nazwy kopii zapasowej jako argumentu.',
-  init_ci_scheme_required:
-    'Tryb --ci wymaga flag --data-shards i --parity-shards.',
-  init_ci_data_shards_invalid:
-    '--data-shards musi być liczbą całkowitą >= 2, podano "%s".',
-  init_ci_parity_shards_invalid:
-    '--parity-shards musi być liczbą całkowitą >= 1, podano "%s".',
-  init_ci_providers_required:
-    'Tryb --ci wymaga %s flag --provider (%s danych + %s parzystości).',
+  init_success: 'Kopia zapasowa "%s" gotowa. Użyj `bfs push`, aby wykonać pierwszą kopię.',
+  init_ci_name_required: 'Tryb --ci wymaga podania nazwy kopii zapasowej jako argumentu.',
+  init_ci_scheme_required: 'Tryb --ci wymaga flag --data-shards i --parity-shards.',
+  init_ci_data_shards_invalid: '--data-shards musi być liczbą całkowitą >= 2, podano "%s".',
+  init_ci_parity_shards_invalid: '--parity-shards musi być liczbą całkowitą >= 1, podano "%s".',
+  init_ci_providers_required: 'Tryb --ci wymaga %s flag --provider (%s danych + %s parzystości).',
 
   // ─── clear ────────────────────────────────────────────────────────────────
-  cmd_clear_desc:
-    'Wyczyść tymczasowe dane kopii zapasowej z przerwanego push/pull',
+  cmd_clear_desc: 'Wyczyść tymczasowe dane kopii zapasowej z przerwanego push/pull',
   clear_done: 'Cache wyczyszczony.',
   clear_removed_file: '%s usunięty',
 
@@ -139,64 +123,52 @@ export const pl: Strings = {
   config_updated: 'Ustawienia zaktualizowane.',
   config_reset: 'Ustawienie przywrócone do domyślnego.',
   config_reset_no_field: 'Podaj --cache-dir lub --temp-dir razem z --reset.',
-  config_dir_hint:
-    'Zmień przez `bfs config --%s <ścieżka>` lub `bfs config --%s --reset`',
+  config_dir_hint: 'Zmień przez `bfs config --%s <ścieżka>` lub `bfs config --%s --reset`',
   config_opt_cache_dir: 'Ustaw katalog cache (zastępuje .bfs/cache)',
-  config_opt_temp_dir:
-    'Ustaw katalog plików tymczasowych (zastępuje systemowy temp)',
+  config_opt_temp_dir: 'Ustaw katalog plików tymczasowych (zastępuje systemowy temp)',
   config_opt_max_ram: 'Ustaw limit RAM do kodowania (MB, 0 = auto)',
   config_opt_reset: 'Przywróć ustawienie do wartości domyślnej',
   config_opt_on: 'Włącz funkcję (compress, encryption)',
   config_opt_off: 'Wyłącz funkcję (compress, encryption)',
   config_feature_on: '%s włączono.',
   config_feature_off: '%s wyłączono.',
-  config_feature_unknown:
-    'Nieznana funkcja: %s. Dostępne: compress, encryption',
+  config_feature_unknown: 'Nieznana funkcja: %s. Dostępne: compress, encryption',
   config_next_push: 'Zmiana wejdzie w życie przy następnym push.',
   config_label_compression: 'kompresja:',
   config_label_encryption: 'szyfrowanie:',
+  config_cache_default: '(domyślnie: %s)',
+  config_temp_default: '(domyślnie: systemowy temp)',
+  config_ram_auto: '(auto: 25% RAM systemu)',
 
   // ─── push ─────────────────────────────────────────────────────────────────
   push_preparing: 'Przygotowanie push…',
   push_completed: 'Push zakończony',
   push_success: 'Kopia zapasowa przesłana na wszystkie providery.',
   push_failed: 'Push nieudany',
-  push_skipped_header:
-    '%s plik(ów) nie można było odczytać i zostało pominięte:',
-  push_cache_hint:
-    'Dane kopii zapisane w cache. Użyj `bfs push --cache` aby wysłać bez ponownego pakowania.',
-  push_completed_healthy:
-    'push zakończony, wersja %s zdrowa (%s z %s wgranych)',
-  push_partial_degraded:
-    'push częściowy, wersja %s zdegradowana (%s z %s wgranych). Zobacz .bfs/push.lock — lista nośników, które się nie powiodły. Kopia jest możliwa do odtworzenia przez `bfs pull`.',
-  push_damaged:
-    'push uszkodzony, wersja %s nieodzyskiwalna (%s z %s wymaganych). Uruchom `bfs prune --version %s`, aby ją usunąć.',
+  push_skipped_header: '%s plik(ów) nie można było odczytać i zostało pominięte:',
+  push_cache_hint: 'Dane kopii zapisane w cache. Użyj `bfs push --cache` aby wysłać bez ponownego pakowania.',
+  push_completed_healthy: 'push zakończony, wersja %s zdrowa (%s z %s wgranych)',
+  push_partial_degraded: 'push częściowy, wersja %s zdegradowana (%s z %s wgranych). Zobacz .bfs/push.lock — lista nośników, które się nie powiodły. Kopia jest możliwa do odtworzenia przez `bfs pull`.',
+  push_damaged: 'push uszkodzony, wersja %s nieodzyskiwalna (%s z %s wymaganych). Uruchom `bfs prune --version %s`, aby ją usunąć.',
   push_opt_new: 'Wymuś nową wersję',
   push_opt_overwrite: 'Nadpisz bieżącą wersję',
   push_opt_password: 'Hasło szyfrowania (pomija interaktywny prompt)',
-  push_opt_cache:
-    'Wyślij zbuforowane dane kopii z poprzedniej przerwanej operacji',
+  push_opt_cache: 'Wyślij zbuforowane dane kopii z poprzedniej przerwanej operacji',
   push_opt_max_ram: 'Nadpisz limit RAM dla tego push (MB)',
   push_opt_no_compress: 'Wyłącz kompresję ZIP dla tego push',
   push_opt_compress: 'Włącz kompresję ZIP dla tego push',
-  push_compress_conflict:
-    'Nie można używać --compress i --no-compress jednocześnie',
+  push_compress_conflict: 'Nie można używać --compress i --no-compress jednocześnie',
   vault_compressing: 'Kompresowanie…',
   vault_decompressing: 'Dekompresowanie…',
   opt_temp_dir_desc: 'Katalog dla plików tymczasowych podczas push/pull',
-  opt_cache_dir_desc:
-    'Katalog dla zbuforowanych danych kopii (zastępuje .bfs/cache)',
+  opt_cache_dir_desc: 'Katalog dla zbuforowanych danych kopii (zastępuje .bfs/cache)',
 
   // ─── lockfile / push partial ─────────────────────────────────────────────
   lock_concurrent_active: 'inna operacja %s w toku (PID %s, od %s)',
-  lock_partial_state_push:
-    'push.lock istnieje (stan częściowy z wersji %s). Uruchom `bfs clear`, aby porzucić ten stan.',
-  push_cache_no_lock:
-    '`--cache` wymaga obecności .bfs/push.lock oraz pliku cache; brakuje: %s',
-  push_cache_write_failed:
-    'Zapis cache nieudany: %s. Tego push nie da się wznowić przez `--cache`.',
-  push_cache_unavailable_in_lock:
-    '`push.lock` wskazuje, że dane cache nie zostały zapisane (np. brak miejsca na dysku). Uruchom `bfs clear`, aby porzucić ten stan.',
+  lock_partial_state_push: 'push.lock istnieje (stan częściowy z wersji %s). Uruchom `bfs clear`, aby porzucić ten stan.',
+  push_cache_no_lock: '`--cache` wymaga obecności .bfs/push.lock oraz pliku cache; brakuje: %s',
+  push_cache_write_failed: 'Zapis cache nieudany: %s. Tego push nie da się wznowić przez `--cache`.',
+  push_cache_unavailable_in_lock: '`push.lock` wskazuje, że dane cache nie zostały zapisane (np. brak miejsca na dysku). Uruchom `bfs clear`, aby porzucić ten stan.',
 
   // ─── pull ─────────────────────────────────────────────────────────────────
   pull_preparing: 'Przygotowanie pull…',
@@ -204,20 +176,16 @@ export const pl: Strings = {
   pull_success: 'Pliki przywrócone.',
   pull_failed: 'Pull nieudany',
   pull_skipped_header: '%s plik(ów) nie można było zapisać na dysku:',
-  pull_cache_hint:
-    'Dane kopii zapisane w cache. Napraw uprawnienia i użyj `bfs pull --cache` aby ponowić.',
+  pull_cache_hint: 'Dane kopii zapisane w cache. Napraw uprawnienia i użyj `bfs pull --cache` aby ponowić.',
   pull_opt_version: 'Numer wersji do przywrócenia (domyślnie: najnowsza)',
   pull_opt_force: 'Nadpisz katalog bez potwierdzenia',
-  pull_opt_yes:
-    'Automatycznie potwierdź nadpisanie (zachowuje pliki, w przeciwieństwie do --force)',
+  pull_opt_yes: 'Automatycznie potwierdź nadpisanie (zachowuje pliki, w przeciwieństwie do --force)',
   pull_opt_password: 'Hasło deszyfrowania (pomija interaktywny prompt)',
   pull_opt_provider: 'Typ nośnika (np. local, ssh, ftp)',
   pull_opt_path: 'Ścieżka bazowa nośnika; dla zdalnych: user@host/ścieżka',
   pull_opt_name: 'Nazwa kopii zapasowej (podfolder na nośniku)',
-  pull_opt_cache:
-    'Ponów przy użyciu zbuforowanych danych kopii z poprzedniej przerwanej operacji',
-  pull_opt_allow_missing_adapters:
-    'Kontynuuj mimo brakujących zewnętrznych adapterów, korzystając z nadmiarowości Reed-Solomon',
+  pull_opt_cache: 'Ponów przy użyciu zbuforowanych danych kopii z poprzedniej przerwanej operacji',
+  pull_opt_allow_missing_adapters: 'Kontynuuj mimo brakujących zewnętrznych adapterów, korzystając z nadmiarowości Reed-Solomon',
 
   // ─── status ───────────────────────────────────────────────────────────────
   status_header: '\n  Status kopii zapasowej\n',
@@ -229,16 +197,15 @@ export const pl: Strings = {
   status_providers: 'Providery:',
   status_enc_enabled: 'włączone',
   status_enc_disabled: 'wyłączone',
-  status_push_disabled_warn:
-    'push wyłączony — schemat %s/%s poniżej minimum 2/1',
+  status_push_disabled_warn: 'push wyłączony — schemat %s/%s poniżej minimum 2/1',
+  status_scheme_breakdown: '(%s danych + %s parzystości)',
 
   // ─── versions ─────────────────────────────────────────────────────────────
-  versions_empty:
-    'Brak wersji. Użyj `bfs push`, aby utworzyć pierwszą kopię zapasową.',
+  versions_empty: 'Brak wersji. Użyj `bfs push`, aby utworzyć pierwszą kopię zapasową.',
   versions_col_version: 'Wersja',
   versions_col_status: 'Status',
   versions_col_scheme: 'Schemat',
-  versions_col_shards: 'Shardy',
+  versions_col_shards: 'Kopie',
   versions_col_files: 'Pliki',
   versions_col_size: 'Rozmiar',
   versions_col_pushed_at: 'Data push',
@@ -268,92 +235,68 @@ export const pl: Strings = {
   verify_col_available: 'Dostępne',
   verify_col_scheme: 'Schemat',
   verify_col_tolerance: 'Tolerancja',
-  /** %s = nazwa pliku shardu, %s = id nośnika, %s = powód */
-  verify_shard_check_failed:
-    'Shard "%s" na nośniku "%s" nie przeszedł weryfikacji integralności: %s',
+  /** %s = filename, %s = provider id, %s = reason */
+  verify_shard_check_failed: 'Plik "%s" na nośniku "%s" nie przeszedł weryfikacji integralności: %s',
 
   // ─── recovery ─────────────────────────────────────────────────────────────
   recovery_provider_type_prompt: 'Typ bootstrapowego providera:',
-  recovery_opt_provider:
-    'Typ bootstrapowego nośnika (np. local, ssh, ftp). Połącz z --bootstrap dla trybu nieinteraktywnego.',
-  recovery_opt_bootstrap:
-    'Flagi adaptera bootstrapowego nośnika, np. "--host x --user y --password z --path /backup". Ta sama gramatyka co w `bfs init --ci`.',
-  recovery_path_prompt:
-    'Ścieżka bazowa nośnika (nie podfolder kopii zapasowej):',
+  recovery_opt_provider: 'Typ bootstrapowego nośnika (np. local, ssh, ftp). Połącz z --bootstrap dla trybu nieinteraktywnego.',
+  recovery_opt_bootstrap: 'Flagi adaptera bootstrapowego nośnika, np. "--host x --user y --password z --path /backup". Ta sama gramatyka co w `bfs init --ci`.',
+  recovery_path_prompt: 'Ścieżka bazowa nośnika (nie podfolder kopii zapasowej):',
   recovery_vault_name_prompt: 'Nazwa kopii zapasowej (podfolder na nośnikach):',
   recovery_opt_name: 'Nazwa kopii zapasowej (podfolder na nośnikach)',
   recovery_opt_password: 'Hasło (dla zaszyfrowanej kopii zapasowej)',
-  recovery_opt_allow_missing_adapters:
-    'Kontynuuj mimo brakujących zewnętrznych adapterów, korzystając z nadmiarowości Reed-Solomon',
+  recovery_opt_allow_missing_adapters: 'Kontynuuj mimo brakujących zewnętrznych adapterów, korzystając z nadmiarowości Reed-Solomon',
   /** %s = raw spec */
-  recovery_bootstrap_empty:
-    'Spec --bootstrap jest pusty. Podaj flagi adaptera, np. --bootstrap "--path /mnt/usb". Otrzymano: "%s"',
+  recovery_bootstrap_empty: 'Spec --bootstrap jest pusty. Podaj flagi adaptera, np. --bootstrap "--path /mnt/usb". Otrzymano: "%s"',
   /** %s = validation errors joined */
   recovery_bootstrap_config_invalid: 'Nieprawidłowa konfiguracja bootstrap: %s',
   /** %s = provider type */
-  recovery_provider_type_unknown:
-    'Nieznany typ nośnika: "%s". Uruchom `bfs provider -h`, aby zobaczyć zarejestrowane typy.',
-  recovery_ci_provider_required:
-    'Flaga --bootstrap wymaga --provider <typ>, aby wiedzieć do którego adaptera przekazać flagi.',
-  recovery_ci_name_required:
-    'Flaga --bootstrap wymaga --name <nazwaKopii>, aby zlokalizować kopię na nośnikach.',
+  recovery_provider_type_unknown: 'Nieznany typ nośnika: "%s". Uruchom `bfs provider -h`, aby zobaczyć zarejestrowane typy.',
+  recovery_ci_provider_required: 'Flaga --bootstrap wymaga --provider <typ>, aby wiedzieć do którego adaptera przekazać flagi.',
+  recovery_ci_name_required: 'Flaga --bootstrap wymaga --name <nazwaKopii>, aby zlokalizować kopię na nośnikach.',
   recovery_connecting: 'Łączenie z providerem…',
   recovery_scanning: 'Skanowanie providerów…',
   recovery_rebuilt: '\n  Odbudowano .bfs/ — %s wersja/wersji\n',
   recovery_col_version: 'Wersja',
   recovery_col_status: 'Status',
   recovery_col_consensus: 'Konsensus',
-  recovery_success:
-    'Użyj `bfs pull`, aby przywrócić pliki (domyślnie: najnowsza wersja).',
+  recovery_success: 'Użyj `bfs pull`, aby przywrócić pliki (domyślnie: najnowsza wersja).',
   recovery_failed: 'Odbudowa nieudana',
 
   // ─── scheme ───────────────────────────────────────────────────────────────
-  scheme_data_shards_invalid: 'Shardy danych muszą być liczbą całkowitą >= 2.',
-  scheme_parity_shards_invalid:
-    'Shardy parzystości muszą być liczbą całkowitą >= 1.',
-  scheme_requires:
-    'Schemat %s/%s wymaga %s providerów, aktualnie skonfigurowanych: %s.',
-  scheme_add_providers:
-    'Dodaj %s provider(ów) przez `provider add`, a następnie zmień schemat.',
-  scheme_remove_providers:
-    'Usuń %s provider(ów) przez `provider remove`, a następnie zmień schemat.',
+  scheme_data_shards_invalid: 'Liczba kopii danych (N) musi być liczbą całkowitą >= 2.',
+  scheme_parity_shards_invalid: 'Liczba kopii nadmiarowych (K) musi być liczbą całkowitą >= 1.',
+  scheme_requires: 'Schemat %s/%s wymaga %s providerów, aktualnie skonfigurowanych: %s.',
+  scheme_add_providers: 'Dodaj %s provider(ów) przez `provider add`, a następnie zmień schemat.',
+  scheme_remove_providers: 'Usuń %s provider(ów) przez `provider remove`, a następnie zmień schemat.',
   scheme_changed: 'Schemat zmieniony: %s → %s/%s.',
   scheme_apply_push: 'Uruchom `bfs push`, aby zastosować nowy schemat.',
-  scheme_missing:
-    'Schemat kopii zapasowej brakuje lub jest uszkodzony w .bfs/config.json. Uruchom `bfs scheme set`, aby naprawić.',
-  scheme_invalid_data_shards:
-    'Nieprawidłowy schemat: data_shards musi być liczbą całkowitą >= 2, podano "%s". Użyj `bfs provider add` lub `bfs scheme set`, aby naprawić.',
-  scheme_invalid_parity_shards:
-    'Nieprawidłowy schemat: parity_shards musi być liczbą całkowitą >= 1, podano "%s". Użyj `bfs provider add` lub `bfs scheme set`, aby naprawić.',
-  scheme_providers_mismatch:
-    'Schemat wymaga %s providerów, skonfigurowano: %s. Użyj `bfs provider add` lub `bfs scheme set`.',
+  scheme_missing: 'Schemat kopii zapasowej brakuje lub jest uszkodzony w .bfs/config.json. Uruchom `bfs scheme set`, aby naprawić.',
+  scheme_invalid_data_shards: 'Nieprawidłowy schemat: data_shards musi być liczbą całkowitą >= 2, podano "%s". Użyj `bfs provider add` lub `bfs scheme set`, aby naprawić.',
+  scheme_invalid_parity_shards: 'Nieprawidłowy schemat: parity_shards musi być liczbą całkowitą >= 1, podano "%s". Użyj `bfs provider add` lub `bfs scheme set`, aby naprawić.',
+  scheme_providers_mismatch: 'Schemat wymaga %s providerów, skonfigurowano: %s. Użyj `bfs provider add` lub `bfs scheme set`.',
 
   // ─── provider: local-fs ──────────────────────────────────────────────────
-  provider_local_path_not_exist_confirm:
-    'Ścieżka "%s" nie istnieje. Utworzyć ją?',
-  provider_local_path_not_exist_error:
-    'Ścieżka "%s" nie istnieje, a utworzenie zostało odrzucone.',
+  provider_local_path_not_exist_confirm: 'Ścieżka "%s" nie istnieje. Utworzyć ją?',
+  provider_local_path_not_exist_error: 'Ścieżka "%s" nie istnieje, a utworzenie zostało odrzucone.',
   provider_local_path_not_writable: 'Ścieżka "%s" nie jest zapisywalna.',
   local_path_prompt: 'Ścieżka katalogu bazowego:',
 
   // ─── provider add ─────────────────────────────────────────────────────────
   provider_add_opt_ci: 'Tryb nieinteraktywny (CI/skrypty): pomija prompty',
   provider_add_opt_name: 'Nazwa nowego nośnika (tryb CI)',
-  provider_add_opt_type:
-    'Typ nośnika (tryb CI). Listę dostępnych typów pokaże `bfs provider -h`.',
+  provider_add_opt_type: 'Typ nośnika (tryb CI). Listę dostępnych typów pokaże `bfs provider -h`.',
   provider_add_current: '\nAktualne providery (%s):',
-  provider_add_warn:
-    'Dodanie providera zmienia schemat N+K. Uruchom `bfs push` po dodaniu, aby zaktualizować sharding.',
+  provider_add_warn: 'Dodanie providera zmienia schemat N+K. Uruchom `bfs push` po dodaniu, aby zastosować zmiany.',
   provider_add_type_required: '--type jest wymagane w trybie CI',
   provider_add_name_prompt: 'Nazwa nowego nośnika:',
   provider_add_name_required: '--name jest wymagane w trybie CI',
-  provider_id_invalid_chars:
-    'Nazwa providera "%s" jest nieprawidłowa — dozwolone są wyłącznie litery, cyfry oraz ". _ -" (bez białych znaków).',
+  provider_id_invalid_chars: 'Nazwa providera "%s" jest nieprawidłowa — dozwolone są wyłącznie litery, cyfry oraz ". _ -" (bez białych znaków).',
   provider_add_exists: 'Provider "%s" już istnieje',
   provider_add_type_prompt: 'Typ providera:',
   provider_add_dir_prompt: 'Ścieżka do katalogu:',
-  provider_add_success:
-    'Provider "%s" dodany. Schemat: %s/%s. Uruchom `bfs push`, aby zastosować nowy schemat.',
+  provider_add_success: 'Provider "%s" dodany. Schemat: %s/%s. Uruchom `bfs push`, aby zastosować nowy schemat.',
 
   // ─── provider list ────────────────────────────────────────────────────────
   provider_list_empty: 'Brak skonfigurowanych providerów.',
@@ -364,125 +307,91 @@ export const pl: Strings = {
   provider_list_col_config: 'Konfiguracja',
 
   // ─── provider remove ──────────────────────────────────────────────────────
-  provider_remove_opt_password:
-    'Hasło szyfrowania (dla strategii rebuild/relocate)',
-  provider_remove_opt_strategy:
-    'Strategia CI: relocate|rebuild|remove (pomija prompt)',
-  provider_remove_opt_new_type:
-    'Nowy typ nośnika (tryb CI). Opcjonalny dla relocate (domyślnie aktualny typ); wymagany dla rebuild do nowej lokalizacji.',
+  provider_remove_opt_password: 'Hasło szyfrowania (dla strategii rebuild/relocate)',
+  provider_remove_opt_strategy: 'Strategia CI: relocate|rebuild|remove (pomija prompt)',
+  provider_remove_opt_new_type: 'Nowy typ nośnika (tryb CI). Opcjonalny dla relocate (domyślnie aktualny typ); wymagany dla rebuild do nowej lokalizacji.',
   provider_remove_opt_target: 'Docelowy nośnik dla strategii rebuild (tryb CI)',
   provider_remove_opt_scope: 'Zakres odbudowy: all|latest (domyślnie: all)',
   provider_remove_opt_yes: 'Pomiń potwierdzenie dla strategii remove (tryb CI)',
-  provider_remove_strategy_invalid:
-    'Nieprawidłowa strategia: "%s". Dozwolone: relocate|rebuild|remove|cancel',
+  provider_remove_strategy_invalid: 'Nieprawidłowa strategia: "%s". Dozwolone: relocate|rebuild|remove|cancel',
   provider_remove_no_providers: 'Brak providerów w konfiguracji.',
   provider_remove_prompt: 'Który provider usunąć?',
-  provider_remove_not_found:
-    'Provider "%s" nie istnieje. Użyj `provider list`, aby zobaczyć dostępne nazwy lub indeksy.',
+  provider_remove_not_found: 'Provider "%s" nie istnieje. Użyj `provider list`, aby zobaczyć dostępne nazwy lub indeksy.',
   provider_remove_impact: 'Provider "%s" jest używany w %s wersji/wersjach:',
-  provider_remove_impact_warn:
-    'Po usunięciu: zdrowe wersje staną się degradowane, degradowane mogą stać się uszkodzone.',
+  provider_remove_impact_warn: 'Po usunięciu: zdrowe wersje staną się degradowane, degradowane mogą stać się uszkodzone.',
   provider_remove_strategy_prompt: 'Wybierz strategię:',
-  provider_remove_strategy_relocate:
-    '[R]elocate — shard istnieje, provider zmienił adres (nowe IP/host/ścieżka)',
-  provider_remove_strategy_rebuild:
-    '[R]ebuild — shard utracony, odbuduj z RS i prześlij na inny provider',
-  provider_remove_strategy_remove:
-    '[R]emove — usuń provider bez zastępstwa, zaktualizuj schemat N/K',
+  provider_remove_strategy_relocate: '[R]elocate — dane istnieją, provider zmienił adres (nowe IP/host/ścieżka)',
+  provider_remove_strategy_rebuild: '[R]ebuild — dane utracone, odbuduj z nadmiarowości i prześlij na inny provider',
+  provider_remove_strategy_remove: '[R]emove — usuń provider bez zastępstwa, zaktualizuj schemat N/K',
   provider_remove_strategy_cancel: '[A]nuluj',
-  provider_remove_new_type_required:
-    '--new-type jest wymagane (lub dodaj prefix "type:" do --new-path)',
+  provider_remove_new_type_required: '--new-type jest wymagane (lub dodaj prefix "type:" do --new-path)',
   provider_remove_change_type_confirm: 'Zmienić typ providera? (aktualny: %s)',
   provider_remove_new_type_prompt: 'Wybierz nowy typ providera:',
-  provider_remove_config_invalid:
-    'Konfiguracja providera jest nieprawidłowa: %s',
-  provider_remove_enc_password_relocate:
-    'Hasło szyfrowania (do aktualizacji mapy lokalizacji):',
-  provider_remove_enc_password_rebuild:
-    'Hasło szyfrowania (do odczytu/zapisu mapy lokalizacji):',
+  provider_remove_config_invalid: 'Konfiguracja providera jest nieprawidłowa: %s',
+  provider_remove_enc_password_relocate: 'Hasło szyfrowania (potrzebne do aktualizacji kopii):',
+  provider_remove_enc_password_rebuild: 'Hasło szyfrowania (potrzebne do odbudowy kopii):',
   provider_remove_rebuild_scope_prompt: 'Które wersje odbudować?',
   provider_remove_rebuild_all: '[W]szystkie wersje używające tego providera',
   provider_remove_rebuild_latest: '[T]ylko najnowszą wersję',
-  provider_remove_no_other_providers:
-    'Brak innych dostępnych providerów do odbudowy.',
-  provider_remove_rebuild_new_location:
-    '[N]owa lokalizacja — dodaj nowy nośnik do odbudowanej kopii',
-  provider_remove_target_prompt: 'Na który provider przesłać odbudowany shard?',
-  provider_remove_yes_required:
-    '--yes jest wymagane dla strategii remove w trybie CI',
-  provider_remove_confirm:
-    'Usunąć provider "%s" bez odbudowy? Wersje zostaną zdegradowane.',
-  provider_remove_scope_invalid:
-    'Nieprawidłowy --scope: "%s". Dozwolone: all|latest',
-  provider_remove_target_required:
-    '--target jest wymagane dla strategii rebuild w trybie CI',
-  provider_remove_target_invalid:
-    'Provider "%s" nie istnieje lub jest tym samym co usuwany',
+  provider_remove_no_other_providers: 'Brak innych dostępnych providerów do odbudowy.',
+  provider_remove_rebuild_new_location: '[N]owa lokalizacja — dodaj nowy nośnik do odbudowanej kopii',
+  provider_remove_target_prompt: 'Na który provider przesłać odbudowane dane?',
+  provider_remove_yes_required: '--yes jest wymagane dla strategii remove w trybie CI',
+  provider_remove_confirm: 'Usunąć provider "%s" bez odbudowy? Wersje zostaną zdegradowane.',
+  provider_remove_scope_invalid: 'Nieprawidłowy --scope: "%s". Dozwolone: all|latest',
+  provider_remove_target_required: '--target jest wymagane dla strategii rebuild w trybie CI',
+  provider_remove_target_invalid: 'Provider "%s" nie istnieje lub jest tym samym co usuwany',
   provider_remove_success: 'Provider "%s" usunięty.',
   provider_remove_next_steps: 'Zalecane kolejne kroki:',
   provider_remove_next_step_1: '  1. `bfs pull` — pobierz bieżącą wersję',
   provider_remove_next_step_2: '  2. `bfs push` — utwórz nową zdrową kopię',
-  provider_remove_next_step_3:
-    '  3. `bfs prune` — opcjonalnie usuń stare zdegradowane wersje',
+  provider_remove_next_step_3: '  3. `bfs prune` — opcjonalnie usuń stare zdegradowane wersje',
   provider_relocate_success: 'Provider "%s" przeniesiony.',
-  provider_rebuild_success:
-    'Provider "%s" zastąpiony. Uruchom `bfs push`, aby zaktualizować schemat.',
+  provider_rebuild_success: 'Provider "%s" zastąpiony. Uruchom `bfs push`, aby zaktualizować schemat.',
 
   // ─── vault operations ────────────────────────────────────────────────────
-  vault_download_shards: 'Pobieranie shardów dla wersji %s…',
-  vault_provider_not_found:
-    'Provider "%s" nie znaleziony w konfiguracji — pomijam shard %s',
-  vault_download_shard_progress: 'Pobieranie sharda %s/%s',
+  vault_download_shards: 'Pobieranie wersji %s…',
+  vault_provider_not_found: 'Provider "%s" nie znaleziony w konfiguracji — pomijam %s',
+  vault_download_shard_progress: 'Pobieranie %s/%s',
   vault_provider_unreachable: 'Nośnik "%s" jest niedostępny — pomijam.',
-  vault_file_missing_on_provider:
-    'Dane kopii brakują na nośniku "%s" — pomijam.',
+  vault_file_missing_on_provider: 'Dane kopii brakują na nośniku "%s" — pomijam.',
   vault_decoding_rs: 'Dekodowanie Reed-Solomon…',
   vault_ask_decrypt_password: 'Podaj hasło deszyfrowania:',
   vault_decrypting: 'Odszyfrowanie…',
-  vault_push_version_confirm:
-    'Na dysku: wersja %s. Najnowsza: %s. Push utworzy wersję %s. Kontynuować?',
+  vault_push_version_confirm: 'Na dysku: wersja %s. Najnowsza: %s. Push utworzy wersję %s. Kontynuować?',
   vault_using_cached_blob: 'Używam zbuforowanych danych…',
-  vault_no_cached_blob_push:
-    'Brak zbuforowanych danych — wykonuję pełne pakowanie…',
-  vault_push_skipped_confirm:
-    '%s plik(ów) nie można było odczytać:\n%s\nKontynuować bez nich?',
+  vault_no_cached_blob_push: 'Brak zbuforowanych danych — wykonuję pełne pakowanie…',
+  vault_push_skipped_confirm: '%s plik(ów) nie można było odczytać:\n%s\nKontynuować bez nich?',
   vault_ask_encrypt_password: 'Podaj hasło szyfrowania:',
   vault_ask_confirm_password: 'Potwierdź hasło:',
-  vault_encrypting: 'Szyfrowanie shardów…',
-  vault_password_overrides_config:
-    'Szyfrowanie włączone przez --password (w konfiguracji szyfrowanie wyłączone).',
+  vault_encrypting: 'Szyfrowanie…',
+  vault_password_overrides_config: 'Szyfrowanie włączone przez --password (w konfiguracji szyfrowanie wyłączone).',
+  vault_unencrypted_warning:
+    'Ta kopia zapasowa NIE jest zaszyfrowana — część Twoich danych jest bezpośrednio możliwa do odczytania na pojedynczym nośniku, a adresy i nazwy użytkownika wszystkich nośników są widoczne na każdym z nich. Ktokolwiek z dostępem do jednego nośnika odczyta te dane i zlokalizuje pozostałe. Aby zaszyfrować, uruchom bez --no-enc.',
+  gcm_payload_too_large:
+    'Ta kopia zapasowa jest zbyt duża, aby bezpiecznie ją zaszyfrować: każda jednostka danych przekroczyłaby limit ~%s GiB dla pojedynczego klucza szyfrowania. Zwiększ liczbę danych w schemacie (`bfs scheme set`), aby każda jednostka była mniejsza, albo wykonaj kopię mniejszego katalogu.',
   vault_encoding_rs: 'Kodowanie Reed-Solomon…',
-  vault_uploading_shards: 'Przesyłanie shardów…',
-  vault_upload_shard_progress: 'Przesyłanie sharda %s/%s',
-  vault_upload_shard_failed: 'Upload fragmentu %s/%s nieudany: %s',
-  vault_no_cached_blob_pull:
-    'Brak zbuforowanych danych — wykonuję pełne pobieranie…',
-  vault_pull_overwrite_confirm:
-    'Na dysku: wersja %s. Przywrócenie wersji %s nadpisze katalog. Kontynuować?',
+  vault_uploading_shards: 'Przesyłanie…',
+  vault_upload_shard_progress: 'Przesyłanie %s/%s',
+  vault_upload_shard_failed: 'Przesyłanie %s/%s nieudane: %s',
+  vault_no_cached_blob_pull: 'Brak zbuforowanych danych — wykonuję pełne pobieranie…',
+  vault_pull_overwrite_confirm: 'Na dysku: wersja %s. Przywrócenie wersji %s nadpisze katalog. Kontynuować?',
   vault_unpacking_files: 'Rozpakowywanie plików…',
-  vault_pull_write_error_confirm:
-    '%s plik(ów) nie można było zapisać:\n%s\nNapraw uprawnienia, naciśnij Y aby ponowić lub N aby anulować.',
-  vault_degraded_provider_unreachable:
-    'Pula zdegradowana: jeden lub więcej nośników jest niedostępnych. Użyj `bfs provider remove`, aby zastąpić nośnik, a następnie `bfs push`, aby przywrócić redundancję.',
-  vault_degraded_file_missing:
-    'Pula zdegradowana: dane kopii zostały usunięte ze sprawnego nośnika. Uruchom `bfs push`, aby odtworzyć kopię.',
+  vault_pull_write_error_confirm: '%s plik(ów) nie można było zapisać:\n%s\nNapraw uprawnienia, naciśnij Y aby ponowić lub N aby anulować.',
+  vault_degraded_provider_unreachable: 'Pula zdegradowana: jeden lub więcej nośników jest niedostępnych. Użyj `bfs provider remove`, aby zastąpić nośnik, a następnie `bfs push`, aby przywrócić redundancję.',
+  vault_degraded_file_missing: 'Pula zdegradowana: dane kopii zostały usunięte ze sprawnego nośnika. Uruchom `bfs push`, aby odtworzyć kopię.',
 
   // ─── recovery operations (vault layer) ──────────────────────────────────
-  recovery_ask_version_password:
-    'Podaj hasło dla wersji %s (zostaw puste, aby pominąć):',
+  recovery_ask_version_password: 'Podaj hasło dla wersji %s (zostaw puste, aby pominąć):',
   recovery_pool_password_failed: 'Znane hasła nie pasują do wersji %s.',
-  recovery_wrong_password_retry:
-    'Błędne hasło. Spróbuj ponownie dla wersji %s (zostaw puste, aby pominąć):',
-  recovery_decrypt_skip:
-    'Wersja %s pominięta — nie udało się odszyfrować (błędne hasło lub nie podano).',
+  recovery_wrong_password_retry: 'Błędne hasło. Spróbuj ponownie dla wersji %s (zostaw puste, aby pominąć):',
+  recovery_decrypt_skip: 'Wersja %s pominięta — nie udało się odszyfrować (błędne hasło lub nie podano).',
+  recovery_ask_transport_password: 'Podaj "%s" dla nośnika "%s" (wymagane do ponownego połączenia przy odzyskiwaniu, zostaw puste, aby pominąć):',
 
   // ─── bootstrap operations ────────────────────────────────────────────────
-  bootstrap_ask_password:
-    'Kopia zapasowa jest zaszyfrowana. Podaj hasło dla wersji %s:',
-  bootstrap_wrong_password_retry:
-    'Błędne hasło. Spróbuj ponownie dla wersji %s:',
-  bootstrap_single_provider_warn:
-    'Tylko 1 provider dostępny — nie można zweryfikować konsensusu. Dane mogą być naruszone. Kontynuuję.',
+  bootstrap_ask_password: 'Kopia zapasowa jest zaszyfrowana. Podaj hasło dla wersji %s:',
+  bootstrap_wrong_password_retry: 'Błędne hasło. Spróbuj ponownie dla wersji %s:',
+  bootstrap_single_provider_warn: 'Tylko 1 provider dostępny — nie można zweryfikować konsensusu. Dane mogą być naruszone. Kontynuuję.',
 
   // ─── provider: ftp ──────────────────────────────────────────────────────
   ftp_host_prompt: 'Host FTP:',
@@ -491,8 +400,7 @@ export const pl: Strings = {
   ftp_password_prompt: 'Hasło:',
   ftp_path_prompt: 'Ścieżka bazowa na serwerze:',
   ftp_secure_prompt: 'Użyć FTPS (szyfrowane połączenie)?',
-  provider_add_ftp_ci_not_supported:
-    'FTP w trybie CI nie jest jeszcze obsługiwany. Użyj trybu interaktywnego.',
+  provider_add_ftp_ci_not_supported: 'FTP w trybie CI nie jest jeszcze obsługiwany. Użyj trybu interaktywnego.',
 
   // ─── provider help (bfs provider -h) ─────────────────────────────────────
   provider_help_available_header: 'Dostępne providery:',
@@ -501,154 +409,100 @@ export const pl: Strings = {
   provider_help_example_label: 'Przykład:',
   provider_help_install_hint: '(instalacja: %s)',
 
-  local_help_description:
-    'Przechowuje shardy jako pliki na lokalnym systemie plików (dysk, USB, ' +
-    'zamontowany katalog). Gdy brak --path i --config-file, BFS używa ' +
-    '~/.bfs-local/<nazwa>/ jako katalog bazowy.',
-  local_help_flag_path_desc:
-    'Katalog bazowy dla nośnika. Ścieżki absolutne używane bez zmian; ' +
-    'ścieżki relatywne rozwiązywane względem katalogu roboczego BFS. ' +
-    'Wygrywa z --config-file gdy podane oba.',
-  local_help_flag_config_file_desc:
-    'Plik JSON z { "path": "<absolute>" }. Używany gdy brak --path. ' +
-    'Gdy oba brak, używa ~/.bfs-local/<nazwa>/',
+  local_help_description: 'Przechowuje dane kopii zapasowej jako pliki na lokalnym systemie plików (dysk, USB, ' + 'zamontowany katalog). Gdy brak --path i --config-file, BFS używa ' + '~/.bfs-local/<nazwa>/ jako katalog bazowy.',
+  local_help_flag_path_desc: 'Katalog bazowy dla nośnika. Ścieżki absolutne używane bez zmian; ' + 'ścieżki relatywne rozwiązywane względem katalogu roboczego BFS. ' + 'Wygrywa z --config-file gdy podane oba.',
+  local_help_flag_config_file_desc: 'Plik JSON z { "path": "<absolute>" }. Używany gdy brak --path. ' + 'Gdy oba brak, używa ~/.bfs-local/<nazwa>/',
 
-  ftp_help_description:
-    'Łączy się z serwerem FTP(S) i przechowuje shardy jako pliki na ' +
-    'zdalnym serwerze. Konfiguracja może pochodzić z flag inline, pliku ' +
-    'JSON lub obu — flagi inline nadpisują pola z JSON-a.',
+  ftp_help_description: 'Łączy się z serwerem FTP(S) i przechowuje dane kopii zapasowej jako pliki na ' + 'zdalnym serwerze. Konfiguracja może pochodzić z flag inline, pliku ' + 'JSON lub obu — flagi inline nadpisują pola z JSON-a.',
   ftp_help_flag_host_desc: 'Nazwa hosta lub IP serwera FTP',
   ftp_help_flag_port_desc: 'Port serwera FTP (domyślnie 21)',
   ftp_help_flag_user_desc: 'Nazwa użytkownika FTP',
   ftp_help_flag_password_desc: 'Hasło FTP',
-  ftp_help_flag_path_desc:
-    'Absolutna ścieżka bazowa na serwerze FTP (musi zaczynać się od "/")',
-  ftp_help_flag_secure_desc:
-    'Użyj FTPS (TLS). Przyjmuje true|false|1|0|yes|no (domyślnie false)',
-  ftp_help_flag_config_file_desc:
-    'JSON z dowolnymi polami { host, port, user, password, path, secure }. ' +
-    'Flagi inline nadpisują pola wczytane z JSON-a.',
+  ftp_help_flag_path_desc: 'Absolutna ścieżka bazowa na serwerze FTP (musi zaczynać się od "/")',
+  ftp_help_flag_secure_desc: 'Użyj FTPS (TLS). Przyjmuje true|false|1|0|yes|no (domyślnie false)',
+  ftp_help_flag_config_file_desc: 'JSON z dowolnymi polami { host, port, user, password, path, secure }. ' + 'Flagi inline nadpisują pola wczytane z JSON-a.',
 
-  ftp_host_required:
-    'Adapter FTP: pole "host" jest wymagane. Podaj --host <host> lub ' +
-    '--config-file <ścieżka> wewnątrz spec --provider, np. ' +
-    '--provider "ftp:nas --host 192.168.1.1 --path /backup".',
-  ftp_path_required:
-    'Adapter FTP: pole "path" jest wymagane. Podaj --path </absolutna/ścieżka> ' +
-    'lub --config-file <ścieżka> wewnątrz spec --provider, np. ' +
-    '--provider "ftp:nas --path /backup".',
-  ftp_path_must_be_absolute:
-    'Adapter FTP: "path" musi być absolutne (zaczynać się od "/").',
-  local_config_path_missing:
-    'Adapter lokalny: JSON z --config-file musi zawierać niepuste pole "path".',
+  ftp_host_required: 'Adapter FTP: pole "host" jest wymagane. Podaj --host <host> lub ' + '--config-file <ścieżka> wewnątrz spec --provider, np. ' + '--provider "ftp:nas --host 192.168.1.1 --path /backup".',
+  ftp_path_required: 'Adapter FTP: pole "path" jest wymagane. Podaj --path </absolutna/ścieżka> ' + 'lub --config-file <ścieżka> wewnątrz spec --provider, np. ' + '--provider "ftp:nas --path /backup".',
+  ftp_path_must_be_absolute: 'Adapter FTP: "path" musi być absolutne (zaczynać się od "/").',
+  local_config_path_missing: 'Adapter lokalny: JSON z --config-file musi zawierać niepuste pole "path".',
 
   // ─── Adapter preflight (missing / version mismatch) ────────────────────────
-  adapter_preflight_missing_header:
-    'Wymagane są następujące adaptery, ale nie są zainstalowane:',
+  adapter_preflight_missing_header: 'Wymagane są następujące adaptery, ale nie są zainstalowane:',
   adapter_preflight_install_label: 'instalacja:',
   adapter_preflight_retry_hint:
-    'Zainstaluj je i ponów. Alternatywnie, jeśli wystarczająco dużo shardów\n' +
-    'jest dostępnych przez już zainstalowanych providerów, użyj\n' +
-    '--allow-missing-adapters, aby spróbować odbudowy Reed-Solomon z tego, co jest.',
-  adapter_preflight_builtin_broken_one:
-    'Wbudowany typ providera "%s" nie jest zarejestrowany. Twoja instalacja BFS ' +
-    'wygląda na uszkodzoną. Zainstaluj BFS ponownie z zaufanego źródła.',
-  adapter_preflight_builtin_broken_many:
-    'Wbudowane typy providerów %s nie są zarejestrowane. Twoja instalacja BFS ' +
-    'wygląda na uszkodzoną. Zainstaluj BFS ponownie z zaufanego źródła.',
-  adapter_preflight_external_install_hint:
-    'Typ providera "%s" wymaga adaptera %s. Zainstaluj go: npm install -g %s',
-  adapter_version_mismatch_strong:
-    '[STRONG WARN] adapter "%s" zapisany jako %s, ale zainstalowana wersja to %s. ' +
-    'Rozważ: npm install -g %s',
-  adapter_version_mismatch_soft:
-    '[warn] adapter "%s" zapisany jako %s, ale zainstalowana wersja to %s. ' +
-    'Różnica patch/minor powinna być bezpieczna w semver.',
+    'Zainstaluj je i ponów. Alternatywnie, jeśli wystarczająco dużo kopii\n' + 'jest dostępnych przez już zainstalowanych providerów, użyj\n' + '--allow-missing-adapters, aby spróbować odbudowy Reed-Solomon z tego, co jest.',
+  adapter_preflight_builtin_broken_one: 'Wbudowany typ providera "%s" nie jest zarejestrowany. Twoja instalacja BFS ' + 'wygląda na uszkodzoną. Zainstaluj BFS ponownie z zaufanego źródła.',
+  adapter_preflight_builtin_broken_many: 'Wbudowane typy providerów %s nie są zarejestrowane. Twoja instalacja BFS ' + 'wygląda na uszkodzoną. Zainstaluj BFS ponownie z zaufanego źródła.',
+  adapter_preflight_external_install_hint: 'Typ providera "%s" wymaga adaptera %s. Zainstaluj go: npm install -g %s',
+  adapter_version_mismatch_strong: 'Ostrzeżenie: adapter "%s" skonfigurowano dla wersji %s, a zainstalowana to %s. ' + 'Rozważ: npm install -g %s',
+  adapter_version_mismatch_soft: 'Ostrzeżenie: adapter "%s" skonfigurowano dla wersji %s, a zainstalowana to %s. ' + 'Niewielka różnica wersji powinna być bezpieczna.',
 
   // ─── Generic provider errors (CLI side) ────────────────────────────────────
   provider_type_unknown: 'Nieznany typ providera: %s',
   provider_add_configure_failed: 'Konfiguracja nieudana: %s',
   provider_add_validate_failed: 'Niepoprawna konfiguracja: %s',
   provider_add_probe_failed: 'Test połączenia providera nieudany: %s',
-  provider_add_probe_unsaved:
-    'Konfiguracja NIE została zapisana. Uruchom ponownie z poprawnymi ustawieniami.',
+  provider_add_probe_unsaved: 'Konfiguracja NIE została zapisana. Uruchom ponownie z poprawnymi ustawieniami.',
 
   // ─── Recovery (consensus + final) ──────────────────────────────────────────
-  recovery_consensus_vault_id_mismatch:
-    'Wersja %s: niezgodność vault_id — pomijam',
-  recovery_consensus_filename_mismatch:
-    'Wersja %s: niezgodność nazwy pliku/nagłówka — pomijam',
-  recovery_consensus_failed:
-    'Wersja %s: konsensus nieudany (pola: %s) — oznaczam jako niezaufaną',
-  recovery_no_manifests:
-    'Nie udało się odtworzyć żadnego poprawnego manifestu z dostępnych providerów.',
-  recovery_manifest_unreadable:
-    'Manifest najnowszej wersji %s nie mógł zostać odczytany po recovery.',
+  recovery_consensus_vault_id_mismatch: 'Wersja %s: niezgodność tożsamości kopii — pomijam',
+  recovery_consensus_filename_mismatch: 'Wersja %s: niezgodność nazwy pliku/nagłówka — pomijam',
+  recovery_consensus_failed: 'Wersja %s: konsensus nieudany (pola: %s) — oznaczam jako niezaufaną',
+  recovery_no_manifests: 'Nie udało się odtworzyć żadnego poprawnego manifestu z dostępnych providerów.',
+  recovery_manifest_unreadable: 'Manifest najnowszej wersji %s nie mógł zostać odczytany po recovery.',
 
   // ─── Provider runtime errors (FTP + LocalFS shared shape) ──────────────────
-  provider_short_shard:
-    'Shard "%s" jest za krótki, aby zawierać poprawny payload po nagłówku',
-  provider_stat_failed: 'Nie udało się odczytać metadanych sharda "%s": %s',
-  provider_header_read_failed:
-    'Nie udało się odczytać nagłówka sharda "%s": %s',
-  provider_download_header_invalid_max_bytes:
-    'downloadHeader: maxBytes musi być > 0 (otrzymano %s)',
+  provider_short_shard: 'Plik "%s" jest za krótki, aby zawierać poprawne dane po nagłówku',
+  provider_stat_failed: 'Nie udało się odczytać metadanych "%s": %s',
+  provider_header_read_failed: 'Nie udało się odczytać nagłówka "%s": %s',
+  provider_download_header_invalid_max_bytes: 'rozmiar odczytu nagłówka musi być większy niż 0 (otrzymano %s)',
+  sidecar_not_supported: 'nośnik typu "%s" nie obsługuje osobnych plików nagłówka',
+  provider_adapter_incompatible: 'Adapter nośnika "%s" jest niezgodny z tą wersją BFS (brak wymaganej metody "%s" z API nośników v%s). Zainstaluj ponownie lub zaktualizuj adapter.',
+  verify_shard_not_found: 'plik pod "%s" nie istnieje',
+  verify_shard_mismatch: 'niezgodność pola nagłówka pliku "%s": oczekiwano "%s", otrzymano "%s"',
+  verify_shard_auth_failed: 'nie udało się uwierzytelnić nośnika "%s" do weryfikacji pliku pod "%s"',
+  verify_shard_corrupted: 'plik pod "%s" ma uszkodzony nagłówek: %s',
+  verify_shard_unverifiable: 'nośnik "%s" nie potrafi zweryfikować pliku pod "%s" (brak odczytu częściowego)',
 
   // ─── FTP — runtime errors ──────────────────────────────────────────────────
   ftp_operation_failed: 'Operacja FTP nieudana na %s:%s: %s',
-  ftp_size_mismatch_attempt:
-    'Niezgodność rozmiaru uploadu FTP dla "%s" w próbie %s/%s: ' +
-    'wysłano %s B, serwer raportuje %s B — ponawiam.',
-  ftp_size_mismatch_final:
-    'Niezgodność rozmiaru uploadu FTP dla "%s" po %s próbach: ' +
-    'wysłano %s B, serwer raportuje %s B (różnica %s). ' +
-    'Sprawdź, czy serwer FTP działa w trybie binarnym (TYPE I).',
+  ftp_size_mismatch_attempt: 'Niezgodność rozmiaru uploadu FTP dla "%s" w próbie %s/%s: ' + 'wysłano %s B, serwer raportuje %s B — ponawiam.',
+  ftp_size_mismatch_final: 'Niezgodność rozmiaru uploadu FTP dla "%s" po %s próbach: ' + 'wysłano %s B, serwer raportuje %s B (różnica %s). ' + 'Sprawdź, czy serwer FTP działa w trybie binarnym (TYPE I).',
 
   // ─── FTP — configureFromFlags + validateConfig ─────────────────────────────
-  ftp_config_port_invalid:
-    'Adapter FTP: pole "port" w configu musi być liczbą całkowitą 1–65535',
-  ftp_inline_port_invalid:
-    'Adapter FTP: --port musi być liczbą całkowitą 1–65535',
-  ftp_inline_secure_invalid:
-    'Adapter FTP: --secure musi być jednym z: true|false|1|0|yes|no',
-  ftp_validate_host_required:
-    'FTP: host jest wymagany i musi być niepustym ciągiem znaków',
+  ftp_config_port_invalid: 'Adapter FTP: pole "port" w configu musi być liczbą całkowitą 1–65535',
+  ftp_inline_port_invalid: 'Adapter FTP: --port musi być liczbą całkowitą 1–65535',
+  ftp_inline_secure_invalid: 'Adapter FTP: --secure musi być jednym z: true|false|1|0|yes|no',
+  ftp_validate_host_required: 'FTP: host jest wymagany i musi być niepustym ciągiem znaków',
   ftp_validate_port_invalid: 'FTP: port musi być liczbą całkowitą 1–65535',
-  ftp_validate_path_required:
-    'FTP: path jest wymagany i musi być niepustym ciągiem znaków',
+  ftp_validate_path_required: 'FTP: path jest wymagany i musi być niepustym ciągiem znaków',
   ftp_validate_path_absolute: 'FTP: path musi zaczynać się od "/"',
-  ftp_describe_config:
-    'host: %s, port: %s, użytkownik: %s, hasło: ****, ścieżka: %s, bezpieczne: %s',
+  ftp_describe_config: 'host: %s, port: %s, użytkownik: %s, hasło: ****, ścieżka: %s, bezpieczne: %s',
 
   // ─── FTP — probeConnection ─────────────────────────────────────────────────
-  ftp_probe_incomplete:
-    'Test nieudany: niepełna konfiguracja FTP (host i path muszą być ustawione)',
+  ftp_probe_incomplete: 'Test nieudany: niepełna konfiguracja FTP (host i path muszą być ustawione)',
   ftp_probe_step_ensure_dir: 'Test nieudany w fazie ensureDir: %s',
   ftp_probe_step_upload: 'Test nieudany w fazie upload: %s',
   ftp_probe_step_download: 'Test nieudany w fazie download: %s',
-  ftp_probe_step_compare_remote:
-    'Test nieudany w fazie compare: pobrane bajty różnią się od wysłanych',
+  ftp_probe_step_compare_remote: 'Test nieudany w fazie compare: pobrane bajty różnią się od wysłanych',
   ftp_probe_step_cleanup: 'Test nieudany w fazie cleanup: %s',
 
   // ─── LocalFS — runtime errors ──────────────────────────────────────────────
-  local_list_failed: 'Nie udało się wylistować katalogu vaulta "%s": %s',
-  local_list_vaults_failed: 'Nie udało się wylistować vaultów w "%s": %s',
-  local_update_header_failed:
-    'Nie udało się zaktualizować nagłówka sharda "%s": %s',
-  local_read_shard_failed: 'Nie udało się odczytać sharda "%s": %s',
+  local_list_failed: 'Nie udało się wylistować katalogu kopii "%s": %s',
+  local_list_vaults_failed: 'Nie udało się wylistować kopii w "%s": %s',
+  local_update_header_failed: 'Nie udało się zaktualizować nagłówka "%s": %s',
+  local_read_shard_failed: 'Nie udało się odczytać "%s": %s',
 
   // ─── LocalFS — validateConfig + describeConfig ─────────────────────────────
-  local_validate_path_required:
-    'Local FS: path jest wymagany i musi być niepustym ciągiem znaków',
+  local_validate_path_required: 'Local FS: path jest wymagany i musi być niepustym ciągiem znaków',
   local_describe_config: 'ścieżka: %s',
 
   // ─── LocalFS — probeConnection ─────────────────────────────────────────────
-  local_probe_incomplete:
-    'Test nieudany: niepełna konfiguracja Local FS (path musi być ustawiony)',
+  local_probe_incomplete: 'Test nieudany: niepełna konfiguracja Local FS (path musi być ustawiony)',
   local_probe_step_mkdir: 'Test nieudany w fazie mkdir: %s',
   local_probe_step_write: 'Test nieudany w fazie write: %s',
   local_probe_step_read: 'Test nieudany w fazie read: %s',
-  local_probe_step_compare_local:
-    'Test nieudany w fazie compare: odczytane bajty różnią się od zapisanych',
+  local_probe_step_compare_local: 'Test nieudany w fazie compare: odczytane bajty różnią się od zapisanych',
   local_probe_step_cleanup: 'Test nieudany w fazie cleanup: %s',
 };

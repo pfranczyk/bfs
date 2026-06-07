@@ -3,10 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VersionHealth } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
-vi.mock('../../src/vault/vault-manager.js', () => ({
-  listVersions: vi.fn(),
-  prune: vi.fn(),
-}));
+vi.mock('../../src/vault/vault-manager.js', () => ({ listVersions: vi.fn(), prune: vi.fn() }));
 vi.mock('inquirer', () => ({
   default: {
     prompt: vi.fn(),
@@ -73,10 +70,7 @@ describe('prune', () => {
 
     await runCmd(['prune', '2']);
 
-    expect(mockPrune).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ versions: [2] }),
-    );
+    expect(mockPrune).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ versions: [2] }));
   });
 
   it('should prune range 1-3', async () => {
@@ -85,10 +79,7 @@ describe('prune', () => {
 
     await runCmd(['prune', '1-3']);
 
-    expect(mockPrune).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ versions: [1, 2, 3] }),
-    );
+    expect(mockPrune).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ versions: [1, 2, 3] }));
   });
 
   it('should prune comma-separated versions', async () => {
@@ -97,10 +88,7 @@ describe('prune', () => {
 
     await runCmd(['prune', '1,3,5']);
 
-    expect(mockPrune).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ versions: [1, 3, 5] }),
-    );
+    expect(mockPrune).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ versions: [1, 3, 5] }));
   });
 
   it('should ignore non-existent versions in range silently', async () => {
@@ -110,10 +98,7 @@ describe('prune', () => {
     await runCmd(['prune', '1-5']);
 
     // Only versions that exist (3,4,5) should be passed
-    expect(mockPrune).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ versions: [3, 4, 5] }),
-    );
+    expect(mockPrune).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ versions: [3, 4, 5] }));
   });
 
   it('should show message when range matches no existing versions', async () => {
@@ -142,10 +127,7 @@ describe('prune', () => {
 
     await runCmd(['prune', '--keep-last', '2']);
 
-    expect(mockPrune).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ versions: [1, 2, 3] }),
-    );
+    expect(mockPrune).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ versions: [1, 2, 3] }));
   });
 
   it('should show message when --keep-last >= total versions', async () => {
@@ -198,15 +180,8 @@ describe('prune', () => {
 
     await runCmd(['prune']);
 
-    expect(mockPrompt).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        expect.objectContaining({ type: 'checkbox', name: 'picked' }),
-      ]),
-    );
-    expect(mockPrune).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ versions: [2] }),
-    );
+    expect(mockPrompt).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ type: 'checkbox', name: 'picked' })]));
+    expect(mockPrune).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ versions: [2] }));
   });
 
   it('should show nothing to prune when 0 versions selected in interactive mode', async () => {
@@ -227,10 +202,7 @@ describe('prune', () => {
 
     await runCmd(['prune']);
 
-    expect(mockPrune).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ versions: [1, 2] }),
-    );
+    expect(mockPrune).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ versions: [1, 2] }));
   });
 
   // ─── Anulowanie ───────────────────────────────────────────────────────────
@@ -253,10 +225,6 @@ describe('prune', () => {
 
     expect(result).toBe('ok');
     expect(mockPrune).not.toHaveBeenCalled();
-    expect(
-      capture.logs.some(
-        (l) => l.includes('Cancelled') || l.includes('Anulowano'),
-      ),
-    ).toBe(true);
+    expect(capture.logs.some((l) => l.includes('Cancelled') || l.includes('Anulowano'))).toBe(true);
   });
 });

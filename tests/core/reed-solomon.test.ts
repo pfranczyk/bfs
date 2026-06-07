@@ -5,15 +5,7 @@ import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BfsError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
-import {
-  calcShardPayloadSize,
-  rsDecode,
-  rsDecodeStriped,
-  rsEncode,
-  rsEncodeStriped,
-  rsRepair,
-  SHARD_ALIGNMENT,
-} from '../../src/core/reed-solomon.js';
+import { calcShardPayloadSize, rsDecode, rsDecodeStriped, rsEncode, rsEncodeStriped, rsRepair, SHARD_ALIGNMENT } from '../../src/core/reed-solomon.js';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -51,9 +43,7 @@ describe('calcShardPayloadSize', () => {
     const dataLen = 100;
     const dataShards = 3;
     const min = Math.ceil(dataLen / dataShards);
-    expect(calcShardPayloadSize(dataLen, dataShards)).toBeGreaterThanOrEqual(
-      min,
-    );
+    expect(calcShardPayloadSize(dataLen, dataShards)).toBeGreaterThanOrEqual(min);
   });
 });
 
@@ -151,10 +141,7 @@ describe('rsDecode', () => {
   });
 
   it('should work with real data block (not just zeros)', () => {
-    const data = Buffer.from(
-      'The quick brown fox jumps over the lazy dog',
-      'utf8',
-    );
+    const data = Buffer.from('The quick brown fox jumps over the lazy dog', 'utf8');
     const shards = rsEncode(data, 4, 2);
     const withMissing = dropShards(shards, [0, 3]);
     const decoded = rsDecode(withMissing, 4, 2, data.length);
@@ -219,21 +206,14 @@ describe('rsEncodeStriped / rsDecodeStriped', () => {
    * stripe by stripe: shard i gets bytes [i*stripeSize : (i+1)*stripeSize] of each stripe.
    * Pads the last stripe to N*stripeSize if needed.
    */
-  function makeDataShards(
-    blob: Buffer,
-    N: number,
-    stripeSize: number,
-  ): Buffer[] {
+  function makeDataShards(blob: Buffer, N: number, stripeSize: number): Buffer[] {
     const shards: Buffer[] = Array.from({ length: N }, () => Buffer.alloc(0));
     const stripeInputSize = N * stripeSize;
     for (let offset = 0; offset < blob.length; offset += stripeInputSize) {
       const inputBlock = Buffer.alloc(stripeInputSize); // zero-padded
       blob.subarray(offset, offset + stripeInputSize).copy(inputBlock);
       for (let i = 0; i < N; i++) {
-        shards[i] = Buffer.concat([
-          shards[i],
-          inputBlock.subarray(i * stripeSize, (i + 1) * stripeSize),
-        ]);
+        shards[i] = Buffer.concat([shards[i], inputBlock.subarray(i * stripeSize, (i + 1) * stripeSize)]);
       }
     }
     return shards;
@@ -252,14 +232,9 @@ describe('rsEncodeStriped / rsDecodeStriped', () => {
     const parityPath0 = parityPaths[0];
     if (!parityPath0) throw new Error('Internal: parityPaths[0] missing');
     const parityBuf = await fs.readFile(parityPath0);
-    const shardStreams: (Readable | null)[] = [
-      ...dataShards.map((s) => Readable.from(s)),
-      Readable.from(parityBuf),
-    ];
+    const shardStreams: (Readable | null)[] = [...dataShards.map((s) => Readable.from(s)), Readable.from(parityBuf)];
 
-    const decoded = await streamToBuffer(
-      rsDecodeStriped(shardStreams, N, K, stripeSize, blob.length),
-    );
+    const decoded = await streamToBuffer(rsDecodeStriped(shardStreams, N, K, stripeSize, blob.length));
 
     expect(decoded).toEqual(blob);
   });
@@ -280,15 +255,9 @@ describe('rsEncodeStriped / rsDecodeStriped', () => {
     const shard1 = dataShards[1];
     if (!shard1) throw new Error('Internal: dataShards[1] missing');
     // Drop shard 0 — recover using shard 1 + parity
-    const shardStreams: (Readable | null)[] = [
-      null,
-      Readable.from(shard1),
-      Readable.from(parityBuf),
-    ];
+    const shardStreams: (Readable | null)[] = [null, Readable.from(shard1), Readable.from(parityBuf)];
 
-    const decoded = await streamToBuffer(
-      rsDecodeStriped(shardStreams, N, K, stripeSize, blob.length),
-    );
+    const decoded = await streamToBuffer(rsDecodeStriped(shardStreams, N, K, stripeSize, blob.length));
 
     expect(decoded).toEqual(blob);
   });
@@ -306,14 +275,9 @@ describe('rsEncodeStriped / rsDecodeStriped', () => {
     const parityPath0 = parityPaths[0];
     if (!parityPath0) throw new Error('Internal: parityPaths[0] missing');
     const parityBuf = await fs.readFile(parityPath0);
-    const shardStreams: (Readable | null)[] = [
-      ...dataShards.map((s) => Readable.from(s)),
-      Readable.from(parityBuf),
-    ];
+    const shardStreams: (Readable | null)[] = [...dataShards.map((s) => Readable.from(s)), Readable.from(parityBuf)];
 
-    const decoded = await streamToBuffer(
-      rsDecodeStriped(shardStreams, N, K, stripeSize, blob.length),
-    );
+    const decoded = await streamToBuffer(rsDecodeStriped(shardStreams, N, K, stripeSize, blob.length));
 
     expect(decoded).toEqual(blob);
   });

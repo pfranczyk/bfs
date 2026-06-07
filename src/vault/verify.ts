@@ -1,26 +1,11 @@
-import { Readable } from 'node:stream';
 import { BfsError } from '../core/errors.js';
-import { parseShardHeaderFromStream } from '../core/shard-io.js';
+import { readShardHeader } from '../core/shard-io.js';
 import { fmt } from '../i18n/index.js';
 import { providerRegistry } from '../providers/provider.js';
-import type {
-  ManifestShard,
-  ProviderIO,
-  ShardHeader,
-  StorageProvider,
-  VaultConfig,
-  VersionManifest,
-} from '../types/index.js';
+import type { ManifestShard, ProviderIO, ShardHeader, StorageProvider, VaultConfig, VersionManifest } from '../types/index.js';
 import { VersionHealth } from '../types/index.js';
 import { readConfig } from './config.js';
 import { listManifests, readManifest, writeManifest } from './manifest.js';
-
-/**
- * Bytes pulled from a shard for header verification. Must cover the common
- * header + kdf_salt + JSON location map for realistic schemes (≤ 32
- * providers). Adapters MUST NOT pull more than this from the wire.
- */
-const SHARD_HEADER_READ_BYTES = 16384;
 
 // ─── Report types ─────────────────────────────────────────────────────────────
 
@@ -49,10 +34,7 @@ export interface VerifyReport {
  * @returns       Report with status for each version
  * @throws BfsError if config is missing
  */
-export async function verifyAll(
-  rootDir: string,
-  io: ProviderIO,
-): Promise<VerifyReport> {
+export async function verifyAll(rootDir: string, io: ProviderIO): Promise<VerifyReport> {
   const manifests = await listManifests(rootDir);
   const results: VersionStatus[] = [];
   for (const manifest of manifests) {
@@ -73,17 +55,12 @@ export async function verifyAll(
  * @returns       VersionStatus (health, available/total shards)
  * @throws BfsError if config or manifest is missing
  */
-export async function verifyVersion(
-  rootDir: string,
-  version: number,
-  io: ProviderIO,
-): Promise<VersionStatus> {
+export async function verifyVersion(rootDir: string, version: number, io: ProviderIO): Promise<VersionStatus> {
   const config = await readConfig(rootDir);
   if (!config) throw new BfsError('No vault config found.');
 
   const manifest = await readManifest(rootDir, version);
-  if (!manifest)
-    throw new BfsError(`Manifest for version ${version} not found.`);
+  if (!manifest) throw new BfsError(`Manifest for version ${version} not found.`);
 
   const { data_shards: N, parity_shards: K } = manifest.scheme;
   const total = N + K;
@@ -127,13 +104,7 @@ export async function verifyVersion(
 
   const tolerance = available >= N ? available - N : 0;
 
-  return {
-    version,
-    health,
-    available_shards: available,
-    total_shards: total,
-    tolerance,
-  };
+  return { version, health, available_shards: available, total_shards: total, tolerance };
 }
 
 /**
@@ -148,13 +119,7 @@ export async function verifyVersion(
  *
  * @returns true when the shard is healthy
  */
-async function checkShardIntegrity(
-  provider: StorageProvider,
-  config: VaultConfig,
-  manifest: VersionManifest,
-  ms: ManifestShard,
-  io: ProviderIO,
-): Promise<boolean> {
+async function checkShardIntegrity(provider: StorageProvider, config: VaultConfig, manifest: VersionManifest, ms: ManifestShard, io: ProviderIO): Promise<boolean> {
   const filename = `shard_${ms.shard_index}.bfs.${manifest.version}`;
   const ref = { provider_id: provider.id, path: filename };
 
@@ -169,35 +134,11 @@ async function checkShardIntegrity(
     return false;
   }
 
-  let headerBytes: Buffer;
-  try {
-    headerBytes = await provider.downloadHeader(ref, SHARD_HEADER_READ_BYTES);
-  } catch (err) {
-    io.warn(
-      fmt(
-        'verify_shard_check_failed',
-        filename,
-        provider.id,
-        err instanceof Error ? err.message : String(err),
-      ),
-    );
-    return false;
-  }
-
   let header: ShardHeader;
   try {
-    const parsed = await parseShardHeaderFromStream(Readable.from(headerBytes));
-    parsed.payloadStream.on('error', () => {}).destroy();
-    header = parsed.header;
+    header = await readShardHeader(provider, ref);
   } catch (err) {
-    io.warn(
-      fmt(
-        'verify_shard_check_failed',
-        filename,
-        provider.id,
-        err instanceof Error ? err.message : String(err),
-      ),
-    );
+    io.warn(fmt('verify_shard_check_failed', filename, provider.id, err instanceof Error ? err.message : String(err)));
     return false;
   }
 
@@ -206,19 +147,10 @@ async function checkShardIntegrity(
   if (header.version !== manifest.version) mismatches.push('version');
   if (header.shard_index !== ms.shard_index) mismatches.push('shard_index');
   if (header.blob_hash !== manifest.blob_hash) mismatches.push('blob_hash');
-  if (header.data_shards !== manifest.scheme.data_shards)
-    mismatches.push('data_shards');
-  if (header.parity_shards !== manifest.scheme.parity_shards)
-    mismatches.push('parity_shards');
+  if (header.data_shards !== manifest.scheme.data_shards) mismatches.push('data_shards');
+  if (header.parity_shards !== manifest.scheme.parity_shards) mismatches.push('parity_shards');
   if (mismatches.length > 0) {
-    io.warn(
-      fmt(
-        'verify_shard_check_failed',
-        filename,
-        provider.id,
-        `header mismatch: ${mismatches.join(', ')}`,
-      ),
-    );
+    io.warn(fmt('verify_shard_check_failed', filename, provider.id, `header mismatch: ${mismatches.join(', ')}`));
     return false;
   }
   return true;

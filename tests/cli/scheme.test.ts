@@ -1,10 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureConsole, makeConfig, runCmd } from './_helpers.js';
 
-vi.mock('../../src/vault/config.js', () => ({
-  readConfig: vi.fn(),
-  writeConfig: vi.fn(),
-}));
+vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn(), writeConfig: vi.fn() }));
 
 import { readConfig, writeConfig } from '../../src/vault/config.js';
 
@@ -39,12 +36,7 @@ describe('scheme set', () => {
     const result = await runCmd(['scheme', 'set', '2', '1']);
 
     expect(result).toBe('ok');
-    expect(mockWriteConfig).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        scheme: { data_shards: 2, parity_shards: 1 },
-      }),
-    );
+    expect(mockWriteConfig).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ scheme: { data_shards: 2, parity_shards: 1 } }));
   });
 
   it('should abort when N+K exceeds provider count', async () => {

@@ -7,9 +7,7 @@ import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import { Command } from 'commander';
 
 const _require = createRequire(import.meta.url);
-const { version: PKG_VERSION } = _require('../package.json') as {
-  version: string;
-};
+const { version: PKG_VERSION } = _require('../package.json') as { version: string };
 // Side-effect imports: register providers in the global registry
 import './providers/local-fs.js';
 import './providers/ftp.js';
@@ -75,9 +73,7 @@ function buildProgram(): Command {
   registerScheme(program);
 
   // Provider sub-commands
-  const providerCmd = program
-    .command('provider')
-    .description(t('cmd_provider_desc'));
+  const providerCmd = program.command('provider').description(t('cmd_provider_desc'));
   registerProviderAdd(providerCmd);
   registerProviderList(providerCmd);
   registerProviderRemove(providerCmd);
@@ -132,9 +128,7 @@ async function main(): Promise<void> {
     if (i > 0 && arr[i - 1] === '--cwd') return false;
     return !a.startsWith('-');
   });
-  const hasGlobalFlag = argv.some(
-    (a) => a === '--help' || a === '-h' || a === '--version' || a === '-V',
-  );
+  const hasGlobalFlag = argv.some((a) => a === '--help' || a === '-h' || a === '--version' || a === '-V');
   const hasSubcommand = nonOptionArgs.length > 0 || hasGlobalFlag;
 
   if (!hasSubcommand) {
@@ -151,8 +145,7 @@ async function main(): Promise<void> {
       // leave sub-commands (e.g. `provider`) with _exitCallback=null → process.exit()
       applyExitOverride(replProgram);
       // Propagate --cwd into REPL commands so resolveCwd() uses the correct rootDir.
-      const augmented =
-        rootDir !== process.cwd() ? ['--cwd', rootDir, ...tokens] : tokens;
+      const augmented = rootDir !== process.cwd() ? ['--cwd', rootDir, ...tokens] : tokens;
       await replProgram.parseAsync(['node', 'bfs', ...augmented]);
     });
   } else {

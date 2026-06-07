@@ -80,6 +80,8 @@ fi
 . "$SCRIPT_DIR/lib/env.sh"
 # shellcheck source=lib/bfs.sh
 . "$SCRIPT_DIR/lib/bfs.sh"
+# shellcheck source=lib/pty.sh
+. "$SCRIPT_DIR/lib/pty.sh"
 # shellcheck source=lib/assert.sh
 . "$SCRIPT_DIR/lib/assert.sh"
 # shellcheck source=lib/hash.sh

@@ -6,10 +6,11 @@ import { extractZip } from './compression.js';
 import type { SkippedFile } from './errors.js';
 import { BfsError } from './errors.js';
 import { resolveSafeChildPath } from './fs-utils.js';
-import { hashBuffer } from './hash.js';
+import { hashBuffer, SHA256_BYTES } from './hash.js';
 
 const HEADER_SIZE = 70;
-const CHECKSUM_SIZE = 32;
+const CHECKSUM_SIZE = SHA256_BYTES;
+
 // Smallest possible file-table entry: pathLen(2) + size(8) + dataOffset(8) +
 // hash(32) + mode(4) + modifiedAt(8) with an empty (0-byte) path. Used to cap a
 // header-declared fileCount before it drives any allocation or loop.
@@ -25,9 +26,7 @@ export function parseBlobFileTable(blob: Buffer): FileEntry[] {
 
   const magic = `${blob.toString('ascii', 0, 3)}\0`;
   if (magic !== 'BFS\0') {
-    throw new BfsError(
-      `Invalid blob magic: expected BFS\\0, got ${JSON.stringify(blob.toString('ascii', 0, 4))}`,
-    );
+    throw new BfsError(`Invalid blob magic: expected BFS\\0, got ${JSON.stringify(blob.toString('ascii', 0, 4))}`);
   }
 
   const fileCount = blob.readUInt32LE(0x22); // 34
@@ -37,33 +36,24 @@ export function parseBlobFileTable(blob: Buffer): FileEntry[] {
   let pos = Number(fileTableOffset);
 
   for (let i = 0; i < fileCount; i++) {
-    if (pos + 2 > blob.length)
-      throw new BfsError(`File table truncated at entry ${i}`);
+    if (pos + 2 > blob.length) throw new BfsError(`File table truncated at entry ${i}`);
     const pathLen = blob.readUInt16LE(pos);
     pos += 2;
-    if (pos + pathLen > blob.length)
-      throw new BfsError(`File table path truncated at entry ${i}`);
+    if (pos + pathLen > blob.length) throw new BfsError(`File table path truncated at entry ${i}`);
     const filePath = blob.toString('utf8', pos, pos + pathLen);
     pos += pathLen;
     const size = blob.readBigUInt64LE(pos);
     pos += 8;
     const dataOffset = blob.readBigUInt64LE(pos);
     pos += 8;
-    const hash = blob.subarray(pos, pos + 32).toString('hex');
-    pos += 32;
+    const hash = blob.subarray(pos, pos + SHA256_BYTES).toString('hex');
+    pos += SHA256_BYTES;
     const mode = blob.readUInt32LE(pos);
     pos += 4;
     const modifiedAt = blob.readBigUInt64LE(pos);
     pos += 8;
 
-    entries.push({
-      path: filePath,
-      size,
-      data_offset: dataOffset,
-      hash,
-      mode,
-      modified_at: modifiedAt,
-    });
+    entries.push({ path: filePath, size, data_offset: dataOffset, hash, mode, modified_at: modifiedAt });
   }
 
   return entries;
@@ -80,11 +70,7 @@ export function parseBlobFileTable(blob: Buffer): FileEntry[] {
  * @param filter    - Optional: unpack only entries where filter returns true
  * @returns         - `{ extracted, skipped }` — written entries and any that could not be written
  */
-export async function unpackBlob(
-  blob: Buffer,
-  targetDir: string,
-  filter?: (entry: FileEntry) => boolean,
-): Promise<{ extracted: FileEntry[]; skipped: SkippedFile[] }> {
+export async function unpackBlob(blob: Buffer, targetDir: string, filter?: (entry: FileEntry) => boolean): Promise<{ extracted: FileEntry[]; skipped: SkippedFile[] }> {
   if (blob.length < HEADER_SIZE + CHECKSUM_SIZE) {
     throw new BfsError('Blob too short to be valid');
   }
@@ -95,9 +81,7 @@ export async function unpackBlob(
   const computedChecksum = Buffer.from(hashBuffer(blobBody), 'hex');
 
   if (!storedChecksum.equals(computedChecksum)) {
-    throw new BfsError(
-      'Blob checksum mismatch — data is corrupted or tampered',
-    );
+    throw new BfsError('Blob checksum mismatch — data is corrupted or tampered');
   }
 
   // 2. Detect compression flag
@@ -109,10 +93,7 @@ export async function unpackBlob(
   const dataSectionLength = Number(blob.readBigUInt64LE(0x3e)); // 62
 
   if (isCompressed) {
-    const zipBuffer = blob.subarray(
-      dataSectionOffset,
-      dataSectionOffset + dataSectionLength,
-    );
+    const zipBuffer = blob.subarray(dataSectionOffset, dataSectionOffset + dataSectionLength);
     return _extractZipToDir(zipBuffer, targetDir);
   }
 
@@ -140,7 +121,7 @@ export async function unpackBlob(
       throw new BfsError(`File hash mismatch for: ${entry.path}`);
     }
 
-    // 6. Write file to disk — skip on I/O failure (permission, disk full, etc.)
+    // 6. Write file to disk — skip on I/O failure (permission, disk full, etc.).
     // resolveSafeChildPath runs before the try so an UnsafePathError (path
     // escaping targetDir) propagates and aborts the restore instead of being
     // demoted to a skipped entry — consistent with the hash-mismatch throw above.
@@ -155,10 +136,7 @@ export async function unpackBlob(
 
       extracted.push(entry);
     } catch (e: unknown) {
-      skipped.push({
-        path: entry.path,
-        reason: e instanceof Error ? e.message : String(e),
-      });
+      skipped.push({ path: entry.path, reason: e instanceof Error ? e.message : String(e) });
     }
   }
 
@@ -173,74 +151,50 @@ export async function unpackBlob(
  * @returns Array of FileEntry records
  * @throws BfsError if the file is too short, magic is invalid, or table is truncated
  */
-export async function parseBlobFileTableFromFile(
-  blobPath: string,
-): Promise<FileEntry[]> {
+export async function parseBlobFileTableFromFile(blobPath: string): Promise<FileEntry[]> {
   const fh = await fs.open(blobPath, 'r');
   try {
     const { size: fileSize } = await fh.stat();
     const header = Buffer.alloc(HEADER_SIZE);
     const { bytesRead: hRead } = await fh.read(header, 0, HEADER_SIZE, 0);
-    if (hRead < HEADER_SIZE)
-      throw new BfsError('Blob file too short to contain header');
+    if (hRead < HEADER_SIZE) throw new BfsError('Blob file too short to contain header');
 
     const magic = `${header.toString('ascii', 0, 3)}\0`;
     if (magic !== 'BFS\0') {
-      throw new BfsError(
-        `Invalid blob magic: expected BFS\\0, got ${JSON.stringify(header.toString('ascii', 0, 4))}`,
-      );
+      throw new BfsError(`Invalid blob magic: expected BFS\\0, got ${JSON.stringify(header.toString('ascii', 0, 4))}`);
     }
 
     const fileCount = header.readUInt32LE(0x22);
     const fileTableOffset = Number(header.readBigUInt64LE(0x26));
     const fileTableLength = Number(header.readBigUInt64LE(0x2e));
 
-    assertSectionWithinFile(
-      { offset: fileTableOffset, length: fileTableLength },
-      fileSize,
-      'file table',
-    );
+    assertSectionWithinFile({ offset: fileTableOffset, length: fileTableLength }, fileSize, 'file table');
     assertFileCountFits(fileCount, fileTableLength);
 
     const ftBuf = Buffer.alloc(fileTableLength);
-    const { bytesRead: ftRead } = await fh.read(
-      ftBuf,
-      0,
-      fileTableLength,
-      fileTableOffset,
-    );
-    if (ftRead < fileTableLength)
-      throw new BfsError('Blob file table truncated');
+    const { bytesRead: ftRead } = await fh.read(ftBuf, 0, fileTableLength, fileTableOffset);
+    if (ftRead < fileTableLength) throw new BfsError('Blob file table truncated');
 
     const entries: FileEntry[] = [];
     let pos = 0;
     for (let i = 0; i < fileCount; i++) {
-      if (pos + 2 > ftBuf.length)
-        throw new BfsError(`File table truncated at entry ${i}`);
+      if (pos + 2 > ftBuf.length) throw new BfsError(`File table truncated at entry ${i}`);
       const pathLen = ftBuf.readUInt16LE(pos);
       pos += 2;
-      if (pos + pathLen > ftBuf.length)
-        throw new BfsError(`File table path truncated at entry ${i}`);
+      if (pos + pathLen > ftBuf.length) throw new BfsError(`File table path truncated at entry ${i}`);
       const entryPath = ftBuf.toString('utf8', pos, pos + pathLen);
       pos += pathLen;
       const size = ftBuf.readBigUInt64LE(pos);
       pos += 8;
       const dataOffset = ftBuf.readBigUInt64LE(pos);
       pos += 8;
-      const entryHash = ftBuf.subarray(pos, pos + 32).toString('hex');
-      pos += 32;
+      const entryHash = ftBuf.subarray(pos, pos + SHA256_BYTES).toString('hex');
+      pos += SHA256_BYTES;
       const mode = ftBuf.readUInt32LE(pos);
       pos += 4;
       const modifiedAt = ftBuf.readBigUInt64LE(pos);
       pos += 8;
-      entries.push({
-        path: entryPath,
-        size,
-        data_offset: dataOffset,
-        hash: entryHash,
-        mode,
-        modified_at: modifiedAt,
-      });
+      entries.push({ path: entryPath, size, data_offset: dataOffset, hash: entryHash, mode, modified_at: modifiedAt });
     }
     return entries;
   } finally {
@@ -259,14 +213,9 @@ export async function parseBlobFileTableFromFile(
  * @returns `{ extracted, skipped }` — written entries and any that could not be written
  * @throws BfsError on data corruption (checksum / hash mismatch)
  */
-export async function unpackBlobFromFile(
-  blobPath: string,
-  targetDir: string,
-  filter?: (entry: FileEntry) => boolean,
-): Promise<{ extracted: FileEntry[]; skipped: SkippedFile[] }> {
+export async function unpackBlobFromFile(blobPath: string, targetDir: string, filter?: (entry: FileEntry) => boolean): Promise<{ extracted: FileEntry[]; skipped: SkippedFile[] }> {
   const fileStat = await fs.stat(blobPath);
-  if (fileStat.size < HEADER_SIZE + CHECKSUM_SIZE)
-    throw new BfsError('Blob too short to be valid');
+  if (fileStat.size < HEADER_SIZE + CHECKSUM_SIZE) throw new BfsError('Blob too short to be valid');
 
   const fh = await fs.open(blobPath, 'r');
   try {
@@ -276,9 +225,7 @@ export async function unpackBlobFromFile(
 
     const magic = `${header.toString('ascii', 0, 3)}\0`;
     if (magic !== 'BFS\0') {
-      throw new BfsError(
-        `Invalid blob magic: expected BFS\\0, got ${JSON.stringify(header.toString('ascii', 0, 4))}`,
-      );
+      throw new BfsError(`Invalid blob magic: expected BFS\\0, got ${JSON.stringify(header.toString('ascii', 0, 4))}`);
     }
 
     const fileCount = header.readUInt32LE(0x22);
@@ -286,46 +233,33 @@ export async function unpackBlobFromFile(
     const fileTableLength = Number(header.readBigUInt64LE(0x2e));
     const dataSectionOffset = Number(header.readBigUInt64LE(0x36));
 
-    // ── 2. Read file table ─────────────────────────────────────────────────
-    assertSectionWithinFile(
-      { offset: fileTableOffset, length: fileTableLength },
-      fileStat.size,
-      'file table',
-    );
+    assertSectionWithinFile({ offset: fileTableOffset, length: fileTableLength }, fileStat.size, 'file table');
     assertFileCountFits(fileCount, fileTableLength);
 
+    // ── 2. Read file table ─────────────────────────────────────────────────
     const ftBuf = Buffer.alloc(fileTableLength);
     await fh.read(ftBuf, 0, fileTableLength, fileTableOffset);
 
     const entries: FileEntry[] = [];
     let pos = 0;
     for (let i = 0; i < fileCount; i++) {
-      if (pos + 2 > ftBuf.length)
-        throw new BfsError(`File table truncated at entry ${i}`);
+      if (pos + 2 > ftBuf.length) throw new BfsError(`File table truncated at entry ${i}`);
       const pathLen = ftBuf.readUInt16LE(pos);
       pos += 2;
-      if (pos + pathLen > ftBuf.length)
-        throw new BfsError(`File table path truncated at entry ${i}`);
+      if (pos + pathLen > ftBuf.length) throw new BfsError(`File table path truncated at entry ${i}`);
       const entryPath = ftBuf.toString('utf8', pos, pos + pathLen);
       pos += pathLen;
       const size = ftBuf.readBigUInt64LE(pos);
       pos += 8;
       const dataOffset = ftBuf.readBigUInt64LE(pos);
       pos += 8;
-      const entryHash = ftBuf.subarray(pos, pos + 32).toString('hex');
-      pos += 32;
+      const entryHash = ftBuf.subarray(pos, pos + SHA256_BYTES).toString('hex');
+      pos += SHA256_BYTES;
       const mode = ftBuf.readUInt32LE(pos);
       pos += 4;
       const modifiedAt = ftBuf.readBigUInt64LE(pos);
       pos += 8;
-      entries.push({
-        path: entryPath,
-        size,
-        data_offset: dataOffset,
-        hash: entryHash,
-        mode,
-        modified_at: modifiedAt,
-      });
+      entries.push({ path: entryPath, size, data_offset: dataOffset, hash: entryHash, mode, modified_at: modifiedAt });
     }
 
     // ── 3. Verify trailing SHA-256 checksum (streaming, 4 MiB chunks) ──────
@@ -336,7 +270,7 @@ export async function unpackBlobFromFile(
     while (readPos < hashLen) {
       const toRead = Math.min(CHUNK, hashLen - readPos);
       // eslint-disable-next-line no-await-in-loop
-      const chunk = Buffer.allocUnsafe(toRead);
+      const chunk = Buffer.alloc(toRead);
       // eslint-disable-next-line no-await-in-loop
       const { bytesRead } = await fh.read(chunk, 0, toRead, readPos);
       checksumHash.update(chunk.subarray(0, bytesRead));
@@ -344,16 +278,9 @@ export async function unpackBlobFromFile(
     }
     const computedChecksum = checksumHash.digest();
     const storedChecksum = Buffer.alloc(CHECKSUM_SIZE);
-    await fh.read(
-      storedChecksum,
-      0,
-      CHECKSUM_SIZE,
-      fileStat.size - CHECKSUM_SIZE,
-    );
+    await fh.read(storedChecksum, 0, CHECKSUM_SIZE, fileStat.size - CHECKSUM_SIZE);
     if (!computedChecksum.equals(storedChecksum)) {
-      throw new BfsError(
-        'Blob checksum mismatch — data is corrupted or tampered',
-      );
+      throw new BfsError('Blob checksum mismatch — data is corrupted or tampered');
     }
 
     // ── 4. Check compression flag ──────────────────────────────────────────
@@ -362,11 +289,7 @@ export async function unpackBlobFromFile(
     const dataSectionLength = Number(header.readBigUInt64LE(0x3e));
 
     if (isCompressed) {
-      assertSectionWithinFile(
-        { offset: dataSectionOffset, length: dataSectionLength },
-        fileStat.size,
-        'data section',
-      );
+      assertSectionWithinFile({ offset: dataSectionOffset, length: dataSectionLength }, fileStat.size, 'data section');
       const zipBuffer = Buffer.alloc(dataSectionLength);
       await fh.read(zipBuffer, 0, dataSectionLength, dataSectionOffset);
       return _extractZipToDir(zipBuffer, targetDir);
@@ -384,9 +307,7 @@ export async function unpackBlobFromFile(
       const fileEnd = fileStart + fileSize;
 
       if (fileEnd > hashLen) {
-        throw new BfsError(
-          `Data section out of bounds for file: ${entry.path}`,
-        );
+        throw new BfsError(`Data section out of bounds for file: ${entry.path}`);
       }
 
       const targetPath = resolveSafeChildPath(targetDir, entry.path);
@@ -398,7 +319,7 @@ export async function unpackBlobFromFile(
           let fp = fileStart;
           while (fp < fileEnd) {
             const toRead = Math.min(CHUNK, fileEnd - fp);
-            const chunk = Buffer.allocUnsafe(toRead);
+            const chunk = Buffer.alloc(toRead);
             // eslint-disable-next-line no-await-in-loop
             const { bytesRead } = await fh.read(chunk, 0, toRead, fp);
             const data = chunk.subarray(0, bytesRead);
@@ -421,10 +342,7 @@ export async function unpackBlobFromFile(
         extracted.push(entry);
       } catch (e: unknown) {
         if (e instanceof BfsError) throw e; // data corruption — propagate
-        skipped.push({
-          path: entry.path,
-          reason: e instanceof Error ? e.message : String(e),
-        });
+        skipped.push({ path: entry.path, reason: e instanceof Error ? e.message : String(e) });
       }
     }
 
@@ -451,26 +369,13 @@ interface FileWindow {
  * @throws BfsError if offset/length are not safe integers, are negative, or
  *         describe a window that extends past the end of the file.
  */
-function assertSectionWithinFile(
-  window: FileWindow,
-  fileSize: number,
-  label: string,
-): void {
+function assertSectionWithinFile(window: FileWindow, fileSize: number, label: string): void {
   const { offset, length } = window;
-  if (
-    !Number.isSafeInteger(offset) ||
-    !Number.isSafeInteger(length) ||
-    offset < 0 ||
-    length < 0
-  ) {
-    throw new BfsError(
-      `${label}: invalid header offset/length (${offset}/${length})`,
-    );
+  if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0) {
+    throw new BfsError(`${label}: invalid header offset/length (${offset}/${length})`);
   }
   if (offset > fileSize || length > fileSize - offset) {
-    throw new BfsError(
-      `${label}: section out of file bounds (offset ${offset}, length ${length}, file ${fileSize})`,
-    );
+    throw new BfsError(`${label}: section out of file bounds (offset ${offset}, length ${length}, file ${fileSize})`);
   }
 }
 
@@ -486,9 +391,7 @@ function assertFileCountFits(fileCount: number, fileTableLength: number): void {
     throw new BfsError(`Invalid file count in header: ${fileCount}`);
   }
   if (fileCount > Math.floor(fileTableLength / MIN_FILE_ENTRY_SIZE)) {
-    throw new BfsError(
-      `File count ${fileCount} exceeds file table capacity (${fileTableLength} bytes)`,
-    );
+    throw new BfsError(`File count ${fileCount} exceeds file table capacity (${fileTableLength} bytes)`);
   }
 }
 
@@ -497,10 +400,7 @@ function assertFileCountFits(fileCount: number, fileTableLength: number): void {
  * CRC-32 is verified by extractZip() for each entry.
  * I/O errors (permission denied, disk full) are collected as skipped — not thrown.
  */
-async function _extractZipToDir(
-  zipBuffer: Buffer,
-  targetDir: string,
-): Promise<{ extracted: FileEntry[]; skipped: SkippedFile[] }> {
+async function _extractZipToDir(zipBuffer: Buffer, targetDir: string): Promise<{ extracted: FileEntry[]; skipped: SkippedFile[] }> {
   const zipEntries = extractZip(zipBuffer); // throws BfsError on corrupt ZIP
   const extracted: FileEntry[] = [];
   const skipped: SkippedFile[] = [];
@@ -512,19 +412,9 @@ async function _extractZipToDir(
     try {
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
       await fs.writeFile(targetPath, entry.data);
-      extracted.push({
-        path: entry.filename,
-        size: BigInt(entry.data.length),
-        data_offset: 0n,
-        hash: '',
-        mode: 0,
-        modified_at: BigInt(Date.now()),
-      });
+      extracted.push({ path: entry.filename, size: BigInt(entry.data.length), data_offset: 0n, hash: '', mode: 0, modified_at: BigInt(Date.now()) });
     } catch (e: unknown) {
-      skipped.push({
-        path: entry.filename,
-        reason: e instanceof Error ? e.message : String(e),
-      });
+      skipped.push({ path: entry.filename, reason: e instanceof Error ? e.message : String(e) });
     }
   }
 

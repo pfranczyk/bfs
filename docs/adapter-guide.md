@@ -40,7 +40,16 @@ Every adapter class implements the full `StorageProvider` interface.
 The interface splits into two groups of methods:
 
 - **Runtime I/O** — `authenticate`, `setVaultName`, `upload`, `download`,
-  `delete`, `rename`, `updateShardHeader`, `list`, `listVaults`, `healthCheck`.
+  `delete`, `rename`, `updateShardHeader`, `list`, `getSize`, `downloadHeader`,
+  `listVaults`, `healthCheck`.
+- **Header storage & verification** — `usesSidecar`, `uploadHeaderSidecar`,
+  `downloadHeaderSidecar`, `verifyShard`. Declare via `usesSidecar()` whether
+  you rewrite the header in place inside the shard (return `false`, like the
+  built-in disk/FTP adapters — the two sidecar methods then MUST throw) or keep
+  it in a sidecar file next to the shard (return `true` — implement both, using
+  the standard BFSH bytes BFS hands you). `verifyShard` checks a shard's
+  identity (vault id, index, version) on your medium and returns a structured
+  verdict instead of throwing for the expected outcomes.
 - **Configuration lifecycle** — `configureInteractive`, `configureFromFlags`,
   `validateConfig`, `describeConfig`, `getSecretFields`, `probeConnection`.
 
@@ -57,6 +66,8 @@ import type {
   ProviderIO,
   CliProviderInput,
   RemoteRef,
+  ShardIdentity,
+  VerifyShardResult,
 } from 'bfs-vault/provider';
 import { ProviderError } from 'bfs-vault/provider';
 
@@ -82,8 +93,16 @@ export class MyProvider implements StorageProvider {
   async rename(ref, newFilename): Promise<RemoteRef> { /* … */ }
   async updateShardHeader(ref, headerData): Promise<RemoteRef> { /* … */ }
   async list(prefix?): Promise<RemoteRef[]> { /* … */ }
+  async getSize(ref): Promise<number> { /* … */ }
+  async downloadHeader(ref, maxBytes): Promise<Buffer> { /* … */ }
   async listVaults(): Promise<string[]> { /* … */ }
   async healthCheck(): Promise<boolean> { /* … */ }
+
+  // ─── Header storage & verification ───────────────────────────────────
+  usesSidecar(): boolean { return false; } // true → keep header in a sidecar file
+  async uploadHeaderSidecar(ref, sidecarBytes): Promise<void> { /* throw when usesSidecar()=false */ }
+  async downloadHeaderSidecar(ref, maxBytes): Promise<Buffer | null> { /* throw when usesSidecar()=false */ }
+  async verifyShard(ref, expected): Promise<VerifyShardResult> { /* … */ }
 
   // ─── Configuration lifecycle ─────────────────────────────────────────
 
@@ -131,7 +150,36 @@ SHA-256, so silent mid-stream corruption will eventually surface as
 `Shard checksum mismatch` during `bfs pull`, but only after the backup
 has been "confirmed" written and perhaps kept for months.
 
-The built-in FTP adapter does this:
+**Chunk the buffer — never `Readable.from(buffer)` to a socket.** A multi-MB
+single-chunk stream piped to a TCP/TLS/SFTP/HTTP transport can silently drop
+bytes under backpressure (observed: 61 799 B lost on a 263 MB shard via
+Docker-bridged vsftpd). Emit the payload as fixed ≤ 64 KB chunks instead — the
+same size `createReadStream` uses. The built-in FTP adapter wraps the buffer in
+a small `Readable`:
+
+```ts
+const UPLOAD_CHUNK_SIZE = 64 * 1024;
+
+// Emits `buffer` as fixed-size chunks so backpressure cooperates and the
+// transport never receives one giant write(). Reuse this for any adapter
+// that pushes a Buffer to a socket. (rule: .claude/rules/streaming.md)
+function bufferToChunkedStream(buffer: Buffer, chunkSize = UPLOAD_CHUNK_SIZE): Readable {
+  let offset = 0;
+  return new Readable({
+    read(this: Readable) {
+      if (offset >= buffer.length) {
+        this.push(null);
+        return;
+      }
+      const end = Math.min(offset + chunkSize, buffer.length);
+      this.push(buffer.subarray(offset, end));
+      offset = end;
+    },
+  });
+}
+```
+
+The built-in FTP adapter uses it together with a round-trip verify:
 
 ```ts
 async upload(
@@ -145,7 +193,8 @@ async upload(
 
   await this.withClient(async (client) => {
     await client.ensureDir(this.vaultPath());
-    await client.uploadFrom(Readable.from(buffer), remotePath);
+    // Chunked stream, NOT Readable.from(buffer) — see bufferToChunkedStream above.
+    await client.uploadFrom(bufferToChunkedStream(buffer), remotePath);
 
     // Round-trip verify: any byte loss / byte flip / size mismatch
     // throws BEFORE this upload() resolves. The caller treats a throw
@@ -167,6 +216,10 @@ async upload(
   return { provider_id: this.id, path: shardFilename, hash };
 }
 ```
+
+`Readable.from(buffer)` is fine only for payloads that stay in-process or are
+≤ 64 KB (probes, handshakes). Anything larger headed for a socket must be
+chunked.
 
 Skip verification only when the transport itself provides an integrity
 guarantee you trust (e.g. the backend's response includes a strong
@@ -255,9 +308,9 @@ BFS ships `src/providers/flags.ts` with two helpers adapters can opt into
 (they are not part of the contract — adapters may ignore them):
 
 - `findStringFlag(rawArgs, '--config-file') → string | null`
-- `readJsonObjectFile(absolutePath, adapterLabel) → Record<string, unknown>`
-  — reads + parses + validates that the result is a plain object; throws
-  `ProviderError` with the label prefix on any failure.
+- `readJsonObjectFile(absolutePath, adapterLabel) → Promise<Record<string, unknown>>`
+  — `async`; reads + parses + validates that the result is a plain object
+  (`await` it). Throws `ProviderError` with the label prefix on any failure.
 
 ### Secrets recommendation
 
@@ -357,7 +410,7 @@ import { MyProvider } from './provider.js';
 const factory: ProviderFactory = {
   lang: 'en',                              // BFS overwrites via providerRegistry.setLang()
   displayName: 'My Storage Backend',       // proper noun / brand — NOT translated
-  requiresApiVersion: 1,                   // minimum BFS provider API version
+  requiresApiVersion: 2,                   // minimum BFS provider API version (v2 added sidecar + verifyShard)
   create: (config, io) => new MyProvider(config, io),
   help() { /* see "Provider help" section */ },
 };
@@ -418,11 +471,16 @@ Adapters declare the minimum contract version they need:
 const factory: ProviderFactory = {
   lang: 'en',
   displayName: 'Foo',
-  requiresApiVersion: 1,
+  requiresApiVersion: 2,
   create: (config, io) => new FooProvider(config, io),
   help() { /* … */ },
 };
 ```
+
+The current contract is **v2** — it added the header-storage and
+verification methods (`usesSidecar`, `uploadHeaderSidecar`,
+`downloadHeaderSidecar`, `verifyShard`) listed above. An adapter that
+implements them declares `requiresApiVersion: 2`.
 
 `ProviderRegistry.register()` throws `BfsError` when
 `requiresApiVersion > BFS_PROVIDER_API_VERSION`. This prevents an adapter

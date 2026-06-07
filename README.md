@@ -27,7 +27,7 @@ bfs pull
 
 ## Requirements
 
-- Node.js >= 23
+- Node.js >= 24
 - Minimum 4 GB RAM (BFS uses ~25% of system memory for Reed-Solomon encoding)
 - **Windows only:** [Microsoft Visual C++ Redistributable 2015–2022 (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe) — required by the Argon2 native binding (Windows 11 desktop typically has this pre-installed; Windows Server usually does not)
 
@@ -36,6 +36,17 @@ bfs pull
 ```bash
 npm install -g bfs-vault
 ```
+
+To try a prerelease (beta) build instead of the latest stable:
+
+```bash
+npm install -g bfs-vault@beta
+```
+
+> **Beta note:** the `0.7.0` line is in beta. Its on-disk format and the provider
+> adapter contract may still change before the stable `0.7.0` release. The plain
+> `npm install -g bfs-vault` command always installs the latest **stable**
+> version, never a beta. Evaluate betas on test data, not your only copy.
 
 ## Quick start
 

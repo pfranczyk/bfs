@@ -1,9 +1,4 @@
-import {
-  createCipheriv,
-  createDecipheriv,
-  createHmac,
-  randomBytes,
-} from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
 import type { Readable, TransformCallback } from 'node:stream';
 import { Transform } from 'node:stream';
 
@@ -15,6 +10,27 @@ const NONCE_SIZE = 12;
 const TAG_SIZE = 16;
 const SALT_SIZE = 16;
 const KEY_SIZE = 32;
+
+/**
+ * Maximum plaintext bytes that may be encrypted under a single AES-GCM
+ * (key, nonce) pair. AES-GCM counts blocks with a 32-bit counter, so one
+ * (key, nonce) covers at most 2^32 - 2 blocks of 16 bytes (~64 GiB) before the
+ * counter wraps and the keystream repeats — a catastrophic confidentiality
+ * break. Each shard is encrypted with the shared data key and its own
+ * deterministic nonce (deriveShardNonce), so the limit applies per shard.
+ * 60 GiB leaves headroom below the ~64 GiB hard wrap; the 16-byte auth tag is
+ * separate and not counted here.
+ */
+export const GCM_MAX_PLAINTEXT_BYTES = 60 * 1024 ** 3;
+
+/**
+ * Returns true when `plaintextBytes` exceeds the safe AES-GCM per-(key, nonce)
+ * plaintext limit (GCM_MAX_PLAINTEXT_BYTES). Pure comparison — allocates
+ * nothing, so callers can guard the encrypt path without materializing the data.
+ */
+export function exceedsGcmPlaintextLimit(plaintextBytes: number): boolean {
+  return plaintextBytes > GCM_MAX_PLAINTEXT_BYTES;
+}
 
 // Argon2id KDF parameters (RFC 9106 recommended: 64 MiB, 3 iterations)
 export const ARGON2_PARAMS = {
@@ -33,31 +49,18 @@ export function generateSalt(): Buffer {
  * @param password - plaintext password provided by the user
  * @param salt     - 16-byte random salt (from generateSalt or shard header kdf_salt)
  */
-export async function deriveKey(
-  password: string,
-  salt: Buffer,
-): Promise<Buffer> {
+export async function deriveKey(password: string, salt: Buffer): Promise<Buffer> {
   // hashRawSync avoids WASM worker-thread initialization, which fails on
   // Windows Server 2025 + Node.js v25 when the native .node addon cannot load
   // its DLL dependency and the WASM fallback tries to spawn pthreads.
-  return hashRawSync(password, {
-    salt,
-    algorithm: Algorithm.Argon2id,
-    outputLen: KEY_SIZE,
-    memoryCost: ARGON2_PARAMS.memoryCost,
-    timeCost: ARGON2_PARAMS.timeCost,
-    parallelism: ARGON2_PARAMS.parallelism,
-  });
+  return hashRawSync(password, { salt, algorithm: Algorithm.Argon2id, outputLen: KEY_SIZE, memoryCost: ARGON2_PARAMS.memoryCost, timeCost: ARGON2_PARAMS.timeCost, parallelism: ARGON2_PARAMS.parallelism });
 }
 
 /**
  * Encrypts a blob with AES-256-GCM using Argon2id KDF.
  * @returns encrypted = nonce(12B) + ciphertext + tag(16B), salt separate, key for reuse
  */
-export async function encryptBlob(
-  data: Buffer,
-  password: string,
-): Promise<{ encrypted: Buffer; salt: Buffer; key: Buffer }> {
+export async function encryptBlob(data: Buffer, password: string): Promise<{ encrypted: Buffer; salt: Buffer; key: Buffer }> {
   const salt = generateSalt();
   const key = await deriveKey(password, salt);
   const encrypted = encryptWithKey(data, key);
@@ -70,11 +73,7 @@ export async function encryptBlob(
  * @param password  - original password
  * @param salt      - kdf_salt from shard header
  */
-export async function decryptBlob(
-  encrypted: Buffer,
-  password: string,
-  salt: Buffer,
-): Promise<Buffer> {
+export async function decryptBlob(encrypted: Buffer, password: string, salt: Buffer): Promise<Buffer> {
   const key = await deriveKey(password, salt);
   return decryptWithKey(encrypted, key);
 }
@@ -107,14 +106,12 @@ export function decryptLocationMap(data: Buffer, key: Buffer): ShardLocation[] {
   } catch {
     throw new DecryptionError('Location map JSON is invalid after decryption');
   }
-  // Backward compat: shards serialized before adapterPackage was introduced
-  // omit the field. Treat undefined as null — the correct semantics for
-  // legacy shards, which were always produced by built-in providers (local,
-  // ftp). See PLAN/binary-format.md for the full compatibility rule.
-  return parsed.map((loc) => ({
-    ...loc,
-    adapterPackage: loc.adapterPackage ?? null,
-  }));
+  // Backward compat: shards serialized before a field existed omit it.
+  // adapterPackage undefined → null (legacy shards came from built-in providers).
+  // required_inputs undefined → null marks a legacy shard whose secret is still
+  // inline in connection_config, so recovery uses it directly instead of
+  // prompting. See PLAN/binary-format.md for the full compatibility rule.
+  return parsed.map((loc) => ({ ...loc, adapterPackage: loc.adapterPackage ?? null, required_inputs: loc.required_inputs ?? null }));
 }
 
 // ─── Streaming per-shard crypto (FORMAT_VERSION=2) ────────────────────────
@@ -129,11 +126,7 @@ export function decryptLocationMap(data: Buffer, key: Buffer): ShardLocation[] {
  * @param shardIndex - shard index 0..N+K-1
  * @returns 12-byte nonce (NONCE_SIZE)
  */
-export function deriveShardNonce(
-  key: Buffer,
-  version: number,
-  shardIndex: number,
-): Buffer {
+export function deriveShardNonce(key: Buffer, version: number, shardIndex: number): Buffer {
   const label = Buffer.from('shard_nonce', 'utf8');
   const versionBuf = Buffer.allocUnsafe(4);
   versionBuf.writeUInt32LE(version, 0);
@@ -155,11 +148,7 @@ export function deriveShardNonce(
  * @param nonce - 12-byte nonce (use deriveShardNonce for per-shard encryption)
  * @returns Readable stream with encrypted data + trailing auth tag
  */
-export function encryptStream(
-  input: Readable,
-  key: Buffer,
-  nonce: Buffer,
-): Readable {
+export function encryptStream(input: Readable, key: Buffer, nonce: Buffer): Readable {
   const cipher = createCipheriv('aes-256-gcm', key, nonce);
   const transform = new Transform({
     transform(chunk: Buffer, _enc: string, cb: TransformCallback) {
@@ -187,11 +176,7 @@ export function encryptStream(
  * @returns Readable stream with decrypted plaintext
  * @throws DecryptionError if auth tag verification fails or stream too short
  */
-export function decryptStream(
-  input: Readable,
-  key: Buffer,
-  nonce: Buffer,
-): Readable {
+export function decryptStream(input: Readable, key: Buffer, nonce: Buffer): Readable {
   const decipher = createDecipheriv('aes-256-gcm', key, nonce);
   // tail holds the last TAG_SIZE bytes seen so far — may be the auth tag
   let tail = Buffer.alloc(0);
@@ -211,22 +196,14 @@ export function decryptStream(
     },
     flush(cb: TransformCallback) {
       if (tail.length !== TAG_SIZE) {
-        cb(
-          new DecryptionError(
-            'Encrypted stream too short — missing GCM auth tag',
-          ),
-        );
+        cb(new DecryptionError('Encrypted stream too short — missing GCM auth tag'));
         return;
       }
       decipher.setAuthTag(tail);
       try {
         cb(null, decipher.final());
       } catch {
-        cb(
-          new DecryptionError(
-            'Decryption failed — wrong key or corrupted data',
-          ),
-        );
+        cb(new DecryptionError('Decryption failed — wrong key or corrupted data'));
       }
     },
   });
@@ -260,18 +237,13 @@ function decryptWithKey(encrypted: Buffer, key: Buffer): Buffer {
   }
   const nonce = encrypted.subarray(0, NONCE_SIZE);
   const tag = encrypted.subarray(encrypted.length - TAG_SIZE);
-  const ciphertext = encrypted.subarray(
-    NONCE_SIZE,
-    encrypted.length - TAG_SIZE,
-  );
+  const ciphertext = encrypted.subarray(NONCE_SIZE, encrypted.length - TAG_SIZE);
 
   try {
     const decipher = createDecipheriv('aes-256-gcm', key, nonce);
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   } catch {
-    throw new DecryptionError(
-      'Decryption failed — wrong key or corrupted data',
-    );
+    throw new DecryptionError('Decryption failed — wrong key or corrupted data');
   }
 }

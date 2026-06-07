@@ -3,20 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ProviderError } from '../../src/core/errors.js';
+import { BfsError, ProviderError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
-import {
-  buildShard,
-  parseShardHeaderFromStream,
-} from '../../src/core/shard-io.js';
+import { buildShard, parseShardHeaderFromStream } from '../../src/core/shard-io.js';
 import { FtpProvider } from '../../src/providers/ftp.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
-import type {
-  CliProviderInput,
-  ProviderConfig,
-  ShardHeader,
-  ShardLocation,
-} from '../../src/types/index.js';
+import type { CliProviderInput, ProviderConfig, ShardHeader, ShardLocation } from '../../src/types/index.js';
 
 async function writeJsonConfig(content: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-ftp-cfg-'));
@@ -26,10 +18,7 @@ async function writeJsonConfig(content: string): Promise<string> {
 }
 
 function cliInput(overrides: Partial<CliProviderInput> = {}): CliProviderInput {
-  return {
-    name: overrides.name ?? 'test',
-    rawArgs: overrides.rawArgs ?? [],
-  };
+  return { name: overrides.name ?? 'test', rawArgs: overrides.rawArgs ?? [] };
 }
 
 // ─── In-memory FTP mock ──────────────────────────────────────────────────────
@@ -38,6 +27,8 @@ const mockState: {
   files: Map<string, Buffer>;
   dirs: Set<string>;
   accessShouldFail: boolean;
+  /** When set, access() throws an error carrying this numeric FTP reply code (e.g. 530). */
+  accessErrorCode: Nullable<number>;
   sentCommands: string[];
   /**
    * Optional post-STOR corruption hook. Receives the buffer that arrived from
@@ -83,6 +74,7 @@ const mockState: {
   files: new Map<string, Buffer>(),
   dirs: new Set<string>(),
   accessShouldFail: false,
+  accessErrorCode: null,
   sentCommands: [],
   corruptOnUpload: null,
   uploadByteLossPlan: [],
@@ -105,6 +97,9 @@ vi.mock('basic-ftp', () => {
       if (mockState.accessShouldFail) {
         throw new Error('ECONNREFUSED');
       }
+      if (mockState.accessErrorCode !== null) {
+        throw Object.assign(new Error(`${mockState.accessErrorCode} access rejected`), { code: mockState.accessErrorCode });
+      }
     }
 
     async send(cmd: string): Promise<{ code: number; message: string }> {
@@ -124,18 +119,12 @@ vi.mock('basic-ftp', () => {
       const attemptIndex = mockState.uploadAttempt;
       mockState.uploadAttempt += 1;
       const loss = mockState.uploadByteLossPlan[attemptIndex] ?? 0;
-      let stored: Buffer =
-        loss > 0
-          ? Buffer.from(received.subarray(0, received.length - loss))
-          : received;
+      let stored: Buffer = loss > 0 ? Buffer.from(received.subarray(0, received.length - loss)) : received;
       if (mockState.corruptOnUpload) stored = mockState.corruptOnUpload(stored);
       mockState.files.set(remotePath, stored);
     }
 
-    async downloadTo(
-      writable: NodeJS.WritableStream,
-      remotePath: string,
-    ): Promise<void> {
+    async downloadTo(writable: NodeJS.WritableStream, remotePath: string): Promise<void> {
       const data = mockState.files.get(remotePath);
       if (!data) throw new Error(`File not found: ${remotePath}`);
       mockState.lastDownloadBytesWritten = 0;
@@ -149,9 +138,7 @@ vi.mock('basic-ftp', () => {
       // Emit the file in fixed chunks, watching for writable.destroy() so the
       // mock mirrors basic-ftp's behavior: a destroyed sink aborts the
       // transfer with an error instead of silently completing.
-      const isDestroyed = (s: NodeJS.WritableStream): boolean =>
-        (s as { destroyed?: boolean }).destroyed === true ||
-        (s as { writableFinished?: boolean }).writableFinished === true;
+      const isDestroyed = (s: NodeJS.WritableStream): boolean => (s as { destroyed?: boolean }).destroyed === true || (s as { writableFinished?: boolean }).writableFinished === true;
       let offset = 0;
       while (offset < data.length) {
         if (isDestroyed(writable)) {
@@ -209,34 +196,24 @@ vi.mock('basic-ftp', () => {
 
     async size(remotePath: string): Promise<number> {
       const data = mockState.files.get(remotePath);
-      if (!data) throw new Error(`File not found: ${remotePath}`);
-      return mockState.sizeOverride
-        ? mockState.sizeOverride(data.length)
-        : data.length;
+      if (!data) throw Object.assign(new Error(`File not found: ${remotePath}`), { code: 550 });
+      return mockState.sizeOverride ? mockState.sizeOverride(data.length) : data.length;
     }
 
-    async list(
-      dir: string,
-    ): Promise<Array<{ name: string; isDirectory: boolean }>> {
+    async list(dir: string): Promise<Array<{ name: string; isDirectory: boolean }>> {
       const entries: Array<{ name: string; isDirectory: boolean }> = [];
       // Files within the directory
       for (const key of mockState.files.keys()) {
         const parent = key.slice(0, key.lastIndexOf('/'));
         if (parent === dir) {
-          entries.push({
-            name: key.slice(key.lastIndexOf('/') + 1),
-            isDirectory: false,
-          });
+          entries.push({ name: key.slice(key.lastIndexOf('/') + 1), isDirectory: false });
         }
       }
       // Subdirectories
       for (const d of mockState.dirs) {
         const parent = d.slice(0, d.lastIndexOf('/'));
         if (parent === dir) {
-          entries.push({
-            name: d.slice(d.lastIndexOf('/') + 1),
-            isDirectory: true,
-          });
+          entries.push({ name: d.slice(d.lastIndexOf('/') + 1), isDirectory: true });
         }
       }
       return entries;
@@ -256,24 +233,8 @@ vi.mock('basic-ftp', () => {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function makeConfig(
-  overrides: Partial<Record<string, unknown>> = {},
-  id = 'test-ftp',
-): ProviderConfig {
-  return {
-    id,
-    type: 'ftp',
-    adapterPackage: null,
-    config: {
-      host: 'localhost',
-      port: 21,
-      user: 'testuser',
-      password: 'testpass',
-      path: '/backup',
-      secure: false,
-      ...overrides,
-    },
-  };
+function makeConfig(overrides: Partial<Record<string, unknown>> = {}, id = 'test-ftp'): ProviderConfig {
+  return { id, type: 'ftp', adapterPackage: null, config: { host: 'localhost', port: 21, user: 'testuser', password: 'testpass', path: '/backup', secure: false, ...overrides } };
 }
 
 const TEST_LOCATIONS: ShardLocation[] = [
@@ -283,6 +244,7 @@ const TEST_LOCATIONS: ShardLocation[] = [
     provider_type: 'ftp',
     adapterPackage: null,
     connection_config: { host: 'localhost', path: '/backup' },
+    required_inputs: [],
     remote_path: '/backup/vault/shard_0.bfs.1',
     shard_hash: 'a'.repeat(64),
   },
@@ -309,18 +271,11 @@ function makeHeader(overrides: Partial<ShardHeader> = {}): ShardHeader {
   };
 }
 
-async function uploadBuf(
-  provider: FtpProvider,
-  filename: string,
-  data: Buffer,
-) {
+async function uploadBuf(provider: FtpProvider, filename: string, data: Buffer) {
   return provider.upload(filename, Readable.from(data), data.length);
 }
 
-async function downloadBuf(
-  provider: FtpProvider,
-  ref: { provider_id: string; path: string },
-): Promise<Buffer> {
+async function downloadBuf(provider: FtpProvider, ref: { provider_id: string; path: string }): Promise<Buffer> {
   return streamToBuffer(await provider.download(ref));
 }
 
@@ -333,6 +288,7 @@ describe('FtpProvider', () => {
     mockState.files.clear();
     mockState.dirs.clear();
     mockState.accessShouldFail = false;
+    mockState.accessErrorCode = null;
     mockState.sentCommands = [];
     mockState.corruptOnUpload = null;
     mockState.uploadByteLossPlan = [];
@@ -365,13 +321,7 @@ describe('FtpProvider', () => {
 
   it('should accept an empty config object for placeholder use in configure flows', () => {
     const { io } = createMockProviderIO();
-    expect(
-      () =>
-        new FtpProvider(
-          { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-          io,
-        ),
-    ).not.toThrow();
+    expect(() => new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io)).not.toThrow();
   });
 
   // ─── diagnostic logging (gated by `bfs --debug`) ─────────────────────────
@@ -387,18 +337,12 @@ describe('FtpProvider', () => {
 
     await uploadBuf(localProvider, 'shard_0.bfs.1', Buffer.alloc(64, 1));
 
-    const connectLogs = logs.filter((l) =>
-      l.message.includes('FTP connecting'),
-    );
+    const connectLogs = logs.filter((l) => l.message.includes('FTP connecting'));
     expect(connectLogs.length).toBeGreaterThan(0);
     for (const entry of connectLogs) {
       expect(entry.level).toBe('debug');
     }
-    expect(
-      logs.find(
-        (l) => l.level === 'info' && l.message.includes('FTP connecting'),
-      ),
-    ).toBeUndefined();
+    expect(logs.find((l) => l.level === 'info' && l.message.includes('FTP connecting'))).toBeUndefined();
   });
 
   // ─── upload / download roundtrip ─────────────────────────────────────────
@@ -429,9 +373,7 @@ describe('FtpProvider', () => {
     mockState.corruptOnUpload = (buf) => buf.subarray(0, buf.length - 1);
     const data = Buffer.alloc(256, 0xab);
 
-    await expect(uploadBuf(provider, 'shard_0.bfs.1', data)).rejects.toThrow(
-      /size mismatch/i,
-    );
+    await expect(uploadBuf(provider, 'shard_0.bfs.1', data)).rejects.toThrow(/size mismatch/i);
   });
 
   // Regression: vsftpd on writeback-cached filesystems briefly reports a
@@ -445,9 +387,7 @@ describe('FtpProvider', () => {
     };
     const data = Buffer.alloc(256, 0xab);
 
-    await expect(
-      uploadBuf(provider, 'shard_0.bfs.1', data),
-    ).resolves.toBeDefined();
+    await expect(uploadBuf(provider, 'shard_0.bfs.1', data)).resolves.toBeDefined();
 
     expect(calls).toBeGreaterThanOrEqual(2);
     expect(mockState.uploadAttempt).toBe(1);
@@ -461,9 +401,7 @@ describe('FtpProvider', () => {
     mockState.uploadByteLossPlan = [25304];
     const data = Buffer.alloc(300_000, 0xab);
 
-    await expect(
-      uploadBuf(provider, 'shard_0.bfs.1', data),
-    ).resolves.toBeDefined();
+    await expect(uploadBuf(provider, 'shard_0.bfs.1', data)).resolves.toBeDefined();
 
     expect(mockState.uploadAttempt).toBe(2);
     const stored = mockState.files.get('/backup/testvault/shard_0.bfs.1');
@@ -477,9 +415,7 @@ describe('FtpProvider', () => {
     mockState.uploadByteLossPlan = [1, 1, 1, 1];
     const data = Buffer.alloc(256, 0xab);
 
-    await expect(uploadBuf(provider, 'shard_0.bfs.1', data)).rejects.toThrow(
-      /after 3 attempts/i,
-    );
+    await expect(uploadBuf(provider, 'shard_0.bfs.1', data)).rejects.toThrow(/after 3 attempts/i);
     expect(mockState.uploadAttempt).toBe(3);
   });
 
@@ -523,10 +459,7 @@ describe('FtpProvider', () => {
 
     const refs = await provider.list('shard_0');
 
-    expect(refs.map((r) => r.path).sort()).toEqual([
-      'shard_0.bfs.1',
-      'shard_0.bfs.2',
-    ]);
+    expect(refs.map((r) => r.path).sort()).toEqual(['shard_0.bfs.1', 'shard_0.bfs.2']);
   });
 
   it('should return empty list when vault has no files', async () => {
@@ -545,9 +478,7 @@ describe('FtpProvider', () => {
   });
 
   it('should throw ProviderError when deleting non-existent file', async () => {
-    await expect(
-      provider.delete({ provider_id: 'test-ftp', path: 'nonexistent.bfs.1' }),
-    ).rejects.toThrow(ProviderError);
+    await expect(provider.delete({ provider_id: 'test-ftp', path: 'nonexistent.bfs.1' })).rejects.toThrow(ProviderError);
   });
 
   // ─── healthCheck ─────────────────────────────────────────────────────────
@@ -575,11 +506,7 @@ describe('FtpProvider', () => {
   // ─── rename ──────────────────────────────────────────────────────────────
 
   it('should rename a file and make old path unavailable', async () => {
-    const ref = await uploadBuf(
-      provider,
-      'shard_0.bfs.1.tmp',
-      Buffer.from('payload'),
-    );
+    const ref = await uploadBuf(provider, 'shard_0.bfs.1.tmp', Buffer.from('payload'));
 
     const newRef = await provider.rename(ref, 'shard_0.bfs.1');
     expect(newRef.path).toBe('shard_0.bfs.1');
@@ -602,29 +529,15 @@ describe('FtpProvider', () => {
 
     const ref = await uploadBuf(provider, 'shard_0.bfs.1', originalShard);
 
-    const updatedHeader = makeHeader({
-      shard_index: 0,
-      location_map: [
-        {
-          ...TEST_LOCATIONS[0],
-          remote_path: '/new/path/shard_0.bfs.1',
-          shard_hash: 'c'.repeat(64),
-        },
-      ],
-    });
+    const updatedHeader = makeHeader({ shard_index: 0, location_map: [{ ...TEST_LOCATIONS[0], remote_path: '/new/path/shard_0.bfs.1', shard_hash: 'c'.repeat(64) }] });
     const newShardForHeader = buildShard(updatedHeader, Buffer.alloc(0));
-    const newHeaderData = newShardForHeader.subarray(
-      0,
-      newShardForHeader.length - 32,
-    );
+    const newHeaderData = newShardForHeader.subarray(0, newShardForHeader.length - 32);
 
     await provider.updateShardHeader(ref, newHeaderData);
 
     const updatedBuf = await downloadBuf(provider, ref);
 
-    const { header: h, payloadStream } = await parseShardHeaderFromStream(
-      Readable.from(updatedBuf),
-    );
+    const { header: h, payloadStream } = await parseShardHeaderFromStream(Readable.from(updatedBuf));
     const p = await streamToBuffer(payloadStream);
 
     expect(p).toEqual(payload);
@@ -642,14 +555,9 @@ describe('FtpProvider', () => {
 
     const updatedHeader = makeHeader({ shard_index: 0 });
     const newShardForHeader = buildShard(updatedHeader, Buffer.alloc(0));
-    const newHeaderData = newShardForHeader.subarray(
-      0,
-      newShardForHeader.length - 32,
-    );
+    const newHeaderData = newShardForHeader.subarray(0, newShardForHeader.length - 32);
 
-    await expect(
-      provider.updateShardHeader(ref, newHeaderData),
-    ).rejects.toThrow(/size mismatch/i);
+    await expect(provider.updateShardHeader(ref, newHeaderData)).rejects.toThrow(/size mismatch/i);
   });
 
   // Regression: updateShardHeader rewrites the entire shard in place. The
@@ -663,36 +571,17 @@ describe('FtpProvider', () => {
 
     const initialAttemptCount = mockState.uploadAttempt;
     // First rewrite STOR drops 4096 B; second rewrite is clean.
-    mockState.uploadByteLossPlan = [
-      ...new Array(initialAttemptCount).fill(0),
-      4096,
-    ];
+    mockState.uploadByteLossPlan = [...new Array(initialAttemptCount).fill(0), 4096];
 
-    const updatedHeader = makeHeader({
-      shard_index: 0,
-      location_map: [
-        {
-          ...TEST_LOCATIONS[0],
-          remote_path: '/new/path/shard_0.bfs.1',
-          shard_hash: 'c'.repeat(64),
-        },
-      ],
-    });
+    const updatedHeader = makeHeader({ shard_index: 0, location_map: [{ ...TEST_LOCATIONS[0], remote_path: '/new/path/shard_0.bfs.1', shard_hash: 'c'.repeat(64) }] });
     const newShardForHeader = buildShard(updatedHeader, Buffer.alloc(0));
-    const newHeaderData = newShardForHeader.subarray(
-      0,
-      newShardForHeader.length - 32,
-    );
+    const newHeaderData = newShardForHeader.subarray(0, newShardForHeader.length - 32);
 
-    await expect(
-      provider.updateShardHeader(ref, newHeaderData),
-    ).resolves.toBeDefined();
+    await expect(provider.updateShardHeader(ref, newHeaderData)).resolves.toBeDefined();
 
     expect(mockState.uploadAttempt).toBe(initialAttemptCount + 2);
     const stored = mockState.files.get('/backup/testvault/shard_0.bfs.1');
-    const { header: h, payloadStream } = await parseShardHeaderFromStream(
-      Readable.from(stored ?? Buffer.alloc(0)),
-    );
+    const { header: h, payloadStream } = await parseShardHeaderFromStream(Readable.from(stored ?? Buffer.alloc(0)));
     const p = await streamToBuffer(payloadStream);
     expect(p).toEqual(payload);
     expect(h.location_map[0].remote_path).toBe('/new/path/shard_0.bfs.1');
@@ -718,10 +607,7 @@ describe('FtpProvider', () => {
       const data = Buffer.alloc(8192, 0x55);
       await uploadBuf(provider, 'shard_0.bfs.1', data);
 
-      const size = await provider.getSize({
-        provider_id: 'test-ftp',
-        path: 'shard_0.bfs.1',
-      });
+      const size = await provider.getSize({ provider_id: 'test-ftp', path: 'shard_0.bfs.1' });
 
       expect(size).toBe(8192);
       // No download bytes flowed through the data channel.
@@ -729,9 +615,7 @@ describe('FtpProvider', () => {
     });
 
     it('should throw ProviderError when the shard is missing', async () => {
-      await expect(
-        provider.getSize({ provider_id: 'test-ftp', path: 'missing.bfs.1' }),
-      ).rejects.toThrow(ProviderError);
+      await expect(provider.getSize({ provider_id: 'test-ftp', path: 'missing.bfs.1' })).rejects.toThrow(ProviderError);
     });
   });
 
@@ -742,10 +626,7 @@ describe('FtpProvider', () => {
       const data = Buffer.from('tiny');
       await uploadBuf(provider, 'shard_0.bfs.1', data);
 
-      const head = await provider.downloadHeader(
-        { provider_id: 'test-ftp', path: 'shard_0.bfs.1' },
-        1024,
-      );
+      const head = await provider.downloadHeader({ provider_id: 'test-ftp', path: 'shard_0.bfs.1' }, 1024);
 
       expect(head.length).toBe(4);
       expect(head.toString()).toBe('tiny');
@@ -759,36 +640,21 @@ describe('FtpProvider', () => {
       await uploadBuf(provider, 'shard_0.bfs.1', data);
       mockState.downloadChunkSize = 4096;
 
-      const head = await provider.downloadHeader(
-        { provider_id: 'test-ftp', path: 'shard_0.bfs.1' },
-        8192,
-      );
+      const head = await provider.downloadHeader({ provider_id: 'test-ftp', path: 'shard_0.bfs.1' }, 8192);
 
       expect(head.length).toBe(8192);
       expect(Buffer.compare(head, data.subarray(0, 8192))).toBe(0);
       // Transferred ≤ one extra chunk past maxBytes — never the whole file.
-      expect(mockState.lastDownloadBytesWritten).toBeLessThanOrEqual(
-        8192 + 4096,
-      );
+      expect(mockState.lastDownloadBytesWritten).toBeLessThanOrEqual(8192 + 4096);
       expect(mockState.lastDownloadBytesWritten).toBeLessThan(data.length);
     });
 
     it('should throw ProviderError for a missing shard', async () => {
-      await expect(
-        provider.downloadHeader(
-          { provider_id: 'test-ftp', path: 'missing.bfs.1' },
-          1024,
-        ),
-      ).rejects.toThrow(ProviderError);
+      await expect(provider.downloadHeader({ provider_id: 'test-ftp', path: 'missing.bfs.1' }, 1024)).rejects.toThrow(ProviderError);
     });
 
     it('should reject maxBytes <= 0', async () => {
-      await expect(
-        provider.downloadHeader(
-          { provider_id: 'test-ftp', path: 'whatever' },
-          0,
-        ),
-      ).rejects.toThrow(ProviderError);
+      await expect(provider.downloadHeader({ provider_id: 'test-ftp', path: 'whatever' }, 0)).rejects.toThrow(ProviderError);
     });
   });
 
@@ -796,46 +662,19 @@ describe('FtpProvider', () => {
 
   describe('configureInteractive', () => {
     it('should prompt for all fields and return a complete config', async () => {
-      const { io } = createMockProviderIO({
-        'FTP host:': 'ftp.example.com',
-        'Port (default 21):': '2121',
-        'Username:': 'alice',
-        'Password:': 'supersecret',
-        'Base path on server:': '/backup',
-        'Use FTPS (secure connection)?': 'true',
-      });
+      const { io } = createMockProviderIO({ 'FTP host:': 'ftp.example.com', 'Port (default 21):': '2121', 'Username:': 'alice', 'Password:': 'supersecret', 'Base path on server:': '/backup', 'Use FTPS (secure connection)?': 'true' });
       const { io: ctorIO } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        ctorIO,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, ctorIO);
 
       const config = await p.configureInteractive(io);
 
-      expect(config).toEqual({
-        host: 'ftp.example.com',
-        port: 2121,
-        user: 'alice',
-        password: 'supersecret',
-        path: '/backup',
-        secure: true,
-      });
+      expect(config).toEqual({ host: 'ftp.example.com', port: 2121, user: 'alice', password: 'supersecret', path: '/backup', secure: true });
     });
 
     it('should default port to 21 when user enters empty string', async () => {
-      const { io } = createMockProviderIO({
-        'FTP host:': 'ftp.example.com',
-        'Port (default 21):': '',
-        'Username:': 'alice',
-        'Password:': 'secret',
-        'Base path on server:': '/backup',
-        'Use FTPS (secure connection)?': 'false',
-      });
+      const { io } = createMockProviderIO({ 'FTP host:': 'ftp.example.com', 'Port (default 21):': '', 'Username:': 'alice', 'Password:': 'secret', 'Base path on server:': '/backup', 'Use FTPS (secure connection)?': 'false' });
       const { io: ctorIO } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        ctorIO,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, ctorIO);
 
       const config = await p.configureInteractive(io);
 
@@ -848,13 +687,8 @@ describe('FtpProvider', () => {
   describe('configureFromFlags', () => {
     it('should throw ProviderError when no config source is given', async () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
-      await expect(p.configureFromFlags(cliInput())).rejects.toThrow(
-        ProviderError,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+      await expect(p.configureFromFlags(cliInput())).rejects.toThrow(ProviderError);
     });
 
     // Regression: an earlier message ("use --host or --config-file") suggested
@@ -862,76 +696,32 @@ describe('FtpProvider', () => {
     // inside the shell-quoted --provider spec. The error must show that.
     it('should explain --provider spec syntax when host is missing', async () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
-      await expect(
-        p.configureFromFlags(cliInput({ rawArgs: ['--path', '/backup'] })),
-      ).rejects.toThrow(/--provider "ftp:nas --host/);
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--path', '/backup'] }))).rejects.toThrow(/--provider "ftp:nas --host/);
     });
 
     it('should explain --provider spec syntax when path is missing', async () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
-      await expect(
-        p.configureFromFlags(cliInput({ rawArgs: ['--host', 'nas'] })),
-      ).rejects.toThrow(/--provider "ftp:nas --path/);
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--host', 'nas'] }))).rejects.toThrow(/--provider "ftp:nas --path/);
     });
 
     // ─── Inline flags ───────────────────────────────────────────────────────
 
     it('should accept full inline FTP spec', async () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      const config = await p.configureFromFlags(
-        cliInput({
-          rawArgs: [
-            '--host',
-            'ftp.example.com',
-            '--port',
-            '2121',
-            '--user',
-            'alice',
-            '--password',
-            'secret',
-            '--path',
-            '/backup',
-            '--secure',
-            'true',
-          ],
-        }),
-      );
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--host', 'ftp.example.com', '--port', '2121', '--user', 'alice', '--password', 'secret', '--path', '/backup', '--secure', 'true'] }));
 
-      expect(config).toEqual({
-        host: 'ftp.example.com',
-        port: 2121,
-        user: 'alice',
-        password: 'secret',
-        path: '/backup',
-        secure: true,
-      });
+      expect(config).toEqual({ host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true });
     });
 
     it('should default port to 21 when --port omitted', async () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      const config = await p.configureFromFlags(
-        cliInput({
-          rawArgs: ['--host', 'h', '--path', '/b'],
-        }),
-      );
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--host', 'h', '--path', '/b'] }));
 
       expect(config.port).toBe(21);
       expect(config.secure).toBe(false);
@@ -939,34 +729,16 @@ describe('FtpProvider', () => {
 
     it('should reject --port outside 1..65535', async () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      await expect(
-        p.configureFromFlags(
-          cliInput({
-            rawArgs: ['--host', 'h', '--path', '/b', '--port', '99999'],
-          }),
-        ),
-      ).rejects.toThrow(ProviderError);
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--host', 'h', '--path', '/b', '--port', '99999'] }))).rejects.toThrow(ProviderError);
     });
 
     it('should reject non-numeric --port', async () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      await expect(
-        p.configureFromFlags(
-          cliInput({
-            rawArgs: ['--host', 'h', '--path', '/b', '--port', 'abc'],
-          }),
-        ),
-      ).rejects.toThrow(ProviderError);
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--host', 'h', '--path', '/b', '--port', 'abc'] }))).rejects.toThrow(ProviderError);
     });
 
     it.each([
@@ -980,155 +752,60 @@ describe('FtpProvider', () => {
       ['No', false],
     ])('should parse --secure %s as %s', async (input, expected) => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      const config = await p.configureFromFlags(
-        cliInput({
-          rawArgs: ['--host', 'h', '--path', '/b', '--secure', input],
-        }),
-      );
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--host', 'h', '--path', '/b', '--secure', input] }));
 
       expect(config.secure).toBe(expected);
     });
 
     it('should reject unrecognized --secure value', async () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      await expect(
-        p.configureFromFlags(
-          cliInput({
-            rawArgs: ['--host', 'h', '--path', '/b', '--secure', 'maybe'],
-          }),
-        ),
-      ).rejects.toThrow(ProviderError);
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--host', 'h', '--path', '/b', '--secure', 'maybe'] }))).rejects.toThrow(ProviderError);
     });
 
     it('should reject inline --path that is not absolute', async () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      await expect(
-        p.configureFromFlags(
-          cliInput({
-            rawArgs: ['--host', 'h', '--path', 'relative/x'],
-          }),
-        ),
-      ).rejects.toThrow(ProviderError);
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--host', 'h', '--path', 'relative/x'] }))).rejects.toThrow(ProviderError);
     });
 
     it('should reject when --host is missing entirely', async () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      await expect(
-        p.configureFromFlags(cliInput({ rawArgs: ['--path', '/b'] })),
-      ).rejects.toThrow(ProviderError);
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--path', '/b'] }))).rejects.toThrow(ProviderError);
     });
 
     it('should let inline flags override --config-file fields', async () => {
-      const file = await writeJsonConfig(
-        JSON.stringify({
-          host: 'ftp.example.com',
-          port: 21,
-          user: 'alice',
-          password: 'json-pass',
-          path: '/backup',
-          secure: false,
-        }),
-      );
+      const file = await writeJsonConfig(JSON.stringify({ host: 'ftp.example.com', port: 21, user: 'alice', password: 'json-pass', path: '/backup', secure: false }));
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      const config = await p.configureFromFlags(
-        cliInput({
-          rawArgs: [
-            '--config-file',
-            file,
-            '--password',
-            'override',
-            '--secure',
-            'true',
-          ],
-        }),
-      );
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file, '--password', 'override', '--secure', 'true'] }));
 
-      expect(config).toEqual({
-        host: 'ftp.example.com',
-        port: 21,
-        user: 'alice',
-        password: 'override',
-        path: '/backup',
-        secure: true,
-      });
+      expect(config).toEqual({ host: 'ftp.example.com', port: 21, user: 'alice', password: 'override', path: '/backup', secure: true });
     });
 
     it('should parse a valid JSON config file', async () => {
-      const file = await writeJsonConfig(
-        JSON.stringify({
-          host: 'ftp.example.com',
-          port: 2121,
-          user: 'alice',
-          password: 'secret',
-          path: '/backup',
-          secure: true,
-        }),
-      );
+      const file = await writeJsonConfig(JSON.stringify({ host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true }));
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      const config = await p.configureFromFlags(
-        cliInput({ rawArgs: ['--config-file', file] }),
-      );
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }));
 
-      expect(config).toEqual({
-        host: 'ftp.example.com',
-        port: 2121,
-        user: 'alice',
-        password: 'secret',
-        path: '/backup',
-        secure: true,
-      });
+      expect(config).toEqual({ host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true });
     });
 
     it('should coerce numeric port from string ("21")', async () => {
-      const file = await writeJsonConfig(
-        JSON.stringify({
-          host: 'ftp.example.com',
-          port: '21',
-          user: 'u',
-          password: 'p',
-          path: '/b',
-          secure: false,
-        }),
-      );
+      const file = await writeJsonConfig(JSON.stringify({ host: 'ftp.example.com', port: '21', user: 'u', password: 'p', path: '/b', secure: false }));
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      const config = await p.configureFromFlags(
-        cliInput({ rawArgs: ['--config-file', file] }),
-      );
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }));
 
       expect(config.port).toBe(21);
     });
@@ -1136,67 +813,36 @@ describe('FtpProvider', () => {
     it('should throw on malformed JSON', async () => {
       const file = await writeJsonConfig('{ not valid json');
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
-      await expect(
-        p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] })),
-      ).rejects.toThrow(ProviderError);
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }))).rejects.toThrow(ProviderError);
     });
 
     it('should throw when JSON is an array (not a plain object)', async () => {
       const file = await writeJsonConfig(JSON.stringify([1, 2, 3]));
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
-      await expect(
-        p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] })),
-      ).rejects.toThrow(ProviderError);
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }))).rejects.toThrow(ProviderError);
     });
 
     it('should throw when host is missing from JSON', async () => {
-      const file = await writeJsonConfig(
-        JSON.stringify({ port: 21, path: '/b' }),
-      );
+      const file = await writeJsonConfig(JSON.stringify({ port: 21, path: '/b' }));
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
-      await expect(
-        p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] })),
-      ).rejects.toThrow(ProviderError);
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }))).rejects.toThrow(ProviderError);
     });
 
     it('should throw when path is not absolute', async () => {
-      const file = await writeJsonConfig(
-        JSON.stringify({ host: 'h', port: 21, path: 'relative' }),
-      );
+      const file = await writeJsonConfig(JSON.stringify({ host: 'h', port: 21, path: 'relative' }));
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
-      await expect(
-        p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] })),
-      ).rejects.toThrow(ProviderError);
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }))).rejects.toThrow(ProviderError);
     });
 
     it('should throw when port is out of range', async () => {
-      const file = await writeJsonConfig(
-        JSON.stringify({ host: 'h', port: 99999, path: '/b' }),
-      );
+      const file = await writeJsonConfig(JSON.stringify({ host: 'h', port: 99999, path: '/b' }));
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
-      await expect(
-        p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] })),
-      ).rejects.toThrow(ProviderError);
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }))).rejects.toThrow(ProviderError);
     });
   });
 
@@ -1205,29 +851,14 @@ describe('FtpProvider', () => {
   describe('validateConfig', () => {
     it('should return [] for a valid config', () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      expect(
-        p.validateConfig({
-          host: 'ftp.example.com',
-          port: 21,
-          user: 'alice',
-          password: 'secret',
-          path: '/backup',
-          secure: false,
-        }),
-      ).toEqual([]);
+      expect(p.validateConfig({ host: 'ftp.example.com', port: 21, user: 'alice', password: 'secret', path: '/backup', secure: false })).toEqual([]);
     });
 
     it('should report missing or empty host', () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
       const errors = p.validateConfig({ port: 21, path: '/backup' });
       expect(errors.length).toBeGreaterThan(0);
@@ -1236,31 +867,17 @@ describe('FtpProvider', () => {
 
     it('should report out-of-range port', () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      const errors = p.validateConfig({
-        host: 'ftp.example.com',
-        port: 99999,
-        path: '/backup',
-      });
+      const errors = p.validateConfig({ host: 'ftp.example.com', port: 99999, path: '/backup' });
       expect(errors.some((e) => /port/i.test(e))).toBe(true);
     });
 
     it('should report path not starting with /', () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      const errors = p.validateConfig({
-        host: 'ftp.example.com',
-        port: 21,
-        path: 'backup',
-      });
+      const errors = p.validateConfig({ host: 'ftp.example.com', port: 21, path: 'backup' });
       expect(errors.some((e) => /path/i.test(e))).toBe(true);
     });
   });
@@ -1270,19 +887,9 @@ describe('FtpProvider', () => {
   describe('describeConfig', () => {
     it('should include host, port, user, path, secure', () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      const desc = p.describeConfig({
-        host: 'ftp.example.com',
-        port: 2121,
-        user: 'alice',
-        password: 'secret',
-        path: '/backup',
-        secure: true,
-      });
+      const desc = p.describeConfig({ host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true });
 
       expect(desc).toContain('ftp.example.com');
       expect(desc).toContain('2121');
@@ -1292,19 +899,9 @@ describe('FtpProvider', () => {
 
     it('should mask the password field — no plaintext, asterisks present', () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
-      const desc = p.describeConfig({
-        host: 'ftp.example.com',
-        port: 21,
-        user: 'alice',
-        password: 'supersecret',
-        path: '/backup',
-        secure: false,
-      });
+      const desc = p.describeConfig({ host: 'ftp.example.com', port: 21, user: 'alice', password: 'supersecret', path: '/backup', secure: false });
 
       expect(desc).not.toContain('supersecret');
       expect(desc).toMatch(/\*{3,}/);
@@ -1316,10 +913,7 @@ describe('FtpProvider', () => {
   describe('getSecretFields', () => {
     it('should return ["password"]', () => {
       const { io } = createMockProviderIO();
-      const p = new FtpProvider(
-        { id: 'stub', type: 'ftp', adapterPackage: null, config: {} },
-        io,
-      );
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
       expect(p.getSecretFields()).toEqual(['password']);
     });
   });
@@ -1337,6 +931,68 @@ describe('FtpProvider', () => {
     it('should throw ProviderError when the FTP connection fails', async () => {
       mockState.accessShouldFail = true;
       await expect(provider.probeConnection()).rejects.toThrow(ProviderError);
+    });
+  });
+
+  // ─── usesSidecar / verifyShard / sidecar methods ───────────────────────────
+
+  describe('header storage strategy + verifyShard', () => {
+    const IDENTITY = { vault_id: '550e8400-e29b-41d4-a716-446655440000', shard_index: 0, version: 1 };
+
+    it('should report usesSidecar() === false', () => {
+      expect(provider.usesSidecar()).toBe(false);
+    });
+
+    it('should throw BfsError from the sidecar methods (not supported)', async () => {
+      await expect(provider.uploadHeaderSidecar({ provider_id: 'test-ftp', path: 'shard_0.bfs.1' }, Buffer.alloc(0))).rejects.toThrow(BfsError);
+      await expect(provider.downloadHeaderSidecar({ provider_id: 'test-ftp', path: 'shard_0.bfs.1' }, 16)).rejects.toThrow(BfsError);
+    });
+
+    it('should return ok for a matching shard identity', async () => {
+      await uploadBuf(provider, 'shard_0.bfs.1', buildShard(makeHeader(), Buffer.from('payload')));
+      const result = await provider.verifyShard({ provider_id: 'test-ftp', path: 'shard_0.bfs.1' }, IDENTITY);
+      expect(result).toEqual({ ok: true });
+    });
+
+    it('should report not_found (FTP 550) for a missing shard', async () => {
+      const result = await provider.verifyShard({ provider_id: 'test-ftp', path: 'shard_0.bfs.999' }, IDENTITY);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe('not_found');
+    });
+
+    it('should report auth_failed (FTP 530) when authentication is rejected', async () => {
+      mockState.accessErrorCode = 530;
+      const result = await provider.verifyShard({ provider_id: 'test-ftp', path: 'shard_0.bfs.1' }, IDENTITY);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe('auth_failed');
+    });
+
+    // Regression: a transport failure with no recognized reply code (here a
+    // transient 421, but equally a code-less ECONNREFUSED/TLS error) must be
+    // reported as unverifiable, not thrown — so one offline host never aborts a
+    // whole multi-provider verification. Mirrors LocalFsProvider.
+    it('should report unverifiable on a transport error without a recognized reply code', async () => {
+      mockState.accessErrorCode = 421;
+      const result = await provider.verifyShard({ provider_id: 'test-ftp', path: 'shard_0.bfs.1' }, IDENTITY);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe('unverifiable');
+    });
+
+    it('should report mismatch on a wrong expected version', async () => {
+      await uploadBuf(provider, 'shard_0.bfs.1', buildShard(makeHeader({ version: 1 }), Buffer.from('payload')));
+      const result = await provider.verifyShard({ provider_id: 'test-ftp', path: 'shard_0.bfs.1' }, { ...IDENTITY, version: 5 });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe('mismatch');
+        expect(result.detail).toContain('version');
+      }
+    });
+
+    it('should report corrupted for a truncated shard', async () => {
+      await uploadBuf(provider, 'shard_0.bfs.1', Buffer.alloc(8));
+      const result = await provider.verifyShard({ provider_id: 'test-ftp', path: 'shard_0.bfs.1' }, IDENTITY);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe('corrupted');
     });
   });
 });

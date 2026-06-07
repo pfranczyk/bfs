@@ -39,10 +39,7 @@ async function collectTsFiles(dir: string): Promise<string[]> {
 }
 
 /** Read a file and return lines that match `pattern`, skipping comments. */
-async function grepLines(
-  file: string,
-  pattern: RegExp,
-): Promise<Array<{ line: number; text: string }>> {
+async function grepLines(file: string, pattern: RegExp): Promise<Array<{ line: number; text: string }>> {
   const content = await fs.readFile(file, 'utf8');
   const lines = content.split('\n');
   const hits: Array<{ line: number; text: string }> = [];
@@ -89,21 +86,13 @@ describe('architecture: provider leak prevention', () => {
 
     const violations: Violation[] = [];
     for (const f of files) {
-      const hits = await grepLines(
-        f,
-        /\b(FtpProvider|LocalFsProvider|SshProvider)\b/,
-      );
+      const hits = await grepLines(f, /\b(FtpProvider|LocalFsProvider|SshProvider)\b/);
       for (const h of hits) {
         violations.push({ file: f, line: h.line, text: h.text });
       }
     }
 
-    expect(
-      violations,
-      `Found ${violations.length} leak(s) — CLI/core must be blind to concrete provider classes:\n${violations
-        .map((v) => `  ${v.file}:${v.line}  ${v.text}`)
-        .join('\n')}`,
-    ).toEqual([]);
+    expect(violations, `Found ${violations.length} leak(s) — CLI/core must be blind to concrete provider classes:\n${violations.map((v) => `  ${v.file}:${v.line}  ${v.text}`).join('\n')}`).toEqual([]);
   });
 
   it('src/cli and src/core MUST NOT contain the literals "ftp" or "local" as provider-type strings', async () => {
@@ -123,12 +112,7 @@ describe('architecture: provider leak prevention', () => {
       }
     }
 
-    expect(
-      violations,
-      `Found ${violations.length} hardcoded provider-type literal(s) — replace with providerRegistry.listTypes() / getFactory():\n${violations
-        .map((v) => `  ${v.file}:${v.line}  ${v.text}`)
-        .join('\n')}`,
-    ).toEqual([]);
+    expect(violations, `Found ${violations.length} hardcoded provider-type literal(s) — replace with providerRegistry.listTypes() / getFactory():\n${violations.map((v) => `  ${v.file}:${v.line}  ${v.text}`).join('\n')}`).toEqual([]);
   });
 
   it('no file imports src/cli/prompt-ftp.ts (the file must stay deleted)', async () => {
@@ -142,17 +126,10 @@ describe('architecture: provider leak prevention', () => {
       }
     }
 
-    expect(
-      violations,
-      `Found ${violations.length} reference(s) to the deleted prompt-ftp module:\n${violations
-        .map((v) => `  ${v.file}:${v.line}  ${v.text}`)
-        .join('\n')}`,
-    ).toEqual([]);
+    expect(violations, `Found ${violations.length} reference(s) to the deleted prompt-ftp module:\n${violations.map((v) => `  ${v.file}:${v.line}  ${v.text}`).join('\n')}`).toEqual([]);
 
     // Verify the file itself is gone.
-    await expect(
-      fs.stat(path.join(SRC, 'cli', 'prompt-ftp.ts')),
-    ).rejects.toThrow();
+    await expect(fs.stat(path.join(SRC, 'cli', 'prompt-ftp.ts'))).rejects.toThrow();
   });
 
   it('provider-add MUST only register the three BFS-level flags (pass-through whitelist)', async () => {
@@ -160,9 +137,7 @@ describe('architecture: provider leak prevention', () => {
     // from CliProviderInput.rawArgs), never as BFS-level Commander options.
     // Adding a fourth flag here requires a deliberate decision — update this
     // whitelist AND note the exception in CHANGELOG.md / ### Changed.
-    const flags = await extractOptionFlags(
-      path.join(SRC, 'cli', 'commands', 'provider-add.ts'),
-    );
+    const flags = await extractOptionFlags(path.join(SRC, 'cli', 'commands', 'provider-add.ts'));
     expect(flags.sort()).toEqual(['--ci', '--name', '--type']);
   });
 
@@ -171,20 +146,8 @@ describe('architecture: provider leak prevention', () => {
     // (--host, --port, --path, --config-file, …) must live inside the
     // --provider spec value, which is tokenized shell-style and forwarded
     // to the adapter via rawArgs — never as top-level Commander options.
-    const flags = await extractOptionFlags(
-      path.join(SRC, 'cli', 'commands', 'init.ts'),
-    );
-    expect(flags.sort()).toEqual([
-      '--ci',
-      '--compress',
-      '--data-shards',
-      '--enc',
-      '--max-ram',
-      '--no-compress',
-      '--parity-shards',
-      '--provider',
-      '--push-mode',
-    ]);
+    const flags = await extractOptionFlags(path.join(SRC, 'cli', 'commands', 'init.ts'));
+    expect(flags.sort()).toEqual(['--ci', '--compress', '--data-shards', '--enc', '--max-ram', '--no-compress', '--no-enc', '--parity-shards', '--provider', '--push-mode']);
   });
 
   it('provider-add and provider-remove MUST enable Commander pass-through (allowUnknownOption + allowExcessArguments)', async () => {
@@ -192,24 +155,15 @@ describe('architecture: provider leak prevention', () => {
     // either fail ("unknown option") or get truncated (value token becomes an
     // "excess positional argument"). The two together are what makes rawArgs
     // pass-through actually work — removing either silently breaks the model.
-    const files = [
-      path.join(SRC, 'cli', 'commands', 'provider-add.ts'),
-      path.join(SRC, 'cli', 'commands', 'provider-remove.ts'),
-    ];
+    const files = [path.join(SRC, 'cli', 'commands', 'provider-add.ts'), path.join(SRC, 'cli', 'commands', 'provider-remove.ts')];
     for (const file of files) {
       const content = await fs.readFile(file, 'utf8');
       const stripped = content
         .split('\n')
         .map((l) => (l.trim().startsWith('//') ? '' : l))
         .join('\n');
-      expect(
-        stripped,
-        `${file} must call .allowUnknownOption(true) to forward adapter flags to rawArgs`,
-      ).toMatch(/\.allowUnknownOption\s*\(\s*true\s*\)/);
-      expect(
-        stripped,
-        `${file} must call .allowExcessArguments(true) so value tokens after unknown flags aren't rejected as excess positional args`,
-      ).toMatch(/\.allowExcessArguments\s*\(\s*true\s*\)/);
+      expect(stripped, `${file} must call .allowUnknownOption(true) to forward adapter flags to rawArgs`).toMatch(/\.allowUnknownOption\s*\(\s*true\s*\)/);
+      expect(stripped, `${file} must call .allowExcessArguments(true) so value tokens after unknown flags aren't rejected as excess positional args`).toMatch(/\.allowExcessArguments\s*\(\s*true\s*\)/);
     }
   });
 
@@ -218,10 +172,7 @@ describe('architecture: provider leak prevention', () => {
     // flags travel inside the `--provider "<type>:<name> [flags]"` value,
     // which is tokenized by shellParse(), not by Commander. Enabling
     // allowUnknownOption here would let BFS-level typos silently succeed.
-    const content = await fs.readFile(
-      path.join(SRC, 'cli', 'commands', 'init.ts'),
-      'utf8',
-    );
+    const content = await fs.readFile(path.join(SRC, 'cli', 'commands', 'init.ts'), 'utf8');
     const stripped = content
       .split('\n')
       .map((l) => (l.trim().startsWith('//') ? '' : l))

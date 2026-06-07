@@ -2,30 +2,13 @@ import readline from 'node:readline';
 import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import chalk from 'chalk';
 import { dbg, stdinState } from '../debug.js';
-import { t } from '../i18n/index.js';
+import { fmt, t } from '../i18n/index.js';
 import { readConfig } from '../vault/config.js';
 import { readState } from '../vault/state.js';
 import { setReplMode } from './repl-context.js';
 import { CommandAbort } from './ui.js';
 
-const COMMANDS = [
-  'init',
-  'push',
-  'pull',
-  'status',
-  'versions',
-  'prune',
-  'verify',
-  'recovery',
-  'provider add',
-  'provider list',
-  'provider remove',
-  'scheme set',
-  'clear',
-  'help',
-  'exit',
-  'quit',
-];
+const COMMANDS = ['init', 'push', 'pull', 'status', 'versions', 'prune', 'verify', 'recovery', 'provider add', 'provider list', 'provider remove', 'scheme set', 'clear', 'help', 'exit', 'quit'];
 
 /**
  * Prints the REPL welcome banner with vault info (if available).
@@ -39,17 +22,11 @@ async function printBanner(rootDir: string): Promise<void> {
     const config = await readConfig(rootDir);
     const state = await readState(rootDir);
     if (config) {
-      console.log(`  Vault:   ${chalk.cyan(config.vault_name)}`);
-      console.log(
-        `  Scheme:  ${config.scheme.data_shards}/${config.scheme.parity_shards} ` +
-          chalk.dim(`(${config.providers.length} providers)`),
-      );
-      console.log(
-        `  Version: v${state.latest_version} (on disk: v${state.working_version})`,
-      );
-      console.log(
-        `  Encryption: ${config.encryption.enabled ? chalk.green(t('status_enc_enabled')) : chalk.dim(t('status_enc_disabled'))}`,
-      );
+      console.log(`  ${t('status_name').padEnd(13)} ${chalk.cyan(config.vault_name)}`);
+      console.log(`  ${t('status_scheme').padEnd(13)} ${config.scheme.data_shards}/${config.scheme.parity_shards} ${chalk.dim(fmt('repl_banner_providers', String(config.providers.length)))}`);
+      console.log(`  ${t('status_latest').padEnd(13)} v${state.latest_version}`);
+      console.log(`  ${t('status_on_disk').padEnd(13)} v${state.working_version}`);
+      console.log(`  ${t('status_encryption').padEnd(13)} ${config.encryption.enabled ? chalk.green(t('status_enc_enabled')) : chalk.dim(t('status_enc_disabled'))}`);
     } else {
       console.log(chalk.dim(t('repl_no_config')));
     }
@@ -73,10 +50,7 @@ function printHelp(): void {
     ['versions', t('repl_help_cmd_versions')],
     ['prune <range>', t('repl_help_cmd_prune')],
     ['verify', t('repl_help_cmd_verify')],
-    [
-      'recovery --provider <t> --path <p> --name <n>',
-      t('repl_help_cmd_recovery'),
-    ],
+    ['recovery --provider <t> --path <p> --name <n>', t('repl_help_cmd_recovery')],
     ['provider add', t('repl_help_cmd_provider_add')],
     ['provider list', t('repl_help_cmd_provider_list')],
     ['provider remove <id>', t('repl_help_cmd_provider_remove')],
@@ -107,24 +81,15 @@ function handleReplError(err: unknown): void {
   // Fallback: check constructor name for Inquirer errors — the old inquirer
   // compat layer (inquirer/dist/ui/prompt.js) can throw ExitPromptError from
   // a different code path (process.kill SIGINT), and instanceof may fail.
-  if (
-    err instanceof Error &&
-    (err.constructor.name === 'AbortPromptError' ||
-      err.constructor.name === 'ExitPromptError')
-  ) {
+  if (err instanceof Error && (err.constructor.name === 'AbortPromptError' || err.constructor.name === 'ExitPromptError')) {
     console.log(chalk.dim(t('repl_cancelled')));
     return;
   }
-  if (
-    err instanceof Error &&
-    'code' in err &&
-    typeof (err as { code: unknown }).code === 'string' &&
-    (err as { code: string }).code.startsWith('commander.')
-  ) {
+  if (err instanceof Error && 'code' in err && typeof (err as { code: unknown }).code === 'string' && (err as { code: string }).code.startsWith('commander.')) {
     return;
   }
   if (err instanceof Error) {
-    console.error(chalk.red(`Error: ${err.message}`));
+    console.error(chalk.red(fmt('repl_error_prefix', err.message)));
   }
 }
 
@@ -136,10 +101,7 @@ function handleReplError(err: unknown): void {
  * @param rootDir     - Current working directory
  * @param runCommand  - Callback that executes a parsed command line
  */
-export async function startRepl(
-  rootDir: string,
-  runCommand: (args: string[]) => Promise<void>,
-): Promise<void> {
+export async function startRepl(rootDir: string, runCommand: (args: string[]) => Promise<void>): Promise<void> {
   setReplMode();
   await printBanner(rootDir);
 
@@ -171,12 +133,7 @@ export async function startRepl(
     if (closed) return;
     rl.question(chalk.bold.cyan('bfs') + chalk.dim(' > '), async (input) => {
       const trimmed = input.trim();
-      dbg('rl.question:input', {
-        raw: JSON.stringify(input),
-        trimmed: JSON.stringify(trimmed),
-        empty: !trimmed,
-        ...stdinState(),
-      });
+      dbg('rl.question:input', { raw: JSON.stringify(input), trimmed: JSON.stringify(trimmed), empty: !trimmed, ...stdinState() });
 
       if (!trimmed) {
         dbg('rl.question:empty → re-prompt', stdinState());
@@ -239,10 +196,7 @@ export async function startRepl(
         await runCommand(tokens);
       } catch (err) {
         caughtErr = err;
-        dbg('dispatch:error', {
-          name: err instanceof Error ? err.name : 'unknown',
-          msg: err instanceof Error ? err.message : String(err),
-        });
+        dbg('dispatch:error', { name: err instanceof Error ? err.name : 'unknown', msg: err instanceof Error ? err.message : String(err) });
       }
 
       process.removeListener('SIGINT', sigintGuard);

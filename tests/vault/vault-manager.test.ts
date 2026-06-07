@@ -2,35 +2,19 @@ import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  ProviderError,
-  PushCacheNoLockError,
-  PushCacheUnavailableError,
-} from '../../src/core/errors.js';
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ProviderError, PullSkippedError, PushCacheNoLockError, PushCacheUnavailableError } from '../../src/core/errors.js';
 import { DEFAULT_BFSIGNORE_CONTENT } from '../../src/core/ignore-defaults.js';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
 import type { ProviderConfig, ProviderIO } from '../../src/types/index.js';
 import { PushMode, VersionHealth } from '../../src/types/index.js';
 import { readConfig, writeConfig } from '../../src/vault/config.js';
-import {
-  type PushLock,
-  pushLockPath,
-  readLock,
-} from '../../src/vault/lockfile.js';
-import { listManifests, readManifest } from '../../src/vault/manifest.js';
+import { type PushLock, pushLockPath, readLock } from '../../src/vault/lockfile.js';
+import { listManifests, readManifest, writeManifest } from '../../src/vault/manifest.js';
 import { recover } from '../../src/vault/recovery.js';
 import { readState } from '../../src/vault/state.js';
-import {
-  _classifyUploadError,
-  init,
-  listVersions,
-  prune,
-  pull,
-  push,
-  removeProvider,
-} from '../../src/vault/vault-manager.js';
+import { _classifyUploadError, init, listVersions, prune, pull, push, removeProvider } from '../../src/vault/vault-manager.js';
 import { verifyAll } from '../../src/vault/verify.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -50,11 +34,7 @@ function mockIO(answers: Record<string, string> = {}): ProviderIO {
 async function createTestFiles(dir: string): Promise<void> {
   await fs.writeFile(path.join(dir, 'hello.txt'), 'Hello, World!', 'utf-8');
   await fs.mkdir(path.join(dir, 'subdir'), { recursive: true });
-  await fs.writeFile(
-    path.join(dir, 'subdir', 'nested.txt'),
-    'Nested content',
-    'utf-8',
-  );
+  await fs.writeFile(path.join(dir, 'subdir', 'nested.txt'), 'Nested content', 'utf-8');
 }
 
 async function listUserFiles(dir: string): Promise<string[]> {
@@ -84,8 +64,7 @@ describe('init', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...dirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...dirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should create .bfs/ and .bfs/manifests/', async () => {
@@ -98,9 +77,24 @@ describe('init', () => {
       io: mockIO(),
     });
     await expect(fs.access(path.join(root, '.bfs'))).resolves.toBeUndefined();
-    await expect(
-      fs.access(path.join(root, '.bfs', 'manifests')),
-    ).resolves.toBeUndefined();
+    await expect(fs.access(path.join(root, '.bfs', 'manifests'))).resolves.toBeUndefined();
+  });
+
+  // POSIX-only: .bfs/ holds config.json (provider secrets) and cached plaintext
+  // blobs, so the directory must be owner-only. Windows NTFS ignores POSIX mode
+  // bits, so the assertion would be a false signal there.
+  it.skipIf(process.platform === 'win32')('should create .bfs/ with 0700 permissions', async () => {
+    await init(root, {
+      vault_name: 'v',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: dirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    const stat = await fs.stat(path.join(root, '.bfs'));
+    expect(stat.mode & 0o777).toBe(0o700);
   });
 
   it('should write config.json with correct vault_name and scheme', async () => {
@@ -115,9 +109,7 @@ describe('init', () => {
     const config = await readConfig(root);
     expect(config?.vault_name).toBe('my-vault');
     expect(config?.scheme).toEqual({ data_shards: 2, parity_shards: 1 });
-    expect(config?.vault_id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-    );
+    expect(config?.vault_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   });
 
   it('should throw when providers.length !== N+K', async () => {
@@ -125,15 +117,8 @@ describe('init', () => {
       init(root, {
         vault_name: 'v',
         scheme: { data_shards: 2, parity_shards: 1 },
-        encryption: {
-          enabled: false,
-          algorithm: 'aes-256-gcm',
-          kdf: 'argon2id',
-        },
-        providers: [
-          localProvider('p0', dirs[0] ?? ''),
-          localProvider('p1', dirs[1] ?? ''),
-        ], // 2, needs 3
+        encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+        providers: [localProvider('p0', dirs[0] ?? ''), localProvider('p1', dirs[1] ?? '')], // 2, needs 3
         push_mode: PushMode.NewVersion,
         io: mockIO(),
       }),
@@ -141,21 +126,12 @@ describe('init', () => {
   });
 
   it('should NOT write config.json when provider type is unknown', async () => {
-    const badProvider: ProviderConfig = {
-      id: 'bad',
-      type: 'unknown-type',
-      adapterPackage: null,
-      config: {},
-    };
+    const badProvider: ProviderConfig = { id: 'bad', type: 'unknown-type', adapterPackage: null, config: {} };
     await expect(
       init(root, {
         vault_name: 'v',
         scheme: { data_shards: 2, parity_shards: 1 },
-        encryption: {
-          enabled: false,
-          algorithm: 'aes-256-gcm',
-          kdf: 'argon2id',
-        },
+        encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
         providers: [badProvider, badProvider, badProvider],
         push_mode: PushMode.NewVersion,
         io: mockIO(),
@@ -216,8 +192,7 @@ describe('push', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should create manifest v001.json after first push', async () => {
@@ -270,18 +245,10 @@ describe('push', () => {
     // Simulate a corrupted .bfs/config.json produced by a buggy init.
     const cfg = await readConfig(root);
     if (!cfg) throw new Error('test setup: config missing');
-    await writeConfig(root, {
-      ...cfg,
-      scheme: {
-        data_shards: null as unknown as number,
-        parity_shards: null as unknown as number,
-      },
-    });
+    await writeConfig(root, { ...cfg, scheme: { data_shards: null as unknown as number, parity_shards: null as unknown as number } });
     await createTestFiles(root);
 
-    await expect(push(root, { io: mockIO() })).rejects.toThrow(
-      /data_shards must be/,
-    );
+    await expect(push(root, { io: mockIO() })).rejects.toThrow(/data_shards must be/);
   });
 
   it('should reject corrupted scheme BEFORE reaching Reed-Solomon encoder', async () => {
@@ -289,18 +256,10 @@ describe('push', () => {
     // surface — the user gets a scheme-level message with remediation hint.
     const cfg = await readConfig(root);
     if (!cfg) throw new Error('test setup: config missing');
-    await writeConfig(root, {
-      ...cfg,
-      scheme: {
-        data_shards: null as unknown as number,
-        parity_shards: 1,
-      },
-    });
+    await writeConfig(root, { ...cfg, scheme: { data_shards: null as unknown as number, parity_shards: 1 } });
     await createTestFiles(root);
 
-    await expect(push(root, { io: mockIO() })).rejects.toThrow(
-      /bfs scheme set/,
-    );
+    await expect(push(root, { io: mockIO() })).rejects.toThrow(/bfs scheme set/);
   });
 });
 
@@ -329,8 +288,7 @@ describe('push — partial commit', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should remove push.lock and cached blob on full success', async () => {
@@ -340,9 +298,7 @@ describe('push — partial commit', () => {
     expect(result.uploaded_count).toBe(3);
     expect(result.failed).toEqual([]);
     expect(existsSync(pushLockPath(root))).toBe(false);
-    expect(
-      existsSync(path.join(root, '.bfs', 'cache', 'push.blob.pending')),
-    ).toBe(false);
+    expect(existsSync(path.join(root, '.bfs', 'cache', 'push.blob.pending'))).toBe(false);
 
     const manifest = await readManifest(root, 1);
     expect(manifest?.shards).toHaveLength(3);
@@ -352,16 +308,11 @@ describe('push — partial commit', () => {
   it('should commit partial manifest when one provider fails (degraded)', async () => {
     const original = LocalFsProvider.prototype.upload;
     let n = 0;
-    vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(
-      async function (
-        this: LocalFsProvider,
-        ...args: Parameters<typeof original>
-      ) {
-        n++;
-        if (n === 3) throw new ProviderError('Simulated 530 Login incorrect');
-        return original.apply(this, args);
-      },
-    );
+    vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(async function (this: LocalFsProvider, ...args: Parameters<typeof original>) {
+      n++;
+      if (n === 3) throw new ProviderError('Simulated 530 Login incorrect');
+      return original.apply(this, args);
+    });
 
     const result = await push(root, { io: mockIO() });
 
@@ -388,24 +339,15 @@ describe('push — partial commit', () => {
     pdirs.push(...extraDirs);
     const cfg = await readConfig(root);
     if (!cfg) throw new Error('test setup: config missing');
-    await writeConfig(root, {
-      ...cfg,
-      scheme: { data_shards: 3, parity_shards: 2 },
-      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
-    });
+    await writeConfig(root, { ...cfg, scheme: { data_shards: 3, parity_shards: 2 }, providers: pdirs.map((d, i) => localProvider(`p${i}`, d)) });
 
     const original = LocalFsProvider.prototype.upload;
     let n = 0;
-    vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(
-      async function (
-        this: LocalFsProvider,
-        ...args: Parameters<typeof original>
-      ) {
-        n++;
-        if (n >= 3) throw new ProviderError('Simulated network failure');
-        return original.apply(this, args);
-      },
-    );
+    vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(async function (this: LocalFsProvider, ...args: Parameters<typeof original>) {
+      n++;
+      if (n >= 3) throw new ProviderError('Simulated network failure');
+      return original.apply(this, args);
+    });
 
     const result = await push(root, { io: mockIO() });
 
@@ -424,15 +366,11 @@ describe('push — partial commit', () => {
   });
 
   it('should throw BfsError and keep state unchanged when zero shards uploaded', async () => {
-    vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(
-      async () => {
-        throw new ProviderError('Simulated total outage');
-      },
-    );
+    vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(async () => {
+      throw new ProviderError('Simulated total outage');
+    });
 
-    await expect(push(root, { io: mockIO() })).rejects.toThrow(
-      /0 shards uploaded/,
-    );
+    await expect(push(root, { io: mockIO() })).rejects.toThrow(/0 shards uploaded/);
 
     const state = await readState(root);
     expect(state.latest_version).toBe(0);
@@ -444,9 +382,7 @@ describe('push — partial commit', () => {
   });
 
   it('should throw PushCacheNoLockError when --cache used without push.lock', async () => {
-    await expect(push(root, { io: mockIO(), fromCache: true })).rejects.toThrow(
-      PushCacheNoLockError,
-    );
+    await expect(push(root, { io: mockIO(), fromCache: true })).rejects.toThrow(PushCacheNoLockError);
   });
 
   it('should throw PushCacheNoLockError when lock points at a missing cache blob', async () => {
@@ -470,9 +406,7 @@ describe('push — partial commit', () => {
     };
     await fs.writeFile(pushLockPath(root), JSON.stringify(lock));
 
-    await expect(push(root, { io: mockIO(), fromCache: true })).rejects.toThrow(
-      PushCacheNoLockError,
-    );
+    await expect(push(root, { io: mockIO(), fromCache: true })).rejects.toThrow(PushCacheNoLockError);
   });
 
   it('should persist RAM-path blob to cache on first upload failure', async () => {
@@ -482,23 +416,15 @@ describe('push — partial commit', () => {
     // `bfs push --cache --overwrite` resume cleanly.
     const cfg = await readConfig(root);
     if (!cfg) throw new Error('test setup: config missing');
-    await writeConfig(root, {
-      ...cfg,
-      compression: { enabled: false, algorithm: 'deflate' },
-    });
+    await writeConfig(root, { ...cfg, compression: { enabled: false, algorithm: 'deflate' } });
 
     const original = LocalFsProvider.prototype.upload;
     let n = 0;
-    vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(
-      async function (
-        this: LocalFsProvider,
-        ...args: Parameters<typeof original>
-      ) {
-        n++;
-        if (n === 3) throw new ProviderError('Simulated outage on last shard');
-        return original.apply(this, args);
-      },
-    );
+    vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(async function (this: LocalFsProvider, ...args: Parameters<typeof original>) {
+      n++;
+      if (n === 3) throw new ProviderError('Simulated outage on last shard');
+      return original.apply(this, args);
+    });
 
     const result = await push(root, { io: mockIO() });
 
@@ -518,41 +444,25 @@ describe('push — partial commit', () => {
     // a dangling string that misleads `bfs push --cache`.
     const cfg = await readConfig(root);
     if (!cfg) throw new Error('test setup: config missing');
-    await writeConfig(root, {
-      ...cfg,
-      compression: { enabled: false, algorithm: 'deflate' },
-    });
+    await writeConfig(root, { ...cfg, compression: { enabled: false, algorithm: 'deflate' } });
 
     const cachePath = path.join(root, '.bfs', 'cache', 'push.blob.pending');
     const originalWriteFile = fs.writeFile.bind(fs);
-    vi.spyOn(fs, 'writeFile').mockImplementation(
-      async (
-        file: Parameters<typeof fs.writeFile>[0],
-        data: Parameters<typeof fs.writeFile>[1],
-        options?: Parameters<typeof fs.writeFile>[2],
-      ) => {
-        if (file === cachePath) {
-          const err = Object.assign(new Error('no space left'), {
-            code: 'ENOSPC',
-          });
-          throw err;
-        }
-        return originalWriteFile(file, data, options);
-      },
-    );
+    vi.spyOn(fs, 'writeFile').mockImplementation(async (file: Parameters<typeof fs.writeFile>[0], data: Parameters<typeof fs.writeFile>[1], options?: Parameters<typeof fs.writeFile>[2]) => {
+      if (file === cachePath) {
+        const err = Object.assign(new Error('no space left'), { code: 'ENOSPC' });
+        throw err;
+      }
+      return originalWriteFile(file, data, options);
+    });
 
     const originalUpload = LocalFsProvider.prototype.upload;
     let n = 0;
-    vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(
-      async function (
-        this: LocalFsProvider,
-        ...args: Parameters<typeof originalUpload>
-      ) {
-        n++;
-        if (n === 3) throw new ProviderError('Simulated outage on last shard');
-        return originalUpload.apply(this, args);
-      },
-    );
+    vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(async function (this: LocalFsProvider, ...args: Parameters<typeof originalUpload>) {
+      n++;
+      if (n === 3) throw new ProviderError('Simulated outage on last shard');
+      return originalUpload.apply(this, args);
+    });
 
     const { io, logs } = createMockProviderIO();
     const result = await push(root, { io });
@@ -563,9 +473,7 @@ describe('push — partial commit', () => {
     const lock = await readLock<PushLock>(pushLockPath(root));
     expect(lock?.blob_pending_path).toBeNull();
 
-    const warnedAboutCache = logs.some(
-      (e) => e.level === 'warn' && /cache write failed/i.test(e.message),
-    );
+    const warnedAboutCache = logs.some((e) => e.level === 'warn' && /cache write failed/i.test(e.message));
     expect(warnedAboutCache).toBe(true);
   });
 
@@ -586,9 +494,7 @@ describe('push — partial commit', () => {
     };
     await fs.writeFile(pushLockPath(root), JSON.stringify(lock));
 
-    await expect(push(root, { io: mockIO(), fromCache: true })).rejects.toThrow(
-      PushCacheUnavailableError,
-    );
+    await expect(push(root, { io: mockIO(), fromCache: true })).rejects.toThrow(PushCacheUnavailableError);
   });
 
   it('should reset uploaded/failed arrays on --cache retry', async () => {
@@ -605,16 +511,11 @@ describe('push — partial commit', () => {
     // by failing partway, which leaves the blob in cache.
     const original = LocalFsProvider.prototype.upload;
     let n = 0;
-    const spy = vi
-      .spyOn(LocalFsProvider.prototype, 'upload')
-      .mockImplementation(async function (
-        this: LocalFsProvider,
-        ...args: Parameters<typeof original>
-      ) {
-        n++;
-        if (n >= 2) throw new ProviderError('Simulated outage');
-        return original.apply(this, args);
-      });
+    const spy = vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(async function (this: LocalFsProvider, ...args: Parameters<typeof original>) {
+      n++;
+      if (n >= 2) throw new ProviderError('Simulated outage');
+      return original.apply(this, args);
+    });
     // Trigger a partial push to leave lock + cached blob behind.
     await push(root, { io: mockIO() }).catch(() => {});
     spy.mockRestore();
@@ -623,9 +524,7 @@ describe('push — partial commit', () => {
     expect(existsSync(cachePath)).toBe(true);
 
     const lockBefore = await readLock<PushLock>(pushLockPath(root));
-    expect(
-      (lockBefore?.uploaded.length ?? 0) + (lockBefore?.failed.length ?? 0),
-    ).toBeGreaterThan(0);
+    expect((lockBefore?.uploaded.length ?? 0) + (lockBefore?.failed.length ?? 0)).toBeGreaterThan(0);
 
     // Act: retry with --cache. All providers OK this time.
     const result = await push(root, { io: mockIO(), fromCache: true });
@@ -641,9 +540,7 @@ describe('push — partial commit', () => {
 
 describe('_classifyUploadError', () => {
   it('should classify ProviderError with auth keywords as auth_failed', () => {
-    const result = _classifyUploadError(
-      new ProviderError('530 Login incorrect — bad password'),
-    );
+    const result = _classifyUploadError(new ProviderError('530 Login incorrect — bad password'));
 
     expect(result.reason).toBe('auth_failed');
     expect(result.detail).toContain('530');
@@ -719,8 +616,7 @@ describe('pull (roundtrip)', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should restore identical files after push → delete → pull', async () => {
@@ -736,12 +632,8 @@ describe('pull (roundtrip)', () => {
 
     const after = await listUserFiles(root);
     expect(after).toEqual(before);
-    expect(await fs.readFile(path.join(root, 'hello.txt'), 'utf-8')).toBe(
-      'Hello, World!',
-    );
-    expect(
-      await fs.readFile(path.join(root, 'subdir', 'nested.txt'), 'utf-8'),
-    ).toBe('Nested content');
+    expect(await fs.readFile(path.join(root, 'hello.txt'), 'utf-8')).toBe('Hello, World!');
+    expect(await fs.readFile(path.join(root, 'subdir', 'nested.txt'), 'utf-8')).toBe('Nested content');
   });
 
   it('should pull specific version (--version)', async () => {
@@ -752,9 +644,7 @@ describe('pull (roundtrip)', () => {
     await push(root, { io }); // v2
 
     await pull(root, { version: 1, io, force: true });
-    expect(await fs.readFile(path.join(root, 'hello.txt'), 'utf-8')).toBe(
-      'Hello, World!',
-    );
+    expect(await fs.readFile(path.join(root, 'hello.txt'), 'utf-8')).toBe('Hello, World!');
     const state = await readState(root);
     expect(state.working_version).toBe(1);
     expect(state.latest_version).toBe(2);
@@ -766,13 +656,9 @@ describe('pull (roundtrip)', () => {
 
     const root2 = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(root2, '.bfs'), {
-        recursive: true,
-      });
+      await fs.cp(path.join(root, '.bfs'), path.join(root2, '.bfs'), { recursive: true });
       await pull(root2, { io: mockIO(), force: true });
-      expect(await fs.readFile(path.join(root2, 'hello.txt'), 'utf-8')).toBe(
-        'Hello, World!',
-      );
+      expect(await fs.readFile(path.join(root2, 'hello.txt'), 'utf-8')).toBe('Hello, World!');
     } finally {
       await fs.rm(root2, { recursive: true, force: true });
     }
@@ -787,9 +673,86 @@ describe('pull (roundtrip)', () => {
 
     // Pull should succeed via RS repair
     await pull(root, { io: mockIO(), force: true });
-    expect(await fs.readFile(path.join(root, 'hello.txt'), 'utf-8')).toBe(
-      'Hello, World!',
-    );
+    expect(await fs.readFile(path.join(root, 'hello.txt'), 'utf-8')).toBe('Hello, World!');
+  });
+
+  describe('interactive retry when manifest.file_count is null (recovery case)', () => {
+    // Guards against: V2 vault + interactive=true + skipped + manifest.file_count=null.
+    // _interactiveUnpackRetry deletes blobCachePath after successful retry;
+    // _finalizePullState must update file_count BEFORE blobCachePath is gone.
+
+    async function setupBlocker(dir: string, filename: string): Promise<void> {
+      await fs.rm(path.join(dir, filename), { force: true });
+      await fs.mkdir(path.join(dir, filename));
+    }
+
+    function interactiveIO(onConfirm: () => Promise<void>): ProviderIO {
+      let confirmed = false;
+      return {
+        ...mockIO(),
+        confirm: vi.fn().mockImplementation(async () => {
+          if (!confirmed) {
+            confirmed = true;
+            await onConfirm();
+          }
+          return true;
+        }),
+      };
+    }
+
+    // it.fails: TDD red phase — remove .fails when the bug is fixed
+    it('should restore files and update manifest.file_count when interactive retry succeeds and manifest.file_count is null (recovery case)', async () => {
+      // Arrange
+      await fs.writeFile(path.join(root, 'hello.txt'), 'Hello, World!');
+      await push(root, { io: mockIO() });
+
+      const manifest = await readManifest(root, 1);
+      assert(manifest !== null, 'manifest should exist after push');
+      await writeManifest(root, { ...manifest, file_count: null, total_size: null });
+
+      await setupBlocker(root, 'hello.txt');
+      const io = interactiveIO(async () => fs.rmdir(path.join(root, 'hello.txt')));
+
+      // Act
+      const result = await pull(root, { yes: true, interactive: true, io });
+
+      // Assert
+      expect(result.version).toBe(1);
+      expect(await fs.readFile(path.join(root, 'hello.txt'), 'utf-8')).toBe('Hello, World!');
+      const updated = await readManifest(root, 1);
+      expect(updated?.file_count).toBe(1);
+    });
+
+    it('should restore files and return version when interactive retry succeeds and file_count is already set', async () => {
+      // Arrange — same as above but file_count stays set (no patch)
+      await fs.writeFile(path.join(root, 'hello.txt'), 'Hello, World!');
+      await push(root, { io: mockIO() });
+
+      await setupBlocker(root, 'hello.txt');
+      const io = interactiveIO(async () => fs.rmdir(path.join(root, 'hello.txt')));
+
+      // Act
+      const result = await pull(root, { yes: true, interactive: true, io });
+
+      // Assert
+      expect(result.version).toBe(1);
+      expect(await fs.readFile(path.join(root, 'hello.txt'), 'utf-8')).toBe('Hello, World!');
+    });
+
+    it('should throw PullSkippedError (not ENOENT) in non-interactive mode when file_count is null', async () => {
+      // Arrange
+      await fs.writeFile(path.join(root, 'hello.txt'), 'Hello, World!');
+      await push(root, { io: mockIO() });
+
+      const manifest = await readManifest(root, 1);
+      assert(manifest !== null, 'manifest should exist after push');
+      await writeManifest(root, { ...manifest, file_count: null, total_size: null });
+
+      await setupBlocker(root, 'hello.txt');
+
+      // Act + Assert — non-interactive: PullSkippedError thrown before _interactiveUnpackRetry
+      await expect(pull(root, { yes: true, io: mockIO() })).rejects.toBeInstanceOf(PullSkippedError);
+    });
   });
 });
 
@@ -815,8 +778,7 @@ describe('removeProvider — strategy: remove', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should mark version as degraded and remove provider from config', async () => {
@@ -836,23 +798,16 @@ describe('removeProvider — strategy: remove', () => {
       await init(root3, {
         vault_name: 'vault',
         scheme: { data_shards: 2, parity_shards: 1 },
-        encryption: {
-          enabled: false,
-          algorithm: 'aes-256-gcm',
-          kdf: 'argon2id',
-        },
+        encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
         providers: p3dirs.map((d, i) => localProvider(`pp${i}`, d)),
         push_mode: PushMode.NewVersion,
         io: mockIO(),
       });
       await createTestFiles(root3);
       await push(root3, { io: mockIO() });
-      await expect(
-        removeProvider(root3, 'pp0', { strategy: 'remove', io: mockIO() }),
-      ).rejects.toThrow();
+      await expect(removeProvider(root3, 'pp0', { strategy: 'remove', io: mockIO() })).rejects.toThrow();
     } finally {
-      for (const d of [root3, ...p3dirs])
-        await fs.rm(d, { recursive: true, force: true });
+      for (const d of [root3, ...p3dirs]) await fs.rm(d, { recursive: true, force: true });
     }
   });
 });
@@ -881,8 +836,7 @@ describe('removeProvider — strategy: rebuild', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs, p4dir])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs, p4dir]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should rebuild shard to new provider and verify healthy', async () => {
@@ -892,11 +846,7 @@ describe('removeProvider — strategy: rebuild', () => {
     config.providers.push(localProvider('p4', p4dir));
     await writeConfig(root, config);
 
-    await removeProvider(root, 'p0', {
-      strategy: 'rebuild',
-      targetProviderId: 'p4',
-      io: mockIO(),
-    });
+    await removeProvider(root, 'p0', { strategy: 'rebuild', targetProviderId: 'p4', io: mockIO() });
 
     // Config should have [p1, p2, p3, p4] (4 providers)
     const updatedConfig = await readConfig(root);
@@ -938,16 +888,11 @@ describe('removeProvider — strategy: relocate', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs, p0newDir])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs, p0newDir]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should update provider address and remain healthy', async () => {
-    await removeProvider(root, 'p0', {
-      strategy: 'relocate',
-      newConnectionConfig: { path: p0newDir },
-      io: mockIO(),
-    });
+    await removeProvider(root, 'p0', { strategy: 'relocate', newConnectionConfig: { path: p0newDir }, io: mockIO() });
 
     // Config should reflect new path
     const config = await readConfig(root);
@@ -964,13 +909,7 @@ describe('removeProvider — strategy: relocate', () => {
     // Spec: "Sprawdź czy shardy istnieją (list). Jeśli nie istnieją → błąd"
     const emptyDir = await tmp();
     try {
-      await expect(
-        removeProvider(root, 'p0', {
-          strategy: 'relocate',
-          newConnectionConfig: { path: emptyDir },
-          io: mockIO(),
-        }),
-      ).rejects.toThrow();
+      await expect(removeProvider(root, 'p0', { strategy: 'relocate', newConnectionConfig: { path: emptyDir }, io: mockIO() })).rejects.toThrow();
     } finally {
       await fs.rm(emptyDir, { recursive: true, force: true });
     }
@@ -980,18 +919,11 @@ describe('removeProvider — strategy: relocate', () => {
     // Corrupt p0 type in config to simulate a provider with unknown type
     const config = await readConfig(root);
     if (!config) throw new Error('no config');
-    const corruptedProviders = config.providers.map((p) =>
-      p.id === 'p0' ? { ...p, type: '?' } : p,
-    );
+    const corruptedProviders = config.providers.map((p) => (p.id === 'p0' ? { ...p, type: '?' } : p));
     await writeConfig(root, { ...config, providers: corruptedProviders });
 
     // relocate with newType repairs both the path and the type
-    await removeProvider(root, 'p0', {
-      strategy: 'relocate',
-      newConnectionConfig: { path: p0newDir },
-      newType: 'local',
-      io: mockIO(),
-    });
+    await removeProvider(root, 'p0', { strategy: 'relocate', newConnectionConfig: { path: p0newDir }, newType: 'local', io: mockIO() });
 
     const updated = await readConfig(root);
     const p0 = updated?.providers.find((p) => p.id === 'p0');
@@ -1016,8 +948,7 @@ describe('scheme — manifests preserve original per-version scheme', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('old manifest keeps its scheme after config scheme change and new push', async () => {
@@ -1038,10 +969,7 @@ describe('scheme — manifests preserve original per-version scheme', () => {
     //        istniejące wersje zachowują swój oryginalny schemat"
     const config = await readConfig(root);
     if (!config) throw new Error('no config');
-    await writeConfig(root, {
-      ...config,
-      scheme: { data_shards: 2, parity_shards: 2 },
-    });
+    await writeConfig(root, { ...config, scheme: { data_shards: 2, parity_shards: 2 } });
 
     // Push v2 — new manifest uses new scheme
     await push(root, { io: mockIO() });
@@ -1079,8 +1007,7 @@ describe('recovery', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should rebuild 3 manifests after .bfs/ is deleted', async () => {
@@ -1089,17 +1016,10 @@ describe('recovery', () => {
 
     // Bootstrap from p0
     const { io: bsIO } = createMockProviderIO();
-    const bootstrapProvider = new LocalFsProvider(
-      localProvider('p0', pdirs[0] ?? ''),
-      bsIO,
-    );
+    const bootstrapProvider = new LocalFsProvider(localProvider('p0', pdirs[0] ?? ''), bsIO);
     await bootstrapProvider.authenticate();
 
-    const report = await recover(root, {
-      vaultName: 'test-vault',
-      provider: bootstrapProvider,
-      io: bsIO,
-    });
+    const report = await recover(root, { vaultName: 'test-vault', provider: bootstrapProvider, io: bsIO });
 
     expect(report.manifests_rebuilt).toBe(3);
     const manifests = await listManifests(root);
@@ -1111,17 +1031,10 @@ describe('recovery', () => {
     await fs.rm(path.join(root, '.bfs'), { recursive: true });
 
     const { io: bsIO } = createMockProviderIO();
-    const bootstrapProvider = new LocalFsProvider(
-      localProvider('p0', pdirs[0] ?? ''),
-      bsIO,
-    );
+    const bootstrapProvider = new LocalFsProvider(localProvider('p0', pdirs[0] ?? ''), bsIO);
     await bootstrapProvider.authenticate();
 
-    await recover(root, {
-      vaultName: 'test-vault',
-      provider: bootstrapProvider,
-      io: bsIO,
-    });
+    await recover(root, { vaultName: 'test-vault', provider: bootstrapProvider, io: bsIO });
 
     const config = await readConfig(root);
     expect(config?.vault_name).toBe('test-vault');
@@ -1132,17 +1045,10 @@ describe('recovery', () => {
     await fs.rm(path.join(root, '.bfs'), { recursive: true });
 
     const { io: bsIO } = createMockProviderIO();
-    const bootstrapProvider = new LocalFsProvider(
-      localProvider('p0', pdirs[0] ?? ''),
-      bsIO,
-    );
+    const bootstrapProvider = new LocalFsProvider(localProvider('p0', pdirs[0] ?? ''), bsIO);
     await bootstrapProvider.authenticate();
 
-    await recover(root, {
-      vaultName: 'test-vault',
-      provider: bootstrapProvider,
-      io: bsIO,
-    });
+    await recover(root, { vaultName: 'test-vault', provider: bootstrapProvider, io: bsIO });
 
     const manifest = await readManifest(root, 1);
     expect(manifest?.rs_striped).toBe(true);

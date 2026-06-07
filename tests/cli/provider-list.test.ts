@@ -1,10 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureConsole, makeConfig, runCmd } from './_helpers.js';
 
-vi.mock('../../src/vault/config.js', () => ({
-  readConfig: vi.fn(),
-  writeConfig: vi.fn(),
-}));
+vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn(), writeConfig: vi.fn() }));
 
 import { readConfig } from '../../src/vault/config.js';
 
@@ -84,13 +81,7 @@ describe('provider list', () => {
   });
 
   it('should show connection config for local provider', async () => {
-    mockReadConfig.mockResolvedValue(
-      makeConfig({
-        providers: [
-          { id: 'local-1', type: 'local', config: { path: '/mnt/usb' } },
-        ],
-      }) as never,
-    );
+    mockReadConfig.mockResolvedValue(makeConfig({ providers: [{ id: 'local-1', type: 'local', config: { path: '/mnt/usb' } }] }) as never);
 
     await runCmd(['provider', 'list']);
 

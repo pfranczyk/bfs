@@ -10,14 +10,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startRepl } from '../../src/cli/repl.js';
 import { CommandAbort } from '../../src/cli/ui.js';
 
-vi.mock('../../src/vault/config.js', () => ({
-  readConfig: vi.fn().mockResolvedValue(null),
-}));
-vi.mock('../../src/vault/state.js', () => ({
-  readState: vi
-    .fn()
-    .mockResolvedValue({ latest_version: 0, working_version: 0 }),
-}));
+vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn().mockResolvedValue(null) }));
+vi.mock('../../src/vault/state.js', () => ({ readState: vi.fn().mockResolvedValue({ latest_version: 0, working_version: 0 }) }));
 
 // ─── Fake readline factory ─────────────────────────────────────────────────
 
@@ -54,11 +48,7 @@ function createFakeRl(lines: string[]) {
 
 type FakeRl = ReturnType<typeof createFakeRl>;
 
-function withFakeRl(lines: string[]): {
-  rl: FakeRl;
-  logs: string[];
-  errors: string[];
-} {
+function withFakeRl(lines: string[]): { rl: FakeRl; logs: string[]; errors: string[] } {
   const rl = createFakeRl(lines);
   vi.spyOn(readline, 'createInterface').mockReturnValueOnce(rl as never);
 
@@ -68,12 +58,8 @@ function withFakeRl(lines: string[]): {
 
   const logs: string[] = [];
   const errors: string[] = [];
-  vi.spyOn(console, 'log').mockImplementation((...a) =>
-    logs.push(stripAnsi(a.map(String).join(' '))),
-  );
-  vi.spyOn(console, 'error').mockImplementation((...a) =>
-    errors.push(stripAnsi(a.map(String).join(' '))),
-  );
+  vi.spyOn(console, 'log').mockImplementation((...a) => logs.push(stripAnsi(a.map(String).join(' '))));
+  vi.spyOn(console, 'error').mockImplementation((...a) => errors.push(stripAnsi(a.map(String).join(' '))));
 
   return { rl, logs, errors };
 }
@@ -172,9 +158,7 @@ describe('REPL', () => {
   // ─── CommanderError (help) — zostaje w REPL ───────────────────────────────
 
   it('should stay in REPL after CommanderError for help', async () => {
-    const helpErr = Object.assign(new Error('(outputHelp)'), {
-      code: 'commander.help',
-    });
+    const helpErr = Object.assign(new Error('(outputHelp)'), { code: 'commander.help' });
     let calls = 0;
     const { rl } = withFakeRl(['provider', 'exit']);
     await startRepl('/fake', async () => {
@@ -186,9 +170,7 @@ describe('REPL', () => {
   });
 
   it('should NOT print "(outputHelp)" error after CommanderError', async () => {
-    const helpErr = Object.assign(new Error('(outputHelp)'), {
-      code: 'commander.help',
-    });
+    const helpErr = Object.assign(new Error('(outputHelp)'), { code: 'commander.help' });
     const { errors, logs } = withFakeRl(['provider', 'exit']);
     await startRepl('/fake', async () => {
       throw helpErr;
@@ -240,8 +222,7 @@ describe('REPL', () => {
     let rlWasPausedWhenCommandRan = false;
 
     await startRepl('/fake', async () => {
-      rlWasPausedWhenCommandRan =
-        (rl.pause as ReturnType<typeof vi.fn>).mock.calls.length > 0;
+      rlWasPausedWhenCommandRan = (rl.pause as ReturnType<typeof vi.fn>).mock.calls.length > 0;
     });
 
     expect(rlWasPausedWhenCommandRan).toBe(true);

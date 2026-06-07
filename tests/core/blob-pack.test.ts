@@ -3,18 +3,8 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, assert, beforeEach, describe, expect, it } from 'vitest';
-import {
-  estimateBlobSize,
-  packBlob,
-  packBlobToFile,
-  packBlobToFileZipped,
-} from '../../src/core/blob-pack.js';
-import {
-  parseBlobFileTable,
-  parseBlobFileTableFromFile,
-  unpackBlob,
-  unpackBlobFromFile,
-} from '../../src/core/blob-unpack.js';
+import { estimateBlobSize, packBlob, packBlobToFile, packBlobToFileZipped } from '../../src/core/blob-pack.js';
+import { parseBlobFileTable, parseBlobFileTableFromFile, unpackBlob, unpackBlobFromFile } from '../../src/core/blob-unpack.js';
 import { BfsError, UnsafePathError } from '../../src/core/errors.js';
 import { createIgnoreFilter } from '../../src/core/ignore.js';
 import { BLOB_FLAGS } from '../../src/types/index.js';
@@ -23,11 +13,7 @@ async function makeTempDir(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'bfs-test-'));
 }
 
-async function writeFile(
-  dir: string,
-  relPath: string,
-  content: string | Buffer,
-): Promise<void> {
+async function writeFile(dir: string, relPath: string, content: string | Buffer): Promise<void> {
   const full = path.join(dir, relPath);
   await fs.mkdir(path.dirname(full), { recursive: true });
   await fs.writeFile(full, content);
@@ -201,11 +187,7 @@ describe('blob-pack / blob-unpack', () => {
     const filter = await createIgnoreFilter(srcDir);
     const { blob } = await packBlob(srcDir, filter);
 
-    const { extracted } = await unpackBlob(
-      blob,
-      outDir,
-      (e) => e.path === 'include.txt',
-    );
+    const { extracted } = await unpackBlob(blob, outDir, (e) => e.path === 'include.txt');
     expect(extracted).toHaveLength(1);
     expect(extracted[0].path).toBe('include.txt');
 
@@ -272,11 +254,7 @@ describe('packBlobToFile', () => {
     const ignoreFilter = createIgnoreFilter(srcDir);
 
     const outputPath = path.join(tmpDir, 'out.blob');
-    const { blobSize, fileCount } = await packBlobToFile(
-      srcDir,
-      outputPath,
-      ignoreFilter,
-    );
+    const { blobSize, fileCount } = await packBlobToFile(srcDir, outputPath, ignoreFilter);
 
     const { blob: ramBlob } = await packBlob(srcDir, ignoreFilter);
     const diskBlob = await fs.readFile(outputPath);
@@ -308,11 +286,7 @@ describe('packBlobToFile', () => {
     const ignoreFilter = createIgnoreFilter(srcDir);
     const outputPath = path.join(tmpDir, 'out2.blob');
 
-    const { fileCount, skipped } = await packBlobToFile(
-      srcDir,
-      outputPath,
-      ignoreFilter,
-    );
+    const { fileCount, skipped } = await packBlobToFile(srcDir, outputPath, ignoreFilter);
     // No unreadable files in this test — skipped should be empty
     expect(skipped).toHaveLength(0);
     expect(fileCount).toBe(1);
@@ -383,12 +357,7 @@ describe('packBlob (compressed=true)', () => {
   it('should handle empty directory', async () => {
     const ignoreFilter = createIgnoreFilter(srcDir);
 
-    const { blob, skipped } = await packBlob(
-      srcDir,
-      ignoreFilter,
-      undefined,
-      true,
-    );
+    const { blob, skipped } = await packBlob(srcDir, ignoreFilter, undefined, true);
 
     expect(skipped).toHaveLength(0);
     const destDir = path.join(tmpDir, 'dest');
@@ -468,11 +437,7 @@ describe('packBlobToFileZipped', () => {
     const ignoreFilter = createIgnoreFilter(srcDir);
     const outputPath = path.join(tmpDir, 'out.blob');
 
-    const { fileCount } = await packBlobToFileZipped(
-      srcDir,
-      outputPath,
-      ignoreFilter,
-    );
+    const { fileCount } = await packBlobToFileZipped(srcDir, outputPath, ignoreFilter);
 
     expect(fileCount).toBe(3); // 3 actual files, not 1 (the ZIP entry)
   });
@@ -483,11 +448,7 @@ describe('packBlobToFileZipped', () => {
     const ignoreFilter = createIgnoreFilter(srcDir);
     const outputPath = path.join(tmpDir, 'out.blob');
 
-    const { totalSize } = await packBlobToFileZipped(
-      srcDir,
-      outputPath,
-      ignoreFilter,
-    );
+    const { totalSize } = await packBlobToFileZipped(srcDir, outputPath, ignoreFilter);
 
     expect(totalSize).toBe(Buffer.byteLength(content, 'utf8'));
   });
@@ -508,23 +469,16 @@ function patchFirstEntryPath(blob: Buffer, newName: string): void {
   const pathLen = blob.readUInt16LE(fileTableOffset);
   const nameBuf = Buffer.from(newName, 'utf8');
   if (nameBuf.length !== pathLen) {
-    throw new Error(
-      `patch length ${nameBuf.length} !== entry path length ${pathLen}`,
-    );
+    throw new Error(`patch length ${nameBuf.length} !== entry path length ${pathLen}`);
   }
   nameBuf.copy(blob, fileTableOffset + 2);
 }
 
 /** Replaces every occurrence of an equal-length needle in the buffer, in place. */
-function replaceAllEqualLength(
-  buf: Buffer,
-  search: string,
-  replacement: string,
-): number {
+function replaceAllEqualLength(buf: Buffer, search: string, replacement: string): number {
   const needle = Buffer.from(search, 'utf8');
   const repl = Buffer.from(replacement, 'utf8');
-  if (needle.length !== repl.length)
-    throw new Error('needle/replacement length mismatch');
+  if (needle.length !== repl.length) throw new Error('needle/replacement length mismatch');
   let count = 0;
   let idx = buf.indexOf(needle);
   while (idx !== -1) {
@@ -574,9 +528,7 @@ describe('blob-unpack path-traversal guard', () => {
     const blobPath = path.join(outDir, 'tampered.blob');
     await fs.writeFile(blobPath, blob);
 
-    await expect(unpackBlobFromFile(blobPath, outDir)).rejects.toThrow(
-      UnsafePathError,
-    );
+    await expect(unpackBlobFromFile(blobPath, outDir)).rejects.toThrow(UnsafePathError);
   });
 
   it('should reject an escaping ZIP entry name even with a recomputed checksum', async () => {
@@ -608,12 +560,7 @@ describe('blob-unpack bound allocation', () => {
     await fs.rm(outDir, { recursive: true, force: true });
   });
 
-  async function writeFieldAt(
-    blobPath: string,
-    value: number,
-    offset: number,
-    bytes: 4 | 8,
-  ): Promise<void> {
+  async function writeFieldAt(blobPath: string, value: number, offset: number, bytes: 4 | 8): Promise<void> {
     const fh = await fs.open(blobPath, 'r+');
     try {
       const field = Buffer.alloc(bytes);
@@ -632,9 +579,7 @@ describe('blob-unpack bound allocation', () => {
 
     await writeFieldAt(blobPath, HUGE, 0x2e, 8); // file table length
 
-    await expect(unpackBlobFromFile(blobPath, outDir)).rejects.toThrow(
-      BfsError,
-    );
+    await expect(unpackBlobFromFile(blobPath, outDir)).rejects.toThrow(BfsError);
   });
 
   it('should reject an out-of-bounds file table length in parseBlobFileTableFromFile', async () => {
@@ -644,9 +589,7 @@ describe('blob-unpack bound allocation', () => {
 
     await writeFieldAt(blobPath, HUGE, 0x2e, 8);
 
-    await expect(parseBlobFileTableFromFile(blobPath)).rejects.toThrow(
-      BfsError,
-    );
+    await expect(parseBlobFileTableFromFile(blobPath)).rejects.toThrow(BfsError);
   });
 
   it('should reject a file count that cannot fit the file table', async () => {
@@ -656,9 +599,7 @@ describe('blob-unpack bound allocation', () => {
 
     await writeFieldAt(blobPath, 0xffff_ffff, 0x22, 4); // file count
 
-    await expect(parseBlobFileTableFromFile(blobPath)).rejects.toThrow(
-      BfsError,
-    );
+    await expect(parseBlobFileTableFromFile(blobPath)).rejects.toThrow(BfsError);
   });
 
   it('should reject an out-of-bounds data section length before allocating (compressed)', async () => {
@@ -671,8 +612,6 @@ describe('blob-unpack bound allocation', () => {
     recomputeTrailingChecksum(blob); // pass the checksum so the alloc guard is what fires
     await fs.writeFile(blobPath, blob);
 
-    await expect(unpackBlobFromFile(blobPath, outDir)).rejects.toThrow(
-      BfsError,
-    );
+    await expect(unpackBlobFromFile(blobPath, outDir)).rejects.toThrow(BfsError);
   });
 });

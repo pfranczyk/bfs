@@ -10,9 +10,7 @@ export interface GlobalSettings {
 }
 
 /** Returned when no settings file exists yet. */
-export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
-  language: null,
-};
+export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = { language: null };
 
 /**
  * Returns the platform-appropriate path to the global BFS settings file.
@@ -54,9 +52,7 @@ export async function readGlobalSettings(): Promise<GlobalSettings> {
  * Creates the directory if it does not exist.
  * @throws on write failure.
  */
-export async function writeGlobalSettings(
-  settings: GlobalSettings,
-): Promise<void> {
+export async function writeGlobalSettings(settings: GlobalSettings): Promise<void> {
   const filePath = getGlobalSettingsPath();
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, JSON.stringify(settings, null, 2), 'utf-8');

@@ -25,6 +25,10 @@ export interface Strings {
   repl_help_cmd_exit: string;
   repl_goodbye: string;
   repl_cancelled: string;
+  /** %s = provider count */
+  repl_banner_providers: string;
+  /** %s = error message */
+  repl_error_prefix: string;
 
   // ─── Health ──────────────────────────────────────────────────────────────
   health_healthy: string;
@@ -76,6 +80,7 @@ export interface Strings {
   init_dir_path_prompt: string;
   init_opt_ci: string;
   init_opt_enc: string;
+  init_opt_no_enc: string;
   init_opt_no_compress: string;
   init_opt_compress: string;
   init_opt_data_shards: string;
@@ -156,6 +161,10 @@ export interface Strings {
   config_next_push: string;
   config_label_compression: string;
   config_label_encryption: string;
+  /** %s = default cache path */
+  config_cache_default: string;
+  config_temp_default: string;
+  config_ram_auto: string;
 
   // ─── push ─────────────────────────────────────────────────────────────────
   push_preparing: string;
@@ -225,6 +234,8 @@ export interface Strings {
   status_enc_disabled: string;
   /** %s = data_shards, %s = parity_shards */
   status_push_disabled_warn: string;
+  /** %s = data_shards, %s = parity_shards */
+  status_scheme_breakdown: string;
 
   // ─── versions ─────────────────────────────────────────────────────────────
   versions_empty: string;
@@ -430,6 +441,9 @@ export interface Strings {
   vault_ask_confirm_password: string;
   vault_encrypting: string;
   vault_password_overrides_config: string;
+  vault_unencrypted_warning: string;
+  /** %s = per-unit encryption limit in GiB */
+  gcm_payload_too_large: string;
   vault_encoding_rs: string;
   vault_uploading_shards: string;
   /** %s = i+1 (1-based), %s = N+K total */
@@ -450,6 +464,7 @@ export interface Strings {
   recovery_pool_password_failed: string;
   recovery_wrong_password_retry: string;
   recovery_decrypt_skip: string;
+  recovery_ask_transport_password: string;
 
   // ─── bootstrap operations ────────────────────────────────────────────────
   bootstrap_ask_password: string;
@@ -541,6 +556,20 @@ export interface Strings {
   provider_header_read_failed: string;
   /** %s = value */
   provider_download_header_invalid_max_bytes: string;
+  /** %s = provider type */
+  sidecar_not_supported: string;
+  /** %s = provider type, %s = missing method, %s = provider API version */
+  provider_adapter_incompatible: string;
+  /** %s = path */
+  verify_shard_not_found: string;
+  /** %s = field, %s = expected, %s = actual */
+  verify_shard_mismatch: string;
+  /** %s = provider id, %s = path */
+  verify_shard_auth_failed: string;
+  /** %s = path, %s = detail */
+  verify_shard_corrupted: string;
+  /** %s = provider id, %s = path */
+  verify_shard_unverifiable: string;
 
   // ─── FTP — runtime errors ────────────────────────────────────────────────
   /** %s = host, %s = port, %s = err */
@@ -666,11 +695,7 @@ export function fmt(key: keyof Strings, ...args: string[]): string {
  * @param key  - Key from the Strings interface
  * @param args - Values to substitute for each %s in order
  */
-export function fmtFor(
-  lang: string,
-  key: keyof Strings,
-  ...args: string[]
-): string {
+export function fmtFor(lang: string, key: keyof Strings, ...args: string[]): string {
   let s = tFor(lang, key);
   for (const arg of args) {
     s = s.replace('%s', arg);

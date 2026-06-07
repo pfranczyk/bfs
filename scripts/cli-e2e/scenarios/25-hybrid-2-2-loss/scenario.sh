@@ -13,7 +13,7 @@ scenario_run() {
   make_fixtures "$vault"
   build_pool_seq "$SC_DIR" "$name" local ftp local ftp   # p0 L · p1 F · p2 L · p3 F
 
-  run_bfs "$vault" init "$name" --ci --no-compress \
+  run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 2 --parity-shards 2 "${PROVIDER_ARGS[@]}"
   assert_ok
 

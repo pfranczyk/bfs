@@ -19,9 +19,7 @@ describe('buildProviderHelpSection', () => {
 
   it('should prepend the fixed BFS usage prefix before provider-specific suffix', () => {
     const help = buildProviderHelpSection();
-    expect(help).toContain(
-      'Usage: bfs provider add --name <name> --type local',
-    );
+    expect(help).toContain('Usage: bfs provider add --name <name> --type local');
     expect(help).toContain('Usage: bfs provider add --name <name> --type ftp');
     // FTP usage now lists all inline flags + --config-file.
     expect(help).toMatch(/--type ftp .*--host <h>.*--config-file <path>/s);

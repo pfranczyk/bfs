@@ -1,13 +1,7 @@
 import { BfsError } from '../core/errors.js';
 import { dbg, debugEnabled, stdinState } from '../debug.js';
 import { fmt, getLang } from '../i18n/index.js';
-import type {
-  AdapterRegistrationMeta,
-  ProviderConfig,
-  ProviderHelp,
-  ProviderIO,
-  StorageProvider,
-} from '../types/index.js';
+import type { AdapterRegistrationMeta, ProviderConfig, ProviderHelp, ProviderIO, StorageProvider } from '../types/index.js';
 import { BFS_PROVIDER_API_VERSION } from '../version.js';
 
 // ─── Provider ID validation ───────────────────────────────────────────────────
@@ -95,6 +89,31 @@ interface RegistryEntry {
   readonly meta: Nullable<AdapterRegistrationMeta>;
 }
 
+/** Methods introduced in provider API v2 that every adapter instance must implement. */
+const PROVIDER_API_V2_METHODS = ['usesSidecar', 'uploadHeaderSidecar', 'downloadHeaderSidecar', 'verifyShard'] as const;
+
+/**
+ * Verifies a freshly created provider instance implements the current provider
+ * API surface. The registration-time gate only rejects adapters declaring a
+ * HIGHER requiresApiVersion; an adapter built against an older API (or with none
+ * declared) clears that gate yet may lack methods added since. Compilation
+ * protects TypeScript adapters, but a published JavaScript adapter run without
+ * recompilation would otherwise fail with a raw "x is not a function" deep in a
+ * verify/heal call. This surfaces the gap at instantiation as a typed, localized error.
+ *
+ * @param type     - Provider type string (for the error message)
+ * @param provider - Instance returned by the factory
+ * @throws BfsError when any method required by the current API is missing
+ */
+function assertProviderApiComplete(type: string, provider: StorageProvider): void {
+  const surface = provider as unknown as Record<string, unknown>;
+  for (const method of PROVIDER_API_V2_METHODS) {
+    if (typeof surface[method] !== 'function') {
+      throw new BfsError(fmt('provider_adapter_incompatible', type, method, String(BFS_PROVIDER_API_VERSION)));
+    }
+  }
+}
+
 export class ProviderRegistry {
   private readonly entries = new Map<string, RegistryEntry>();
 
@@ -110,34 +129,27 @@ export class ProviderRegistry {
    *                  providers omit it.
    * @throws BfsError when factory.requiresApiVersion > BFS_PROVIDER_API_VERSION
    */
-  register(
-    type: string,
-    factory: ProviderFactory,
-    meta?: AdapterRegistrationMeta,
-  ): void {
+  register(type: string, factory: ProviderFactory, meta?: AdapterRegistrationMeta): void {
     const required = factory.requiresApiVersion ?? 1;
     if (required > BFS_PROVIDER_API_VERSION) {
-      throw new BfsError(
-        `Provider adapter "${type}" requires BFS provider API >= ${required}, ` +
-          `this BFS installation only supports up to ${BFS_PROVIDER_API_VERSION}. ` +
-          `Upgrade BFS or use an older adapter version.`,
-      );
+      throw new BfsError(`Provider adapter "${type}" requires BFS provider API >= ${required}, this BFS installation only supports up to ${BFS_PROVIDER_API_VERSION}. Upgrade BFS or use an older adapter version.`);
     }
     this.entries.set(type, { factory, meta: meta ?? null });
   }
 
   /**
    * Creates a StorageProvider instance from config using the registered factory.
-   * @throws Error when no factory is registered for config.type
+   * @throws BfsError when no factory is registered for config.type, or the
+   *         instance is missing a method required by the current provider API
    */
   create(config: ProviderConfig, io: ProviderIO): StorageProvider {
     const entry = this.entries.get(config.type);
     if (!entry) {
-      throw new Error(
-        `Unknown provider type: "${config.type}". Registered types: ${[...this.entries.keys()].join(', ')}`,
-      );
+      throw new BfsError(`Unknown provider type: "${config.type}". Registered types: ${[...this.entries.keys()].join(', ')}`);
     }
-    return entry.factory.create(config, io);
+    const provider = entry.factory.create(config, io);
+    assertProviderApiComplete(config.type, provider);
+    return provider;
   }
 
   /**
@@ -145,10 +157,7 @@ export class ProviderRegistry {
    * Used by CLI to build "select provider type" prompts without hardcoded lists.
    */
   listTypes(): ReadonlyArray<{ type: string; displayName: string }> {
-    return [...this.entries.entries()].map(([type, e]) => ({
-      type,
-      displayName: e.factory.displayName,
-    }));
+    return [...this.entries.entries()].map(([type, e]) => ({ type, displayName: e.factory.displayName }));
   }
 
   /**
@@ -212,18 +221,12 @@ export function createCliProviderIO(workDir: string): ProviderIO {
       const { default: inquirer } = await import('inquirer');
       dbg('inquirer:ask:before', { prompt, ...stdinState() });
       try {
-        const { value } = await inquirer.prompt<{ value: string }>([
-          { type: 'input', name: 'value', message: prompt },
-        ]);
+        const { value } = await inquirer.prompt<{ value: string }>([{ type: 'input', name: 'value', message: prompt }]);
         dbg('inquirer:ask:after', { value, ...stdinState() });
         if (process.stdin.isTTY) process.stdin.setRawMode(true);
         return value;
       } catch (e) {
-        dbg('inquirer:ask:error', {
-          name: (e as Error).name,
-          msg: (e as Error).message,
-          ...stdinState(),
-        });
+        dbg('inquirer:ask:error', { name: (e as Error).name, msg: (e as Error).message, ...stdinState() });
         throw e;
       }
     },
@@ -232,18 +235,12 @@ export function createCliProviderIO(workDir: string): ProviderIO {
       const { default: inquirer } = await import('inquirer');
       dbg('inquirer:askSecret:before', { prompt, ...stdinState() });
       try {
-        const { value } = await inquirer.prompt<{ value: string }>([
-          { type: 'password', name: 'value', message: prompt, mask: '*' },
-        ]);
+        const { value } = await inquirer.prompt<{ value: string }>([{ type: 'password', name: 'value', message: prompt, mask: '*' }]);
         dbg('inquirer:askSecret:after', { answered: true, ...stdinState() });
         if (process.stdin.isTTY) process.stdin.setRawMode(true);
         return value;
       } catch (e) {
-        dbg('inquirer:askSecret:error', {
-          name: (e as Error).name,
-          msg: (e as Error).message,
-          ...stdinState(),
-        });
+        dbg('inquirer:askSecret:error', { name: (e as Error).name, msg: (e as Error).message, ...stdinState() });
         throw e;
       }
     },
@@ -252,18 +249,12 @@ export function createCliProviderIO(workDir: string): ProviderIO {
       const { default: inquirer } = await import('inquirer');
       dbg('inquirer:confirm:before', { message, ...stdinState() });
       try {
-        const { value } = await inquirer.prompt<{ value: boolean }>([
-          { type: 'confirm', name: 'value', message, default: false },
-        ]);
+        const { value } = await inquirer.prompt<{ value: boolean }>([{ type: 'confirm', name: 'value', message, default: false }]);
         dbg('inquirer:confirm:after', { value, ...stdinState() });
         if (process.stdin.isTTY) process.stdin.setRawMode(true);
         return value;
       } catch (e) {
-        dbg('inquirer:confirm:error', {
-          name: (e as Error).name,
-          msg: (e as Error).message,
-          ...stdinState(),
-        });
+        dbg('inquirer:confirm:error', { name: (e as Error).name, msg: (e as Error).message, ...stdinState() });
         throw e;
       }
     },
@@ -272,18 +263,12 @@ export function createCliProviderIO(workDir: string): ProviderIO {
       const { default: inquirer } = await import('inquirer');
       dbg('inquirer:choose:before', { message, options, ...stdinState() });
       try {
-        const { value } = await inquirer.prompt<{ value: string }>([
-          { type: 'rawlist', name: 'value', message, choices: options },
-        ]);
+        const { value } = await inquirer.prompt<{ value: string }>([{ type: 'rawlist', name: 'value', message, choices: options }]);
         dbg('inquirer:choose:after', { value, ...stdinState() });
         if (process.stdin.isTTY) process.stdin.setRawMode(true);
         return value;
       } catch (e) {
-        dbg('inquirer:choose:error', {
-          name: (e as Error).name,
-          msg: (e as Error).message,
-          ...stdinState(),
-        });
+        dbg('inquirer:choose:error', { name: (e as Error).name, msg: (e as Error).message, ...stdinState() });
         throw e;
       }
     },
@@ -331,13 +316,7 @@ export function createCliProviderIO(workDir: string): ProviderIO {
  * @returns       A ProviderIO and a `logs` array collecting info/debug/warn
  *                output
  */
-export function createMockProviderIO(
-  answers: Record<string, string> = {},
-  workDir: string = process.cwd(),
-): {
-  io: ProviderIO;
-  logs: Array<{ level: 'info' | 'debug' | 'warn'; message: string }>;
-} {
+export function createMockProviderIO(answers: Record<string, string> = {}, workDir: string = process.cwd()): { io: ProviderIO; logs: Array<{ level: 'info' | 'debug' | 'warn'; message: string }> } {
   const logs: Array<{ level: 'info' | 'debug' | 'warn'; message: string }> = [];
 
   const io: ProviderIO = {

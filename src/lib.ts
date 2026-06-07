@@ -44,7 +44,9 @@ export type {
   ProviderHelpFlag,
   ProviderIO,
   RemoteRef,
+  ShardIdentity,
   StorageProvider,
+  VerifyShardResult,
 } from './types/index.js';
 
 // Version numbers.

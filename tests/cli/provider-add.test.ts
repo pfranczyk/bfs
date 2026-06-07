@@ -4,10 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureConsole, makeConfig, runCmd } from './_helpers.js';
 
-vi.mock('../../src/vault/config.js', () => ({
-  readConfig: vi.fn(),
-  writeConfig: vi.fn(),
-}));
+vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn(), writeConfig: vi.fn() }));
 vi.mock('inquirer', () => ({
   default: {
     prompt: vi.fn(),
@@ -45,13 +42,8 @@ describe('provider add', () => {
     // Unit tests — skip real fs probe and interactive path prompt.
     // Integration of probeConnection + configureInteractive is covered by
     // tests/providers/local-fs.test.ts.
-    vi.spyOn(LocalFsProvider.prototype, 'probeConnection').mockResolvedValue(
-      undefined,
-    );
-    vi.spyOn(
-      LocalFsProvider.prototype,
-      'configureInteractive',
-    ).mockResolvedValue({ path: '/mnt/d4' });
+    vi.spyOn(LocalFsProvider.prototype, 'probeConnection').mockResolvedValue(undefined);
+    vi.spyOn(LocalFsProvider.prototype, 'configureInteractive').mockResolvedValue({ path: '/mnt/d4' });
   });
 
   afterEach(() => {
@@ -66,17 +58,7 @@ describe('provider add', () => {
     mockReadConfig.mockResolvedValue(null);
 
     const cfg = await writeConfigFile({ path: '/mnt/new' });
-    const result = await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'new-disk',
-      '--type',
-      'local',
-      '--config-file',
-      cfg,
-    ]);
+    const result = await runCmd(['provider', 'add', '--ci', '--name', 'new-disk', '--type', 'local', '--config-file', cfg]);
 
     expect(result).toBe('abort');
     expect(capture.errors.some((e) => e.includes('bfs init'))).toBe(true);
@@ -88,23 +70,11 @@ describe('provider add', () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     const cfg = await writeConfigFile({ path: '/mnt/d4' });
 
-    await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'dysk-4',
-      '--type',
-      'local',
-      '--config-file',
-      cfg,
-    ]);
+    await runCmd(['provider', 'add', '--ci', '--name', 'dysk-4', '--type', 'local', '--config-file', cfg]);
 
     expect(mockWriteConfig).toHaveBeenCalledOnce();
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
-    expect(
-      writtenConfig.providers.some((p: { id: string }) => p.id === 'dysk-4'),
-    ).toBe(true);
+    expect(writtenConfig.providers.some((p: { id: string }) => p.id === 'dysk-4')).toBe(true);
   });
 
   it('CI: should increment parity_shards by 1 after adding provider (pipeline krok 6)', async () => {
@@ -112,17 +82,7 @@ describe('provider add', () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never); // starts with parity_shards: 1
     const cfg = await writeConfigFile({ path: '/mnt/d4' });
 
-    await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'dysk-4',
-      '--type',
-      'local',
-      '--config-file',
-      cfg,
-    ]);
+    await runCmd(['provider', 'add', '--ci', '--name', 'dysk-4', '--type', 'local', '--config-file', cfg]);
 
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
     expect(writtenConfig.scheme.parity_shards).toBe(2); // 1 + 1
@@ -133,65 +93,28 @@ describe('provider add', () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     const cfg = await writeConfigFile({ path: '/mnt/nas' });
 
-    await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'nas',
-      '--type',
-      'local',
-      '--config-file',
-      cfg,
-    ]);
+    await runCmd(['provider', 'add', '--ci', '--name', 'nas', '--type', 'local', '--config-file', cfg]);
 
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
-    const added = writtenConfig.providers.find(
-      (p: { id: string }) => p.id === 'nas',
-    );
-    expect(added).toMatchObject({
-      id: 'nas',
-      type: 'local',
-      adapterPackage: null,
-      config: { path: '/mnt/nas' },
-    });
+    const added = writtenConfig.providers.find((p: { id: string }) => p.id === 'nas');
+    expect(added).toMatchObject({ id: 'nas', type: 'local', adapterPackage: null, config: { path: '/mnt/nas' } });
   });
 
   it('CI: should default local path to ~/.bfs-local/<name> when --config-file is omitted', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'default-local',
-      '--type',
-      'local',
-    ]);
+    await runCmd(['provider', 'add', '--ci', '--name', 'default-local', '--type', 'local']);
 
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
-    const added = writtenConfig.providers.find(
-      (p: { id: string }) => p.id === 'default-local',
-    );
+    const added = writtenConfig.providers.find((p: { id: string }) => p.id === 'default-local');
     expect(added).toBeDefined();
-    expect(added?.config.path).toBe(
-      path.join(os.homedir(), '.bfs-local', 'default-local'),
-    );
+    expect(added?.config.path).toBe(path.join(os.homedir(), '.bfs-local', 'default-local'));
   });
 
   it('CI: should show success message with provider name and new scheme (pipeline krok 8)', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'dysk-4',
-      '--type',
-      'local',
-    ]);
+    await runCmd(['provider', 'add', '--ci', '--name', 'dysk-4', '--type', 'local']);
 
     const output = capture.logs.join('\n');
     expect(output).toContain('dysk-4');
@@ -201,15 +124,7 @@ describe('provider add', () => {
   it('CI: should suggest bfs push in success message', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'dysk-4',
-      '--type',
-      'local',
-    ]);
+    await runCmd(['provider', 'add', '--ci', '--name', 'dysk-4', '--type', 'local']);
 
     expect(capture.logs.some((l) => l.includes('push'))).toBe(true);
   });
@@ -217,15 +132,7 @@ describe('provider add', () => {
   it('CI: should skip all inquirer prompts in CI mode', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'dysk-4',
-      '--type',
-      'local',
-    ]);
+    await runCmd(['provider', 'add', '--ci', '--name', 'dysk-4', '--type', 'local']);
 
     expect(mockPrompt).not.toHaveBeenCalled();
   });
@@ -234,29 +141,12 @@ describe('provider add', () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     const spy = vi.spyOn(LocalFsProvider.prototype, 'configureFromFlags');
 
-    await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'cloud',
-      '--type',
-      'local',
-      '--private-key',
-      '/home/alice/.ssh/id_rsa',
-      '--passphrase-env',
-      'SECRET',
-    ]);
+    await runCmd(['provider', 'add', '--ci', '--name', 'cloud', '--type', 'local', '--private-key', '/home/alice/.ssh/id_rsa', '--passphrase-env', 'SECRET']);
 
     expect(spy).toHaveBeenCalledOnce();
     const input = spy.mock.calls[0]?.[0];
     expect(input?.name).toBe('cloud');
-    expect(input?.rawArgs).toEqual([
-      '--private-key',
-      '/home/alice/.ssh/id_rsa',
-      '--passphrase-env',
-      'SECRET',
-    ]);
+    expect(input?.rawArgs).toEqual(['--private-key', '/home/alice/.ssh/id_rsa', '--passphrase-env', 'SECRET']);
   });
 
   it('CI: should abort when --config-file path is not readable', async () => {
@@ -266,17 +156,7 @@ describe('provider add', () => {
     // the config untouched.
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    const result = await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'dysk-4',
-      '--type',
-      'local',
-      '--config-file',
-      path.join(os.tmpdir(), 'this-does-not-exist-bfs-test.json'),
-    ]);
+    const result = await runCmd(['provider', 'add', '--ci', '--name', 'dysk-4', '--type', 'local', '--config-file', path.join(os.tmpdir(), 'this-does-not-exist-bfs-test.json')]);
 
     expect(result).toBe('abort');
     expect(mockWriteConfig).not.toHaveBeenCalled();
@@ -293,25 +173,12 @@ describe('provider add', () => {
     const abs = path.join(dir, 'relcfg.json');
     await fs.writeFile(abs, JSON.stringify({ path: '/mnt/rel' }), 'utf8');
 
-    const fromFlagsSpy = vi.spyOn(
-      LocalFsProvider.prototype,
-      'configureFromFlags',
-    );
+    const fromFlagsSpy = vi.spyOn(LocalFsProvider.prototype, 'configureFromFlags');
 
     const oldCwd = process.cwd();
     process.chdir(dir);
     try {
-      await runCmd([
-        'provider',
-        'add',
-        '--ci',
-        '--name',
-        'rel-disk',
-        '--type',
-        'local',
-        '--config-file',
-        'relcfg.json',
-      ]);
+      await runCmd(['provider', 'add', '--ci', '--name', 'rel-disk', '--type', 'local', '--config-file', 'relcfg.json']);
     } finally {
       process.chdir(oldCwd);
       await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -323,9 +190,7 @@ describe('provider add', () => {
 
     expect(mockWriteConfig).toHaveBeenCalledOnce();
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
-    const added = writtenConfig.providers.find(
-      (p: { id: string }) => p.id === 'rel-disk',
-    );
+    const added = writtenConfig.providers.find((p: { id: string }) => p.id === 'rel-disk');
     expect(added?.config).toEqual({ path: '/mnt/rel' });
   });
 
@@ -335,27 +200,13 @@ describe('provider add', () => {
     // the provider fall back to its default (no readability check fires).
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    const result = await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'empty-flag',
-      '--type',
-      'local',
-      '--config-file',
-      '',
-    ]);
+    const result = await runCmd(['provider', 'add', '--ci', '--name', 'empty-flag', '--type', 'local', '--config-file', '']);
 
     expect(result).toBe('ok');
     expect(mockWriteConfig).toHaveBeenCalledOnce();
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
-    const added = writtenConfig.providers.find(
-      (p: { id: string }) => p.id === 'empty-flag',
-    );
-    expect(added?.config.path).toBe(
-      path.join(os.homedir(), '.bfs-local', 'empty-flag'),
-    );
+    const added = writtenConfig.providers.find((p: { id: string }) => p.id === 'empty-flag');
+    expect(added?.config.path).toBe(path.join(os.homedir(), '.bfs-local', 'empty-flag'));
   });
 
   // ─── --config-file: propagacja danych do writeConfig ──────────────────────
@@ -367,22 +218,10 @@ describe('provider add', () => {
     vi.spyOn(LocalFsProvider.prototype, 'configureFromFlags');
     const cfg = await writeConfigFile({ path: '/mnt/from-file' });
 
-    await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'from-file',
-      '--type',
-      'local',
-      '--config-file',
-      cfg,
-    ]);
+    await runCmd(['provider', 'add', '--ci', '--name', 'from-file', '--type', 'local', '--config-file', cfg]);
 
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
-    const added = writtenConfig.providers.find(
-      (p: { id: string }) => p.id === 'from-file',
-    );
+    const added = writtenConfig.providers.find((p: { id: string }) => p.id === 'from-file');
     expect(added?.config).toEqual({ path: '/mnt/from-file' });
   });
 
@@ -395,23 +234,11 @@ describe('provider add', () => {
     vi.spyOn(LocalFsProvider.prototype, 'configureFromFlags');
     const cfg = await writeConfigFile({});
 
-    const result = await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'bad-json',
-      '--type',
-      'local',
-      '--config-file',
-      cfg,
-    ]);
+    const result = await runCmd(['provider', 'add', '--ci', '--name', 'bad-json', '--type', 'local', '--config-file', cfg]);
 
     expect(result).toBe('abort');
     expect(mockWriteConfig).not.toHaveBeenCalled();
-    expect(capture.errors.some((e) => e.includes('Configuration failed'))).toBe(
-      true,
-    );
+    expect(capture.errors.some((e) => e.includes('Configuration failed'))).toBe(true);
   });
 
   it('CI: should abort with human-readable error when --config-file is not valid JSON', async () => {
@@ -423,23 +250,11 @@ describe('provider add', () => {
     await fs.writeFile(file, '{not-json', 'utf8');
 
     try {
-      const result = await runCmd([
-        'provider',
-        'add',
-        '--ci',
-        '--name',
-        'garbage',
-        '--type',
-        'local',
-        '--config-file',
-        file,
-      ]);
+      const result = await runCmd(['provider', 'add', '--ci', '--name', 'garbage', '--type', 'local', '--config-file', file]);
 
       expect(result).toBe('abort');
       expect(mockWriteConfig).not.toHaveBeenCalled();
-      expect(
-        capture.errors.some((e) => e.includes('Configuration failed')),
-      ).toBe(true);
+      expect(capture.errors.some((e) => e.includes('Configuration failed'))).toBe(true);
     } finally {
       await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
     }
@@ -450,73 +265,29 @@ describe('provider add', () => {
   it('CI: should load FTP provider config from --config-file and persist it', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     // FTP probeConnection would try a real TCP connection — mock it out.
-    vi.spyOn(FtpProvider.prototype, 'probeConnection').mockResolvedValue(
-      undefined,
-    );
+    vi.spyOn(FtpProvider.prototype, 'probeConnection').mockResolvedValue(undefined);
 
-    const cfg = await writeConfigFile({
-      host: 'ftp.example.com',
-      port: 2121,
-      user: 'alice',
-      password: 'secret',
-      path: '/backup',
-      secure: true,
-    });
+    const cfg = await writeConfigFile({ host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true });
 
-    await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'ftp-remote',
-      '--type',
-      'ftp',
-      '--config-file',
-      cfg,
-    ]);
+    await runCmd(['provider', 'add', '--ci', '--name', 'ftp-remote', '--type', 'ftp', '--config-file', cfg]);
 
     expect(mockWriteConfig).toHaveBeenCalledOnce();
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
-    const added = writtenConfig.providers.find(
-      (p: { id: string }) => p.id === 'ftp-remote',
-    );
-    expect(added).toMatchObject({
-      id: 'ftp-remote',
-      type: 'ftp',
-      config: {
-        host: 'ftp.example.com',
-        port: 2121,
-        user: 'alice',
-        password: 'secret',
-        path: '/backup',
-        secure: true,
-      },
-    });
+    const added = writtenConfig.providers.find((p: { id: string }) => p.id === 'ftp-remote');
+    expect(added).toMatchObject({ id: 'ftp-remote', type: 'ftp', config: { host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true } });
   });
 
   it('CI: should abort when FTP --type provider is invoked without --config-file', async () => {
     // FTP adapter requires --config-file; without it configureFromFlags throws
     // ProviderError immediately. CLI must surface this as abort, not crash.
     mockReadConfig.mockResolvedValue(makeConfig() as never);
-    vi.spyOn(FtpProvider.prototype, 'probeConnection').mockResolvedValue(
-      undefined,
-    );
+    vi.spyOn(FtpProvider.prototype, 'probeConnection').mockResolvedValue(undefined);
 
-    const result = await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'ftp-no-file',
-      '--type',
-      'ftp',
-    ]);
+    const result = await runCmd(['provider', 'add', '--ci', '--name', 'ftp-no-file', '--type', 'ftp']);
 
     expect(result).toBe('abort');
     expect(mockWriteConfig).not.toHaveBeenCalled();
-    expect(capture.errors.some((e) => e.includes('Configuration failed'))).toBe(
-      true,
-    );
+    expect(capture.errors.some((e) => e.includes('Configuration failed'))).toBe(true);
   });
 
   // ─── Walidacja CI ────────────────────────────────────────────────────────
@@ -533,13 +304,7 @@ describe('provider add', () => {
   it('CI: should abort when --type is missing', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    const result = await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'dysk-4',
-    ]);
+    const result = await runCmd(['provider', 'add', '--ci', '--name', 'dysk-4']);
 
     expect(result).toBe('abort');
     expect(mockWriteConfig).not.toHaveBeenCalled();
@@ -548,15 +313,7 @@ describe('provider add', () => {
   it('CI: should abort when provider name already exists', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never); // has dysk-1, dysk-2, dysk-3
 
-    const result = await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'dysk-1',
-      '--type',
-      'local',
-    ]);
+    const result = await runCmd(['provider', 'add', '--ci', '--name', 'dysk-1', '--type', 'local']);
 
     expect(result).toBe('abort');
     expect(capture.errors.some((e) => e.includes('dysk-1'))).toBe(true);
@@ -567,9 +324,7 @@ describe('provider add', () => {
 
   it('interactive: should prompt for name and type (path goes through configureInteractive)', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
-    mockPrompt
-      .mockResolvedValueOnce({ name: 'dysk-4' } as never)
-      .mockResolvedValueOnce({ type: 'local' } as never);
+    mockPrompt.mockResolvedValueOnce({ name: 'dysk-4' } as never).mockResolvedValueOnce({ type: 'local' } as never);
 
     await runCmd(['provider', 'add']);
 
@@ -581,16 +336,12 @@ describe('provider add', () => {
 
   it('interactive: should display current providers list before prompting', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
-    mockPrompt
-      .mockResolvedValueOnce({ name: 'dysk-4' } as never)
-      .mockResolvedValueOnce({ type: 'local' } as never);
+    mockPrompt.mockResolvedValueOnce({ name: 'dysk-4' } as never).mockResolvedValueOnce({ type: 'local' } as never);
 
     await runCmd(['provider', 'add']);
 
     // Should show warning about schema change
-    expect(
-      [...capture.logs, ...capture.errors].some((l) => l.includes('push')),
-    ).toBe(true);
+    expect([...capture.logs, ...capture.errors].some((l) => l.includes('push'))).toBe(true);
   });
 
   // ─── Walidacja charset nazwy providera ────────────────────────────────────
@@ -599,40 +350,18 @@ describe('provider add', () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     const cfg = await writeConfigFile({ path: '/mnt/d4' });
 
-    const result = await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'my nas',
-      '--type',
-      'local',
-      '--config-file',
-      cfg,
-    ]);
+    const result = await runCmd(['provider', 'add', '--ci', '--name', 'my nas', '--type', 'local', '--config-file', cfg]);
 
     expect(result).toBe('abort');
     expect(mockWriteConfig).not.toHaveBeenCalled();
-    expect(
-      capture.errors.some((e) => e.includes('"my nas"') && e.includes('-')),
-    ).toBe(true);
+    expect(capture.errors.some((e) => e.includes('"my nas"') && e.includes('-'))).toBe(true);
   });
 
   it('CI: should abort when --name contains a colon', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     const cfg = await writeConfigFile({ path: '/mnt/d4' });
 
-    const result = await runCmd([
-      'provider',
-      'add',
-      '--ci',
-      '--name',
-      'nas:1',
-      '--type',
-      'local',
-      '--config-file',
-      cfg,
-    ]);
+    const result = await runCmd(['provider', 'add', '--ci', '--name', 'nas:1', '--type', 'local', '--config-file', cfg]);
 
     expect(result).toBe('abort');
     expect(mockWriteConfig).not.toHaveBeenCalled();

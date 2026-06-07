@@ -1,11 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BfsError } from '../../src/core/errors.js';
 import { disableDebug, enableDebug } from '../../src/debug.js';
-import {
-  createCliProviderIO,
-  createMockProviderIO,
-  validateProviderId,
-} from '../../src/providers/provider.js';
+import { createCliProviderIO, createMockProviderIO, type ProviderFactory, ProviderRegistry, validateProviderId } from '../../src/providers/provider.js';
+import type { ProviderConfig, StorageProvider } from '../../src/types/index.js';
 
 describe('validateProviderId', () => {
   it('should accept letters, digits, dot, underscore and dash', () => {
@@ -52,6 +49,51 @@ describe('createMockProviderIO', () => {
       { level: 'info', message: 'second' },
       { level: 'debug', message: 'third' },
     ]);
+  });
+});
+
+describe('ProviderRegistry.create — provider API completeness guard', () => {
+  function fakeConfig(type: string): ProviderConfig {
+    return { id: 'x', type, adapterPackage: null, config: {} };
+  }
+
+  function factory(create: ProviderFactory['create']): ProviderFactory {
+    return { lang: 'en', displayName: 'Test', create, help: () => ({ usage: '', description: '', flags: [], examples: [] }) };
+  }
+
+  it('should throw BfsError when the created instance lacks a method from the current API', () => {
+    const registry = new ProviderRegistry();
+    // An adapter compiled against API v1: it declares no requiresApiVersion (so
+    // it clears the registration version gate, since 1 > current is false) yet
+    // returns an instance without verifyShard. The guard must catch this at create().
+    registry.register(
+      'legacy',
+      factory(
+        () =>
+          ({
+            usesSidecar: () => false,
+            uploadHeaderSidecar: async () => {},
+            downloadHeaderSidecar: async () => null,
+            // verifyShard intentionally absent — predates provider API v2
+          }) as unknown as StorageProvider,
+      ),
+    );
+    const { io } = createMockProviderIO();
+
+    expect(() => registry.create(fakeConfig('legacy'), io)).toThrow(BfsError);
+  });
+
+  it('should return the instance when every required method is present', () => {
+    const registry = new ProviderRegistry();
+    registry.register(
+      'complete',
+      factory(() => ({ usesSidecar: () => false, uploadHeaderSidecar: async () => {}, downloadHeaderSidecar: async () => null, verifyShard: async () => ({ ok: true }) }) as unknown as StorageProvider),
+    );
+    const { io } = createMockProviderIO();
+
+    const provider = registry.create(fakeConfig('complete'), io);
+
+    expect(typeof provider.verifyShard).toBe('function');
   });
 });
 

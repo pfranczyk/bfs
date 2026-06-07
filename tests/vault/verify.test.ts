@@ -19,10 +19,7 @@ function localProvider(id: string, dir: string): ProviderConfig {
   return { id, type: 'local', adapterPackage: null, config: { path: dir } };
 }
 
-function mockIO(): {
-  io: ProviderIO;
-  warnings: string[];
-} {
+function mockIO(): { io: ProviderIO; warnings: string[] } {
   const warnings: string[] = [];
   const { io } = createMockProviderIO();
   // Wrap warn to capture verify warnings without losing the underlying mock
@@ -35,12 +32,7 @@ function mockIO(): {
   return { io, warnings };
 }
 
-async function setupVault(): Promise<{
-  root: string;
-  providerDirs: string[];
-  io: ProviderIO;
-  warnings: string[];
-}> {
+async function setupVault(): Promise<{ root: string; providerDirs: string[]; io: ProviderIO; warnings: string[] }> {
   const root = await tmp();
   const providerDirs = [await tmp(), await tmp(), await tmp()];
   const m = mockIO();
@@ -87,11 +79,7 @@ describe('verifyVersion (integrity check)', () => {
     const setup = await setupVault();
     dirs = [setup.root, ...setup.providerDirs];
     // Truncate shard_0 on provider p0 to 0 bytes — getSize returns 0.
-    const truncated = path.join(
-      setup.providerDirs[0],
-      'verify-test',
-      'shard_0.bfs.1',
-    );
+    const truncated = path.join(setup.providerDirs[0], 'verify-test', 'shard_0.bfs.1');
     await fs.writeFile(truncated, Buffer.alloc(0));
 
     const status = await verifyVersion(setup.root, 1, setup.io);
@@ -107,11 +95,7 @@ describe('verifyVersion (integrity check)', () => {
     // Corrupt shard_1 by flipping a byte inside the version field. The
     // header reports a different version than the manifest, so verify must
     // refuse it.
-    const tampered = path.join(
-      setup.providerDirs[1],
-      'verify-test',
-      'shard_1.bfs.1',
-    );
+    const tampered = path.join(setup.providerDirs[1], 'verify-test', 'shard_1.bfs.1');
     const buf = await fs.readFile(tampered);
     // Find the version field — magic(4) + format_version(1) + uuid(16) +
     // vault_name_len(2) + vault_name(N) + blob_size(8) + blob_hash(32) +

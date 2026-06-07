@@ -1,19 +1,10 @@
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { generateSalt } from '../../src/core/crypto.js';
-import {
-  BfsError,
-  DecryptionError,
-  ShardCorruptedError,
-} from '../../src/core/errors.js';
+import { BfsError, DecryptionError, ShardCorruptedError } from '../../src/core/errors.js';
 import { hashBuffer, streamToBuffer } from '../../src/core/hash.js';
-import {
-  buildShard,
-  buildShardStream,
-  parseShardHeaderFromStream,
-  serializeShardHeader,
-} from '../../src/core/shard-io.js';
-import type { ShardHeader, ShardLocation } from '../../src/types/index.js';
+import { buildShard, buildShardStream, buildSidecarBytes, matchShardIdentity, parseShardHeaderFromStream, readShardHeader, serializeShardHeader } from '../../src/core/shard-io.js';
+import type { RemoteRef, ShardHeader, ShardLocation, StorageProvider } from '../../src/types/index.js';
 
 // ─── Test fixtures ─────────────────────────────────────────────────────────
 
@@ -21,30 +12,15 @@ const TEST_VAULT_ID = '550e8400-e29b-41d4-a716-446655440000';
 const TEST_BLOB_HASH = 'a'.repeat(64); // 32 hex-encoded bytes
 
 const TEST_LOCATIONS: ShardLocation[] = [
-  {
-    shard_index: 0,
-    provider_id: 'local-disk',
-    provider_type: 'local',
-    adapterPackage: null,
-    connection_config: { path: '/mnt/backup' },
-    remote_path: '/mnt/backup/myvault/shard_0.bfs.1',
-    shard_hash: 'b'.repeat(64),
-  },
-  {
-    shard_index: 1,
-    provider_id: 'usb-drive',
-    provider_type: 'local',
-    adapterPackage: null,
-    connection_config: { path: '/mnt/usb' },
-    remote_path: '/mnt/usb/myvault/shard_1.bfs.1',
-    shard_hash: 'c'.repeat(64),
-  },
+  { shard_index: 0, provider_id: 'local-disk', provider_type: 'local', adapterPackage: null, connection_config: { path: '/mnt/backup' }, required_inputs: [], remote_path: '/mnt/backup/myvault/shard_0.bfs.1', shard_hash: 'b'.repeat(64) },
+  { shard_index: 1, provider_id: 'usb-drive', provider_type: 'local', adapterPackage: null, connection_config: { path: '/mnt/usb' }, required_inputs: [], remote_path: '/mnt/usb/myvault/shard_1.bfs.1', shard_hash: 'c'.repeat(64) },
   {
     shard_index: 2,
     provider_id: 'ftp-server',
     provider_type: 'ftp',
     adapterPackage: null,
     connection_config: { host: 'ftp.example.com', port: 21 },
+    required_inputs: [],
     remote_path: '/backup/myvault/shard_2.bfs.1',
     shard_hash: 'd'.repeat(64),
   },
@@ -75,14 +51,8 @@ const TEST_PAYLOAD = Buffer.from('Hello, BFS shard payload! '.repeat(20));
 
 // ─── Helper: parse shard buffer and collect payload ─────────────────────────
 
-async function parseShard(
-  shard: Buffer,
-  key?: Buffer,
-): Promise<{ header: ShardHeader; payload: Buffer }> {
-  const { header, payloadStream } = await parseShardHeaderFromStream(
-    Readable.from(shard),
-    key,
-  );
+async function parseShard(shard: Buffer, key?: Buffer): Promise<{ header: ShardHeader; payload: Buffer }> {
+  const { header, payloadStream } = await parseShardHeaderFromStream(Readable.from(shard), key);
   const payload = await streamToBuffer(payloadStream);
   return { header, payload };
 }
@@ -118,13 +88,8 @@ describe('shard-io', () => {
 
       expect(h.location_map).toHaveLength(TEST_LOCATIONS.length);
       expect(h.location_map[0].provider_id).toBe('local-disk');
-      expect(h.location_map[1].remote_path).toBe(
-        '/mnt/usb/myvault/shard_1.bfs.1',
-      );
-      expect(h.location_map[2].connection_config).toEqual({
-        host: 'ftp.example.com',
-        port: 21,
-      });
+      expect(h.location_map[1].remote_path).toBe('/mnt/usb/myvault/shard_1.bfs.1');
+      expect(h.location_map[2].connection_config).toEqual({ host: 'ftp.example.com', port: 21 });
     });
 
     it('should handle binary payload correctly', async () => {
@@ -152,12 +117,7 @@ describe('shard-io', () => {
     });
 
     it('should handle large version numbers', async () => {
-      const header = makeHeader({
-        version: 999,
-        shard_index: 5,
-        data_shards: 4,
-        parity_shards: 2,
-      });
+      const header = makeHeader({ version: 999, shard_index: 5, data_shards: 4, parity_shards: 2 });
       const shard = buildShard(header, TEST_PAYLOAD);
       const { header: h } = await parseShard(shard);
       expect(h.version).toBe(999);
@@ -203,9 +163,7 @@ describe('shard-io', () => {
       const shard = buildShard(header, TEST_PAYLOAD, encryptionKey);
 
       // Without key: header parses successfully — location_map stays []
-      const { header: h } = await parseShardHeaderFromStream(
-        Readable.from(shard),
-      );
+      const { header: h } = await parseShardHeaderFromStream(Readable.from(shard));
       expect(h.encrypted).toBe(true);
       expect(h.location_map).toHaveLength(0);
     });
@@ -218,9 +176,7 @@ describe('shard-io', () => {
 
       const shard = buildShard(header, TEST_PAYLOAD, correctKey);
 
-      await expect(parseShard(shard, wrongKey)).rejects.toThrow(
-        DecryptionError,
-      );
+      await expect(parseShard(shard, wrongKey)).rejects.toThrow(DecryptionError);
     });
   });
 
@@ -229,9 +185,7 @@ describe('shard-io', () => {
       const header = makeHeader({ shard_index: 3, version: 42 });
       const shard = buildShard(header, TEST_PAYLOAD);
 
-      const { header: h } = await parseShardHeaderFromStream(
-        Readable.from(shard),
-      );
+      const { header: h } = await parseShardHeaderFromStream(Readable.from(shard));
 
       expect(h.magic).toBe('BFSS');
       expect(h.vault_id).toBe(TEST_VAULT_ID);
@@ -247,17 +201,11 @@ describe('shard-io', () => {
     it('should parse metadata without key (encrypted) — location_map empty', async () => {
       const salt = generateSalt();
       const encryptionKey = Buffer.alloc(32, 0x55);
-      const header = makeHeader({
-        encrypted: true,
-        kdf_salt: salt,
-        shard_index: 1,
-      });
+      const header = makeHeader({ encrypted: true, kdf_salt: salt, shard_index: 1 });
       const shard = buildShard(header, TEST_PAYLOAD, encryptionKey);
 
       // Can call without key — should not throw, location_map stays []
-      const { header: h } = await parseShardHeaderFromStream(
-        Readable.from(shard),
-      );
+      const { header: h } = await parseShardHeaderFromStream(Readable.from(shard));
 
       expect(h.encrypted).toBe(true);
       expect(h.kdf_salt).toEqual(salt);
@@ -272,17 +220,12 @@ describe('shard-io', () => {
       const shard = buildShard(header, TEST_PAYLOAD, encryptionKey);
 
       // Step 1: discover salt without key
-      const { header: meta } = await parseShardHeaderFromStream(
-        Readable.from(shard),
-      );
+      const { header: meta } = await parseShardHeaderFromStream(Readable.from(shard));
       expect(meta.kdf_salt).not.toBeNull();
       expect(meta.kdf_salt).toEqual(salt);
 
       // Step 2: use salt to derive key, then parse full shard
-      const { header: h } = await parseShardHeaderFromStream(
-        Readable.from(shard),
-        encryptionKey,
-      );
+      const { header: h } = await parseShardHeaderFromStream(Readable.from(shard), encryptionKey);
       expect(h.location_map).toHaveLength(TEST_LOCATIONS.length);
     });
   });
@@ -312,20 +255,14 @@ describe('shard-io', () => {
       const corrupted = Buffer.from(shard);
       corrupted.write('XXXX', 0, 'ascii');
 
-      await expect(
-        parseShardHeaderFromStream(Readable.from(corrupted)),
-      ).rejects.toThrow(ShardCorruptedError);
-      await expect(
-        parseShardHeaderFromStream(Readable.from(corrupted)),
-      ).rejects.toThrow(/magic/i);
+      await expect(parseShardHeaderFromStream(Readable.from(corrupted))).rejects.toThrow(ShardCorruptedError);
+      await expect(parseShardHeaderFromStream(Readable.from(corrupted))).rejects.toThrow(/magic/i);
     });
 
     it('should throw ShardCorruptedError for stream too short', async () => {
       const buf = Buffer.alloc(3, 0); // too short for any valid shard
 
-      await expect(
-        parseShardHeaderFromStream(Readable.from(buf)),
-      ).rejects.toThrow(ShardCorruptedError);
+      await expect(parseShardHeaderFromStream(Readable.from(buf))).rejects.toThrow(ShardCorruptedError);
     });
   });
 
@@ -349,19 +286,13 @@ describe('shard-io', () => {
 
   describe('buildShardStream + parseShardHeaderFromStream roundtrip (FORMAT_VERSION=2)', () => {
     it('should roundtrip header and payload via stream including rs_stripe_size', async () => {
-      const header = makeHeader({
-        shard_index: 1,
-        version: 5,
-        rs_stripe_size: 64 * 1024 * 1024,
-      });
+      const header = makeHeader({ shard_index: 1, version: 5, rs_stripe_size: 64 * 1024 * 1024 });
       const serializedHeader = serializeShardHeader(header);
       const payloadInput = Readable.from(TEST_PAYLOAD);
       const shardStream = buildShardStream(serializedHeader, payloadInput);
 
       const shardBuf = await streamToBuffer(shardStream);
-      const { header: h, payloadStream } = await parseShardHeaderFromStream(
-        Readable.from(shardBuf),
-      );
+      const { header: h, payloadStream } = await parseShardHeaderFromStream(Readable.from(shardBuf));
       const payload = await streamToBuffer(payloadStream);
 
       expect(h.format_version).toBe(2);
@@ -375,21 +306,14 @@ describe('shard-io', () => {
 
     it('should detect checksum corruption in v2 stream shard', async () => {
       const serializedHeader = serializeShardHeader(makeHeader());
-      const shardStream = buildShardStream(
-        serializedHeader,
-        Readable.from(TEST_PAYLOAD),
-      );
+      const shardStream = buildShardStream(serializedHeader, Readable.from(TEST_PAYLOAD));
       const shardBuf = await streamToBuffer(shardStream);
 
       const corrupted = Buffer.from(shardBuf);
       corrupted[corrupted.length - 40] ^= 0x01; // tamper payload region
 
-      const { payloadStream } = await parseShardHeaderFromStream(
-        Readable.from(corrupted),
-      );
-      await expect(streamToBuffer(payloadStream)).rejects.toThrow(
-        ShardCorruptedError,
-      );
+      const { payloadStream } = await parseShardHeaderFromStream(Readable.from(corrupted));
+      await expect(streamToBuffer(payloadStream)).rejects.toThrow(ShardCorruptedError);
     });
   });
 
@@ -416,26 +340,17 @@ describe('shard-io', () => {
         throw new Error('test setup: modern JSON not found in shard');
       }
 
-      const legacyMap = TEST_LOCATIONS.map(
-        ({ adapterPackage: _ap, ...rest }) => rest,
-      );
+      const legacyMap = TEST_LOCATIONS.map(({ adapterPackage: _ap, required_inputs: _ri, ...rest }) => rest);
       const legacyJsonBytes = Buffer.from(JSON.stringify(legacyMap), 'utf8');
 
       const mapLenOffset = jsonStart - 4;
       const prefix = Buffer.from(shard.subarray(0, mapLenOffset));
-      const afterJson = Buffer.from(
-        shard.subarray(jsonStart + modernJsonBytes.length, shard.length - 32),
-      );
+      const afterJson = Buffer.from(shard.subarray(jsonStart + modernJsonBytes.length, shard.length - 32));
 
       const newMapLen = Buffer.alloc(4);
       newMapLen.writeUInt32LE(legacyJsonBytes.length, 0);
 
-      const body = Buffer.concat([
-        prefix,
-        newMapLen,
-        legacyJsonBytes,
-        afterJson,
-      ]);
+      const body = Buffer.concat([prefix, newMapLen, legacyJsonBytes, afterJson]);
       const checksum = Buffer.from(hashBuffer(body), 'hex');
       const legacyShard = Buffer.concat([body, checksum]);
 
@@ -444,6 +359,8 @@ describe('shard-io', () => {
       expect(parsed.location_map).toHaveLength(TEST_LOCATIONS.length);
       for (const loc of parsed.location_map) {
         expect(loc.adapterPackage).toBeNull();
+        // Legacy shard omits required_inputs → null marks "secret still inline".
+        expect(loc.required_inputs).toBeNull();
       }
       // Other fields must round-trip unchanged.
       expect(parsed.location_map[0]?.provider_id).toBe('local-disk');
@@ -459,18 +376,13 @@ describe('shard-io', () => {
       // JSON.stringify on the array, so only the legacy keys hit the
       // encrypted JSON payload — exactly the on-disk shape of a shard
       // produced by a BFS version older than adapterPackage.
-      const legacyMap = TEST_LOCATIONS.map(
-        ({ adapterPackage: _ap, ...rest }) => rest,
-      );
+      const legacyMap = TEST_LOCATIONS.map(({ adapterPackage: _ap, required_inputs: _ri, ...rest }) => rest);
 
       // We can't easily swap only the encrypted bytes in-place, so instead
       // serialize a fresh header whose `location_map` is cast to the legacy
       // shape. serializeHeader uses JSON.stringify → the legacy keys are
       // the only ones written.
-      const legacyHeader: ShardHeader = {
-        ...header,
-        location_map: legacyMap as unknown as ShardLocation[],
-      };
+      const legacyHeader: ShardHeader = { ...header, location_map: legacyMap as unknown as ShardLocation[] };
       const legacyShard = buildShard(legacyHeader, TEST_PAYLOAD, key);
 
       const { header: parsed } = await parseShard(legacyShard, key);
@@ -478,7 +390,164 @@ describe('shard-io', () => {
       expect(parsed.location_map).toHaveLength(TEST_LOCATIONS.length);
       for (const loc of parsed.location_map) {
         expect(loc.adapterPackage).toBeNull();
+        // Legacy shard omits required_inputs → null marks "secret still inline".
+        expect(loc.required_inputs).toBeNull();
       }
+    });
+  });
+
+  // ─── Sidecar (BFSH) format + readShardHeader ─────────────────────────────
+
+  const TEST_REF: RemoteRef = { provider_id: 'p', path: 'shard_0.bfs.1' };
+
+  /**
+   * Minimal StorageProvider stub exercising only the three methods
+   * readShardHeader touches: usesSidecar, downloadHeaderSidecar, downloadHeader.
+   */
+  function stubProvider(opts: { usesSidecar: boolean; sidecar?: Nullable<Buffer>; inShard: Buffer }): StorageProvider {
+    return {
+      usesSidecar: () => opts.usesSidecar,
+      async downloadHeaderSidecar(): Promise<Buffer | null> {
+        return opts.sidecar ?? null;
+      },
+      async downloadHeader(): Promise<Buffer> {
+        return opts.inShard;
+      },
+    } as unknown as StorageProvider;
+  }
+
+  describe('buildSidecarBytes + readShardHeader', () => {
+    it('should roundtrip a header through the BFSH sidecar', async () => {
+      const sidecar = buildSidecarBytes(makeHeader({ shard_index: 2, version: 7 }));
+      const provider = stubProvider({ usesSidecar: true, sidecar, inShard: Buffer.alloc(0) });
+
+      const header = await readShardHeader(provider, TEST_REF);
+
+      expect(header.vault_id).toBe(TEST_VAULT_ID);
+      expect(header.shard_index).toBe(2);
+      expect(header.version).toBe(7);
+      expect(header.location_map).toHaveLength(TEST_LOCATIONS.length);
+    });
+
+    it('should roundtrip an encrypted header sidecar with the vault key', async () => {
+      const salt = generateSalt();
+      const key = Buffer.alloc(32, 0x5a);
+      const sidecar = buildSidecarBytes(makeHeader({ encrypted: true, kdf_salt: salt }), key);
+      const provider = stubProvider({ usesSidecar: true, sidecar, inShard: Buffer.alloc(0) });
+
+      const header = await readShardHeader(provider, TEST_REF, key);
+
+      expect(header.encrypted).toBe(true);
+      expect(header.location_map).toHaveLength(TEST_LOCATIONS.length);
+      expect(header.location_map[0]?.provider_id).toBe('local-disk');
+    });
+
+    it('should let the sidecar win over the in-shard header', async () => {
+      // In-shard header carries version 1; sidecar carries version 9.
+      const inShard = buildShard(makeHeader({ version: 1 }), TEST_PAYLOAD);
+      const sidecar = buildSidecarBytes(makeHeader({ version: 9 }));
+      const provider = stubProvider({ usesSidecar: true, sidecar, inShard });
+
+      const header = await readShardHeader(provider, TEST_REF);
+
+      expect(header.version).toBe(9);
+    });
+
+    it('should fall back to the in-shard header when no sidecar exists', async () => {
+      const inShard = buildShard(makeHeader({ version: 3 }), TEST_PAYLOAD);
+      const provider = stubProvider({ usesSidecar: true, sidecar: null, inShard });
+
+      const header = await readShardHeader(provider, TEST_REF);
+
+      expect(header.version).toBe(3);
+    });
+
+    it('should ignore any sidecar when usesSidecar() is false', async () => {
+      const inShard = buildShard(makeHeader({ version: 4 }), TEST_PAYLOAD);
+      // Even if a (stale) sidecar were present, a non-sidecar provider never reads it.
+      const sidecar = buildSidecarBytes(makeHeader({ version: 99 }));
+      const provider = stubProvider({ usesSidecar: false, sidecar, inShard });
+
+      const header = await readShardHeader(provider, TEST_REF);
+
+      expect(header.version).toBe(4);
+    });
+
+    it('should throw on a bit-flip inside the sidecar (checksum)', async () => {
+      const sidecar = buildSidecarBytes(makeHeader());
+      sidecar[20] ^= 0xff; // flip a byte inside the serialized header
+      const provider = stubProvider({ usesSidecar: true, sidecar, inShard: Buffer.alloc(0) });
+
+      await expect(readShardHeader(provider, TEST_REF)).rejects.toThrow(BfsError);
+      await expect(readShardHeader(provider, TEST_REF)).rejects.toThrow(/checksum/i);
+    });
+
+    it('should throw on a sidecar with the wrong magic', async () => {
+      const sidecar = buildSidecarBytes(makeHeader());
+      sidecar.write('XXXX', 0, 'ascii'); // corrupt the BFSH magic (checksum still covers it)
+      const provider = stubProvider({ usesSidecar: true, sidecar, inShard: Buffer.alloc(0) });
+
+      await expect(readShardHeader(provider, TEST_REF)).rejects.toThrow(BfsError);
+      await expect(readShardHeader(provider, TEST_REF)).rejects.toThrow(/magic/i);
+    });
+
+    it('should throw BfsError when building an encrypted sidecar without kdf_salt', () => {
+      const key = Buffer.alloc(32, 0x3c);
+      expect(() => buildSidecarBytes(makeHeader({ encrypted: true, kdf_salt: null }), key)).toThrow(BfsError);
+      expect(() => buildSidecarBytes(makeHeader({ encrypted: true, kdf_salt: null }), key)).toThrow(/kdf_salt/i);
+    });
+
+    // Untrusted bytes from an external provider must never escape as a raw
+    // RangeError. A header whose name-length field overruns the buffer is the
+    // canonical malformed-input case — it must surface as ShardCorruptedError.
+    it('should raise ShardCorruptedError (not a raw RangeError) on a bogus name length (in-shard path)', async () => {
+      const malformed = Buffer.alloc(40);
+      malformed.write('BFSS', 0, 'ascii');
+      malformed.writeUInt16LE(1, 4); // format_version
+      malformed.writeUInt16LE(0xffff, 22); // vault name length at offset 4+2+16 — overruns the 40-byte buffer
+      const provider = stubProvider({ usesSidecar: false, inShard: malformed });
+
+      await expect(readShardHeader(provider, TEST_REF)).rejects.toThrow(ShardCorruptedError);
+    });
+
+    it('should raise ShardCorruptedError when a sidecar wraps a malformed header (valid BFSH checksum)', async () => {
+      const inner = Buffer.alloc(40);
+      inner.write('BFSS', 0, 'ascii');
+      inner.writeUInt16LE(1, 4);
+      inner.writeUInt16LE(0xffff, 22); // bogus name length inside an otherwise well-framed sidecar
+      const prefix = Buffer.alloc(8);
+      prefix.write('BFSH', 0, 'ascii');
+      prefix.writeUInt32LE(1, 4);
+      const body = Buffer.concat([prefix, inner]);
+      const sidecar = Buffer.concat([body, Buffer.from(hashBuffer(body), 'hex')]);
+      const provider = stubProvider({ usesSidecar: true, sidecar, inShard: Buffer.alloc(0) });
+
+      await expect(readShardHeader(provider, TEST_REF)).rejects.toThrow(ShardCorruptedError);
+    });
+  });
+
+  describe('matchShardIdentity', () => {
+    it('should return null when identity matches', () => {
+      const header = makeHeader({ shard_index: 2, version: 5 });
+      expect(matchShardIdentity(header, { vault_id: TEST_VAULT_ID, shard_index: 2, version: 5 })).toBeNull();
+    });
+
+    it('should report a version mismatch with stringified values', () => {
+      const header = makeHeader({ version: 4 });
+      const mismatch = matchShardIdentity(header, { vault_id: TEST_VAULT_ID, shard_index: 0, version: 5 });
+      expect(mismatch).toEqual({ field: 'version', expected: '5', actual: '4' });
+    });
+
+    it('should report a shard_index mismatch before version', () => {
+      const header = makeHeader({ shard_index: 0, version: 4 });
+      const mismatch = matchShardIdentity(header, { vault_id: TEST_VAULT_ID, shard_index: 1, version: 5 });
+      expect(mismatch?.field).toBe('shard_index');
+    });
+
+    it('should report a vault_id mismatch first of all', () => {
+      const header = makeHeader();
+      const mismatch = matchShardIdentity(header, { vault_id: 'different', shard_index: 9, version: 9 });
+      expect(mismatch?.field).toBe('vault_id');
     });
   });
 });

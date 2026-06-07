@@ -32,7 +32,7 @@
   <section class="min-h-screen flex flex-col items-center justify-center px-6 text-center">
     <div class="max-w-3xl">
       <div class="inline-block mb-6 px-3 py-1 rounded-full border border-slate-700 text-xs text-slate-400 tracking-widest uppercase">
-        v0.6.2 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 23
+        v0.7.0-beta.1 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 24
       </div>
 
       <h1 class="text-7xl font-black tracking-tight mb-4 bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
@@ -95,7 +95,7 @@
           <h3 class="text-lg font-semibold mb-2" data-i18n="feat1_title">Your Eyes Only</h3>
           <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat1_desc">
             Optional AES-256-GCM encryption with Argon2id key derivation.
-            Each drive holds one piece — encrypted, incomplete, and useless on its own.
+            When enabled, each drive holds one piece — encrypted, incomplete, and useless on its own.
           </p>
         </div>
 
@@ -259,11 +259,11 @@
   <footer class="border-t border-slate-800 py-10 px-6 text-center text-slate-500 text-sm">
     <p class="mb-2">
       <span class="text-white font-semibold">BFS</span>
-      &nbsp;v0.6.2
+      &nbsp;v0.7.0-beta.1
       &nbsp;·&nbsp;
-      <a href="https://github.com/pfranczyk/BFS/blob/master/LICENSE" class="hover:text-white transition-colors">AGPL-3.0</a>
+      <a href="https://github.com/pfranczyk/BFS/blob/main/LICENSE" class="hover:text-white transition-colors">AGPL-3.0</a>
       &nbsp;·&nbsp;
-      Node.js &gt;= 23
+      Node.js &gt;= 24
     </p>
     <p>
       <a href="https://github.com/pfranczyk/BFS" class="hover:text-white transition-colors">github.com/pfranczyk/BFS</a>
@@ -283,7 +283,7 @@
                                                 feat2_title:   'Survive Drive Failures',
                                                 feat2_desc:    'Your backup is split into <span class="text-white font-mono">N+K</span> pieces using Reed-Solomon erasure coding — the same math that keeps CDs readable despite scratches. Lose up to K drives and still recover everything from any N.',
                                                 feat1_title:   'Your Eyes Only',
-                                                feat1_desc:    'Optional AES-256-GCM encryption with Argon2id key derivation. Each drive holds one piece — encrypted, incomplete, and useless on its own.',
+                                                feat1_desc:    'Optional AES-256-GCM encryption with Argon2id key derivation. When enabled, each drive holds one piece — encrypted, incomplete, and useless on its own.',
                                                 feat0_title:   'Smaller Backups, Automatically',
                                                 feat0_desc:    'ZIP/Deflate compression is on by default. BFS detects already-compressed files (photos, videos, archives) and skips them — no wasted CPU, smaller shards.',
                                                 feat3_title:   'Use Whatever Storage You Have',
@@ -324,7 +324,7 @@
                                                 feat2_title:   'Odporność na awarie dysków',
                                                 feat2_desc:    'Backup jest dzielony na <span class="text-white font-mono">N+K</span> fragmentów za pomocą kodowania Reed-Solomona — tej samej matematyki, dzięki której porysowane CD wciąż działają. Stracisz do K dysków i nadal odtworzysz wszystko z dowolnych N.',
                                                 feat1_title:   'Tylko dla Twoich oczu',
-                                                feat1_desc:    'Opcjonalne szyfrowanie AES-256-GCM z Argon2id. Każdy dysk przechowuje jeden fragment — zaszyfrowany, niekompletny i bezużyteczny sam w sobie.',
+                                                feat1_desc:    'Opcjonalne szyfrowanie AES-256-GCM z Argon2id. Po włączeniu każdy dysk przechowuje jeden fragment — zaszyfrowany, niekompletny i bezużyteczny sam w sobie.',
                                                 feat0_title:   'Mniejsze backupy, automatycznie',
                                                 feat0_desc:    'Kompresja ZIP (deflate) domyślnie włączona. BFS wykrywa już skompresowane pliki (zdjęcia, filmy, archiwa) i je pomija — bez marnowania CPU, mniejsze fragmenty.',
                                                 feat3_title:   'Użyj czegokolwiek, co masz',

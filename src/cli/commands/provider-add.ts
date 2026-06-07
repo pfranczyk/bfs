@@ -1,10 +1,6 @@
 import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
-import {
-  createCliProviderIO,
-  providerRegistry,
-  validateProviderId,
-} from '../../providers/provider.js';
+import { createCliProviderIO, providerRegistry, validateProviderId } from '../../providers/provider.js';
 import type { CliProviderInput, ProviderConfig } from '../../types/index.js';
 import { readConfig, writeConfig } from '../../vault/config.js';
 import { resolveCwd } from '../cwd.js';
@@ -57,9 +53,7 @@ export function registerProviderAdd(providerCmd: Command): void {
       }
 
       if (!isCi) {
-        console.log(
-          fmt('provider_add_current', String(config.providers.length)),
-        );
+        console.log(fmt('provider_add_current', String(config.providers.length)));
         for (const p of config.providers) {
           console.log(`  - ${p.id} (${p.type})`);
         }
@@ -105,24 +99,14 @@ export function registerProviderAdd(providerCmd: Command): void {
               } catch (err) {
                 return err instanceof Error ? err.message : String(err);
               }
-              if (config.providers.some((p) => p.id === trimmed))
-                return fmt('provider_add_exists', v);
+              if (config.providers.some((p) => p.id === trimmed)) return fmt('provider_add_exists', v);
               return true;
             },
           },
         ]);
         name = ans.name.trim();
 
-        const typeAns = await promptWithRawMode<{ type: string }>([
-          {
-            type: 'rawlist',
-            name: 'type',
-            message: t('provider_add_type_prompt'),
-            choices: providerRegistry
-              .listTypes()
-              .map((pt) => ({ name: pt.displayName, value: pt.type })),
-          },
-        ]);
+        const typeAns = await promptWithRawMode<{ type: string }>([{ type: 'rawlist', name: 'type', message: t('provider_add_type_prompt'), choices: providerRegistry.listTypes().map((pt) => ({ name: pt.displayName, value: pt.type })) }]);
         type = typeAns.type;
       }
 
@@ -138,14 +122,9 @@ export function registerProviderAdd(providerCmd: Command): void {
       // that registered with AdapterRegistrationMeta. Persisted in the new
       // provider entry so disaster recovery can reproduce the environment.
       const meta = providerRegistry.getMeta(type);
-      const adapterPackage = meta
-        ? `${meta.packageName}@${meta.packageVersion}`
-        : null;
+      const adapterPackage = meta ? `${meta.packageName}@${meta.packageVersion}` : null;
 
-      const placeholder = factory.create(
-        { id: name, type, adapterPackage, config: {} },
-        io,
-      );
+      const placeholder = factory.create({ id: name, type, adapterPackage, config: {} }, io);
 
       let providerConfig: Record<string, unknown>;
       try {
@@ -162,19 +141,11 @@ export function registerProviderAdd(providerCmd: Command): void {
           providerConfig = await placeholder.configureInteractive(io);
         }
       } catch (err) {
-        error(
-          fmt(
-            'provider_add_configure_failed',
-            err instanceof Error ? err.message : String(err),
-          ),
-        );
+        error(fmt('provider_add_configure_failed', err instanceof Error ? err.message : String(err)));
         throw new CommandAbort();
       }
 
-      const instance = factory.create(
-        { id: name, type, adapterPackage, config: providerConfig },
-        io,
-      );
+      const instance = factory.create({ id: name, type, adapterPackage, config: providerConfig }, io);
       const errors = instance.validateConfig(providerConfig);
       if (errors.length > 0) {
         error(fmt('provider_add_validate_failed', errors.join('; ')));
@@ -185,35 +156,18 @@ export function registerProviderAdd(providerCmd: Command): void {
       try {
         await instance.probeConnection();
       } catch (err) {
-        error(
-          fmt(
-            'provider_add_probe_failed',
-            err instanceof Error ? err.message : String(err),
-          ),
-        );
+        error(fmt('provider_add_probe_failed', err instanceof Error ? err.message : String(err)));
         warn(t('provider_add_probe_unsaved'));
         throw new CommandAbort();
       }
 
-      const newProvider: ProviderConfig = {
-        id: name,
-        type,
-        adapterPackage,
-        config: providerConfig,
-      };
+      const newProvider: ProviderConfig = { id: name, type, adapterPackage, config: providerConfig };
       config.providers.push(newProvider);
 
       // Adjust parity shard count: keep data_shards, increase parity by 1
       config.scheme.parity_shards += 1;
 
       await writeConfig(rootDir, config);
-      success(
-        fmt(
-          'provider_add_success',
-          newProvider.id,
-          String(config.scheme.data_shards),
-          String(config.scheme.parity_shards),
-        ),
-      );
+      success(fmt('provider_add_success', newProvider.id, String(config.scheme.data_shards), String(config.scheme.parity_shards)));
     });
 }

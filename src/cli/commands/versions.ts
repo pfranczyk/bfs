@@ -2,13 +2,7 @@ import type { Command } from 'commander';
 import { t } from '../../i18n/index.js';
 import { listVersions } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
-import {
-  CommandAbort,
-  error,
-  formatBytes,
-  formatHealth,
-  table,
-} from '../ui.js';
+import { CommandAbort, error, formatBytes, formatHealth, table } from '../ui.js';
 
 /**
  * Registers the `bfs versions` command on the given Commander program.
@@ -42,18 +36,7 @@ export function registerVersions(program: Command): void {
         ]);
 
         console.log();
-        table(
-          [
-            t('versions_col_version'),
-            t('versions_col_status'),
-            t('versions_col_scheme'),
-            t('versions_col_shards'),
-            t('versions_col_files'),
-            t('versions_col_size'),
-            t('versions_col_pushed_at'),
-          ],
-          rows,
-        );
+        table([t('versions_col_version'), t('versions_col_status'), t('versions_col_scheme'), t('versions_col_shards'), t('versions_col_files'), t('versions_col_size'), t('versions_col_pushed_at')], rows);
         console.log();
       } catch (err) {
         error(err instanceof Error ? err.message : String(err));

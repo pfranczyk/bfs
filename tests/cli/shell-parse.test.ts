@@ -6,11 +6,7 @@ describe('shellParse', () => {
   // ─── Plain whitespace splitting ──────────────────────────────────────────
 
   it('should split tokens on whitespace', () => {
-    expect(shellParse('ftp:nas --config-file ./ftp.json')).toEqual([
-      'ftp:nas',
-      '--config-file',
-      './ftp.json',
-    ]);
+    expect(shellParse('ftp:nas --config-file ./ftp.json')).toEqual(['ftp:nas', '--config-file', './ftp.json']);
   });
 
   it('should collapse runs of whitespace', () => {
@@ -28,17 +24,11 @@ describe('shellParse', () => {
   // ─── Quoted strings ──────────────────────────────────────────────────────
 
   it('should preserve whitespace inside double quotes', () => {
-    expect(shellParse('--path "C:/Program Files/bfs/ftp.json"')).toEqual([
-      '--path',
-      'C:/Program Files/bfs/ftp.json',
-    ]);
+    expect(shellParse('--path "C:/Program Files/bfs/ftp.json"')).toEqual(['--path', 'C:/Program Files/bfs/ftp.json']);
   });
 
   it('should preserve whitespace inside single quotes', () => {
-    expect(shellParse("--flag 'value with spaces'")).toEqual([
-      '--flag',
-      'value with spaces',
-    ]);
+    expect(shellParse("--flag 'value with spaces'")).toEqual(['--flag', 'value with spaces']);
   });
 
   it('should treat single quotes as literal (no escapes)', () => {
@@ -58,10 +48,7 @@ describe('shellParse', () => {
   it('should treat backslash as literal outside quotes', () => {
     // Anchors the rule that Windows paths inline (`--path D:\backup\p1`)
     // are tokenized verbatim — including the `\b` and `\v` sequences.
-    expect(shellParse('--path D:\\backup\\p1')).toEqual([
-      '--path',
-      'D:\\backup\\p1',
-    ]);
+    expect(shellParse('--path D:\\backup\\p1')).toEqual(['--path', 'D:\\backup\\p1']);
   });
 
   it('should keep backslash literal even before a space outside quotes', () => {
@@ -93,17 +80,8 @@ describe('shellParse', () => {
   // ─── Realistic provider spec ─────────────────────────────────────────────
 
   it('should tokenize a full pass-through provider spec', () => {
-    const spec =
-      "ftp:nas-prod --jakis-parametr 'wartosc ze spacja' " +
-      "-inna_forma-propsa --config-file './katalog ze spacja/ftp.json'";
-    expect(shellParse(spec)).toEqual([
-      'ftp:nas-prod',
-      '--jakis-parametr',
-      'wartosc ze spacja',
-      '-inna_forma-propsa',
-      '--config-file',
-      './katalog ze spacja/ftp.json',
-    ]);
+    const spec = "ftp:nas-prod --jakis-parametr 'wartosc ze spacja' " + "-inna_forma-propsa --config-file './katalog ze spacja/ftp.json'";
+    expect(shellParse(spec)).toEqual(['ftp:nas-prod', '--jakis-parametr', 'wartosc ze spacja', '-inna_forma-propsa', '--config-file', './katalog ze spacja/ftp.json']);
   });
 
   it('should tokenize a colon-rich token as a single token', () => {
@@ -117,10 +95,6 @@ describe('shellParse', () => {
     // Provider spec with a Windows base path. cmd / PowerShell strip the
     // outer quotes before shellParse sees the value; the inner string
     // must tokenize cleanly without mangling backslashes.
-    expect(shellParse('local:vol1 --path D:\\backup\\vol1')).toEqual([
-      'local:vol1',
-      '--path',
-      'D:\\backup\\vol1',
-    ]);
+    expect(shellParse('local:vol1 --path D:\\backup\\vol1')).toEqual(['local:vol1', '--path', 'D:\\backup\\vol1']);
   });
 });

@@ -18,10 +18,7 @@ import { ProviderError } from '../core/errors.js';
  * or null when the flag is absent. Case-sensitive; the flag must appear
  * immediately before its value (no `=` form).
  */
-export function findStringFlag(
-  rawArgs: readonly string[],
-  flagName: string,
-): Nullable<string> {
+export function findStringFlag(rawArgs: readonly string[], flagName: string): Nullable<string> {
   for (let i = 0; i < rawArgs.length; i++) {
     if (rawArgs[i] === flagName && i + 1 < rawArgs.length) {
       return rawArgs[i + 1];
@@ -38,40 +35,24 @@ export function findStringFlag(
  * `adapterLabel` should identify the adapter in the message so users can
  * tell whose configuration failed (e.g. `"FTP adapter"`, `"Local adapter"`).
  */
-export async function readJsonObjectFile(
-  absolutePath: string,
-  adapterLabel: string,
-): Promise<Record<string, unknown>> {
+export async function readJsonObjectFile(absolutePath: string, adapterLabel: string): Promise<Record<string, unknown>> {
   let raw: string;
   try {
     raw = await fs.readFile(absolutePath, 'utf8');
   } catch (err) {
-    throw new ProviderError(
-      `${adapterLabel}: cannot read "${absolutePath}": ` +
-        `${err instanceof Error ? err.message : String(err)}`,
-    );
+    throw new ProviderError(`${adapterLabel}: cannot read "${absolutePath}": ` + `${err instanceof Error ? err.message : String(err)}`);
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    throw new ProviderError(
-      `${adapterLabel}: "${absolutePath}" is not valid JSON: ` +
-        `${err instanceof Error ? err.message : String(err)}`,
-    );
+    throw new ProviderError(`${adapterLabel}: "${absolutePath}" is not valid JSON: ` + `${err instanceof Error ? err.message : String(err)}`);
   }
 
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    const kind =
-      parsed === null
-        ? 'null'
-        : Array.isArray(parsed)
-          ? 'array'
-          : typeof parsed;
-    throw new ProviderError(
-      `${adapterLabel}: "${absolutePath}" must contain a JSON object (got ${kind})`,
-    );
+    const kind = parsed === null ? 'null' : Array.isArray(parsed) ? 'array' : typeof parsed;
+    throw new ProviderError(`${adapterLabel}: "${absolutePath}" must contain a JSON object (got ${kind})`);
   }
 
   return parsed as Record<string, unknown>;

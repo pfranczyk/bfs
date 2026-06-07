@@ -31,11 +31,5 @@ export function dbg(label: string, data?: Record<string, unknown>): void {
 
 /** Snapshot of process.stdin state — useful for diagnosing Inquirer hangs. */
 export function stdinState(): Record<string, unknown> {
-  return {
-    paused: process.stdin.isPaused(),
-    ended: process.stdin.readableEnded,
-    destroyed: process.stdin.destroyed,
-    listeners_data: process.stdin.listenerCount('data'),
-    listeners_readable: process.stdin.listenerCount('readable'),
-  };
+  return { paused: process.stdin.isPaused(), ended: process.stdin.readableEnded, destroyed: process.stdin.destroyed, listeners_data: process.stdin.listenerCount('data'), listeners_readable: process.stdin.listenerCount('readable') };
 }

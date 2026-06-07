@@ -2,21 +2,15 @@ import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import * as ftp from 'basic-ftp';
 import { ProviderError } from '../core/errors.js';
-import { hashBuffer, streamToBuffer } from '../core/hash.js';
-import { computeShardHeaderSize } from '../core/shard-io.js';
+import { hashBuffer, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
+import { buildShardHeaderFromBytes, computeShardHeaderSize, SHARD_HEADER_READ_BYTES } from '../core/shard-io.js';
 import { fmtFor, t, tFor } from '../i18n/index.js';
-import type {
-  CliProviderInput,
-  ProviderConfig,
-  ProviderHelp,
-  ProviderIO,
-  RemoteRef,
-  StorageProvider,
-} from '../types/index.js';
+import type { CliProviderInput, ProviderConfig, ProviderHelp, ProviderIO, RemoteRef, ShardHeader, ShardIdentity, StorageProvider, VerifyShardResult } from '../types/index.js';
 import { findStringFlag, readJsonObjectFile } from './flags.js';
+import { finishVerifyShard, throwSidecarUnsupported } from './header-verify.js';
 import { type ProviderFactory, providerRegistry } from './provider.js';
 
-const CHECKSUM_SIZE = 32;
+const CHECKSUM_SIZE = SHA256_BYTES;
 const FTP_TIMEOUT_MS = 10_000;
 const UPLOAD_CHUNK_SIZE = 64 * 1024;
 const MAX_UPLOAD_ATTEMPTS = 3;
@@ -39,10 +33,7 @@ const SIZE_RETRY_DELAYS_MS: readonly number[] = [0, 100, 250, 500];
  * known-good behavior of `createReadStream`, lets backpressure cooperate,
  * and removes the truncation.
  */
-function bufferToChunkedStream(
-  buffer: Buffer,
-  chunkSize = UPLOAD_CHUNK_SIZE,
-): Readable {
+function bufferToChunkedStream(buffer: Buffer, chunkSize = UPLOAD_CHUNK_SIZE): Readable {
   let offset = 0;
   return new Readable({
     read(this: Readable) {
@@ -55,6 +46,19 @@ function bufferToChunkedStream(
       offset = end;
     },
   });
+}
+
+/**
+ * Extracts the numeric FTP reply code from a basic-ftp error (FTPError carries
+ * `code`, e.g. 550 = file unavailable, 530 = not logged in). Returns null when
+ * the error has no numeric code.
+ */
+function ftpReplyCode(err: unknown): Nullable<number> {
+  if (err !== null && typeof err === 'object' && 'code' in err) {
+    const code = (err as { code: unknown }).code;
+    if (typeof code === 'number') return code;
+  }
+  return null;
 }
 
 /**
@@ -102,19 +106,11 @@ export class FtpProvider implements StorageProvider {
    * Opens a fresh FTP connection, runs `op`, and always closes the client.
    * All exceptions (network, auth, FTP errors) are wrapped in ProviderError.
    */
-  private async withClient<T>(
-    op: (client: ftp.Client) => Promise<T>,
-  ): Promise<T> {
+  private async withClient<T>(op: (client: ftp.Client) => Promise<T>): Promise<T> {
     const client = new ftp.Client(FTP_TIMEOUT_MS);
     try {
       this.io.debug(`FTP connecting to ${this.host}:${this.port}`);
-      await client.access({
-        host: this.host,
-        port: this.port,
-        user: this.user,
-        password: this.password,
-        secure: this.secure,
-      });
+      await client.access({ host: this.host, port: this.port, user: this.user, password: this.password, secure: this.secure });
       // Belt-and-suspenders binary mode. access() already issues TYPE I via
       // useDefaultSettings(); a bare repeat per session is cheap insurance
       // against any control-channel state drift between auth and STOR.
@@ -122,15 +118,7 @@ export class FtpProvider implements StorageProvider {
       return await op(client);
     } catch (err) {
       if (err instanceof ProviderError) throw err;
-      throw new ProviderError(
-        fmtFor(
-          this.io.lang,
-          'ftp_operation_failed',
-          this.host,
-          String(this.port),
-          err instanceof Error ? err.message : String(err),
-        ),
-      );
+      throw new ProviderError(fmtFor(this.io.lang, 'ftp_operation_failed', this.host, String(this.port), err instanceof Error ? err.message : String(err)));
     } finally {
       client.close();
     }
@@ -142,9 +130,7 @@ export class FtpProvider implements StorageProvider {
    */
   private vaultPath(): string {
     if (this.vaultName === null) {
-      throw new ProviderError(
-        'setVaultName() must be called before any file operation',
-      );
+      throw new ProviderError('setVaultName() must be called before any file operation');
     }
     return `${this.basePath}/${this.vaultName}`;
   }
@@ -160,11 +146,7 @@ export class FtpProvider implements StorageProvider {
    * detection of true persistent truncation, which would keep returning the
    * same wrong value across all attempts.
    */
-  private async verifyRemoteSize(
-    client: ftp.Client,
-    remotePath: string,
-    expectedSize: number,
-  ): Promise<number> {
+  private async verifyRemoteSize(client: ftp.Client, remotePath: string, expectedSize: number): Promise<number> {
     let lastObserved = -1;
     for (const delay of SIZE_RETRY_DELAYS_MS) {
       if (delay > 0) await new Promise((r) => setTimeout(r, delay));
@@ -185,43 +167,18 @@ export class FtpProvider implements StorageProvider {
    * returning the same wrong size across all attempts and surface as
    * `ProviderError` after the last try.
    */
-  private async uploadWithRetry(
-    client: ftp.Client,
-    remotePath: string,
-    buffer: Buffer,
-    label: string,
-  ): Promise<void> {
+  private async uploadWithRetry(client: ftp.Client, remotePath: string, buffer: Buffer, label: string): Promise<void> {
     let lastSize = -1;
     for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
       await client.uploadFrom(bufferToChunkedStream(buffer), remotePath);
       lastSize = await this.verifyRemoteSize(client, remotePath, buffer.length);
       if (lastSize === buffer.length) return;
       if (attempt < MAX_UPLOAD_ATTEMPTS) {
-        this.io.warn(
-          fmtFor(
-            this.io.lang,
-            'ftp_size_mismatch_attempt',
-            label,
-            String(attempt),
-            String(MAX_UPLOAD_ATTEMPTS),
-            String(buffer.length),
-            String(lastSize),
-          ),
-        );
+        this.io.warn(fmtFor(this.io.lang, 'ftp_size_mismatch_attempt', label, String(attempt), String(MAX_UPLOAD_ATTEMPTS), String(buffer.length), String(lastSize)));
         await this.bestEffortRemove(client, remotePath);
       }
     }
-    throw new ProviderError(
-      fmtFor(
-        this.io.lang,
-        'ftp_size_mismatch_final',
-        label,
-        String(MAX_UPLOAD_ATTEMPTS),
-        String(buffer.length),
-        String(lastSize),
-        String(lastSize - buffer.length),
-      ),
-    );
+    throw new ProviderError(fmtFor(this.io.lang, 'ftp_size_mismatch_final', label, String(MAX_UPLOAD_ATTEMPTS), String(buffer.length), String(lastSize), String(lastSize - buffer.length)));
   }
 
   /**
@@ -230,10 +187,7 @@ export class FtpProvider implements StorageProvider {
    * necessary because withClient closes the connection in `finally`, so a
    * lazy stream would fail after the client disconnects.
    */
-  private async downloadToBuffer(
-    client: ftp.Client,
-    remotePath: string,
-  ): Promise<Buffer> {
+  private async downloadToBuffer(client: ftp.Client, remotePath: string): Promise<Buffer> {
     const chunks: Buffer[] = [];
     const writable = new Writable({
       write(chunk: Buffer | Uint8Array, _encoding: string, cb: () => void) {
@@ -277,11 +231,7 @@ export class FtpProvider implements StorageProvider {
    * @returns RemoteRef with provider_id, filename, and SHA-256 hash
    * @throws ProviderError on upload failure
    */
-  async upload(
-    shardFilename: string,
-    data: Readable,
-    _size: number,
-  ): Promise<RemoteRef> {
+  async upload(shardFilename: string, data: Readable, _size: number): Promise<RemoteRef> {
     const buffer = await streamToBuffer(data);
     const hash = hashBuffer(buffer);
     const remotePath = `${this.vaultPath()}/${shardFilename}`;
@@ -359,25 +309,17 @@ export class FtpProvider implements StorageProvider {
    * @returns Updated RemoteRef (same path, no hash)
    * @throws ProviderError on failure or if the shard is too short
    */
-  async updateShardHeader(
-    ref: RemoteRef,
-    headerData: Buffer,
-  ): Promise<RemoteRef> {
+  async updateShardHeader(ref: RemoteRef, headerData: Buffer): Promise<RemoteRef> {
     const remotePath = `${this.vaultPath()}/${ref.path}`;
     return this.withClient(async (client) => {
       const existing = await this.downloadToBuffer(client, remotePath);
 
       const oldHeaderSize = computeShardHeaderSize(existing);
       if (existing.length < oldHeaderSize + CHECKSUM_SIZE) {
-        throw new ProviderError(
-          fmtFor(this.io.lang, 'provider_short_shard', ref.path),
-        );
+        throw new ProviderError(fmtFor(this.io.lang, 'provider_short_shard', ref.path));
       }
 
-      const payload = existing.subarray(
-        oldHeaderSize,
-        existing.length - CHECKSUM_SIZE,
-      );
+      const payload = existing.subarray(oldHeaderSize, existing.length - CHECKSUM_SIZE);
       const newBody = Buffer.concat([headerData, payload]);
       const newChecksum = Buffer.from(hashBuffer(newBody), 'hex');
       const newShard = Buffer.concat([newBody, newChecksum]);
@@ -406,13 +348,8 @@ export class FtpProvider implements StorageProvider {
       }
 
       const files = entries.filter((e) => !e.isDirectory);
-      const filtered = prefix
-        ? files.filter((e) => e.name.startsWith(prefix))
-        : files;
-      return filtered.map((e) => ({
-        provider_id: this.id,
-        path: e.name,
-      }));
+      const filtered = prefix ? files.filter((e) => e.name.startsWith(prefix)) : files;
+      return filtered.map((e) => ({ provider_id: this.id, path: e.name }));
     });
   }
 
@@ -430,14 +367,7 @@ export class FtpProvider implements StorageProvider {
       try {
         return await client.size(remotePath);
       } catch (err) {
-        throw new ProviderError(
-          fmtFor(
-            this.io.lang,
-            'provider_stat_failed',
-            remotePath,
-            err instanceof Error ? err.message : String(err),
-          ),
-        );
+        throw new ProviderError(fmtFor(this.io.lang, 'provider_stat_failed', remotePath, err instanceof Error ? err.message : String(err)));
       }
     });
   }
@@ -461,13 +391,7 @@ export class FtpProvider implements StorageProvider {
    */
   async downloadHeader(ref: RemoteRef, maxBytes: number): Promise<Buffer> {
     if (maxBytes <= 0) {
-      throw new ProviderError(
-        fmtFor(
-          this.io.lang,
-          'provider_download_header_invalid_max_bytes',
-          String(maxBytes),
-        ),
-      );
+      throw new ProviderError(fmtFor(this.io.lang, 'provider_download_header_invalid_max_bytes', String(maxBytes)));
     }
     const remotePath = `${this.vaultPath()}/${ref.path}`;
     return this.withClient(async (client) => {
@@ -475,68 +399,68 @@ export class FtpProvider implements StorageProvider {
       try {
         totalSize = await client.size(remotePath);
       } catch (err) {
-        throw new ProviderError(
-          fmtFor(
-            this.io.lang,
-            'provider_stat_failed',
-            remotePath,
-            err instanceof Error ? err.message : String(err),
-          ),
-        );
+        throw new ProviderError(fmtFor(this.io.lang, 'provider_stat_failed', remotePath, err instanceof Error ? err.message : String(err)));
       }
 
       // Shard fits entirely within the requested window — pull it once.
       if (totalSize <= maxBytes) {
         return this.downloadToBuffer(client, remotePath);
       }
-
-      // Shard exceeds maxBytes — collect into a buffer that aborts after the
-      // limit. We mark `aborted=true` immediately before destroying the
-      // Writable so the catch block can distinguish a deliberate abort from
-      // a real transport error.
-      const chunks: Buffer[] = [];
-      let collected = 0;
-      let aborted = false;
-      const collector = new Writable({
-        write(chunk: Buffer | Uint8Array, _enc: string, cb: () => void) {
-          if (aborted) {
-            cb();
-            return;
-          }
-          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-          const remaining = maxBytes - collected;
-          if (buf.length >= remaining) {
-            chunks.push(buf.subarray(0, remaining));
-            collected = maxBytes;
-            aborted = true;
-            this.destroy();
-            cb();
-            return;
-          }
-          chunks.push(buf);
-          collected += buf.length;
-          cb();
-        },
-      });
-
       try {
-        await client.downloadTo(collector, remotePath);
+        return await this.collectBounded(client, remotePath, maxBytes);
       } catch (err) {
-        if (!aborted) {
-          throw new ProviderError(
-            fmtFor(
-              this.io.lang,
-              'provider_header_read_failed',
-              remotePath,
-              err instanceof Error ? err.message : String(err),
-            ),
-          );
-        }
-        // Deliberate abort — basic-ftp's pipeline surfaces the destroyed
-        // writable as an error. We have the bytes we need.
+        throw new ProviderError(fmtFor(this.io.lang, 'provider_header_read_failed', remotePath, err instanceof Error ? err.message : String(err)));
       }
-      return Buffer.concat(chunks);
     });
+  }
+
+  /**
+   * Streams a remote file into a buffer but aborts the transfer once `maxBytes`
+   * have been collected, so a large shard is not pulled in full. Rethrows the
+   * raw transport error (unwrapped) when the failure is not the deliberate
+   * abort, letting the caller classify FTP reply codes.
+   *
+   * @param client     - Connected FTP client
+   * @param remotePath - Absolute remote path
+   * @param maxBytes   - Maximum byte count to collect before aborting
+   * @returns Buffer of at most `maxBytes` bytes
+   */
+  private async collectBounded(client: ftp.Client, remotePath: string, maxBytes: number): Promise<Buffer> {
+    // `aborted` is set immediately before destroying the Writable so the catch
+    // below can distinguish a deliberate abort from a real transport error.
+    const chunks: Buffer[] = [];
+    let collected = 0;
+    let aborted = false;
+    const collector = new Writable({
+      write(chunk: Buffer | Uint8Array, _enc: string, cb: () => void) {
+        if (aborted) {
+          cb();
+          return;
+        }
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        const remaining = maxBytes - collected;
+        if (buf.length >= remaining) {
+          chunks.push(buf.subarray(0, remaining));
+          collected = maxBytes;
+          aborted = true;
+          this.destroy();
+          cb();
+          return;
+        }
+        chunks.push(buf);
+        collected += buf.length;
+        cb();
+      },
+    });
+
+    try {
+      await client.downloadTo(collector, remotePath);
+    } catch (err) {
+      if (!aborted) throw err;
+      // Deliberate abort — basic-ftp surfaces the destroyed writable as an
+      // error. We already hold the bytes we need.
+    }
+    return Buffer.concat(chunks);
   }
 
   /**
@@ -564,6 +488,95 @@ export class FtpProvider implements StorageProvider {
     } catch {
       return false;
     }
+  }
+
+  // ─── Header storage strategy + verification ───────────────────────────────
+
+  /** FTP rewrites the header in place inside the shard — no sidecar. */
+  usesSidecar(): boolean {
+    return false;
+  }
+
+  /**
+   * Not supported — FTP rewrites the header in place via updateShardHeader().
+   * @throws BfsError always (usesSidecar() === false)
+   */
+  async uploadHeaderSidecar(_ref: RemoteRef, _sidecarBytes: Buffer): Promise<void> {
+    throwSidecarUnsupported(this.io.lang, this.type);
+  }
+
+  /**
+   * Not supported — FTP has no sidecar files.
+   * @throws BfsError always (usesSidecar() === false)
+   */
+  async downloadHeaderSidecar(_ref: RemoteRef, _maxBytes: number): Promise<Buffer | null> {
+    throwSidecarUnsupported(this.io.lang, this.type);
+  }
+
+  /**
+   * Opens a dedicated FTP connection and returns the shard's header window (at
+   * most maxBytes). Unlike withClient, it does NOT wrap errors, so the caller
+   * can read the raw FTP reply code (530 auth, 550 missing) for classification.
+   * Always closes the connection.
+   *
+   * @param remotePath - Absolute remote path of the shard
+   * @param maxBytes   - Maximum byte count to read from the header
+   * @returns Buffer of at most `maxBytes` bytes
+   * @throws the raw transport / FTPError (unwrapped)
+   */
+  private async readHeaderWindowDirect(remotePath: string, maxBytes: number): Promise<Buffer> {
+    const client = new ftp.Client(FTP_TIMEOUT_MS);
+    try {
+      await client.access({ host: this.host, port: this.port, user: this.user, password: this.password, secure: this.secure });
+      await client.send('TYPE I');
+      const totalSize = await client.size(remotePath);
+      return totalSize <= maxBytes ? await this.downloadToBuffer(client, remotePath) : await this.collectBounded(client, remotePath, maxBytes);
+    } finally {
+      client.close();
+    }
+  }
+
+  /**
+   * Verifies the shard identity by reading only its header window and comparing
+   * the plaintext vault_id / shard_index / version. Reads over a dedicated
+   * connection so the raw FTP reply codes survive: 530 → auth_failed,
+   * 550 → not_found.
+   *
+   * @param ref      - RemoteRef of the shard
+   * @param expected - Identity the shard is expected to carry
+   * @returns { ok: true } or a classified failure (auth_failed / not_found /
+   *          corrupted / mismatch / unverifiable). A transport failure with no
+   *          recognized reply code (host down, ECONNREFUSED, TLS) is reported
+   *          as unverifiable rather than thrown, mirroring LocalFsProvider.
+   */
+  async verifyShard(ref: RemoteRef, expected: ShardIdentity): Promise<VerifyShardResult> {
+    const lang = this.io.lang;
+    const remotePath = `${this.vaultPath()}/${ref.path}`;
+
+    let headerBytes: Buffer;
+    try {
+      headerBytes = await this.readHeaderWindowDirect(remotePath, SHARD_HEADER_READ_BYTES);
+    } catch (err) {
+      switch (ftpReplyCode(err)) {
+        case 530:
+          return { ok: false, reason: 'auth_failed', detail: fmtFor(lang, 'verify_shard_auth_failed', this.id, ref.path) };
+        case 550:
+          return { ok: false, reason: 'not_found', detail: fmtFor(lang, 'verify_shard_not_found', ref.path) };
+        default:
+          return { ok: false, reason: 'unverifiable', detail: fmtFor(lang, 'verify_shard_unverifiable', this.id, ref.path) };
+      }
+    }
+
+    // The header window has no payload or trailing checksum, so parse it
+    // synchronously — no payload stream to build, verify, or discard.
+    let header: ShardHeader;
+    try {
+      header = buildShardHeaderFromBytes(headerBytes);
+    } catch (err) {
+      return { ok: false, reason: 'corrupted', detail: fmtFor(lang, 'verify_shard_corrupted', ref.path, err instanceof Error ? err.message : String(err)) };
+    }
+
+    return finishVerifyShard(header, expected, lang);
   }
 
   // ─── Configuration lifecycle ──────────────────────────────────────────────
@@ -606,25 +619,19 @@ export class FtpProvider implements StorageProvider {
    * @throws ProviderError when `--config-file` is unreadable / malformed,
    *         port/secure flags are invalid, or final config fails validation
    */
-  async configureFromFlags(
-    input: CliProviderInput,
-  ): Promise<Record<string, unknown>> {
+  async configureFromFlags(input: CliProviderInput): Promise<Record<string, unknown>> {
     const config: Record<string, unknown> = { port: 21, secure: false };
 
     const cfgFile = findStringFlag(input.rawArgs, '--config-file');
     if (cfgFile !== null && cfgFile.length > 0) {
-      const absolutePath = path.isAbsolute(cfgFile)
-        ? cfgFile
-        : path.resolve(this.io.workDir, cfgFile);
+      const absolutePath = path.isAbsolute(cfgFile) ? cfgFile : path.resolve(this.io.workDir, cfgFile);
       const obj = await readJsonObjectFile(absolutePath, 'FTP adapter');
       if (typeof obj.host === 'string') config.host = obj.host;
       if (obj.port !== undefined) {
         const portRaw = obj.port;
         const port = typeof portRaw === 'number' ? portRaw : Number(portRaw);
         if (!Number.isInteger(port) || port < 1 || port > 65535) {
-          throw new ProviderError(
-            tFor(this.io.lang, 'ftp_config_port_invalid'),
-          );
+          throw new ProviderError(tFor(this.io.lang, 'ftp_config_port_invalid'));
         }
         config.port = port;
       }
@@ -663,9 +670,7 @@ export class FtpProvider implements StorageProvider {
       } else if (v === 'false' || v === '0' || v === 'no') {
         config.secure = false;
       } else {
-        throw new ProviderError(
-          tFor(this.io.lang, 'ftp_inline_secure_invalid'),
-        );
+        throw new ProviderError(tFor(this.io.lang, 'ftp_inline_secure_invalid'));
       }
     }
 
@@ -696,12 +701,7 @@ export class FtpProvider implements StorageProvider {
     }
 
     const port = config.port;
-    if (
-      typeof port !== 'number' ||
-      !Number.isInteger(port) ||
-      port < 1 ||
-      port > 65535
-    ) {
+    if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
       errors.push(tFor(lang, 'ftp_validate_port_invalid'));
     }
 
@@ -721,27 +721,17 @@ export class FtpProvider implements StorageProvider {
    */
   describeConfig(config: Record<string, unknown>): string {
     const host = typeof config.host === 'string' ? config.host : '';
-    const port =
-      typeof config.port === 'number'
-        ? String(config.port)
-        : String(config.port ?? '');
+    const port = typeof config.port === 'number' ? String(config.port) : String(config.port ?? '');
     const user = typeof config.user === 'string' ? config.user : '';
     const remotePath = typeof config.path === 'string' ? config.path : '';
     const secure = config.secure === true;
-    return fmtFor(
-      this.io.lang,
-      'ftp_describe_config',
-      host,
-      port,
-      user,
-      remotePath,
-      String(secure),
-    );
+    return fmtFor(this.io.lang, 'ftp_describe_config', host, port, user, remotePath, String(secure));
   }
 
   /**
-   * Declares which config fields are secrets and must be masked in any
-   * user-facing display. Used by describeConfig and future consumers.
+   * Declares which config fields are secrets. BFS uses this to strip the
+   * password from the shard location map (it must never travel in headers) and
+   * to know which field to request interactively during disaster recovery.
    */
   getSecretFields(): readonly string[] {
     return ['password'];
@@ -773,25 +763,13 @@ export class FtpProvider implements StorageProvider {
       try {
         await client.ensureDir(vaultDir);
       } catch (err) {
-        throw new ProviderError(
-          fmtFor(
-            lang,
-            'ftp_probe_step_ensure_dir',
-            err instanceof Error ? err.message : String(err),
-          ),
-        );
+        throw new ProviderError(fmtFor(lang, 'ftp_probe_step_ensure_dir', err instanceof Error ? err.message : String(err)));
       }
 
       try {
         await client.uploadFrom(Readable.from(probeData), remotePath);
       } catch (err) {
-        throw new ProviderError(
-          fmtFor(
-            lang,
-            'ftp_probe_step_upload',
-            err instanceof Error ? err.message : String(err),
-          ),
-        );
+        throw new ProviderError(fmtFor(lang, 'ftp_probe_step_upload', err instanceof Error ? err.message : String(err)));
       }
 
       let downloaded: Buffer;
@@ -799,13 +777,7 @@ export class FtpProvider implements StorageProvider {
         downloaded = await this.downloadToBuffer(client, remotePath);
       } catch (err) {
         await this.bestEffortRemove(client, remotePath);
-        throw new ProviderError(
-          fmtFor(
-            lang,
-            'ftp_probe_step_download',
-            err instanceof Error ? err.message : String(err),
-          ),
-        );
+        throw new ProviderError(fmtFor(lang, 'ftp_probe_step_download', err instanceof Error ? err.message : String(err)));
       }
 
       if (Buffer.compare(probeData, downloaded) !== 0) {
@@ -816,22 +788,13 @@ export class FtpProvider implements StorageProvider {
       try {
         await client.remove(remotePath);
       } catch (err) {
-        throw new ProviderError(
-          fmtFor(
-            lang,
-            'ftp_probe_step_cleanup',
-            err instanceof Error ? err.message : String(err),
-          ),
-        );
+        throw new ProviderError(fmtFor(lang, 'ftp_probe_step_cleanup', err instanceof Error ? err.message : String(err)));
       }
     });
   }
 
   /** Silent remove — swallow errors (used in probe cleanup paths). */
-  private async bestEffortRemove(
-    client: ftp.Client,
-    remotePath: string,
-  ): Promise<void> {
+  private async bestEffortRemove(client: ftp.Client, remotePath: string): Promise<void> {
     try {
       await client.remove(remotePath);
     } catch {
@@ -845,43 +808,20 @@ export class FtpProvider implements StorageProvider {
 const ftpFactory: ProviderFactory = {
   lang: 'en',
   displayName: 'FTP/FTPS',
-  requiresApiVersion: 1,
+  requiresApiVersion: 2,
   create: (config, io) => new FtpProvider(config, io),
   help(): ProviderHelp {
     return {
-      usage:
-        '[--host <h>] [--port <n>] [--user <u>] [--password <p>] ' +
-        '[--path <p>] [--secure <b>] [--config-file <path>]',
+      usage: '[--host <h>] [--port <n>] [--user <u>] [--password <p>] ' + '[--path <p>] [--secure <b>] [--config-file <path>]',
       description: tFor(this.lang, 'ftp_help_description'),
       flags: [
-        {
-          flag: '--host <host>',
-          description: tFor(this.lang, 'ftp_help_flag_host_desc'),
-        },
-        {
-          flag: '--port <port>',
-          description: tFor(this.lang, 'ftp_help_flag_port_desc'),
-        },
-        {
-          flag: '--user <user>',
-          description: tFor(this.lang, 'ftp_help_flag_user_desc'),
-        },
-        {
-          flag: '--password <password>',
-          description: tFor(this.lang, 'ftp_help_flag_password_desc'),
-        },
-        {
-          flag: '--path <path>',
-          description: tFor(this.lang, 'ftp_help_flag_path_desc'),
-        },
-        {
-          flag: '--secure <bool>',
-          description: tFor(this.lang, 'ftp_help_flag_secure_desc'),
-        },
-        {
-          flag: '--config-file <path>',
-          description: tFor(this.lang, 'ftp_help_flag_config_file_desc'),
-        },
+        { flag: '--host <host>', description: tFor(this.lang, 'ftp_help_flag_host_desc') },
+        { flag: '--port <port>', description: tFor(this.lang, 'ftp_help_flag_port_desc') },
+        { flag: '--user <user>', description: tFor(this.lang, 'ftp_help_flag_user_desc') },
+        { flag: '--password <password>', description: tFor(this.lang, 'ftp_help_flag_password_desc') },
+        { flag: '--path <path>', description: tFor(this.lang, 'ftp_help_flag_path_desc') },
+        { flag: '--secure <bool>', description: tFor(this.lang, 'ftp_help_flag_secure_desc') },
+        { flag: '--config-file <path>', description: tFor(this.lang, 'ftp_help_flag_config_file_desc') },
       ],
       examples: [
         'bfs provider add --ci --name nas --type ftp \\',

@@ -3,6 +3,12 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import type { Readable } from 'node:stream';
 
+/**
+ * Width in bytes of a SHA-256 digest. Used both for hash fields inside the
+ * binary formats and for the trailing checksum that protects each blob/shard.
+ */
+export const SHA256_BYTES = 32;
+
 /** Computes the SHA-256 hash of a Buffer and returns it as a hex string. */
 export function hashBuffer(data: Buffer): string {
   return createHash('sha256').update(data).digest('hex');
@@ -22,9 +28,7 @@ export function hashStream(stream: Readable): Promise<string> {
 export async function streamToBuffer(stream: Readable): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of stream) {
-    chunks.push(
-      Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array),
-    );
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
   }
   return Buffer.concat(chunks);
 }
@@ -38,10 +42,7 @@ export async function streamToBuffer(stream: Readable): Promise<Buffer> {
  * @param tailBytes - Number of trailing bytes to exclude from the digest
  * @returns Hex-encoded SHA-256 digest
  */
-export async function hashFileExcludingTail(
-  filePath: string,
-  tailBytes: number,
-): Promise<string> {
+export async function hashFileExcludingTail(filePath: string, tailBytes: number): Promise<string> {
   const fileStat = await stat(filePath);
   const hashLen = Math.max(0, fileStat.size - tailBytes);
   const hash = createHash('sha256');

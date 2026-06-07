@@ -8,20 +8,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureConsole, makeConfig, runCmd } from './_helpers.js';
 
-vi.mock('../../src/vault/config.js', () => ({
-  readConfig: vi.fn(),
-  writeConfig: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn(), writeConfig: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    default: {
-      ...(actual.default as Record<string, unknown>),
-      stat: vi.fn().mockResolvedValue({ isDirectory: () => true }),
-    },
-  };
+  return { ...actual, default: { ...(actual.default as Record<string, unknown>), stat: vi.fn().mockResolvedValue({ isDirectory: () => true }) } };
 });
 
 import fsMock from 'node:fs/promises';
@@ -46,12 +37,7 @@ describe('config', () => {
   // ─── Display (no args) ────────────────────────────────────────────────────
 
   it('should display current settings when no args given', async () => {
-    mockReadConfig.mockResolvedValue(
-      makeConfig({
-        cache_dir: '/custom/cache',
-        temp_dir: '/custom/tmp',
-      }) as never,
-    );
+    mockReadConfig.mockResolvedValue(makeConfig({ cache_dir: '/custom/cache', temp_dir: '/custom/tmp' }) as never);
 
     const result = await runCmd(['config']);
 
@@ -62,9 +48,7 @@ describe('config', () => {
   });
 
   it('should display (default) placeholder when cache_dir is null', async () => {
-    mockReadConfig.mockResolvedValue(
-      makeConfig({ cache_dir: null, temp_dir: null }) as never,
-    );
+    mockReadConfig.mockResolvedValue(makeConfig({ cache_dir: null, temp_dir: null }) as never);
 
     await runCmd(['config']);
 
@@ -90,10 +74,7 @@ describe('config', () => {
     const result = await runCmd(['config', '--cache-dir', '/new/cache']);
 
     expect(result).toBe('ok');
-    expect(mockWriteConfig).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ cache_dir: '/new/cache' }),
-    );
+    expect(mockWriteConfig).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ cache_dir: '/new/cache' }));
   });
 
   it('should print config_updated on successful set', async () => {
@@ -112,32 +93,22 @@ describe('config', () => {
 
     await runCmd(['config', '--temp-dir', '/custom/tmp']);
 
-    expect(mockWriteConfig).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ temp_dir: '/custom/tmp' }),
-    );
+    expect(mockWriteConfig).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ temp_dir: '/custom/tmp' }));
   });
 
   // ─── Reset cache_dir ──────────────────────────────────────────────────────
 
   it('should reset cache_dir to null when --cache-dir --reset given', async () => {
-    mockReadConfig.mockResolvedValue(
-      makeConfig({ cache_dir: '/old/cache' }) as never,
-    );
+    mockReadConfig.mockResolvedValue(makeConfig({ cache_dir: '/old/cache' }) as never);
 
     const result = await runCmd(['config', '--cache-dir', '--reset']);
 
     expect(result).toBe('ok');
-    expect(mockWriteConfig).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ cache_dir: null }),
-    );
+    expect(mockWriteConfig).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ cache_dir: null }));
   });
 
   it('should print config_reset when reset performed', async () => {
-    mockReadConfig.mockResolvedValue(
-      makeConfig({ cache_dir: '/old/cache' }) as never,
-    );
+    mockReadConfig.mockResolvedValue(makeConfig({ cache_dir: '/old/cache' }) as never);
 
     await runCmd(['config', '--cache-dir', '--reset']);
 
@@ -148,16 +119,11 @@ describe('config', () => {
   // ─── Reset temp_dir ───────────────────────────────────────────────────────
 
   it('should reset temp_dir to null when --temp-dir --reset given', async () => {
-    mockReadConfig.mockResolvedValue(
-      makeConfig({ temp_dir: '/old/tmp' }) as never,
-    );
+    mockReadConfig.mockResolvedValue(makeConfig({ temp_dir: '/old/tmp' }) as never);
 
     await runCmd(['config', '--temp-dir', '--reset']);
 
-    expect(mockWriteConfig).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ temp_dir: null }),
-    );
+    expect(mockWriteConfig).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ temp_dir: null }));
   });
 
   // ─── No writeConfig when nothing changes ──────────────────────────────────

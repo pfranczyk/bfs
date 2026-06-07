@@ -21,10 +21,7 @@ export function sha256(buf: Buffer): string {
  * @param base - Relative path prefix (used internally during recursion)
  * @returns    Map of relativePath → SHA-256 hex
  */
-export async function hashDir(
-  dir: string,
-  base = '',
-): Promise<Map<string, string>> {
+export async function hashDir(dir: string, base = ''): Promise<Map<string, string>> {
   const result = new Map<string, string>();
   let entries: import('node:fs').Dirent<string>[];
   try {
@@ -49,9 +46,7 @@ export async function hashDir(
 /**
  * Creates test files in sourceDir and returns their SHA-256 map.
  */
-export async function createTestFiles(
-  dir: string,
-): Promise<Map<string, string>> {
+export async function createTestFiles(dir: string): Promise<Map<string, string>> {
   const hashes = new Map<string, string>();
   const write = async (rel: string, content: Buffer): Promise<void> => {
     const full = path.join(dir, rel);
@@ -76,34 +71,12 @@ export async function createTestFiles(
 export async function setupVault(ctx: SmokeContext): Promise<void> {
   const { io } = createMockProviderIO();
   const providers: ProviderConfig[] = [
-    {
-      id: 'p1',
-      type: 'local',
-      adapterPackage: null,
-      config: { path: ctx.provider1Dir },
-    },
-    {
-      id: 'p2',
-      type: 'local',
-      adapterPackage: null,
-      config: { path: ctx.provider2Dir },
-    },
-    {
-      id: 'p3',
-      type: 'local',
-      adapterPackage: null,
-      config: { path: ctx.provider3Dir },
-    },
+    { id: 'p1', type: 'local', adapterPackage: null, config: { path: ctx.provider1Dir } },
+    { id: 'p2', type: 'local', adapterPackage: null, config: { path: ctx.provider2Dir } },
+    { id: 'p3', type: 'local', adapterPackage: null, config: { path: ctx.provider3Dir } },
   ];
 
-  await init(ctx.vaultDir, {
-    vault_name: 'smoke-vault',
-    scheme: { data_shards: 2, parity_shards: 1 },
-    encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
-    push_mode: PushMode.NewVersion,
-    providers,
-    io,
-  });
+  await init(ctx.vaultDir, { vault_name: 'smoke-vault', scheme: { data_shards: 2, parity_shards: 1 }, encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' }, push_mode: PushMode.NewVersion, providers, io });
 }
 
 /** Returns true if the path exists, without throwing. */
@@ -127,25 +100,8 @@ export async function readJson<T>(filePath: string): Promise<T> {
  * @param extra     - Additional flags, e.g. ['--no-compress']
  * @returns         Argument array ready to pass to runBfs
  */
-export function buildInitArgs(
-  vaultName: string,
-  providers: Array<{ id: string; dir: string }>,
-  extra: string[] = [],
-): string[] {
-  return [
-    'init',
-    vaultName,
-    '--ci',
-    '--data-shards',
-    '2',
-    '--parity-shards',
-    '1',
-    ...providers.flatMap(({ id, dir }) => [
-      '--provider',
-      `local:${id} --path ${dir}`,
-    ]),
-    ...extra,
-  ];
+export function buildInitArgs(vaultName: string, providers: Array<{ id: string; dir: string }>, extra: string[] = []): string[] {
+  return ['init', vaultName, '--ci', '--data-shards', '2', '--parity-shards', '1', ...providers.flatMap(({ id, dir }) => ['--provider', `local:${id} --path ${dir}`]), ...extra];
 }
 
 /**
@@ -159,23 +115,11 @@ export function buildInitArgs(
  * @returns         SHA-256 map of test files
  * @throws          When bfs init exits with a non-zero code
  */
-export async function initTestVault(
-  vaultDir: string,
-  vaultName: string,
-  providers: Array<{ id: string; dir: string }>,
-  extra: string[] = [],
-): Promise<Map<string, string>> {
-  await Promise.all(
-    [vaultDir, ...providers.map((p) => p.dir)].map((d) =>
-      fs.mkdir(d, { recursive: true }),
-    ),
-  );
+export async function initTestVault(vaultDir: string, vaultName: string, providers: Array<{ id: string; dir: string }>, extra: string[] = []): Promise<Map<string, string>> {
+  await Promise.all([vaultDir, ...providers.map((p) => p.dir)].map((d) => fs.mkdir(d, { recursive: true })));
   const hashes = await createTestFiles(vaultDir);
   const r = runBfs(buildInitArgs(vaultName, providers, extra), vaultDir);
-  assert(
-    r.status === 0,
-    `bfs init exit ${r.status ?? 'null'}\n${r.stdout}\n${r.stderr}`,
-  );
+  assert(r.status === 0, `bfs init exit ${r.status ?? 'null'}\n${r.stdout}\n${r.stderr}`);
   return hashes;
 }
 
@@ -187,18 +131,11 @@ export async function initTestVault(
  * @param label    - Label for error messages (e.g. "after pull")
  * @throws         When a file is missing or its SHA-256 does not match
  */
-export async function verifyShaHashes(
-  vaultDir: string,
-  hashes: Map<string, string>,
-  label = 'after pull',
-): Promise<void> {
+export async function verifyShaHashes(vaultDir: string, hashes: Map<string, string>, label = 'after pull'): Promise<void> {
   for (const [rel, expectedHash] of hashes) {
     const buf = await fs.readFile(path.join(vaultDir, rel)).catch(() => null);
     assert(buf !== null, `file missing ${label}: ${rel}`);
     const actual = sha256(buf as Buffer);
-    assert(
-      actual === expectedHash,
-      `SHA mismatch dla ${rel}: expected ${expectedHash}, got ${actual}`,
-    );
+    assert(actual === expectedHash, `SHA mismatch dla ${rel}: expected ${expectedHash}, got ${actual}`);
   }
 }

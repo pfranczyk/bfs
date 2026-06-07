@@ -2,12 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  DEFAULT_GLOBAL_SETTINGS,
-  getGlobalSettingsPath,
-  readGlobalSettings,
-  writeGlobalSettings,
-} from '../../src/global/settings.js';
+import { DEFAULT_GLOBAL_SETTINGS, getGlobalSettingsPath, readGlobalSettings, writeGlobalSettings } from '../../src/global/settings.js';
 
 /** Sets XDG_CONFIG_HOME to tmpDir/config so getGlobalSettingsPath() uses it. */
 function useXdgDir(dir: string): string {

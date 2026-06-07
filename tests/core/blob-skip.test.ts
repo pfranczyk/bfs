@@ -13,11 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // The default implementation calls through to the real functions.
 vi.mock('node:fs/promises', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs/promises')>();
-  return {
-    ...real,
-    readFile: vi.fn(real.readFile),
-    writeFile: vi.fn(real.writeFile),
-  };
+  return { ...real, readFile: vi.fn(real.readFile), writeFile: vi.fn(real.writeFile) };
 });
 
 // These imports must come AFTER vi.mock so they receive the mocked module.
@@ -36,16 +32,9 @@ describe('blob-pack / blob-unpack — skip behavior', () => {
 
   afterEach(async () => {
     // Restore default (call-through) implementations after each test
-    const real =
-      await vi.importActual<typeof import('node:fs/promises')>(
-        'node:fs/promises',
-      );
-    vi.mocked(fs.readFile).mockImplementation(
-      real.readFile as typeof fs.readFile,
-    );
-    vi.mocked(fs.writeFile).mockImplementation(
-      real.writeFile as typeof fs.writeFile,
-    );
+    const real = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(fs.readFile).mockImplementation(real.readFile as typeof fs.readFile);
+    vi.mocked(fs.writeFile).mockImplementation(real.writeFile as typeof fs.writeFile);
     await fs.rm(srcDir, { recursive: true, force: true });
     await fs.rm(outDir, { recursive: true, force: true });
   });
@@ -59,18 +48,14 @@ describe('blob-pack / blob-unpack — skip behavior', () => {
     const filter = await createIgnoreFilter(srcDir);
 
     // Override readFile: fail for bad.txt, pass through for everything else
-    const realReadFile = await vi
-      .importActual<typeof import('node:fs/promises')>('node:fs/promises')
-      .then((m) => m.readFile);
+    const realReadFile = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises').then((m) => m.readFile);
 
-    vi.mocked(fs.readFile).mockImplementation(
-      async (p: Parameters<typeof fs.readFile>[0], ...rest) => {
-        if (String(p).endsWith('bad.txt')) {
-          throw new Error('EACCES: permission denied, open bad.txt');
-        }
-        return realReadFile(p, ...(rest as []));
-      },
-    );
+    vi.mocked(fs.readFile).mockImplementation(async (p: Parameters<typeof fs.readFile>[0], ...rest) => {
+      if (String(p).endsWith('bad.txt')) {
+        throw new Error('EACCES: permission denied, open bad.txt');
+      }
+      return realReadFile(p, ...(rest as []));
+    });
 
     const { blob, skipped } = await packBlob(srcDir, filter);
 
@@ -91,18 +76,14 @@ describe('blob-pack / blob-unpack — skip behavior', () => {
     const { blob } = await packBlob(srcDir, filter);
 
     // Override writeFile: fail for bad.txt, pass through for everything else
-    const realWriteFile = await vi
-      .importActual<typeof import('node:fs/promises')>('node:fs/promises')
-      .then((m) => m.writeFile);
+    const realWriteFile = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises').then((m) => m.writeFile);
 
-    vi.mocked(fs.writeFile).mockImplementation(
-      async (p: Parameters<typeof fs.writeFile>[0], data, options?) => {
-        if (String(p).endsWith('bad.txt')) {
-          throw new Error('EACCES: permission denied, open bad.txt');
-        }
-        return realWriteFile(p, data as never, options as never);
-      },
-    );
+    vi.mocked(fs.writeFile).mockImplementation(async (p: Parameters<typeof fs.writeFile>[0], data, options?) => {
+      if (String(p).endsWith('bad.txt')) {
+        throw new Error('EACCES: permission denied, open bad.txt');
+      }
+      return realWriteFile(p, data as never, options as never);
+    });
 
     const { extracted, skipped } = await unpackBlob(blob, outDir);
 

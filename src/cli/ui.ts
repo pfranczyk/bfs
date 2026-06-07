@@ -44,10 +44,7 @@ export function info(msg: string): void {
  * @param lines - Content lines inside the box
  */
 export function box(title: string, lines: string[]): void {
-  const maxLen = Math.max(
-    title.length,
-    ...lines.map((l) => stripAnsi(l).length),
-  );
+  const maxLen = Math.max(title.length, ...lines.map((l) => stripAnsi(l).length));
   const width = maxLen + 4;
   const top = `┌${'─'.repeat(width)}┐`;
   const bottom = `└${'─'.repeat(width)}┘`;
@@ -73,15 +70,10 @@ export function box(title: string, lines: string[]): void {
  */
 export function table(headers: string[], rows: string[][]): void {
   const cols = headers.length;
-  const widths = headers.map((h, i) =>
-    Math.max(h.length, ...rows.map((r) => stripAnsi(r[i] ?? '').length)),
-  );
+  const widths = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => stripAnsi(r[i] ?? '').length)));
 
   const sep = `+${widths.map((w) => '-'.repeat(w + 2)).join('+')}+`;
-  const headerRow =
-    '|' +
-    headers.map((h, i) => ` ${chalk.bold(h.padEnd(widths[i]))} `).join('|') +
-    '|';
+  const headerRow = `|${headers.map((h, i) => ` ${chalk.bold(h.padEnd(widths[i]))} `).join('|')}|`;
 
   console.log(chalk.dim(sep));
   console.log(headerRow);
@@ -120,8 +112,7 @@ export function formatHealth(health: VersionHealth): string {
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024)
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 

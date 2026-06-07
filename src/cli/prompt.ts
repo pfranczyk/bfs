@@ -22,9 +22,7 @@ type InquirerQuestions = Parameters<(typeof inquirer)['prompt']>[0];
  * @param questions - Inquirer question collection
  * @returns User answers
  */
-export async function promptWithRawMode<T extends Record<string, unknown>>(
-  questions: InquirerQuestions,
-): Promise<T> {
+export async function promptWithRawMode<T extends Record<string, unknown>>(questions: InquirerQuestions): Promise<T> {
   const promptResult = inquirer.prompt<T>(questions);
   const escHandler = (data: Buffer): void => {
     // Standalone Escape = 1 byte 0x1b; arrow keys = 3+ bytes (\x1b[A etc.)

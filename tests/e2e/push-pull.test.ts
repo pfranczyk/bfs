@@ -20,14 +20,7 @@ import { readConfig, writeConfig } from '../../src/vault/config.js';
 import { listManifests, readManifest } from '../../src/vault/manifest.js';
 import { recover } from '../../src/vault/recovery.js';
 import { readState } from '../../src/vault/state.js';
-import {
-  init,
-  listVersions,
-  prune,
-  pull,
-  push,
-  removeProvider,
-} from '../../src/vault/vault-manager.js';
+import { init, listVersions, prune, pull, push, removeProvider } from '../../src/vault/vault-manager.js';
 import { verifyAll } from '../../src/vault/verify.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -108,30 +101,18 @@ async function hashAllFiles(dir: string): Promise<Map<string, string>> {
 }
 
 /** Porównuje pliki w katalogu z oczekiwaną mapą SHA-256. */
-async function assertFilesMatch(
-  destDir: string,
-  expected: Map<string, string>,
-): Promise<void> {
+async function assertFilesMatch(destDir: string, expected: Map<string, string>): Promise<void> {
   const actual = await hashAllFiles(destDir);
   for (const [rel, expectedHash] of expected) {
-    expect(actual.get(rel), `Plik ${rel}: brakuje lub hash niezgodny`).toBe(
-      expectedHash,
-    );
+    expect(actual.get(rel), `Plik ${rel}: brakuje lub hash niezgodny`).toBe(expectedHash);
   }
   expect(actual.size).toBe(expected.size);
 }
 
 /** Sprawdza czy shard istnieje na providerze. */
-async function shardExists(
-  providerDir: string,
-  vaultName: string,
-  shardIndex: number,
-  version: number,
-): Promise<boolean> {
+async function shardExists(providerDir: string, vaultName: string, shardIndex: number, version: number): Promise<boolean> {
   try {
-    await fs.access(
-      path.join(providerDir, vaultName, `shard_${shardIndex}.bfs.${version}`),
-    );
+    await fs.access(path.join(providerDir, vaultName, `shard_${shardIndex}.bfs.${version}`));
     return true;
   } catch {
     return false;
@@ -150,8 +131,7 @@ describe('Scenariusz 1: brak szyfrowania, schemat 3/1, RS repair z 3 z 4 shardó
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should create 4 shards across 4 providers after push', async () => {
@@ -191,9 +171,7 @@ describe('Scenariusz 1: brak szyfrowania, schemat 3/1, RS repair z 3 z 4 shardó
     // Pull do nowego katalogu
     const dest = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
-        recursive: true,
-      });
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
       await pull(dest, { io: mockIO(), force: true });
       await assertFilesMatch(dest, originalHashes);
     } finally {
@@ -216,8 +194,7 @@ describe('Scenariusz 2: szyfrowanie, schemat 5/2, RS repair z 5 z 7 shardów', (
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should create 7 shards after encrypted push', async () => {
@@ -257,9 +234,7 @@ describe('Scenariusz 2: szyfrowanie, schemat 5/2, RS repair z 5 z 7 shardów', (
 
     const dest = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
-        recursive: true,
-      });
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
       await pull(dest, { io: mockIO(), force: true, password: PASSWORD });
       await assertFilesMatch(dest, originalHashes);
     } finally {
@@ -280,8 +255,7 @@ describe('Scenariusz 3: wersjonowanie i przywracanie wersji', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should track state correctly across push/pull/push cycles', async () => {
@@ -375,8 +349,7 @@ describe('Scenariusz 4: pull z istniejącym .bfs/ — providery z config, bez py
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should pull without specifying providers — config knows them', async () => {
@@ -420,13 +393,10 @@ describe('Scenariusz 5: duży plik 50 MB', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
-  it('should push and pull 50 MB file with SHA-256 verification', {
-    timeout: 60_000,
-  }, async () => {
+  it('should push and pull 50 MB file with SHA-256 verification', { timeout: 60_000 }, async () => {
     await init(root, {
       vault_name: 'large-vault',
       scheme: { data_shards: 2, parity_shards: 1 },
@@ -464,8 +434,7 @@ describe('Scenariusz 6: verify i health check', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should detect healthy → degraded → damaged after removing shards', async () => {
@@ -519,8 +488,7 @@ describe('Scenariusz 7: provider remove + heal — verify healthy, pull poprawny
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs, spareDir])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs, spareDir]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should heal shard to new provider and keep all versions healthy', async () => {
@@ -544,12 +512,7 @@ describe('Scenariusz 7: provider remove + heal — verify healthy, pull poprawny
     await writeConfig(root, config);
 
     // Usuń p0, odbuduj shard na spare
-    await removeProvider(root, 'p0', {
-      strategy: 'rebuild',
-      targetProviderId: 'spare',
-      rebuildScope: 'all',
-      io: mockIO(),
-    });
+    await removeProvider(root, 'p0', { strategy: 'rebuild', targetProviderId: 'spare', rebuildScope: 'all', io: mockIO() });
 
     // Obie wersje healthy
     const report = await verifyAll(root, mockIO());
@@ -580,8 +543,7 @@ describe('Scenariusz 8: różne schematy N/K per wersja', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should use correct schema per version when pulling old version', async () => {
@@ -650,8 +612,7 @@ describe('Scenariusz 9: full disaster recovery', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should rebuild .bfs/ and restore all 3 versions after full directory loss', async () => {
@@ -680,17 +641,10 @@ describe('Scenariusz 9: full disaster recovery', () => {
 
     // Recovery — bootstrap z p0
     const { io: bsIO } = createMockProviderIO();
-    const bootstrapProvider = new LocalFsProvider(
-      localProvider('p0', pdirs[0] ?? ''),
-      bsIO,
-    );
+    const bootstrapProvider = new LocalFsProvider(localProvider('p0', pdirs[0] ?? ''), bsIO);
     await bootstrapProvider.authenticate();
 
-    const report = await recover(root, {
-      vaultName: 'recovery-vault',
-      provider: bootstrapProvider,
-      io: bsIO,
-    });
+    const report = await recover(root, { vaultName: 'recovery-vault', provider: bootstrapProvider, io: bsIO });
 
     // .bfs/ odbudowane: 3 manifesty, config, state
     expect(report.manifests_rebuilt).toBe(3);
@@ -740,8 +694,7 @@ describe('Scenariusz 9: kompresja ZIP, brak szyfrowania, 2/1', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should roundtrip byte-for-byte with compression enabled', async () => {
@@ -765,9 +718,7 @@ describe('Scenariusz 9: kompresja ZIP, brak szyfrowania, 2/1', () => {
 
     const dest = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
-        recursive: true,
-      });
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
       await pull(dest, { io: mockIO(), force: true });
       await assertFilesMatch(dest, originalHashes);
     } finally {
@@ -814,9 +765,7 @@ describe('Scenariusz 9: kompresja ZIP, brak szyfrowania, 2/1', () => {
 
     const dest = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
-        recursive: true,
-      });
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
       await pull(dest, { io: mockIO(), force: true });
       await assertFilesMatch(dest, await hashAllFiles(root));
     } finally {
@@ -843,9 +792,7 @@ describe('Scenariusz 9: kompresja ZIP, brak szyfrowania, 2/1', () => {
 
     const dest = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
-        recursive: true,
-      });
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
       await pull(dest, { io: mockIO(), force: true });
       await assertFilesMatch(dest, await hashAllFiles(root));
     } finally {
@@ -867,8 +814,7 @@ describe('Scenariusz 10: kompresja ZIP + szyfrowanie, 2/1', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should roundtrip byte-for-byte with compression + encryption', async () => {
@@ -891,9 +837,7 @@ describe('Scenariusz 10: kompresja ZIP + szyfrowanie, 2/1', () => {
 
     const dest = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
-        recursive: true,
-      });
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
       await pull(dest, { io: mockIO(), force: true, password: PASSWORD });
       await assertFilesMatch(dest, originalHashes);
     } finally {
@@ -914,8 +858,7 @@ describe('Scenariusz 11: wsteczna kompatybilność — brak kompresji w konfigur
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should roundtrip without compression flag set (legacy blob)', async () => {
@@ -937,9 +880,7 @@ describe('Scenariusz 11: wsteczna kompatybilność — brak kompresji w konfigur
 
     const dest = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
-        recursive: true,
-      });
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
       await pull(dest, { io: mockIO(), force: true });
       await assertFilesMatch(dest, originalHashes);
     } finally {
@@ -961,8 +902,7 @@ describe('Scenariusz 8: --password override przy encryption.enabled=false', () =
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should encrypt when --password provided despite config encryption disabled', async () => {
@@ -1001,9 +941,7 @@ describe('Scenariusz 8: --password override przy encryption.enabled=false', () =
 
     const dest = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
-        recursive: true,
-      });
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
       await pull(dest, { io: mockIO(), force: true, password: PASSWORD });
       await assertFilesMatch(dest, originalHashes);
     } finally {
@@ -1025,8 +963,7 @@ describe('Scenariusz 9: --password na unencrypted vault = silent no-op', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should ignore --password on unencrypted manifest (deriveKey not called, files restored)', async () => {
@@ -1049,14 +986,8 @@ describe('Scenariusz 9: --password na unencrypted vault = silent no-op', () => {
 
     const dest = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
-        recursive: true,
-      });
-      await pull(dest, {
-        io: mockIO(),
-        force: true,
-        password: 'irrelevant-password',
-      });
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
+      await pull(dest, { io: mockIO(), force: true, password: 'irrelevant-password' });
       await assertFilesMatch(dest, originalHashes);
       expect(deriveKeySpy).not.toHaveBeenCalled();
     } finally {
@@ -1078,8 +1009,7 @@ describe('Scenariusz 10: pull bez password na encrypted manifest fails czytelnie
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should throw BfsError when no password provided for encrypted manifest', async () => {
@@ -1097,14 +1027,10 @@ describe('Scenariusz 10: pull bez password na encrypted manifest fails czytelnie
 
     const dest = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
-        recursive: true,
-      });
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
       // mockIO without answers → askSecret returns '' → triggers
       // 'Password required for encrypted vault.' in vault-manager.ts:597
-      await expect(pull(dest, { io: mockIO(), force: true })).rejects.toThrow(
-        BfsError,
-      );
+      await expect(pull(dest, { io: mockIO(), force: true })).rejects.toThrow(BfsError);
     } finally {
       await fs.rm(dest, { recursive: true, force: true });
     }
@@ -1125,14 +1051,10 @@ describe('Scenariusz 11: mixed-version vault — pull respektuje per-version enc
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
-  async function setupMixedVault(): Promise<{
-    v1Hashes: Map<string, string>;
-    v2Hashes: Map<string, string>;
-  }> {
+  async function setupMixedVault(): Promise<{ v1Hashes: Map<string, string>; v2Hashes: Map<string, string> }> {
     await init(root, {
       vault_name: 'mixed-vault',
       scheme: { data_shards: 2, parity_shards: 1 },
@@ -1170,9 +1092,7 @@ describe('Scenariusz 11: mixed-version vault — pull respektuje per-version enc
     const { v1Hashes } = await setupMixedVault();
     const dest = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
-        recursive: true,
-      });
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
       await pull(dest, { io: mockIO(), force: true, version: 1 });
       await assertFilesMatch(dest, v1Hashes);
     } finally {
@@ -1184,15 +1104,8 @@ describe('Scenariusz 11: mixed-version vault — pull respektuje per-version enc
     const { v2Hashes } = await setupMixedVault();
     const dest = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
-        recursive: true,
-      });
-      await pull(dest, {
-        io: mockIO(),
-        force: true,
-        version: 2,
-        password: V2_PASSWORD,
-      });
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
+      await pull(dest, { io: mockIO(), force: true, version: 2, password: V2_PASSWORD });
       await assertFilesMatch(dest, v2Hashes);
     } finally {
       await fs.rm(dest, { recursive: true, force: true });
@@ -1203,12 +1116,8 @@ describe('Scenariusz 11: mixed-version vault — pull respektuje per-version enc
     await setupMixedVault();
     const dest = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
-        recursive: true,
-      });
-      await expect(
-        pull(dest, { io: mockIO(), force: true, version: 2 }),
-      ).rejects.toThrow(BfsError);
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
+      await expect(pull(dest, { io: mockIO(), force: true, version: 2 })).rejects.toThrow(BfsError);
     } finally {
       await fs.rm(dest, { recursive: true, force: true });
     }
@@ -1219,15 +1128,8 @@ describe('Scenariusz 11: mixed-version vault — pull respektuje per-version enc
     const deriveKeySpy = vi.spyOn(cryptoModule, 'deriveKey');
     const dest = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
-        recursive: true,
-      });
-      await pull(dest, {
-        io: mockIO(),
-        force: true,
-        version: 1,
-        password: 'irrelevant',
-      });
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
+      await pull(dest, { io: mockIO(), force: true, version: 1, password: 'irrelevant' });
       await assertFilesMatch(dest, v1Hashes);
       expect(deriveKeySpy).not.toHaveBeenCalled();
     } finally {
@@ -1257,8 +1159,7 @@ describe('Scenariusz 12: pull ze złym hasłem na encrypted vault', () => {
   });
 
   afterEach(async () => {
-    for (const d of [root, ...pdirs])
-      await fs.rm(d, { recursive: true, force: true });
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
   it('should reject with DecryptionError (no unhandled stream error) on wrong password', async () => {
@@ -1276,16 +1177,12 @@ describe('Scenariusz 12: pull ze złym hasłem na encrypted vault', () => {
 
     const dest = await tmp();
     try {
-      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), {
-        recursive: true,
-      });
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
 
       // All N+K shards present, but the wrong password → every shard's GCM
       // check fails. Must surface as a single DecryptionError, never an
       // uncaught 'error' event from a sibling decrypt stream.
-      await expect(
-        pull(dest, { io: mockIO(), force: true, password: 'wrong-password' }),
-      ).rejects.toThrow(DecryptionError);
+      await expect(pull(dest, { io: mockIO(), force: true, password: 'wrong-password' })).rejects.toThrow(DecryptionError);
     } finally {
       await fs.rm(dest, { recursive: true, force: true });
     }

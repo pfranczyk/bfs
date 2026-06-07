@@ -2,9 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PullSkippedError } from '../../src/core/errors.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
-vi.mock('../../src/vault/vault-manager.js', () => ({
-  pull: vi.fn(),
-}));
+vi.mock('../../src/vault/vault-manager.js', () => ({ pull: vi.fn() }));
 vi.mock('inquirer', () => ({
   default: {
     prompt: vi.fn(),
@@ -16,30 +14,10 @@ vi.mock('inquirer', () => ({
     type = 'separator';
   },
 }));
-vi.mock('ora', () => ({
-  default: () => ({
-    start: vi.fn().mockReturnThis(),
-    stop: vi.fn().mockReturnThis(),
-    succeed: vi.fn().mockReturnThis(),
-    fail: vi.fn().mockReturnThis(),
-    text: '',
-  }),
-}));
+vi.mock('ora', () => ({ default: () => ({ start: vi.fn().mockReturnThis(), stop: vi.fn().mockReturnThis(), succeed: vi.fn().mockReturnThis(), fail: vi.fn().mockReturnThis(), text: '' }) }));
 vi.mock('../../src/providers/provider.js', async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import('../../src/providers/provider.js')>();
-  return {
-    ...actual,
-    createCliProviderIO: vi.fn(() => ({
-      ask: vi.fn(),
-      askSecret: vi.fn().mockResolvedValue(''),
-      confirm: vi.fn().mockResolvedValue(true),
-      choose: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      progress: vi.fn(),
-    })),
-  };
+  const actual = await importOriginal<typeof import('../../src/providers/provider.js')>();
+  return { ...actual, createCliProviderIO: vi.fn(() => ({ ask: vi.fn(), askSecret: vi.fn().mockResolvedValue(''), confirm: vi.fn().mockResolvedValue(true), choose: vi.fn(), info: vi.fn(), warn: vi.fn(), progress: vi.fn() })) };
 });
 
 import { pull } from '../../src/vault/vault-manager.js';
@@ -74,37 +52,25 @@ describe('pull', () => {
   it('should pass version when --version flag given', async () => {
     await runCmd(['pull', '--version', '5']);
 
-    expect(mockPull).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ version: 5 }),
-    );
+    expect(mockPull).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ version: 5 }));
   });
 
   it('should pass force=true when --force flag given', async () => {
     await runCmd(['pull', '--force']);
 
-    expect(mockPull).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ force: true }),
-    );
+    expect(mockPull).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ force: true }));
   });
 
   it('should pass password when --password flag given', async () => {
     await runCmd(['pull', '--password', 'tajne']);
 
-    expect(mockPull).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ password: 'tajne' }),
-    );
+    expect(mockPull).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ password: 'tajne' }));
   });
 
   it('should not set version when no --version flag', async () => {
     await runCmd(['pull']);
 
-    expect(mockPull).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.not.objectContaining({ version: expect.anything() }),
-    );
+    expect(mockPull).toHaveBeenCalledWith(expect.any(String), expect.not.objectContaining({ version: expect.anything() }));
   });
 
   // ─── io — potwierdzenie nadpisania (pipeline krok 4 Tryb A) ───────────────
@@ -112,9 +78,7 @@ describe('pull', () => {
   it('should pass io with confirm for overwrite confirmation', async () => {
     // Pipeline step 4 (Mode A): "Na dysku: wersja X. Przywrócenie wersji Y nadpisze katalog."
     mockPull.mockImplementation(async (_dir, opts) => {
-      const cont = await opts.io.confirm(
-        'Na dysku: wersja 1. Przywrócenie wersji 2 nadpisze katalog. Kontynuować?',
-      );
+      const cont = await opts.io.confirm('Na dysku: wersja 1. Przywrócenie wersji 2 nadpisze katalog. Kontynuować?');
       expect(cont).toBe(true);
       return { version: 1, extracted: 0, skipped: [] };
     });
@@ -131,9 +95,7 @@ describe('pull', () => {
     });
 
     // Override createCliProviderIO mock to return false for confirm
-    const { createCliProviderIO } = await import(
-      '../../src/providers/provider.js'
-    );
+    const { createCliProviderIO } = await import('../../src/providers/provider.js');
     vi.mocked(createCliProviderIO).mockReturnValueOnce({
       lang: 'en',
       workDir: process.cwd(),
@@ -169,9 +131,7 @@ describe('pull', () => {
 
   it('should route io.warn through to underlying io.warn', async () => {
     const warnMock = vi.fn();
-    const { createCliProviderIO } = await import(
-      '../../src/providers/provider.js'
-    );
+    const { createCliProviderIO } = await import('../../src/providers/provider.js');
     vi.mocked(createCliProviderIO).mockReturnValueOnce({
       lang: 'en',
       workDir: process.cwd(),
@@ -199,10 +159,7 @@ describe('pull', () => {
   it('should pass cacheDir when --cache-dir flag given', async () => {
     await runCmd(['pull', '--cache-dir', '/custom/cache']);
 
-    expect(mockPull).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ cacheDir: '/custom/cache' }),
-    );
+    expect(mockPull).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ cacheDir: '/custom/cache' }));
   });
 
   // ─── Odrzucenie usuniętych opcji ──────────────────────────────────────────
@@ -221,29 +178,19 @@ describe('pull', () => {
 
   it('should show skipped file list and cache hint when PullSkippedError is thrown', async () => {
     const cachePath = '/vault/.bfs/cache/pull.blob.pending';
-    mockPull.mockRejectedValue(
-      new PullSkippedError(
-        [{ path: 'protected.cfg', reason: 'EACCES: permission denied' }],
-        cachePath,
-      ),
-    );
+    mockPull.mockRejectedValue(new PullSkippedError([{ path: 'protected.cfg', reason: 'EACCES: permission denied' }], cachePath));
 
     const result = await runCmd(['pull']);
 
     expect(result).toBe('abort');
-    expect(capture.errors.some((e) => e.includes('could not be written'))).toBe(
-      true,
-    );
+    expect(capture.errors.some((e) => e.includes('could not be written'))).toBe(true);
     expect(capture.logs.some((l) => l.includes('pull --cache'))).toBe(true);
   });
 
   it('should pass fromCache=true when --cache flag given', async () => {
     await runCmd(['pull', '--cache']);
 
-    expect(mockPull).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ fromCache: true }),
-    );
+    expect(mockPull).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ fromCache: true }));
   });
 
   // ─── Błąd pull ────────────────────────────────────────────────────────────
@@ -254,9 +201,7 @@ describe('pull', () => {
     const result = await runCmd(['pull']);
 
     expect(result).toBe('abort');
-    expect(capture.errors.some((e) => e.includes('Za mało shardów'))).toBe(
-      true,
-    );
+    expect(capture.errors.some((e) => e.includes('Za mało shardów'))).toBe(true);
   });
 
   it('should abort when vault config is missing', async () => {
@@ -265,8 +210,6 @@ describe('pull', () => {
     const result = await runCmd(['pull']);
 
     expect(result).toBe('abort');
-    expect(
-      capture.errors.some((e) => e.includes('No vault config found')),
-    ).toBe(true);
+    expect(capture.errors.some((e) => e.includes('No vault config found'))).toBe(true);
   });
 });

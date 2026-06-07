@@ -3,20 +3,25 @@ import { deriveKey } from '../core/crypto.js';
 import { BfsError } from '../core/errors.js';
 import { hashBuffer, streamToBuffer } from '../core/hash.js';
 import { rsRepair } from '../core/reed-solomon.js';
-import { buildShard, parseShardHeaderFromStream } from '../core/shard-io.js';
+import { buildHeaderBytes, buildShard, buildShardHeaderFromBytes } from '../core/shard-io.js';
 import { providerRegistry } from '../providers/provider.js';
 import type {
   ManifestShard,
   ProviderConfig,
   ProviderIO,
+  RebuildAllVersionsOptions,
+  RebuildVersionOptions,
+  RelocateProviderOptions,
   RemoteRef,
   ShardHeader,
   ShardLocation,
+  UpdateLocationMapsOptions,
   VaultConfig,
   VersionManifest,
 } from '../types/index.js';
 import { VersionHealth } from '../types/index.js';
 import { readConfig, writeConfig } from './config.js';
+import { splitLocationSecrets } from './location-map.js';
 import { listManifests, readManifest, writeManifest } from './manifest.js';
 import { readState } from './state.js';
 import { buildRemotePath, extractShardPayload } from './vault-manager.js';
@@ -30,19 +35,6 @@ export interface HealReport {
   versions_degraded: number[];
 }
 
-// ─── Internal helpers ─────────────────────────────────────────────────────────
-
-/**
- * Builds the new header bytes for a shard with an updated location map.
- * Uses buildShard with an empty payload, then strips the trailing checksum,
- * yielding just the serialized header (magic … end of location map).
- */
-function buildHeaderBytes(header: ShardHeader, encKey?: Buffer): Buffer {
-  const tempShard = buildShard(header, Buffer.alloc(0), encKey);
-  // [header][0-byte payload][32-byte checksum] → strip last 32 bytes
-  return tempShard.subarray(0, tempShard.length - 32);
-}
-
 // ─── Private helpers for rebuildVersion ───────────────────────────────────────
 
 /**
@@ -50,15 +42,7 @@ function buildHeaderBytes(header: ShardHeader, encKey?: Buffer): Buffer {
  * Returns a slots array (null where unavailable) and a map of raw shard binaries for
  * header inspection.
  */
-async function downloadAvailableShards(
-  config: VaultConfig,
-  manifest: VersionManifest,
-  removedProviderId: string,
-  io: ProviderIO,
-): Promise<{
-  shardSlots: Nullable<Buffer>[];
-  shardDataMap: Map<number, Buffer>;
-}> {
+async function downloadAvailableShards(config: VaultConfig, manifest: VersionManifest, removedProviderId: string, io: ProviderIO): Promise<{ shardSlots: Nullable<Buffer>[]; shardDataMap: Map<number, Buffer> }> {
   const { data_shards: N, parity_shards: K } = manifest.scheme;
   const version = manifest.version;
   const shardSlots: Nullable<Buffer>[] = new Array(N + K).fill(null);
@@ -72,10 +56,7 @@ async function downloadAvailableShards(
       const provider = providerRegistry.create(pc, io);
       await provider.authenticate();
       provider.setVaultName(config.vault_name);
-      const stream = await provider.download({
-        provider_id: ms.provider_id,
-        path: `shard_${ms.shard_index}.bfs.${version}`,
-      });
+      const stream = await provider.download({ provider_id: ms.provider_id, path: `shard_${ms.shard_index}.bfs.${version}` });
       const data = await streamToBuffer(stream);
       shardSlots[ms.shard_index] = extractShardPayload(data);
       shardDataMap.set(ms.shard_index, data);
@@ -95,16 +76,7 @@ async function extractShardMeta(
   shardDataMap: Map<number, Buffer>,
   manifest: VersionManifest,
   password: string | undefined,
-): Promise<{
-  encKey: Buffer | undefined;
-  kdf_salt: Nullable<Buffer>;
-  blobSize: bigint;
-  blobHash: string;
-  formatVersion: number;
-  vaultId: string;
-  vaultName: string;
-  rsStripeSize: Nullable<number>;
-}> {
+): Promise<{ encKey: Buffer | undefined; kdf_salt: Nullable<Buffer>; blobSize: bigint; blobHash: string; formatVersion: number; vaultId: string; vaultName: string; rsStripeSize: Nullable<number> }> {
   let encKey: Buffer | undefined;
   let kdf_salt: Nullable<Buffer> = null;
   let blobSize = BigInt(0);
@@ -115,9 +87,7 @@ async function extractShardMeta(
   let rsStripeSize: Nullable<number> = null;
 
   for (const [, rawData] of shardDataMap) {
-    const { header: meta } = await parseShardHeaderFromStream(
-      Readable.from(rawData),
-    );
+    const meta = buildShardHeaderFromBytes(rawData);
     blobSize = meta.blob_size;
     blobHash = meta.blob_hash;
     formatVersion = meta.format_version;
@@ -135,40 +105,19 @@ async function extractShardMeta(
   if (manifest.encrypted && password && !encKey) {
     throw new BfsError('Could not retrieve kdf_salt from available shards.');
   }
-  return {
-    encKey,
-    kdf_salt,
-    blobSize,
-    blobHash,
-    formatVersion,
-    vaultId,
-    vaultName,
-    rsStripeSize,
-  };
+  return { encKey, kdf_salt, blobSize, blobHash, formatVersion, vaultId, vaultName, rsStripeSize };
 }
 
 /**
  * Builds the repaired shard binary and uploads it to the target provider.
  * @throws BfsError if the target provider cannot be authenticated
  */
-async function uploadRepairedShard(
-  targetProviderConfig: ProviderConfig,
-  header: ShardHeader,
-  payload: Buffer,
-  filename: string,
-  vaultName: string,
-  encKey: Buffer | undefined,
-  io: ProviderIO,
-): Promise<void> {
+async function uploadRepairedShard(targetProviderConfig: ProviderConfig, header: ShardHeader, payload: Buffer, filename: string, vaultName: string, encKey: Buffer | undefined, io: ProviderIO): Promise<void> {
   const targetProvider = providerRegistry.create(targetProviderConfig, io);
   await targetProvider.authenticate();
   targetProvider.setVaultName(vaultName);
   const shardBuffer = buildShard(header, payload, encKey);
-  await targetProvider.upload(
-    filename,
-    Readable.from(shardBuffer),
-    shardBuffer.length,
-  );
+  await targetProvider.upload(filename, Readable.from(shardBuffer), shardBuffer.length);
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -178,31 +127,21 @@ async function uploadRepairedShard(
  * For encrypted vaults, decrypts the old location map, replaces it, and re-encrypts.
  * Uses provider.updateShardHeader() for each available shard.
  *
- * @param rootDir        - Vault root directory
- * @param version        - Version number to update
- * @param newLocationMap - Replacement ShardLocation[] to embed
- * @param io             - ProviderIO for provider authentication
- * @param password       - Decryption/re-encryption password (required if vault is encrypted)
+ * @param rootDir  - Vault root directory
+ * @param version  - Version number to update
+ * @param options  - newLocationMap, io, and optional password
  * @throws BfsError if config or manifest is missing, or password is required but absent
  */
-export async function updateLocationMaps(
-  rootDir: string,
-  version: number,
-  newLocationMap: ShardLocation[],
-  io: ProviderIO,
-  password?: string,
-): Promise<void> {
+export async function updateLocationMaps(rootDir: string, version: number, options: UpdateLocationMapsOptions): Promise<void> {
+  const { newLocationMap, io, password } = options;
   const config = await readConfig(rootDir);
   if (!config) throw new BfsError('No vault config found.');
 
   const manifest = await readManifest(rootDir, version);
-  if (!manifest)
-    throw new BfsError(`Manifest for version ${version} not found.`);
+  if (!manifest) throw new BfsError(`Manifest for version ${version} not found.`);
 
   if (manifest.encrypted && !password) {
-    throw new BfsError(
-      'Password required to update location maps in an encrypted vault.',
-    );
+    throw new BfsError('Password required to update location maps in an encrypted vault.');
   }
 
   for (const ms of manifest.shards) {
@@ -220,9 +159,7 @@ export async function updateLocationMaps(
       // Download existing shard to read its header metadata
       const shardStream = await provider.download(ref);
       const shardData = await streamToBuffer(shardStream);
-      const { header: meta } = await parseShardHeaderFromStream(
-        Readable.from(shardData),
-      );
+      const meta = buildShardHeaderFromBytes(shardData);
 
       // Derive encryption key if needed
       let encKey: Buffer | undefined;
@@ -261,114 +198,80 @@ export async function updateLocationMaps(
  * Rebuilds a lost/corrupted shard using Reed-Solomon repair and uploads it
  * to a new target provider. Also updates location maps on all remaining shards.
  *
- * @param rootDir          - Vault root directory
- * @param version          - Version to repair
- * @param removedProviderId - Provider whose shard is missing/gone
- * @param targetProviderId  - Provider that will receive the repaired shard
- * @param io               - ProviderIO for provider interaction
- * @param password         - Required for encrypted vaults
+ * @param rootDir  - Vault root directory
+ * @param version  - Version to repair
+ * @param options  - removedProviderId, targetProviderId, io, and optional password
  * @throws BfsError if not enough shards available or password missing for encrypted vault
  */
-export async function rebuildVersion(
-  rootDir: string,
-  version: number,
-  removedProviderId: string,
-  targetProviderId: string,
-  io: ProviderIO,
-  password?: string,
-): Promise<void> {
+export async function rebuildVersion(rootDir: string, version: number, options: RebuildVersionOptions): Promise<void> {
+  const { removedProviderId, targetProviderId, io, password } = options;
   const config = await readConfig(rootDir);
   if (!config) throw new BfsError('No vault config found.');
 
   const manifest = await readManifest(rootDir, version);
-  if (!manifest)
-    throw new BfsError(`Manifest for version ${version} not found.`);
+  if (!manifest) throw new BfsError(`Manifest for version ${version} not found.`);
 
   if (manifest.encrypted && !password) {
-    throw new BfsError(
-      'Password required for RS repair in an encrypted vault.',
-    );
+    throw new BfsError('Password required for RS repair in an encrypted vault.');
   }
 
   const { data_shards: N, parity_shards: K } = manifest.scheme;
 
   // Find which shard index belongs to the removed provider
-  const removedShard = manifest.shards.find(
-    (s) => s.provider_id === removedProviderId,
-  );
+  const removedShard = manifest.shards.find((s) => s.provider_id === removedProviderId);
   if (!removedShard) return; // this version doesn't use the removed provider — nothing to do
 
-  const targetProviderConfig = config.providers.find(
-    (p) => p.id === targetProviderId,
-  );
+  const targetProviderConfig = config.providers.find((p) => p.id === targetProviderId);
   if (!targetProviderConfig) {
-    throw new BfsError(
-      `Target provider "${targetProviderId}" not found in config.`,
-    );
+    throw new BfsError(`Target provider "${targetProviderId}" not found in config.`);
   }
 
   // Validate invariant: targetProvider must not already hold a shard for this version
-  const targetAlreadyHasShard = manifest.shards.some(
-    (s) => s.provider_id === targetProviderId,
-  );
+  const targetAlreadyHasShard = manifest.shards.some((s) => s.provider_id === targetProviderId);
   if (targetAlreadyHasShard) {
-    throw new BfsError(
-      `Target provider "${targetProviderId}" already holds a shard for version ${version}. ` +
-        `Each provider can hold at most one shard per version.`,
-    );
+    throw new BfsError(`Target provider "${targetProviderId}" already holds a shard for version ${version}. Each provider can hold at most one shard per version.`);
   }
 
   // Download all available shards (skip the removed provider)
-  const { shardSlots, shardDataMap } = await downloadAvailableShards(
-    config,
-    manifest,
-    removedProviderId,
-    io,
-  );
+  const { shardSlots, shardDataMap } = await downloadAvailableShards(config, manifest, removedProviderId, io);
 
   const available = shardSlots.filter((s) => s !== null).length;
   if (available < N) {
-    throw new BfsError(
-      `Not enough shards to repair version ${version}: need ${N}, got ${available}.`,
-    );
+    throw new BfsError(`Not enough shards to repair version ${version}: need ${N}, got ${available}.`);
   }
 
   // RS repair — produces all N+K shard payloads
   const repaired = rsRepair(shardSlots, N, K);
   const repairedPayload = repaired[removedShard.shard_index];
   if (!repairedPayload) {
-    throw new BfsError(
-      `RS repair failed for shard ${removedShard.shard_index} in version ${version}.`,
-    );
+    throw new BfsError(`RS repair failed for shard ${removedShard.shard_index} in version ${version}.`);
   }
   const repairedPayloadHash = hashBuffer(repairedPayload);
 
   // Build new location map: swap removedProvider → targetProvider
   const newLocationMap: ShardLocation[] = manifest.shards.map((ms) => {
     if (ms.provider_id === removedProviderId) {
+      const split = splitLocationSecrets(targetProviderConfig.type, targetProviderConfig.config, io);
       return {
         shard_index: ms.shard_index,
         provider_id: targetProviderId,
         provider_type: targetProviderConfig.type,
         adapterPackage: targetProviderConfig.adapterPackage,
-        connection_config: targetProviderConfig.config,
-        remote_path: buildRemotePath(
-          targetProviderConfig,
-          config.vault_name,
-          `shard_${ms.shard_index}.bfs.${version}`,
-        ),
+        connection_config: split.connection_config,
+        required_inputs: split.required_inputs,
+        remote_path: buildRemotePath(targetProviderConfig, config.vault_name, `shard_${ms.shard_index}.bfs.${version}`),
         shard_hash: repairedPayloadHash,
       };
     }
-    const sourceProvider = config.providers.find(
-      (p) => p.id === ms.provider_id,
-    );
+    const sourceProvider = config.providers.find((p) => p.id === ms.provider_id);
+    const split = splitLocationSecrets(ms.provider_type, sourceProvider?.config ?? {}, io);
     return {
       shard_index: ms.shard_index,
       provider_id: ms.provider_id,
       provider_type: ms.provider_type,
       adapterPackage: sourceProvider?.adapterPackage ?? null,
-      connection_config: sourceProvider?.config ?? {},
+      connection_config: split.connection_config,
+      required_inputs: split.required_inputs,
       remote_path: ms.remote_path,
       shard_hash: ms.shard_hash,
     };
@@ -376,15 +279,7 @@ export async function rebuildVersion(
 
   // Extract metadata and key from the first available shard
   const shardMeta = await extractShardMeta(shardDataMap, manifest, password);
-  const {
-    encKey,
-    kdf_salt,
-    blobSize,
-    blobHash,
-    formatVersion,
-    vaultId,
-    vaultName,
-  } = shardMeta;
+  const { encKey, kdf_salt, blobSize, blobHash, formatVersion, vaultId, vaultName } = shardMeta;
 
   // Build and upload the repaired shard to the target provider
   const repairedHeader: ShardHeader = {
@@ -405,18 +300,10 @@ export async function rebuildVersion(
     location_map: newLocationMap,
   };
   const repairedFilename = `shard_${removedShard.shard_index}.bfs.${version}`;
-  await uploadRepairedShard(
-    targetProviderConfig,
-    repairedHeader,
-    repairedPayload,
-    repairedFilename,
-    config.vault_name,
-    encKey,
-    io,
-  );
+  await uploadRepairedShard(targetProviderConfig, repairedHeader, repairedPayload, repairedFilename, config.vault_name, encKey, io);
 
   // Update location maps on all existing (available) shards
-  await updateLocationMaps(rootDir, version, newLocationMap, io, password);
+  await updateLocationMaps(rootDir, version, { newLocationMap, io, ...(password !== undefined ? { password } : {}) });
 
   // Update manifest
   const updatedShards: ManifestShard[] = manifest.shards.map((ms) => {
@@ -425,79 +312,45 @@ export async function rebuildVersion(
         shard_index: ms.shard_index,
         provider_id: targetProviderId,
         provider_type: targetProviderConfig.type,
-        remote_path: buildRemotePath(
-          targetProviderConfig,
-          config.vault_name,
-          `shard_${ms.shard_index}.bfs.${version}`,
-        ),
+        remote_path: buildRemotePath(targetProviderConfig, config.vault_name, `shard_${ms.shard_index}.bfs.${version}`),
         shard_hash: repairedPayloadHash,
       };
     }
     return ms;
   });
 
-  await writeManifest(rootDir, {
-    ...manifest,
-    shards: updatedShards,
-    health: VersionHealth.Healthy,
-  });
+  await writeManifest(rootDir, { ...manifest, shards: updatedShards, health: VersionHealth.Healthy });
 }
 
 /**
  * Rebuilds all specified versions after a provider was lost.
  * Uploads repaired shards to targetProvider and updates location maps.
  *
- * @param rootDir           - Vault root directory
- * @param removedProviderId - Provider whose shards are lost
- * @param targetProviderId  - Provider to upload repaired shards to
- * @param scope             - 'all' | 'latest' | version number array
- * @param io                - ProviderIO
- * @param password          - Required for encrypted vaults
+ * @param rootDir  - Vault root directory
+ * @param options  - removedProviderId, targetProviderId, scope, io, and optional password
  * @returns HealReport
  */
-export async function rebuildAllVersions(
-  rootDir: string,
-  removedProviderId: string,
-  targetProviderId: string,
-  scope: number[] | 'all' | 'latest',
-  io: ProviderIO,
-  password?: string,
-): Promise<HealReport> {
+export async function rebuildAllVersions(rootDir: string, options: RebuildAllVersionsOptions): Promise<HealReport> {
+  const { removedProviderId, targetProviderId, scope, io, password } = options;
   const state = await readState(rootDir);
   const manifests = await listManifests(rootDir);
 
-  const affectedManifests = manifests.filter((m) =>
-    m.shards.some((s) => s.provider_id === removedProviderId),
-  );
+  const affectedManifests = manifests.filter((m) => m.shards.some((s) => s.provider_id === removedProviderId));
 
   let targetVersions: number[];
   if (scope === 'all') {
     targetVersions = affectedManifests.map((m) => m.version);
   } else if (scope === 'latest') {
-    targetVersions = affectedManifests
-      .filter((m) => m.version === state.latest_version)
-      .map((m) => m.version);
+    targetVersions = affectedManifests.filter((m) => m.version === state.latest_version).map((m) => m.version);
   } else {
     targetVersions = scope;
   }
 
-  const report: HealReport = {
-    repaired: 0,
-    degraded: 0,
-    versions_repaired: [],
-    versions_degraded: [],
-  };
+  const report: HealReport = { repaired: 0, degraded: 0, versions_repaired: [], versions_degraded: [] };
 
   for (const version of targetVersions) {
     try {
-      await rebuildVersion(
-        rootDir,
-        version,
-        removedProviderId,
-        targetProviderId,
-        io,
-        password,
-      );
+      await rebuildVersion(rootDir, version, { removedProviderId, targetProviderId, io, ...(password !== undefined ? { password } : {}) });
       report.repaired++;
       report.versions_repaired.push(version);
     } catch {
@@ -520,55 +373,34 @@ export async function rebuildAllVersions(
  * Verifies provider accessibility, confirms shards exist, then updates location maps
  * in all existing shards and in config.json.
  *
- * @param rootDir          - Vault root directory
- * @param providerId       - Existing provider id to relocate
- * @param newConnectionConfig - New connection parameters (e.g., new IP/path)
- * @param io               - ProviderIO
- * @param password         - Required for encrypted vaults
+ * @param rootDir    - Vault root directory
+ * @param providerId - Existing provider id to relocate
+ * @param options    - newConnectionConfig, io, optional password and newType
  * @throws BfsError if provider is unreachable at new address or shards are missing
  */
-export async function relocateProvider(
-  rootDir: string,
-  providerId: string,
-  newConnectionConfig: Record<string, unknown>,
-  io: ProviderIO,
-  password?: string,
-  newType?: string,
-): Promise<void> {
+export async function relocateProvider(rootDir: string, providerId: string, options: RelocateProviderOptions): Promise<void> {
+  const { newConnectionConfig, io, password, newType } = options;
   const config = await readConfig(rootDir);
   if (!config) throw new BfsError('No vault config found.');
 
   const existingProvider = config.providers.find((p) => p.id === providerId);
-  if (!existingProvider)
-    throw new BfsError(`Provider "${providerId}" not found in config.`);
+  if (!existingProvider) throw new BfsError(`Provider "${providerId}" not found in config.`);
 
   const resolvedType = newType ?? existingProvider.type;
   // When the type changes the adapter may also change — refresh the package
   // metadata from the registry so the probed provider advertises the correct
   // provenance. When the type is unchanged, keep the persisted adapterPackage.
   const updatedMeta = providerRegistry.getMeta(resolvedType);
-  const updatedAdapterPackage =
-    resolvedType === existingProvider.type
-      ? existingProvider.adapterPackage
-      : updatedMeta
-        ? `${updatedMeta.packageName}@${updatedMeta.packageVersion}`
-        : null;
+  const updatedAdapterPackage = resolvedType === existingProvider.type ? existingProvider.adapterPackage : updatedMeta ? `${updatedMeta.packageName}@${updatedMeta.packageVersion}` : null;
 
   // Create a temporary config with the new connection parameters
-  const updatedProviderConfig = {
-    ...existingProvider,
-    type: resolvedType,
-    adapterPackage: updatedAdapterPackage,
-    config: newConnectionConfig,
-  };
+  const updatedProviderConfig = { ...existingProvider, type: resolvedType, adapterPackage: updatedAdapterPackage, config: newConnectionConfig };
   const tempProvider = providerRegistry.create(updatedProviderConfig, io);
 
   // Verify accessibility
   const healthy = await tempProvider.healthCheck();
   if (!healthy) {
-    throw new BfsError(
-      `Provider "${providerId}" is not accessible at the new address.`,
-    );
+    throw new BfsError(`Provider "${providerId}" is not accessible at the new address.`);
   }
 
   await tempProvider.authenticate();
@@ -576,9 +408,7 @@ export async function relocateProvider(
 
   // Verify shards exist on the new address for all relevant versions
   const manifests = await listManifests(rootDir);
-  const affectedManifests = manifests.filter((m) =>
-    m.shards.some((s) => s.provider_id === providerId),
-  );
+  const affectedManifests = manifests.filter((m) => m.shards.some((s) => s.provider_id === providerId));
 
   for (const manifest of affectedManifests) {
     const ms = manifest.shards.find((s) => s.provider_id === providerId);
@@ -586,9 +416,7 @@ export async function relocateProvider(
     const filename = `shard_${ms.shard_index}.bfs.${manifest.version}`;
     const refs = await tempProvider.list(filename);
     if (!refs.some((r) => r.path === filename)) {
-      throw new BfsError(
-        `Shard "${filename}" not found at new provider address for version ${manifest.version}.`,
-      );
+      throw new BfsError(`Shard "${filename}" not found at new provider address for version ${manifest.version}.`);
     }
   }
 
@@ -596,19 +424,8 @@ export async function relocateProvider(
   // When the type changes, refresh adapterPackage from the registry so the
   // persisted metadata matches the new adapter's provenance.
   const resolvedMeta = providerRegistry.getMeta(resolvedType);
-  const resolvedAdapterPackage = resolvedMeta
-    ? `${resolvedMeta.packageName}@${resolvedMeta.packageVersion}`
-    : null;
-  const updatedProviders = config.providers.map((p) =>
-    p.id === providerId
-      ? {
-          ...p,
-          type: resolvedType,
-          adapterPackage: resolvedAdapterPackage,
-          config: newConnectionConfig,
-        }
-      : p,
-  );
+  const resolvedAdapterPackage = resolvedMeta ? `${resolvedMeta.packageName}@${resolvedMeta.packageVersion}` : null;
+  const updatedProviders = config.providers.map((p) => (p.id === providerId ? { ...p, type: resolvedType, adapterPackage: resolvedAdapterPackage, config: newConnectionConfig } : p));
   await writeConfig(rootDir, { ...config, providers: updatedProviders });
 
   // Update location maps in all affected shards (new connection_config)
@@ -616,41 +433,33 @@ export async function relocateProvider(
     const newLocationMap: ShardLocation[] = manifest.shards.map((ms) => {
       if (ms.provider_id === providerId) {
         const filename = `shard_${ms.shard_index}.bfs.${manifest.version}`;
+        const split = splitLocationSecrets(resolvedType, newConnectionConfig, io);
         return {
           shard_index: ms.shard_index,
           provider_id: providerId,
           provider_type: resolvedType,
           adapterPackage: resolvedAdapterPackage,
-          connection_config: newConnectionConfig,
-          remote_path: [
-            String(newConnectionConfig.path ?? ''),
-            config.vault_name,
-            filename,
-          ]
-            .join('/')
-            .replace(/\\/g, '/'),
+          connection_config: split.connection_config,
+          required_inputs: split.required_inputs,
+          remote_path: [String(newConnectionConfig.path ?? ''), config.vault_name, filename].join('/').replace(/\\/g, '/'),
           shard_hash: ms.shard_hash,
         };
       }
       const pc = config.providers.find((p) => p.id === ms.provider_id);
+      const split = splitLocationSecrets(ms.provider_type, pc?.config ?? {}, io);
       return {
         shard_index: ms.shard_index,
         provider_id: ms.provider_id,
         provider_type: ms.provider_type,
         adapterPackage: pc?.adapterPackage ?? null,
-        connection_config: pc?.config ?? {},
+        connection_config: split.connection_config,
+        required_inputs: split.required_inputs,
         remote_path: ms.remote_path,
         shard_hash: ms.shard_hash,
       };
     });
 
     // Re-read config (now updated) for the location map update
-    await updateLocationMaps(
-      rootDir,
-      manifest.version,
-      newLocationMap,
-      io,
-      password,
-    );
+    await updateLocationMaps(rootDir, manifest.version, { newLocationMap, io, ...(password !== undefined ? { password } : {}) });
   }
 }

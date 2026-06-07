@@ -43,16 +43,12 @@ describe('t()', () => {
 describe('fmt()', () => {
   it('should replace %s placeholders in order', () => {
     setLang('en');
-    expect(fmt('init_found_files', '42', '1.5 MB')).toBe(
-      'Found 42 file(s) (1.5 MB)',
-    );
+    expect(fmt('init_found_files', '42', '1.5 MB')).toBe('Found 42 file(s) (1.5 MB)');
   });
 
   it('should work in Polish', () => {
     setLang('pl');
-    expect(fmt('init_found_files', '7', '200 KB')).toBe(
-      'Znaleziono 7 plik(ów) (200 KB)',
-    );
+    expect(fmt('init_found_files', '7', '200 KB')).toBe('Znaleziono 7 plik(ów) (200 KB)');
   });
 
   it('should replace multiple %s in order', () => {

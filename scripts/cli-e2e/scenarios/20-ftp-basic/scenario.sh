@@ -14,7 +14,7 @@ scenario_run() {
   make_large_file "$vault" $((2 * 1024 * 1024))
   build_pool "$SC_DIR" 0 4 "$name"
 
-  run_bfs "$vault" init "$name" --ci --no-compress \
+  run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 3 --parity-shards 1 "${PROVIDER_ARGS[@]}"
   assert_ok
 

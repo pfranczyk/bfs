@@ -3,12 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as zlib from 'node:zlib';
 import { afterEach, assert, beforeEach, describe, expect, it } from 'vitest';
-import {
-  createZipPacker,
-  estimateCompressibility,
-  extractZip,
-  isZipBuffer,
-} from '../../src/core/compression.js';
+import { createZipPacker, estimateCompressibility, extractZip, isZipBuffer } from '../../src/core/compression.js';
 import { BfsError } from '../../src/core/errors.js';
 
 // ─── createZipPacker + extractZip roundtrip ───────────────────────────────────

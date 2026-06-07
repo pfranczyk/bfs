@@ -7,23 +7,17 @@ import path from 'node:path';
 import type { Readable, TransformCallback } from 'node:stream';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { ProviderError } from '../core/errors.js';
+import { ProviderError, ShardCorruptedError } from '../core/errors.js';
 import { isEnoent } from '../core/fs-utils.js';
-import { hashBuffer } from '../core/hash.js';
-import { computeShardHeaderSize } from '../core/shard-io.js';
+import { hashBuffer, SHA256_BYTES } from '../core/hash.js';
+import { computeShardHeaderSize, readShardHeader } from '../core/shard-io.js';
 import { fmt, fmtFor, t, tFor } from '../i18n/index.js';
-import type {
-  CliProviderInput,
-  ProviderConfig,
-  ProviderHelp,
-  ProviderIO,
-  RemoteRef,
-  StorageProvider,
-} from '../types/index.js';
+import type { CliProviderInput, ProviderConfig, ProviderHelp, ProviderIO, RemoteRef, ShardHeader, ShardIdentity, StorageProvider, VerifyShardResult } from '../types/index.js';
 import { findStringFlag, readJsonObjectFile } from './flags.js';
+import { finishVerifyShard, throwSidecarUnsupported } from './header-verify.js';
 import { type ProviderFactory, providerRegistry } from './provider.js';
 
-const CHECKSUM_SIZE = 32;
+const CHECKSUM_SIZE = SHA256_BYTES;
 
 /**
  * StorageProvider backed by the local filesystem (disk, USB, mounted folder).
@@ -61,9 +55,7 @@ export class LocalFsProvider implements StorageProvider {
    */
   private vaultDir(): string {
     if (this.vaultName === null) {
-      throw new ProviderError(
-        'setVaultName() must be called before any file operation',
-      );
+      throw new ProviderError('setVaultName() must be called before any file operation');
     }
     return path.join(this.basePath, this.vaultName);
   }
@@ -93,20 +85,14 @@ export class LocalFsProvider implements StorageProvider {
     }
 
     if (!exists) {
-      const create = await this.io.confirm(
-        fmt('provider_local_path_not_exist_confirm', this.basePath),
-      );
+      const create = await this.io.confirm(fmt('provider_local_path_not_exist_confirm', this.basePath));
       if (!create) {
-        throw new ProviderError(
-          fmt('provider_local_path_not_exist_error', this.basePath),
-        );
+        throw new ProviderError(fmt('provider_local_path_not_exist_error', this.basePath));
       }
       try {
         await fs.mkdir(this.basePath, { recursive: true });
       } catch (err) {
-        throw new ProviderError(
-          `Failed to create directory "${this.basePath}": ${String(err)}`,
-        );
+        throw new ProviderError(`Failed to create directory "${this.basePath}": ${String(err)}`);
       }
       return;
     }
@@ -114,9 +100,7 @@ export class LocalFsProvider implements StorageProvider {
     try {
       await fs.access(this.basePath, fs.constants.W_OK);
     } catch {
-      throw new ProviderError(
-        fmt('provider_local_path_not_writable', this.basePath),
-      );
+      throw new ProviderError(fmt('provider_local_path_not_writable', this.basePath));
     }
   }
 
@@ -140,28 +124,18 @@ export class LocalFsProvider implements StorageProvider {
    * @returns RemoteRef with the provider_id, shard filename, and SHA-256 hash
    * @throws ProviderError on write failure
    */
-  async upload(
-    shardFilename: string,
-    data: Readable,
-    _size: number,
-  ): Promise<RemoteRef> {
+  async upload(shardFilename: string, data: Readable, _size: number): Promise<RemoteRef> {
     const dir = this.vaultDir();
     try {
       await fs.mkdir(dir, { recursive: true });
     } catch (err) {
-      throw new ProviderError(
-        `Failed to create vault directory "${dir}": ${String(err)}`,
-      );
+      throw new ProviderError(`Failed to create vault directory "${dir}": ${String(err)}`);
     }
 
     const filePath = path.join(dir, shardFilename);
     const hasher = createHash('sha256');
     const hashTransform = new Transform({
-      transform(
-        chunk: Buffer | Uint8Array,
-        _enc: string,
-        cb: TransformCallback,
-      ) {
+      transform(chunk: Buffer | Uint8Array, _enc: string, cb: TransformCallback) {
         const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         hasher.update(buf);
         cb(null, buf);
@@ -171,16 +145,10 @@ export class LocalFsProvider implements StorageProvider {
     try {
       await pipeline(data, hashTransform, createWriteStream(filePath));
     } catch (err) {
-      throw new ProviderError(
-        `Failed to write shard "${filePath}": ${String(err)}`,
-      );
+      throw new ProviderError(`Failed to write shard "${filePath}": ${String(err)}`);
     }
 
-    return {
-      provider_id: this.id,
-      path: shardFilename,
-      hash: hasher.digest('hex'),
-    };
+    return { provider_id: this.id, path: shardFilename, hash: hasher.digest('hex') };
   }
 
   /**
@@ -195,9 +163,7 @@ export class LocalFsProvider implements StorageProvider {
     try {
       await fs.access(filePath, fs.constants.R_OK);
     } catch (err) {
-      throw new ProviderError(
-        `Failed to read shard "${filePath}": ${String(err)}`,
-      );
+      throw new ProviderError(`Failed to read shard "${filePath}": ${String(err)}`);
     }
     return createReadStream(filePath);
   }
@@ -213,9 +179,7 @@ export class LocalFsProvider implements StorageProvider {
     try {
       await fs.unlink(filePath);
     } catch (err) {
-      throw new ProviderError(
-        `Failed to delete shard "${filePath}": ${String(err)}`,
-      );
+      throw new ProviderError(`Failed to delete shard "${filePath}": ${String(err)}`);
     }
   }
 
@@ -233,9 +197,7 @@ export class LocalFsProvider implements StorageProvider {
     try {
       await fs.rename(oldPath, newPath);
     } catch (err) {
-      throw new ProviderError(
-        `Failed to rename "${oldPath}" → "${newPath}": ${String(err)}`,
-      );
+      throw new ProviderError(`Failed to rename "${oldPath}" → "${newPath}": ${String(err)}`);
     }
     return { provider_id: this.id, path: newFilename };
   }
@@ -259,19 +221,14 @@ export class LocalFsProvider implements StorageProvider {
    * @throws ProviderError on read/write failure
    * @throws ProviderError if the existing shard is too short to contain a valid payload
    */
-  async updateShardHeader(
-    ref: RemoteRef,
-    headerData: Buffer,
-  ): Promise<RemoteRef> {
+  async updateShardHeader(ref: RemoteRef, headerData: Buffer): Promise<RemoteRef> {
     const filePath = this.refToPath(ref);
 
     let existing: Buffer;
     try {
       existing = await fs.readFile(filePath);
     } catch (err) {
-      throw new ProviderError(
-        `Failed to read shard for header update "${filePath}": ${String(err)}`,
-      );
+      throw new ProviderError(`Failed to read shard for header update "${filePath}": ${String(err)}`);
     }
 
     // The existing shard layout: [old header][payload][32-byte checksum]
@@ -281,15 +238,10 @@ export class LocalFsProvider implements StorageProvider {
     const oldHeaderSize = computeShardHeaderSize(existing);
 
     if (existing.length < oldHeaderSize + CHECKSUM_SIZE) {
-      throw new ProviderError(
-        fmtFor(this.io.lang, 'provider_short_shard', filePath),
-      );
+      throw new ProviderError(fmtFor(this.io.lang, 'provider_short_shard', filePath));
     }
 
-    const payload = existing.subarray(
-      oldHeaderSize,
-      existing.length - CHECKSUM_SIZE,
-    );
+    const payload = existing.subarray(oldHeaderSize, existing.length - CHECKSUM_SIZE);
     const newBody = Buffer.concat([headerData, payload]);
     const newChecksum = Buffer.from(hashBuffer(newBody), 'hex');
     const newShard = Buffer.concat([newBody, newChecksum]);
@@ -301,9 +253,7 @@ export class LocalFsProvider implements StorageProvider {
     } catch (err) {
       // Best-effort cleanup of the .tmp file
       await fs.unlink(tmpPath).catch(() => {});
-      throw new ProviderError(
-        `Failed to update shard header "${filePath}": ${String(err)}`,
-      );
+      throw new ProviderError(`Failed to update shard header "${filePath}": ${String(err)}`);
     }
 
     return { provider_id: this.id, path: ref.path };
@@ -322,9 +272,7 @@ export class LocalFsProvider implements StorageProvider {
       const st = await fs.stat(filePath);
       return st.size;
     } catch (err) {
-      throw new ProviderError(
-        fmtFor(this.io.lang, 'provider_stat_failed', filePath, String(err)),
-      );
+      throw new ProviderError(fmtFor(this.io.lang, 'provider_stat_failed', filePath, String(err)));
     }
   }
 
@@ -341,41 +289,22 @@ export class LocalFsProvider implements StorageProvider {
   async downloadHeader(ref: RemoteRef, maxBytes: number): Promise<Buffer> {
     const lang = this.io.lang;
     if (maxBytes <= 0) {
-      throw new ProviderError(
-        fmtFor(
-          lang,
-          'provider_download_header_invalid_max_bytes',
-          String(maxBytes),
-        ),
-      );
+      throw new ProviderError(fmtFor(lang, 'provider_download_header_invalid_max_bytes', String(maxBytes)));
     }
     const filePath = this.refToPath(ref);
     try {
       await fs.access(filePath, fs.constants.R_OK);
     } catch (err) {
-      throw new ProviderError(
-        fmtFor(lang, 'local_read_shard_failed', filePath, String(err)),
-      );
+      throw new ProviderError(fmtFor(lang, 'local_read_shard_failed', filePath, String(err)), { cause: err });
     }
     return new Promise<Buffer>((resolve, reject) => {
       const chunks: Buffer[] = [];
-      const stream = createReadStream(filePath, {
-        start: 0,
-        end: maxBytes - 1,
-      });
+      const stream = createReadStream(filePath, { start: 0, end: maxBytes - 1 });
       stream.on('data', (chunk: Buffer | string) => {
-        chunks.push(
-          Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string),
-        );
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
       });
       stream.on('end', () => resolve(Buffer.concat(chunks)));
-      stream.on('error', (err) =>
-        reject(
-          new ProviderError(
-            fmtFor(lang, 'provider_header_read_failed', filePath, String(err)),
-          ),
-        ),
-      );
+      stream.on('error', (err) => reject(new ProviderError(fmtFor(lang, 'provider_header_read_failed', filePath, String(err)), { cause: err })));
     });
   }
 
@@ -393,18 +322,11 @@ export class LocalFsProvider implements StorageProvider {
       entries = await fs.readdir(dir);
     } catch (err: unknown) {
       if (isEnoent(err)) return []; // directory doesn't exist yet
-      throw new ProviderError(
-        `Failed to list vault directory "${dir}": ${String(err)}`,
-      );
+      throw new ProviderError(`Failed to list vault directory "${dir}": ${String(err)}`);
     }
 
-    const filtered = prefix
-      ? entries.filter((e) => e.startsWith(prefix))
-      : entries;
-    return filtered.map((filename) => ({
-      provider_id: this.id,
-      path: filename,
-    }));
+    const filtered = prefix ? entries.filter((e) => e.startsWith(prefix)) : entries;
+    return filtered.map((filename) => ({ provider_id: this.id, path: filename }));
   }
 
   /**
@@ -420,9 +342,7 @@ export class LocalFsProvider implements StorageProvider {
       entries = await fs.readdir(this.basePath, { withFileTypes: true });
     } catch (err: unknown) {
       if (isEnoent(err)) return [];
-      throw new ProviderError(
-        `Failed to list vaults in "${this.basePath}": ${String(err)}`,
-      );
+      throw new ProviderError(`Failed to list vaults in "${this.basePath}": ${String(err)}`);
     }
     return entries.filter((e) => e.isDirectory()).map((e) => e.name);
   }
@@ -439,6 +359,58 @@ export class LocalFsProvider implements StorageProvider {
     } catch {
       return false;
     }
+  }
+
+  // ─── Header storage strategy + verification ───────────────────────────────
+
+  /** LocalFS rewrites the header in place inside the shard — no sidecar. */
+  usesSidecar(): boolean {
+    return false;
+  }
+
+  /**
+   * Not supported — LocalFS rewrites the header in place via updateShardHeader().
+   * @throws BfsError always (usesSidecar() === false)
+   */
+  async uploadHeaderSidecar(_ref: RemoteRef, _sidecarBytes: Buffer): Promise<void> {
+    throwSidecarUnsupported(this.io.lang, this.type);
+  }
+
+  /**
+   * Not supported — LocalFS has no sidecar files.
+   * @throws BfsError always (usesSidecar() === false)
+   */
+  async downloadHeaderSidecar(_ref: RemoteRef, _maxBytes: number): Promise<Buffer | null> {
+    throwSidecarUnsupported(this.io.lang, this.type);
+  }
+
+  /**
+   * Verifies the shard identity by reading only its header window and comparing
+   * the plaintext vault_id / shard_index / version.
+   *
+   * @param ref      - RemoteRef of the shard
+   * @param expected - Identity the shard is expected to carry
+   * @returns { ok: true } or a classified failure (not_found / corrupted / mismatch / unverifiable)
+   */
+  async verifyShard(ref: RemoteRef, expected: ShardIdentity): Promise<VerifyShardResult> {
+    const lang = this.io.lang;
+    let header: ShardHeader;
+    try {
+      header = await readShardHeader(this, ref);
+    } catch (err) {
+      if (err instanceof ShardCorruptedError) {
+        return { ok: false, reason: 'corrupted', detail: fmtFor(lang, 'verify_shard_corrupted', ref.path, err.message) };
+      }
+      // Classify from the read failure itself, not a second stat (no TOCTOU
+      // window). downloadHeader wraps the fs error in a ProviderError but keeps
+      // the original as `cause`, so ENOENT — whether raw or wrapped — means the
+      // shard is gone; anything else (permissions, I/O) means present-but-unreadable.
+      const cause = err instanceof Error ? err.cause : undefined;
+      return isEnoent(err) || isEnoent(cause)
+        ? { ok: false, reason: 'not_found', detail: fmtFor(lang, 'verify_shard_not_found', ref.path) }
+        : { ok: false, reason: 'unverifiable', detail: fmtFor(lang, 'verify_shard_unverifiable', this.id, ref.path) };
+    }
+    return finishVerifyShard(header, expected, lang);
   }
 
   // ─── Configuration lifecycle ──────────────────────────────────────────────
@@ -486,26 +458,18 @@ export class LocalFsProvider implements StorageProvider {
    * @throws ProviderError when the JSON file is unreadable, malformed, or
    *         lacks a non-empty `path` field
    */
-  async configureFromFlags(
-    input: CliProviderInput,
-  ): Promise<Record<string, unknown>> {
+  async configureFromFlags(input: CliProviderInput): Promise<Record<string, unknown>> {
     const inlinePath = findStringFlag(input.rawArgs, '--path');
     if (inlinePath !== null && inlinePath.length > 0) {
-      const resolved = path.isAbsolute(inlinePath)
-        ? inlinePath
-        : path.resolve(this.io.workDir, inlinePath);
+      const resolved = path.isAbsolute(inlinePath) ? inlinePath : path.resolve(this.io.workDir, inlinePath);
       return { path: resolved };
     }
 
     const rawFlag = findStringFlag(input.rawArgs, '--config-file');
     if (rawFlag === null || rawFlag.length === 0) {
-      return {
-        path: path.join(os.homedir(), '.bfs-local', input.name),
-      };
+      return { path: path.join(os.homedir(), '.bfs-local', input.name) };
     }
-    const absolutePath = path.isAbsolute(rawFlag)
-      ? rawFlag
-      : path.resolve(this.io.workDir, rawFlag);
+    const absolutePath = path.isAbsolute(rawFlag) ? rawFlag : path.resolve(this.io.workDir, rawFlag);
     const obj = await readJsonObjectFile(absolutePath, 'Local adapter');
     const p = typeof obj.path === 'string' ? obj.path : '';
     if (p.length === 0) {
@@ -559,25 +523,13 @@ export class LocalFsProvider implements StorageProvider {
     try {
       await fs.mkdir(vaultDir, { recursive: true });
     } catch (err) {
-      throw new ProviderError(
-        fmtFor(
-          lang,
-          'local_probe_step_mkdir',
-          err instanceof Error ? err.message : String(err),
-        ),
-      );
+      throw new ProviderError(fmtFor(lang, 'local_probe_step_mkdir', err instanceof Error ? err.message : String(err)));
     }
 
     try {
       await fs.writeFile(probePath, probeData);
     } catch (err) {
-      throw new ProviderError(
-        fmtFor(
-          lang,
-          'local_probe_step_write',
-          err instanceof Error ? err.message : String(err),
-        ),
-      );
+      throw new ProviderError(fmtFor(lang, 'local_probe_step_write', err instanceof Error ? err.message : String(err)));
     }
 
     let readBack: Buffer;
@@ -585,13 +537,7 @@ export class LocalFsProvider implements StorageProvider {
       readBack = await fs.readFile(probePath);
     } catch (err) {
       await fs.rm(probePath, { force: true }).catch(() => undefined);
-      throw new ProviderError(
-        fmtFor(
-          lang,
-          'local_probe_step_read',
-          err instanceof Error ? err.message : String(err),
-        ),
-      );
+      throw new ProviderError(fmtFor(lang, 'local_probe_step_read', err instanceof Error ? err.message : String(err)));
     }
 
     if (Buffer.compare(probeData, readBack) !== 0) {
@@ -602,13 +548,7 @@ export class LocalFsProvider implements StorageProvider {
     try {
       await fs.unlink(probePath);
     } catch (err) {
-      throw new ProviderError(
-        fmtFor(
-          lang,
-          'local_probe_step_cleanup',
-          err instanceof Error ? err.message : String(err),
-        ),
-      );
+      throw new ProviderError(fmtFor(lang, 'local_probe_step_cleanup', err instanceof Error ? err.message : String(err)));
     }
   }
 }
@@ -618,21 +558,15 @@ export class LocalFsProvider implements StorageProvider {
 const localFsFactory: ProviderFactory = {
   lang: 'en',
   displayName: 'Local filesystem',
-  requiresApiVersion: 1,
+  requiresApiVersion: 2,
   create: (config, io) => new LocalFsProvider(config, io),
   help(): ProviderHelp {
     return {
       usage: '[--path <path> | --config-file <path>]',
       description: tFor(this.lang, 'local_help_description'),
       flags: [
-        {
-          flag: '--path <path>',
-          description: tFor(this.lang, 'local_help_flag_path_desc'),
-        },
-        {
-          flag: '--config-file <path>',
-          description: tFor(this.lang, 'local_help_flag_config_file_desc'),
-        },
+        { flag: '--path <path>', description: tFor(this.lang, 'local_help_flag_path_desc') },
+        { flag: '--config-file <path>', description: tFor(this.lang, 'local_help_flag_config_file_desc') },
       ],
       examples: [
         'bfs provider add --ci --name usb --type local --path /mnt/usb/backup',

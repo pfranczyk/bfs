@@ -10,6 +10,8 @@ import {
   encryptBlob,
   encryptLocationMap,
   encryptStream,
+  exceedsGcmPlaintextLimit,
+  GCM_MAX_PLAINTEXT_BYTES,
   generateSalt,
 } from '../../src/core/crypto.js';
 import { DecryptionError } from '../../src/core/errors.js';
@@ -20,24 +22,8 @@ import type { ShardLocation } from '../../src/types/index.js';
 const TIMEOUT = 30_000;
 
 const SAMPLE_LOCATIONS: ShardLocation[] = [
-  {
-    shard_index: 0,
-    provider_id: 'local-1',
-    provider_type: 'local',
-    adapterPackage: null,
-    connection_config: { path: '/backup' },
-    remote_path: '/backup/vault/shard_0.bfs.1',
-    shard_hash: 'abc123',
-  },
-  {
-    shard_index: 1,
-    provider_id: 'ftp-1',
-    provider_type: 'ftp',
-    adapterPackage: null,
-    connection_config: { host: '192.168.1.10', port: 21 },
-    remote_path: '/backup/vault/shard_1.bfs.1',
-    shard_hash: 'def456',
-  },
+  { shard_index: 0, provider_id: 'local-1', provider_type: 'local', adapterPackage: null, connection_config: { path: '/backup' }, required_inputs: [], remote_path: '/backup/vault/shard_0.bfs.1', shard_hash: 'abc123' },
+  { shard_index: 1, provider_id: 'ftp-1', provider_type: 'ftp', adapterPackage: null, connection_config: { host: '192.168.1.10', port: 21 }, required_inputs: [], remote_path: '/backup/vault/shard_1.bfs.1', shard_hash: 'def456' },
 ];
 
 describe('crypto', () => {
@@ -110,9 +96,7 @@ describe('crypto', () => {
         const data = Buffer.from('secret data');
         const { encrypted, salt } = await encryptBlob(data, 'correct-password');
 
-        await expect(
-          decryptBlob(encrypted, 'wrong-password', salt),
-        ).rejects.toThrow(DecryptionError);
+        await expect(decryptBlob(encrypted, 'wrong-password', salt)).rejects.toThrow(DecryptionError);
       },
       TIMEOUT,
     );
@@ -124,9 +108,7 @@ describe('crypto', () => {
         const { encrypted } = await encryptBlob(data, 'password');
         const wrongSalt = generateSalt();
 
-        await expect(
-          decryptBlob(encrypted, 'password', wrongSalt),
-        ).rejects.toThrow(DecryptionError);
+        await expect(decryptBlob(encrypted, 'password', wrongSalt)).rejects.toThrow(DecryptionError);
       },
       TIMEOUT,
     );
@@ -193,9 +175,7 @@ describe('crypto', () => {
         const { encrypted } = await encryptBlob(data, 'password');
         const wrongKey = Buffer.alloc(32, 0xff);
 
-        expect(() => decryptBlobWithKey(encrypted, wrongKey)).toThrow(
-          DecryptionError,
-        );
+        expect(() => decryptBlobWithKey(encrypted, wrongKey)).toThrow(DecryptionError);
       },
       TIMEOUT,
     );
@@ -242,9 +222,7 @@ describe('crypto', () => {
         const encrypted = encryptLocationMap(SAMPLE_LOCATIONS, key);
         const wrongKey = Buffer.alloc(32, 0xaa);
 
-        expect(() => decryptLocationMap(encrypted, wrongKey)).toThrow(
-          DecryptionError,
-        );
+        expect(() => decryptLocationMap(encrypted, wrongKey)).toThrow(DecryptionError);
       },
       TIMEOUT,
     );
@@ -297,16 +275,10 @@ describe('crypto', () => {
     const TEST_NONCE = Buffer.alloc(12, 0x11);
 
     it('should roundtrip arbitrary plaintext', async () => {
-      const plaintext = Buffer.from(
-        'Hello, streaming AES-256-GCM!'.repeat(100),
-      );
+      const plaintext = Buffer.from('Hello, streaming AES-256-GCM!'.repeat(100));
 
-      const encrypted = await streamToBuffer(
-        encryptStream(Readable.from(plaintext), TEST_KEY, TEST_NONCE),
-      );
-      const decrypted = await streamToBuffer(
-        decryptStream(Readable.from(encrypted), TEST_KEY, TEST_NONCE),
-      );
+      const encrypted = await streamToBuffer(encryptStream(Readable.from(plaintext), TEST_KEY, TEST_NONCE));
+      const decrypted = await streamToBuffer(decryptStream(Readable.from(encrypted), TEST_KEY, TEST_NONCE));
 
       expect(decrypted).toEqual(plaintext);
     });
@@ -314,64 +286,63 @@ describe('crypto', () => {
     it('should roundtrip empty plaintext', async () => {
       const plaintext = Buffer.alloc(0);
 
-      const encrypted = await streamToBuffer(
-        encryptStream(Readable.from(plaintext), TEST_KEY, TEST_NONCE),
-      );
-      const decrypted = await streamToBuffer(
-        decryptStream(Readable.from(encrypted), TEST_KEY, TEST_NONCE),
-      );
+      const encrypted = await streamToBuffer(encryptStream(Readable.from(plaintext), TEST_KEY, TEST_NONCE));
+      const decrypted = await streamToBuffer(decryptStream(Readable.from(encrypted), TEST_KEY, TEST_NONCE));
 
       expect(decrypted).toEqual(plaintext);
     });
 
     it('should produce ciphertext longer than plaintext (auth tag appended)', async () => {
       const plaintext = Buffer.from('test data');
-      const encrypted = await streamToBuffer(
-        encryptStream(Readable.from(plaintext), TEST_KEY, TEST_NONCE),
-      );
+      const encrypted = await streamToBuffer(encryptStream(Readable.from(plaintext), TEST_KEY, TEST_NONCE));
       // Output = ciphertext (same length as plaintext) + 16B tag
       expect(encrypted.length).toBe(plaintext.length + 16);
     });
 
     it('should throw DecryptionError when auth tag is tampered', async () => {
       const plaintext = Buffer.from('sensitive data');
-      const encrypted = await streamToBuffer(
-        encryptStream(Readable.from(plaintext), TEST_KEY, TEST_NONCE),
-      );
+      const encrypted = await streamToBuffer(encryptStream(Readable.from(plaintext), TEST_KEY, TEST_NONCE));
 
       // Corrupt the auth tag (last 16 bytes)
       const tampered = Buffer.from(encrypted);
       tampered[tampered.length - 1] ^= 0xff;
 
-      await expect(
-        streamToBuffer(
-          decryptStream(Readable.from(tampered), TEST_KEY, TEST_NONCE),
-        ),
-      ).rejects.toThrow(DecryptionError);
+      await expect(streamToBuffer(decryptStream(Readable.from(tampered), TEST_KEY, TEST_NONCE))).rejects.toThrow(DecryptionError);
     });
 
     it('should throw DecryptionError when stream is too short (missing tag)', async () => {
       const tooShort = Buffer.alloc(10); // less than 16-byte tag
 
-      await expect(
-        streamToBuffer(
-          decryptStream(Readable.from(tooShort), TEST_KEY, TEST_NONCE),
-        ),
-      ).rejects.toThrow(DecryptionError);
+      await expect(streamToBuffer(decryptStream(Readable.from(tooShort), TEST_KEY, TEST_NONCE))).rejects.toThrow(DecryptionError);
     });
 
     it('should throw DecryptionError when wrong key is used', async () => {
       const plaintext = Buffer.from('secret data');
-      const encrypted = await streamToBuffer(
-        encryptStream(Readable.from(plaintext), TEST_KEY, TEST_NONCE),
-      );
+      const encrypted = await streamToBuffer(encryptStream(Readable.from(plaintext), TEST_KEY, TEST_NONCE));
 
       const wrongKey = Buffer.alloc(32, 0x99);
-      await expect(
-        streamToBuffer(
-          decryptStream(Readable.from(encrypted), wrongKey, TEST_NONCE),
-        ),
-      ).rejects.toThrow(DecryptionError);
+      await expect(streamToBuffer(decryptStream(Readable.from(encrypted), wrongKey, TEST_NONCE))).rejects.toThrow(DecryptionError);
+    });
+  });
+
+  // Guards the AES-GCM 32-bit block-counter wrap: a single (key, nonce) must
+  // never encrypt more than ~64 GiB. The predicate is a pure size comparison so
+  // these run without allocating tens of gigabytes.
+  describe('exceedsGcmPlaintextLimit', () => {
+    it('should set the limit to 60 GiB', () => {
+      expect(GCM_MAX_PLAINTEXT_BYTES).toBe(60 * 1024 ** 3);
+    });
+
+    it('should not flag a payload at exactly the limit', () => {
+      expect(exceedsGcmPlaintextLimit(GCM_MAX_PLAINTEXT_BYTES)).toBe(false);
+    });
+
+    it('should flag a payload one byte over the limit', () => {
+      expect(exceedsGcmPlaintextLimit(GCM_MAX_PLAINTEXT_BYTES + 1)).toBe(true);
+    });
+
+    it('should not flag a small payload', () => {
+      expect(exceedsGcmPlaintextLimit(1024)).toBe(false);
     });
   });
 });

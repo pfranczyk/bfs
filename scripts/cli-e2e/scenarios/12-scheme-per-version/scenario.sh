@@ -15,7 +15,7 @@ scenario_run() {
   # Build 4 providers for the initial 3/1 scheme; the 5th is added later.
   build_pool "$SC_DIR" 4 0 "$name"
 
-  run_bfs "$vault" init "$name" --ci --no-compress \
+  run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 3 --parity-shards 1 "${PROVIDER_ARGS[@]}"
   assert_ok
   snapshot_hashes "$vault" "$b1"

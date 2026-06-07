@@ -14,15 +14,9 @@ function manifestFilePath(rootDir: string, version: number): string {
  * @returns VersionManifest or null if not found.
  * @throws on read/parse errors other than ENOENT.
  */
-export async function readManifest(
-  rootDir: string,
-  version: number,
-): Promise<Nullable<VersionManifest>> {
+export async function readManifest(rootDir: string, version: number): Promise<Nullable<VersionManifest>> {
   try {
-    const content = await fs.readFile(
-      manifestFilePath(rootDir, version),
-      'utf-8',
-    );
+    const content = await fs.readFile(manifestFilePath(rootDir, version), 'utf-8');
     return JSON.parse(content) as VersionManifest;
   } catch (err: unknown) {
     if (isEnoent(err)) return null;
@@ -41,15 +35,8 @@ export async function readManifest(
  *
  * @throws on write failure.
  */
-export async function writeManifest(
-  rootDir: string,
-  manifest: VersionManifest,
-): Promise<void> {
-  await fs.writeFile(
-    manifestFilePath(rootDir, manifest.version),
-    JSON.stringify(manifest, null, 2),
-    'utf-8',
-  );
+export async function writeManifest(rootDir: string, manifest: VersionManifest): Promise<void> {
+  await fs.writeFile(manifestFilePath(rootDir, manifest.version), JSON.stringify(manifest, null, 2), 'utf-8');
 }
 
 /**
@@ -57,9 +44,7 @@ export async function writeManifest(
  * Silently skips unreadable or malformed manifest files.
  * @returns Array of VersionManifest objects.
  */
-export async function listManifests(
-  rootDir: string,
-): Promise<VersionManifest[]> {
+export async function listManifests(rootDir: string): Promise<VersionManifest[]> {
   const dir = path.join(rootDir, '.bfs', 'manifests');
   let entries: string[];
   try {
@@ -86,9 +71,6 @@ export async function listManifests(
  * Deletes the manifest file for the given version.
  * @throws on unlink failure (including ENOENT).
  */
-export async function deleteManifest(
-  rootDir: string,
-  version: number,
-): Promise<void> {
+export async function deleteManifest(rootDir: string, version: number): Promise<void> {
   await fs.unlink(manifestFilePath(rootDir, version));
 }

@@ -6,10 +6,7 @@ import type { PushLockFailedEntry } from '../vault/lockfile.js';
 // ─── Enums ────────────────────────────────────────────────────
 
 /** Bitfield constants for BlobHeader.flags (uint32 LE). */
-export const BLOB_FLAGS = {
-  ENCRYPTED: 0x01,
-  COMPRESSED: 0x02,
-} as const;
+export const BLOB_FLAGS = { ENCRYPTED: 0x01, COMPRESSED: 0x02 } as const;
 
 /** Push behavior mode — what to do with the existing version. */
 export enum PushMode {
@@ -39,15 +36,8 @@ export interface VaultConfig {
   // INVARIANT: providers.length === scheme.data_shards + scheme.parity_shards
   // Each provider holds exactly 1 shard per version.
   // Validated at init, push, provider-add, provider-remove.
-  encryption: {
-    enabled: boolean;
-    algorithm: 'aes-256-gcm';
-    kdf: 'argon2id';
-  };
-  compression: {
-    enabled: boolean;
-    algorithm: 'deflate';
-  };
+  encryption: { enabled: boolean; algorithm: 'aes-256-gcm'; kdf: 'argon2id' };
+  compression: { enabled: boolean; algorithm: 'deflate' };
   push_mode: PushMode;
   providers: ProviderConfig[];
   /** Overrides default .bfs/cache directory. Defaults to {rootDir}/.bfs/cache when null/absent. */
@@ -142,6 +132,38 @@ export interface PushResult {
   health: VersionHealth;
 }
 
+/** Options for push() — pack, encrypt, RS-encode, and upload to all providers. */
+export interface PushOptions {
+  /** Overrides config.push_mode. If absent, config.push_mode is used. */
+  mode?: PushMode.NewVersion | PushMode.Overwrite;
+  /**
+   * Override compression for this push only.
+   * true  = force compress (even if config.compression.enabled=false)
+   * false = force skip compression (even if config.compression.enabled=true)
+   * undefined = use config.compression.enabled
+   */
+  compressOverride?: boolean;
+  /** Pre-provided encryption password (skips interactive prompt). */
+  password?: string;
+  /**
+   * When true, loads the blob from `.bfs/cache/push.blob.pending` instead of re-packing.
+   * Falls back to a fresh pack if the cache file does not exist.
+   */
+  fromCache?: boolean;
+  /**
+   * When true (REPL mode), prompts the user on skipped files instead of aborting.
+   * Defaults to false (standalone CLI: abort with PushSkippedError).
+   */
+  interactive?: boolean;
+  /** Directory for temporary parity files during push. Defaults to cacheDir. */
+  tempDir?: string;
+  /** Overrides cache directory for push.blob.pending. Defaults to {rootDir}/.bfs/cache. */
+  cacheDir?: string;
+  /** Overrides config.max_ram_mb for this push operation. */
+  maxRamMb?: number;
+  io: ProviderIO;
+}
+
 /** Result returned by pull() on success. */
 export interface PullResult {
   version: number;
@@ -212,14 +234,22 @@ export interface ShardLocation {
    * serialized by BFS versions older than the adapterPackage field.
    */
   adapterPackage: Nullable<string>;
-  // NOTE: connection_config stores connection details (host, port, user, path).
-  // When encrypted=false the location map is stored as raw JSON inside the
-  // shard header. Anyone who gets hold of a single shard sees the
-  // connection_config of EVERY provider. The user knowingly accepts that
-  // risk by choosing to disable encryption.
-  // Recommendation: never put passwords or private keys into connection_config
-  // — secrets should be supplied interactively via ProviderIO.askSecret().
+  // NOTE: connection_config stores only NON-SECRET connection coordinates
+  // (host, port, user, path). Adapter-declared secret fields (FTP password,
+  // SSH private key/passphrase) are stripped before the map is embedded —
+  // see splitLocationSecrets in vault/location-map.ts. This matters because
+  // when encrypted=false the location map is raw JSON inside the shard header,
+  // so anyone holding a single shard reads every provider's coordinates. The
+  // secret is supplied from the local config.json during normal use, or
+  // interactively via ProviderIO.askSecret() during disaster recovery.
   connection_config: Record<string, unknown>;
+  // Names of inputs this resource requires at connection time but that are NOT
+  // stored here — stripped secrets the operator must supply during recovery.
+  // [] = nothing required (e.g. anonymous FTP). null = shard written before
+  // this field existed (legacy): the secret is still inline in connection_config,
+  // so recovery uses it directly instead of prompting. The map parser
+  // normalizes an absent field to null; builders (push/heal) always set an array.
+  required_inputs: Nullable<string[]>;
   remote_path: string;
   shard_hash: string; // SHA-256 of the PAYLOAD (RS data, without the shard header)
 }
@@ -380,11 +410,7 @@ export interface StorageProvider {
    * @param data shard data stream (header + payload + checksum)
    * @param size total stream size in bytes (for Content-Length / pre-allocation)
    */
-  upload(
-    shardFilename: string,
-    data: Readable,
-    size: number,
-  ): Promise<RemoteRef>;
+  upload(shardFilename: string, data: Readable, size: number): Promise<RemoteRef>;
   /**
    * Fetches a shard from the provider as a stream.
    * The caller reads it in chunks (header, payload, checksum).
@@ -473,8 +499,10 @@ export interface StorageProvider {
   describeConfig(config: Record<string, unknown>): string;
 
   /**
-   * Provider-declared secret field names (e.g. ['password']).
-   * Used by describeConfig and any other consumer that wants to mask.
+   * Config field names the adapter treats as secret (e.g. ['password']).
+   * BFS strips their values from the shard location map and records the names
+   * in ShardLocation.required_inputs, so disaster recovery knows what to ask
+   * the operator for. describeConfig also masks these when rendering.
    */
   getSecretFields(): readonly string[];
 
@@ -485,10 +513,119 @@ export interface StorageProvider {
    * @throws ProviderError with step context (auth / ensureDir / upload / download / compare / delete)
    */
   probeConnection(): Promise<void>;
+
+  // ─── Header storage strategy + verification ───────────────────────────────
+  // Built-in providers (local, ftp) rewrite the header in place inside the
+  // shard file. Providers whose medium cannot do an atomic in-file rewrite
+  // (append-only object stores, APIs without partial writes) keep the updated
+  // header in a separate sidecar file next to the shard. usesSidecar() tells
+  // BFS which write-path and read-path to take.
+
+  /**
+   * Reports whether this provider stores an updated header in a sidecar file
+   * instead of rewriting it in place inside the shard.
+   *   - false → BFS calls updateShardHeader(); the sidecar methods are never
+   *     called and MUST throw if invoked.
+   *   - true  → BFS calls uploadHeaderSidecar() on write; the read-path fetches
+   *     the sidecar first and, when present, it wins over the in-shard header.
+   * @returns true when the provider keeps the header in a sidecar file
+   */
+  usesSidecar(): boolean;
+
+  /**
+   * Stores the header sidecar bytes (BFSH format) next to the shard, replacing
+   * any previous sidecar atomically. Only called when usesSidecar() === true.
+   * Like every write method, it MUST confirm the bytes landed on the medium
+   * before resolving (download-back / ETag / metadata check).
+   * @param ref          - RemoteRef of the shard the sidecar belongs to
+   * @param sidecarBytes - Sidecar payload in BFSH format (see buildSidecarBytes)
+   * @throws BfsError when usesSidecar() === false (contract violation)
+   * @throws ProviderError when the bytes cannot be persisted
+   */
+  uploadHeaderSidecar(ref: RemoteRef, sidecarBytes: Buffer): Promise<void>;
+
+  /**
+   * Fetches the header sidecar (up to maxBytes) for a shard, or null when no
+   * sidecar exists yet. Only called when usesSidecar() === true.
+   * @param ref      - RemoteRef of the shard
+   * @param maxBytes - Maximum byte count to return (must be > 0)
+   * @returns          Sidecar bytes (BFSH format) or null when absent
+   * @throws BfsError when usesSidecar() === false (contract violation)
+   * @throws ProviderError on transport failure
+   */
+  downloadHeaderSidecar(ref: RemoteRef, maxBytes: number): Promise<Buffer | null>;
+
+  /**
+   * Checks whether the shard under `ref` has the expected identity (vault_id,
+   * shard_index, version). The provider picks a strategy that fits its medium
+   * (bounded header read, sidecar fetch, metadata API, full download). The
+   * identity fields live in the plaintext part of the header, so no vault key
+   * is needed. Returns a structured verdict rather than throwing for the
+   * common, expected outcomes (missing / mismatched / unauthenticated).
+   * @param ref      - RemoteRef of the shard to verify
+   * @param expected - Identity the shard is expected to carry
+   * @returns          { ok: true } or { ok: false, reason, detail }
+   */
+  verifyShard(ref: RemoteRef, expected: ShardIdentity): Promise<VerifyShardResult>;
 }
 
 export interface RemoteRef {
   provider_id: string;
   path: string;
   hash?: string; // SHA-256 — available after upload(); list() may not return it (FTP, SSH)
+}
+
+/** Identity a shard must carry, used by StorageProvider.verifyShard(). */
+export interface ShardIdentity {
+  vault_id: string; // vault UUID — detects a foreign shard
+  shard_index: number; // 0..N+K-1 — detects a wrong shard index
+  version: number; // shard version — detects a wrong version
+}
+
+/**
+ * Result of StorageProvider.verifyShard(). `ok: true` means the shard under
+ * the ref carries the expected identity. Otherwise `reason` classifies the
+ * failure and `detail` carries a human-readable explanation.
+ */
+export type VerifyShardResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason:
+        | 'not_found' // no file under ref
+        | 'mismatch' // header parsed but identity differs
+        | 'auth_failed' // provider could not authenticate
+        | 'corrupted' // header does not parse (truncated / bad magic)
+        | 'unverifiable'; // provider cannot verify on its medium
+      detail: string;
+    };
+
+// ─── Heal operation options ───────────────────────────────────
+
+export interface UpdateLocationMapsOptions {
+  newLocationMap: ShardLocation[];
+  io: ProviderIO;
+  password?: string;
+}
+
+export interface RebuildVersionOptions {
+  removedProviderId: string;
+  targetProviderId: string;
+  io: ProviderIO;
+  password?: string;
+}
+
+export interface RebuildAllVersionsOptions {
+  removedProviderId: string;
+  targetProviderId: string;
+  scope: number[] | 'all' | 'latest';
+  io: ProviderIO;
+  password?: string;
+}
+
+export interface RelocateProviderOptions {
+  newConnectionConfig: Record<string, unknown>;
+  io: ProviderIO;
+  password?: string;
+  newType?: string;
 }

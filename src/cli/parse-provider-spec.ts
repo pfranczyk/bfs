@@ -1,9 +1,5 @@
 import { fmt } from '../i18n/index.js';
-import {
-  createCliProviderIO,
-  providerRegistry,
-  validateProviderId,
-} from '../providers/provider.js';
+import { createCliProviderIO, providerRegistry, validateProviderId } from '../providers/provider.js';
 import type { ProviderConfig } from '../types/index.js';
 import { shellParse } from './shell-parse.js';
 
@@ -33,10 +29,7 @@ export interface RecoveryBootstrapSpec {
  * @throws      Error when the format is invalid, the id charset rule is
  *              violated, or the adapter rejects the resulting configuration
  */
-export async function parseInitProviderSpec(
-  spec: string,
-  cwd: string,
-): Promise<ProviderConfig> {
+export async function parseInitProviderSpec(spec: string, cwd: string): Promise<ProviderConfig> {
   const tokens = shellParse(spec);
   if (tokens.length === 0) {
     throw new Error(fmt('init_provider_format_invalid', spec));
@@ -52,9 +45,7 @@ export async function parseInitProviderSpec(
     throw new Error(fmt('init_provider_format_invalid', spec));
   }
   const meta = providerRegistry.getMeta(type);
-  const adapterPackage = meta
-    ? `${meta.packageName}@${meta.packageVersion}`
-    : null;
+  const adapterPackage = meta ? `${meta.packageName}@${meta.packageVersion}` : null;
 
   // After the first colon the entire head is the id. The charset regex
   // forbids further `:`, whitespace, or quote chars — multi-segment forms
@@ -63,10 +54,7 @@ export async function parseInitProviderSpec(
   validateProviderId(id);
   const rawArgs = tokens.slice(1);
   const io = createCliProviderIO(cwd);
-  const placeholder = factory.create(
-    { id, type, adapterPackage, config: {} },
-    io,
-  );
+  const placeholder = factory.create({ id, type, adapterPackage, config: {} }, io);
   const config = await placeholder.configureFromFlags({ name: id, rawArgs });
   const errors = placeholder.validateConfig(config);
   if (errors.length > 0) {
@@ -91,11 +79,7 @@ export async function parseInitProviderSpec(
  * @throws Error when the spec is empty, the type is unknown, or the adapter
  *         rejects the resulting configuration
  */
-export async function parseRecoveryBootstrapSpec(
-  bootstrapSpec: string,
-  providerType: string,
-  cwd: string,
-): Promise<RecoveryBootstrapSpec> {
+export async function parseRecoveryBootstrapSpec(bootstrapSpec: string, providerType: string, cwd: string): Promise<RecoveryBootstrapSpec> {
   const tokens = shellParse(bootstrapSpec);
   if (tokens.length === 0) {
     throw new Error(fmt('recovery_bootstrap_empty', bootstrapSpec));
@@ -105,28 +89,13 @@ export async function parseRecoveryBootstrapSpec(
     throw new Error(fmt('recovery_provider_type_unknown', providerType));
   }
   const meta = providerRegistry.getMeta(providerType);
-  const adapterPackage = meta
-    ? `${meta.packageName}@${meta.packageVersion}`
-    : null;
+  const adapterPackage = meta ? `${meta.packageName}@${meta.packageVersion}` : null;
   const io = createCliProviderIO(cwd);
-  const placeholder = factory.create(
-    {
-      id: 'recovery-bootstrap',
-      type: providerType,
-      adapterPackage,
-      config: {},
-    },
-    io,
-  );
-  const config = await placeholder.configureFromFlags({
-    name: 'recovery-bootstrap',
-    rawArgs: tokens,
-  });
+  const placeholder = factory.create({ id: 'recovery-bootstrap', type: providerType, adapterPackage, config: {} }, io);
+  const config = await placeholder.configureFromFlags({ name: 'recovery-bootstrap', rawArgs: tokens });
   const errors = placeholder.validateConfig(config);
   if (errors.length > 0) {
-    throw new Error(
-      fmt('recovery_bootstrap_config_invalid', errors.join('; ')),
-    );
+    throw new Error(fmt('recovery_bootstrap_config_invalid', errors.join('; ')));
   }
   return { adapterPackage, config };
 }

@@ -13,7 +13,7 @@ scenario_run() {
   make_fixtures "$vault"
   build_pool "$SC_DIR" 4 0 "$name"
 
-  run_bfs "$vault" init "$name" --ci --no-compress \
+  run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 3 --parity-shards 1 "${PROVIDER_ARGS[@]}"
   assert_ok
 

@@ -47,21 +47,14 @@ interface CdEntry {
 
 function _toDosDateTime(): { dosTime: number; dosDate: number } {
   const now = new Date();
-  const dosTime =
-    (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
-  const dosDate =
-    ((now.getFullYear() - 1980) << 9) |
-    ((now.getMonth() + 1) << 5) |
-    now.getDate();
+  const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+  const dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
   return { dosTime, dosDate };
 }
 
 // ─── ZIP64 extra fields ──────────────────────────────────────────────────────
 
-function _buildZip64ExtraLfh(
-  compressedSize: number,
-  uncompressedSize: number,
-): Buffer {
+function _buildZip64ExtraLfh(compressedSize: number, uncompressedSize: number): Buffer {
   const buf = Buffer.alloc(20);
   buf.writeUInt16LE(ZIP64_EXTRA_ID, 0);
   buf.writeUInt16LE(16, 2); // data size: 8 + 8
@@ -70,11 +63,7 @@ function _buildZip64ExtraLfh(
   return buf;
 }
 
-function _buildZip64ExtraCde(
-  compressedSize: number,
-  uncompressedSize: number,
-  localHeaderOffset: number,
-): Buffer {
+function _buildZip64ExtraCde(compressedSize: number, uncompressedSize: number, localHeaderOffset: number): Buffer {
   const buf = Buffer.alloc(28);
   buf.writeUInt16LE(ZIP64_EXTRA_ID, 0);
   buf.writeUInt16LE(24, 2); // data size: 8 + 8 + 8
@@ -84,11 +73,7 @@ function _buildZip64ExtraCde(
   return buf;
 }
 
-function _buildZip64Eocd(
-  entryCount: number,
-  cdSize: number,
-  cdOffset: number,
-): Buffer {
+function _buildZip64Eocd(entryCount: number, cdSize: number, cdOffset: number): Buffer {
   const buf = Buffer.alloc(56);
   let pos = 0;
   buf.writeUInt32LE(SIG_ZIP64_EOCD, pos);
@@ -138,14 +123,7 @@ function _buildEocdZip64Marker(): Buffer {
 
 // ─── ZIP building blocks (always ZIP64) ───────────────────────────────────────
 
-function _buildLfh(
-  filenameBuf: Buffer,
-  crc32: number,
-  compressedSize: number,
-  uncompressedSize: number,
-  dosTime: number,
-  dosDate: number,
-): Buffer {
+function _buildLfh(filenameBuf: Buffer, crc32: number, compressedSize: number, uncompressedSize: number, dosTime: number, dosDate: number): Buffer {
   const extra = _buildZip64ExtraLfh(compressedSize, uncompressedSize);
   const buf = Buffer.alloc(30 + filenameBuf.length + extra.length);
   let pos = 0;
@@ -177,11 +155,7 @@ function _buildLfh(
   return buf;
 }
 
-function _buildDataDescriptor(
-  crc32: number,
-  compressedSize: number,
-  uncompressedSize: number,
-): Buffer {
+function _buildDataDescriptor(crc32: number, compressedSize: number, uncompressedSize: number): Buffer {
   const buf = Buffer.alloc(24); // ZIP64: 4+4+8+8 = 24 (was 16)
   buf.writeUInt32LE(SIG_DD, 0);
   buf.writeUInt32LE(crc32, 4);
@@ -191,11 +165,7 @@ function _buildDataDescriptor(
 }
 
 function _buildCde(entry: CdEntry): Buffer {
-  const extra = _buildZip64ExtraCde(
-    entry.compressedSize,
-    entry.uncompressedSize,
-    entry.localHeaderOffset,
-  );
+  const extra = _buildZip64ExtraCde(entry.compressedSize, entry.uncompressedSize, entry.localHeaderOffset);
   const buf = Buffer.alloc(46 + entry.filename.length + extra.length);
   let pos = 0;
   buf.writeUInt32LE(SIG_CDE, pos);
@@ -262,25 +232,10 @@ export function createZipPacker(): ZipPackerInternal {
     const crc32 = zlib.crc32(data);
     const { dosTime, dosDate } = _toDosDateTime();
 
-    const lfh = _buildLfh(
-      filenameBuf,
-      crc32,
-      compressed.length,
-      data.length,
-      dosTime,
-      dosDate,
-    );
+    const lfh = _buildLfh(filenameBuf, crc32, compressed.length, data.length, dosTime, dosDate);
     const dd = _buildDataDescriptor(crc32, compressed.length, data.length);
 
-    cdEntries.push({
-      filename: filenameBuf,
-      crc32,
-      compressedSize: compressed.length,
-      uncompressedSize: data.length,
-      localHeaderOffset: currentOffset,
-      dosTime,
-      dosDate,
-    });
+    cdEntries.push({ filename: filenameBuf, crc32, compressedSize: compressed.length, uncompressedSize: data.length, localHeaderOffset: currentOffset, dosTime, dosDate });
 
     parts.push(lfh, compressed, dd);
     currentOffset += lfh.length + compressed.length + dd.length;
@@ -319,9 +274,7 @@ export interface StreamingZipPacker {
  * @param handle - Open FileHandle positioned where ZIP data should start
  * @returns StreamingZipPacker with addFile() and finalize()
  */
-export function createStreamingZipPacker(
-  handle: FileHandle,
-): StreamingZipPacker {
+export function createStreamingZipPacker(handle: FileHandle): StreamingZipPacker {
   const cdEntries: CdEntry[] = [];
   const hasher = createHash('sha256');
   let currentOffset = 0;
@@ -338,25 +291,10 @@ export function createStreamingZipPacker(
     const crc32 = zlib.crc32(data);
     const { dosTime, dosDate } = _toDosDateTime();
 
-    const lfh = _buildLfh(
-      filenameBuf,
-      crc32,
-      compressed.length,
-      data.length,
-      dosTime,
-      dosDate,
-    );
+    const lfh = _buildLfh(filenameBuf, crc32, compressed.length, data.length, dosTime, dosDate);
     const dd = _buildDataDescriptor(crc32, compressed.length, data.length);
 
-    cdEntries.push({
-      filename: filenameBuf,
-      crc32,
-      compressedSize: compressed.length,
-      uncompressedSize: data.length,
-      localHeaderOffset: currentOffset,
-      dosTime,
-      dosDate,
-    });
+    cdEntries.push({ filename: filenameBuf, crc32, compressedSize: compressed.length, uncompressedSize: data.length, localHeaderOffset: currentOffset, dosTime, dosDate });
 
     await _writeAndHash(lfh);
     await _writeAndHash(compressed);
@@ -383,10 +321,7 @@ export function createStreamingZipPacker(
 // ─── ZIP64 extra field parser ────────────────────────────────────────────────
 
 /** Parses ZIP64 extra field from LFH extra area to get real sizes. */
-function _parseZip64ExtraLfh(extraBuf: Buffer): {
-  compressedSize: number;
-  uncompressedSize: number;
-} {
+function _parseZip64ExtraLfh(extraBuf: Buffer): { compressedSize: number; uncompressedSize: number } {
   let offset = 0;
   while (offset + 4 <= extraBuf.length) {
     const headerId = extraBuf.readUInt16LE(offset);
@@ -401,9 +336,7 @@ function _parseZip64ExtraLfh(extraBuf: Buffer): {
     }
     offset += 4 + dataSize;
   }
-  throw new BfsError(
-    'ZIP: ZIP64 extra field (0x0001) not found but size marker is 0xFFFFFFFF',
-  );
+  throw new BfsError('ZIP: ZIP64 extra field (0x0001) not found but size marker is 0xFFFFFFFF');
 }
 
 // ─── ZIP extractor (dual-mode: legacy + ZIP64) ──────────────────────────────
@@ -431,9 +364,7 @@ export function extractZip(zipBuffer: Buffer): ZipExtractResult[] {
         pos += 16;
         continue;
       }
-      throw new BfsError(
-        `ZIP: unexpected signature 0x${sig.toString(16)} at offset ${pos}`,
-      );
+      throw new BfsError(`ZIP: unexpected signature 0x${sig.toString(16)} at offset ${pos}`);
     }
 
     if (pos + 30 > zipBuffer.length) {
@@ -467,18 +398,12 @@ export function extractZip(zipBuffer: Buffer): ZipExtractResult[] {
       uncompressedSize = rawUncompressedSize;
     }
 
-    const filename = zipBuffer.toString(
-      'utf8',
-      pos + 30,
-      pos + 30 + filenameLen,
-    );
+    const filename = zipBuffer.toString('utf8', pos + 30, pos + 30 + filenameLen);
     const dataStart = headerEnd;
     const dataEnd = dataStart + compressedSize;
 
     if (dataEnd > zipBuffer.length) {
-      throw new BfsError(
-        `ZIP: compressed data for "${filename}" exceeds buffer`,
-      );
+      throw new BfsError(`ZIP: compressed data for "${filename}" exceeds buffer`);
     }
 
     const compressedData = zipBuffer.subarray(dataStart, dataEnd);
@@ -486,22 +411,16 @@ export function extractZip(zipBuffer: Buffer): ZipExtractResult[] {
     try {
       decompressed = zlib.inflateRawSync(compressedData);
     } catch (e) {
-      throw new BfsError(
-        `ZIP: inflate failed for "${filename}": ${e instanceof Error ? e.message : String(e)}`,
-      );
+      throw new BfsError(`ZIP: inflate failed for "${filename}": ${e instanceof Error ? e.message : String(e)}`);
     }
 
     if (decompressed.length !== uncompressedSize) {
-      throw new BfsError(
-        `ZIP: size mismatch for "${filename}": expected ${uncompressedSize}, got ${decompressed.length}`,
-      );
+      throw new BfsError(`ZIP: size mismatch for "${filename}": expected ${uncompressedSize}, got ${decompressed.length}`);
     }
 
     const actualCrc32 = zlib.crc32(decompressed);
     if (actualCrc32 !== storedCrc32) {
-      throw new BfsError(
-        `ZIP: CRC-32 mismatch for "${filename}": expected 0x${storedCrc32.toString(16)}, got 0x${actualCrc32.toString(16)}`,
-      );
+      throw new BfsError(`ZIP: CRC-32 mismatch for "${filename}": expected 0x${storedCrc32.toString(16)}, got 0x${actualCrc32.toString(16)}`);
     }
 
     results.push({ filename, data: decompressed });
@@ -593,17 +512,12 @@ export interface CompressibilityResult {
  * @param rootDir - Directory to analyse
  * @returns Compressibility statistics
  */
-export async function estimateCompressibility(
-  rootDir: string,
-): Promise<CompressibilityResult> {
+export async function estimateCompressibility(rootDir: string): Promise<CompressibilityResult> {
   let compressibleBytes = 0;
   let incompressibleBytes = 0;
   const extBytes = new Map<string, number>();
 
-  const entries = await fs.readdir(rootDir, {
-    recursive: true,
-    withFileTypes: true,
-  });
+  const entries = await fs.readdir(rootDir, { recursive: true, withFileTypes: true });
 
   for (const entry of entries) {
     if (!entry.isFile()) continue;
@@ -615,8 +529,7 @@ export async function estimateCompressibility(
     if (segments[0] === '.bfs') continue;
 
     const ext = path.extname(entry.name).toLowerCase();
-    const isIncompressible =
-      segments[0] === '.git' || INCOMPRESSIBLE_EXTS.has(ext);
+    const isIncompressible = segments[0] === '.git' || INCOMPRESSIBLE_EXTS.has(ext);
 
     const { size } = await fs.stat(fullPath);
 
@@ -637,13 +550,7 @@ export async function estimateCompressibility(
     .slice(0, 3)
     .map(([ext]) => ext);
 
-  return {
-    totalBytes,
-    compressibleBytes,
-    incompressibleBytes,
-    ratio,
-    topIncompressible,
-  };
+  return { totalBytes, compressibleBytes, incompressibleBytes, ratio, topIncompressible };
 }
 
 // ─── Detection ────────────────────────────────────────────────────────────────

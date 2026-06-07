@@ -41,19 +41,7 @@ export function registerPull(program: Command): void {
     .option('--allow-missing-adapters', t('pull_opt_allow_missing_adapters'))
     .action(
       async (
-        opts: {
-          version?: string;
-          force?: boolean;
-          yes?: boolean;
-          password?: string;
-          provider?: string;
-          path?: string;
-          name?: string;
-          cache?: boolean;
-          tempDir?: string;
-          cacheDir?: string;
-          allowMissingAdapters?: boolean;
-        },
+        opts: { version?: string; force?: boolean; yes?: boolean; password?: string; provider?: string; path?: string; name?: string; cache?: boolean; tempDir?: string; cacheDir?: string; allowMissingAdapters?: boolean },
         cmd: Command,
       ) => {
         const rootDir = resolveCwd(cmd);
@@ -120,9 +108,7 @@ export function registerPull(program: Command): void {
             ...(opts.password !== undefined ? { password: opts.password } : {}),
             ...(opts.tempDir !== undefined ? { tempDir: opts.tempDir } : {}),
             ...(opts.cacheDir !== undefined ? { cacheDir: opts.cacheDir } : {}),
-            ...(opts.allowMissingAdapters === true
-              ? { allowMissingAdapters: true }
-              : {}),
+            ...(opts.allowMissingAdapters === true ? { allowMissingAdapters: true } : {}),
             fromCache: opts.cache ?? false,
             interactive: isReplMode(),
             io: wrappedIo,

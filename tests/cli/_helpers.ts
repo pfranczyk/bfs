@@ -58,9 +58,7 @@ export function buildTestProgram(): Command {
   registerRecovery(program);
   registerScheme(program);
 
-  const providerCmd = program
-    .command('provider')
-    .description('Zarządzaj providerami');
+  const providerCmd = program.command('provider').description('Zarządzaj providerami');
   registerProviderAdd(providerCmd);
   registerProviderList(providerCmd);
   registerProviderRemove(providerCmd);
@@ -75,23 +73,15 @@ export function buildTestProgram(): Command {
  *
  * @returns 'abort' | 'ok' | 'commander' | 'cancelled'
  */
-export async function runCmd(
-  tokens: string[],
-): Promise<'abort' | 'ok' | 'commander' | 'cancelled'> {
+export async function runCmd(tokens: string[]): Promise<'abort' | 'ok' | 'commander' | 'cancelled'> {
   const program = buildTestProgram();
   try {
     await program.parseAsync(['node', 'bfs', ...tokens]);
     return 'ok';
   } catch (err) {
     if (err instanceof CommandAbort) return 'abort';
-    if (err instanceof AbortPromptError || err instanceof ExitPromptError)
-      return 'cancelled';
-    if (
-      err instanceof Error &&
-      'code' in err &&
-      String((err as { code: unknown }).code).startsWith('commander.')
-    )
-      return 'commander';
+    if (err instanceof AbortPromptError || err instanceof ExitPromptError) return 'cancelled';
+    if (err instanceof Error && 'code' in err && String((err as { code: unknown }).code).startsWith('commander.')) return 'commander';
     throw err;
   }
 }
@@ -100,32 +90,22 @@ export async function runCmd(
  * Spy on console.log and console.error for a test block.
  * Returns captured lines (stripped of ANSI codes).
  */
-export function captureConsole(): {
-  logs: string[];
-  errors: string[];
-  restore: () => void;
-} {
+export function captureConsole(): { logs: string[]; errors: string[]; restore: () => void } {
   const logs: string[] = [];
   const errors: string[] = [];
   const stripAnsi = (s: string) =>
     // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI stripping
     s.replace(/\x1B\[[0-9;]*m/g, '');
 
-  const logSpy = vi
-    .spyOn(console, 'log')
-    .mockImplementation((...args: unknown[]) => {
-      logs.push(stripAnsi(args.map(String).join(' ')));
-    });
-  const errSpy = vi
-    .spyOn(console, 'error')
-    .mockImplementation((...args: unknown[]) => {
-      errors.push(stripAnsi(args.map(String).join(' ')));
-    });
-  const warnSpy = vi
-    .spyOn(console, 'warn')
-    .mockImplementation((...args: unknown[]) => {
-      errors.push(stripAnsi(args.map(String).join(' ')));
-    });
+  const logSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+    logs.push(stripAnsi(args.map(String).join(' ')));
+  });
+  const errSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+    errors.push(stripAnsi(args.map(String).join(' ')));
+  });
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+    errors.push(stripAnsi(args.map(String).join(' ')));
+  });
 
   return {
     logs,

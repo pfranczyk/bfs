@@ -8,23 +8,9 @@ export interface SkippedFile {
 
 /** Base error class for all BFS-specific errors. */
 export class BfsError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
     this.name = 'BfsError';
-  }
-}
-
-/**
- * Thrown when a backup entry path would escape the restore target directory.
- * Guards the unpack path-traversal / zip-slip vector when the file table may
- * originate from an untrusted source (tampered shards on a compromised provider).
- */
-export class UnsafePathError extends BfsError {
-  readonly entryPath: string;
-  constructor(entryPath: string, reason: string) {
-    super(`Unsafe path in backup (${reason}): ${JSON.stringify(entryPath)}`);
-    this.name = 'UnsafePathError';
-    this.entryPath = entryPath;
   }
 }
 
@@ -38,8 +24,8 @@ export class ShardCorruptedError extends BfsError {
 
 /** Thrown when a storage provider operation fails (I/O error, auth failure, etc.). */
 export class ProviderError extends BfsError {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
     this.name = 'ProviderError';
   }
 }
@@ -61,6 +47,21 @@ export class TamperDetectedError extends BfsError {
 }
 
 /**
+ * Thrown when a blob entry's path is unsafe to write during unpack — absolute,
+ * contains a `..` segment or NUL byte, or resolves outside the target directory.
+ * This is the path-traversal / zip-slip guard for restoring a backup whose
+ * contents may originate from an untrusted source.
+ */
+export class UnsafePathError extends BfsError {
+  readonly entryPath: string;
+  constructor(entryPath: string, reason: string) {
+    super(`Unsafe path in backup (${reason}): ${JSON.stringify(entryPath)}`);
+    this.name = 'UnsafePathError';
+    this.entryPath = entryPath;
+  }
+}
+
+/**
  * Thrown by push() when one or more source files could not be read.
  * The partially-built blob is saved to cachePath so the user can resume
  * with `bfs push --cache` without re-packing.
@@ -69,9 +70,7 @@ export class PushSkippedError extends BfsError {
   readonly skipped: SkippedFile[];
   readonly cachePath: string;
   constructor(skipped: SkippedFile[], cachePath: string) {
-    super(
-      `${skipped.length} file(s) could not be read and were excluded from the blob.`,
-    );
+    super(`${skipped.length} file(s) could not be read and were excluded from the blob.`);
     this.name = 'PushSkippedError';
     this.skipped = skipped;
     this.cachePath = cachePath;
@@ -100,9 +99,7 @@ export class LockConcurrentActiveError extends BfsError {
   readonly pid: number;
   readonly started_at: string;
   constructor(operation: 'push' | 'repair', pid: number, started_at: string) {
-    super(
-      `another ${operation} operation is in progress (PID ${pid}, started ${started_at})`,
-    );
+    super(`another ${operation} operation is in progress (PID ${pid}, started ${started_at})`);
     this.name = 'LockConcurrentActiveError';
     this.operation = operation;
     this.pid = pid;
@@ -118,9 +115,7 @@ export class LockConcurrentActiveError extends BfsError {
 export class LockPartialStatePushError extends BfsError {
   readonly version: number;
   constructor(version: number) {
-    super(
-      `push.lock exists from partial-state push of version ${version}; run \`bfs repair --version ${version} ... --rebuild\` or \`bfs clear\` to discard`,
-    );
+    super(`push.lock exists from partial-state push of version ${version}; run \`bfs repair --version ${version} ... --rebuild\` or \`bfs clear\` to discard`);
     this.name = 'LockPartialStatePushError';
     this.version = version;
   }
@@ -130,9 +125,7 @@ export class LockPartialStatePushError extends BfsError {
 export class PushCacheNoLockError extends BfsError {
   readonly missing: string[];
   constructor(missing: string[]) {
-    super(
-      `\`--cache\` requires both .bfs/push.lock and cached blob; missing: ${missing.join(', ')}`,
-    );
+    super(`\`--cache\` requires both .bfs/push.lock and cached blob; missing: ${missing.join(', ')}`);
     this.name = 'PushCacheNoLockError';
     this.missing = missing;
   }
@@ -146,9 +139,7 @@ export class PushCacheNoLockError extends BfsError {
  */
 export class PushCacheUnavailableError extends BfsError {
   constructor() {
-    super(
-      '`push.lock` indicates the cached blob was not persisted; run `bfs clear` to discard the leftover state',
-    );
+    super('`push.lock` indicates the cached blob was not persisted; run `bfs clear` to discard the leftover state');
     this.name = 'PushCacheUnavailableError';
   }
 }

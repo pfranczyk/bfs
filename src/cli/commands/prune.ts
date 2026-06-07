@@ -34,9 +34,7 @@ function parseVersionRange(rangeStr: string, allVersions: number[]): number[] {
   }
 
   // Filter to only existing versions
-  return [...versions]
-    .filter((v) => allVersions.includes(v))
-    .sort((a, b) => a - b);
+  return [...versions].filter((v) => allVersions.includes(v)).sort((a, b) => a - b);
 }
 
 /**
@@ -56,154 +54,99 @@ export function registerPrune(program: Command): void {
     .description(t('cmd_prune_desc'))
     .option('--keep-last <n>', t('prune_opt_keep_last'))
     .option('--yes', t('prune_opt_yes'))
-    .action(
-      async (
-        range: string | undefined,
-        opts: { keepLast?: string; yes?: boolean },
-        cmd: Command,
-      ) => {
-        const rootDir = resolveCwd(cmd);
+    .action(async (range: string | undefined, opts: { keepLast?: string; yes?: boolean }, cmd: Command) => {
+      const rootDir = resolveCwd(cmd);
 
-        try {
-          const manifests = await listVersions(rootDir);
-          const allVersions = manifests
-            .map((m) => m.version)
-            .sort((a, b) => a - b);
+      try {
+        const manifests = await listVersions(rootDir);
+        const allVersions = manifests.map((m) => m.version).sort((a, b) => a - b);
 
-          if (allVersions.length === 0) {
-            console.log(t('prune_no_versions'));
-            return;
+        if (allVersions.length === 0) {
+          console.log(t('prune_no_versions'));
+          return;
+        }
+
+        let toRemove: number[] = [];
+
+        if (opts.keepLast) {
+          const keep = parseInt(opts.keepLast, 10);
+          if (Number.isNaN(keep) || keep < 1) {
+            error(t('prune_keep_last_invalid'));
+            throw new CommandAbort();
           }
-
-          let toRemove: number[] = [];
-
-          if (opts.keepLast) {
-            const keep = parseInt(opts.keepLast, 10);
-            if (Number.isNaN(keep) || keep < 1) {
-              error(t('prune_keep_last_invalid'));
-              throw new CommandAbort();
-            }
-            toRemove = allVersions.slice(
-              0,
-              Math.max(0, allVersions.length - keep),
-            );
-          } else if (range) {
-            toRemove = parseVersionRange(range, allVersions);
-          } else {
-            const choices = [
-              ...allVersions.map((v) => ({ name: `v${v}`, value: String(v) })),
-              new inquirer.Separator(),
+          toRemove = allVersions.slice(0, Math.max(0, allVersions.length - keep));
+        } else if (range) {
+          toRemove = parseVersionRange(range, allVersions);
+        } else {
+          const choices = [...allVersions.map((v) => ({ name: `v${v}`, value: String(v) })), new inquirer.Separator(), { name: t('prune_range_manual'), value: '__manual__' }];
+          // theme.style.keysHelpTip adds "esc cancel" to the help bar.
+          // Cast: legacy inquirer types don't expose @inquirer/checkbox theme.
+          let picked: string[] = [];
+          try {
+            const ans = await promptWithRawMode<{ picked: string[] }>([
               {
-                name: t('prune_range_manual'),
-                value: '__manual__',
-              },
-            ];
-            // theme.style.keysHelpTip adds "esc cancel" to the help bar.
-            // Cast: legacy inquirer types don't expose @inquirer/checkbox theme.
-            let picked: string[] = [];
+                type: 'checkbox',
+                name: 'picked',
+                message: t('prune_select_prompt'),
+                choices,
+                theme: { style: { keysHelpTip: (keys: [key: string, action: string][]): string => [...keys, ['esc', t('cancel').toLowerCase()]].map(([k, a]) => `${k} ${a}`).join(' • ') } },
+              } as never,
+            ]);
+            picked = ans.picked;
+          } catch (err) {
+            if (!(err instanceof AbortPromptError) && !(err instanceof ExitPromptError)) throw err;
+            // Esc / Ctrl+C → treat as empty selection
+          }
+          if (picked.includes('__manual__')) {
             try {
-              const ans = await promptWithRawMode<{ picked: string[] }>([
-                {
-                  type: 'checkbox',
-                  name: 'picked',
-                  message: t('prune_select_prompt'),
-                  choices,
-                  theme: {
-                    style: {
-                      keysHelpTip: (
-                        keys: [key: string, action: string][],
-                      ): string =>
-                        [...keys, ['esc', t('cancel').toLowerCase()]]
-                          .map(([k, a]) => `${k} ${a}`)
-                          .join(' • '),
-                    },
-                  },
-                } as never,
-              ]);
-              picked = ans.picked;
+              const { rangeInput } = await promptWithRawMode<{ rangeInput: string }>([{ type: 'input', name: 'rangeInput', message: t('prune_range_prompt'), validate: (v: string) => (v.trim() ? true : t('required')) }]);
+              toRemove = parseVersionRange(rangeInput.trim(), allVersions);
             } catch (err) {
-              if (
-                !(err instanceof AbortPromptError) &&
-                !(err instanceof ExitPromptError)
-              )
-                throw err;
+              if (!(err instanceof AbortPromptError) && !(err instanceof ExitPromptError)) throw err;
               // Esc / Ctrl+C → treat as empty selection
             }
-            if (picked.includes('__manual__')) {
-              try {
-                const { rangeInput } = await promptWithRawMode<{
-                  rangeInput: string;
-                }>([
-                  {
-                    type: 'input',
-                    name: 'rangeInput',
-                    message: t('prune_range_prompt'),
-                    validate: (v: string) => (v.trim() ? true : t('required')),
-                  },
-                ]);
-                toRemove = parseVersionRange(rangeInput.trim(), allVersions);
-              } catch (err) {
-                if (
-                  !(err instanceof AbortPromptError) &&
-                  !(err instanceof ExitPromptError)
-                )
-                  throw err;
-                // Esc / Ctrl+C → treat as empty selection
-              }
-            } else {
-              toRemove = picked
-                .map(Number)
-                .filter((v) => allVersions.includes(v))
-                .sort((a, b) => a - b);
-            }
-            if (toRemove.length === 0) {
-              console.log(t('prune_no_selected'));
-              return;
-            }
+          } else {
+            toRemove = picked
+              .map(Number)
+              .filter((v) => allVersions.includes(v))
+              .sort((a, b) => a - b);
           }
-
           if (toRemove.length === 0) {
-            console.log(t('prune_no_in_range'));
+            console.log(t('prune_no_selected'));
             return;
           }
-
-          warn(fmt('prune_versions_to_delete', toRemove.join(', ')));
-
-          if (!opts.yes) {
-            let confirmed = false;
-            try {
-              const ans = await promptWithRawMode<{ confirmed: boolean }>([
-                {
-                  type: 'confirm',
-                  name: 'confirmed',
-                  message: fmt('prune_confirm', String(toRemove.length)),
-                  default: false,
-                },
-              ]);
-              confirmed = ans.confirmed;
-            } catch (err) {
-              if (
-                !(err instanceof AbortPromptError) &&
-                !(err instanceof ExitPromptError)
-              )
-                throw err;
-              // Esc / Ctrl+C → treat as decline
-            }
-            if (!confirmed) {
-              console.log(t('cancelled'));
-              return;
-            }
-          }
-
-          await prune(rootDir, { versions: toRemove });
-          success(fmt('prune_deleted', toRemove.join(', ')));
-        } catch (err) {
-          if (err instanceof CommandAbort) throw err;
-          if (err instanceof AbortPromptError) throw err;
-          if (err instanceof ExitPromptError) throw err;
-          error(err instanceof Error ? err.message : String(err));
-          throw new CommandAbort();
         }
-      },
-    );
+
+        if (toRemove.length === 0) {
+          console.log(t('prune_no_in_range'));
+          return;
+        }
+
+        warn(fmt('prune_versions_to_delete', toRemove.join(', ')));
+
+        if (!opts.yes) {
+          let confirmed = false;
+          try {
+            const ans = await promptWithRawMode<{ confirmed: boolean }>([{ type: 'confirm', name: 'confirmed', message: fmt('prune_confirm', String(toRemove.length)), default: false }]);
+            confirmed = ans.confirmed;
+          } catch (err) {
+            if (!(err instanceof AbortPromptError) && !(err instanceof ExitPromptError)) throw err;
+            // Esc / Ctrl+C → treat as decline
+          }
+          if (!confirmed) {
+            console.log(t('cancelled'));
+            return;
+          }
+        }
+
+        await prune(rootDir, { versions: toRemove });
+        success(fmt('prune_deleted', toRemove.join(', ')));
+      } catch (err) {
+        if (err instanceof CommandAbort) throw err;
+        if (err instanceof AbortPromptError) throw err;
+        if (err instanceof ExitPromptError) throw err;
+        error(err instanceof Error ? err.message : String(err));
+        throw new CommandAbort();
+      }
+    });
 }

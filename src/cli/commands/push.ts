@@ -1,13 +1,7 @@
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import ora from 'ora';
-import {
-  LockConcurrentActiveError,
-  LockPartialStatePushError,
-  PushCacheNoLockError,
-  PushCacheUnavailableError,
-  PushSkippedError,
-} from '../../core/errors.js';
+import { LockConcurrentActiveError, LockPartialStatePushError, PushCacheNoLockError, PushCacheUnavailableError, PushSkippedError } from '../../core/errors.js';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO } from '../../providers/provider.js';
 import { PushMode, VersionHealth } from '../../types/index.js';
@@ -73,8 +67,7 @@ export function registerPush(program: Command): void {
 
         // compressOverride is set only when the user explicitly passed one of the flags
         const compressSource = cmd.getOptionValueSource('compress');
-        const compressOverride: boolean | undefined =
-          compressSource === 'cli' ? opts.compress : undefined;
+        const compressOverride: boolean | undefined = compressSource === 'cli' ? opts.compress : undefined;
 
         const spinner = ora({ color: 'cyan' });
         const io = createCliProviderIO(rootDir);
@@ -126,9 +119,7 @@ export function registerPush(program: Command): void {
             ...(opts.password !== undefined ? { password: opts.password } : {}),
             ...(opts.tempDir !== undefined ? { tempDir: opts.tempDir } : {}),
             ...(opts.cacheDir !== undefined ? { cacheDir: opts.cacheDir } : {}),
-            ...(opts.maxRam !== undefined
-              ? { maxRamMb: parseInt(opts.maxRam, 10) }
-              : {}),
+            ...(opts.maxRam !== undefined ? { maxRamMb: parseInt(opts.maxRam, 10) } : {}),
             ...(compressOverride !== undefined ? { compressOverride } : {}),
             fromCache: opts.cache ?? false,
             interactive: isReplMode(),
@@ -142,37 +133,15 @@ export function registerPush(program: Command): void {
           switch (result.health) {
             case VersionHealth.Healthy:
               spinner.succeed(t('push_completed'));
-              success(
-                fmt(
-                  'push_completed_healthy',
-                  String(result.version),
-                  String(result.uploaded_count),
-                  String(total),
-                ),
-              );
+              success(fmt('push_completed_healthy', String(result.version), String(result.uploaded_count), String(total)));
               break;
             case VersionHealth.Degraded:
               spinner.warn(t('push_failed'));
-              warn(
-                fmt(
-                  'push_partial_degraded',
-                  String(result.version),
-                  String(result.uploaded_count),
-                  String(total),
-                ),
-              );
+              warn(fmt('push_partial_degraded', String(result.version), String(result.uploaded_count), String(total)));
               throw new CommandAbort();
             case VersionHealth.Damaged:
               spinner.fail(t('push_failed'));
-              error(
-                fmt(
-                  'push_damaged',
-                  String(result.version),
-                  String(result.uploaded_count),
-                  String(total),
-                  String(result.version),
-                ),
-              );
+              error(fmt('push_damaged', String(result.version), String(result.uploaded_count), String(total), String(result.version)));
               throw new CommandAbort();
             // VersionHealth.Unknown is never returned by push(); intentionally no default branch.
           }
@@ -192,14 +161,7 @@ export function registerPush(program: Command): void {
           }
           if (err instanceof LockConcurrentActiveError) {
             spinner.fail(t('push_failed'));
-            error(
-              fmt(
-                'lock_concurrent_active',
-                err.operation,
-                String(err.pid),
-                err.started_at,
-              ),
-            );
+            error(fmt('lock_concurrent_active', err.operation, String(err.pid), err.started_at));
             throw new CommandAbort();
           }
           if (err instanceof LockPartialStatePushError) {

@@ -1,10 +1,7 @@
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
-import {
-  createCliProviderIO,
-  providerRegistry,
-} from '../../providers/provider.js';
+import { createCliProviderIO, providerRegistry } from '../../providers/provider.js';
 import { readConfig } from '../../vault/config.js';
 import { resolveCwd } from '../cwd.js';
 import { CommandAbort, error, table } from '../ui.js';
@@ -33,14 +30,7 @@ export function registerProviderList(providerCmd: Command): void {
         return;
       }
 
-      console.log(
-        fmt(
-          'provider_list_header',
-          chalk.cyan(config.vault_name),
-          String(config.scheme.data_shards),
-          String(config.scheme.parity_shards),
-        ),
-      );
+      console.log(fmt('provider_list_header', chalk.cyan(config.vault_name), String(config.scheme.data_shards), String(config.scheme.parity_shards)));
 
       const io = createCliProviderIO(rootDir);
       const rows = config.providers.map((p, i) => {
@@ -56,15 +46,7 @@ export function registerProviderList(providerCmd: Command): void {
         return [String(i), p.id, p.type, connInfo || '—'];
       });
 
-      table(
-        [
-          t('provider_list_col_num'),
-          t('provider_list_col_id'),
-          t('provider_list_col_type'),
-          t('provider_list_col_config'),
-        ],
-        rows,
-      );
+      table([t('provider_list_col_num'), t('provider_list_col_id'), t('provider_list_col_type'), t('provider_list_col_config')], rows);
       console.log();
     });
 }
