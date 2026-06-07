@@ -5,10 +5,15 @@ import { BLOB_FLAGS, type FileEntry } from '../types/index.js';
 import { extractZip } from './compression.js';
 import type { SkippedFile } from './errors.js';
 import { BfsError } from './errors.js';
+import { resolveSafeChildPath } from './fs-utils.js';
 import { hashBuffer } from './hash.js';
 
 const HEADER_SIZE = 70;
 const CHECKSUM_SIZE = 32;
+// Smallest possible file-table entry: pathLen(2) + size(8) + dataOffset(8) +
+// hash(32) + mode(4) + modifiedAt(8) with an empty (0-byte) path. Used to cap a
+// header-declared fileCount before it drives any allocation or loop.
+const MIN_FILE_ENTRY_SIZE = 62;
 
 /**
  * Parses the file table from a BFS blob — pure logic, no I/O.
@@ -136,7 +141,10 @@ export async function unpackBlob(
     }
 
     // 6. Write file to disk — skip on I/O failure (permission, disk full, etc.)
-    const targetPath = path.join(targetDir, entry.path);
+    // resolveSafeChildPath runs before the try so an UnsafePathError (path
+    // escaping targetDir) propagates and aborts the restore instead of being
+    // demoted to a skipped entry — consistent with the hash-mismatch throw above.
+    const targetPath = resolveSafeChildPath(targetDir, entry.path);
     try {
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
       await fs.writeFile(targetPath, data);
@@ -170,6 +178,7 @@ export async function parseBlobFileTableFromFile(
 ): Promise<FileEntry[]> {
   const fh = await fs.open(blobPath, 'r');
   try {
+    const { size: fileSize } = await fh.stat();
     const header = Buffer.alloc(HEADER_SIZE);
     const { bytesRead: hRead } = await fh.read(header, 0, HEADER_SIZE, 0);
     if (hRead < HEADER_SIZE)
@@ -185,6 +194,13 @@ export async function parseBlobFileTableFromFile(
     const fileCount = header.readUInt32LE(0x22);
     const fileTableOffset = Number(header.readBigUInt64LE(0x26));
     const fileTableLength = Number(header.readBigUInt64LE(0x2e));
+
+    assertSectionWithinFile(
+      { offset: fileTableOffset, length: fileTableLength },
+      fileSize,
+      'file table',
+    );
+    assertFileCountFits(fileCount, fileTableLength);
 
     const ftBuf = Buffer.alloc(fileTableLength);
     const { bytesRead: ftRead } = await fh.read(
@@ -271,6 +287,13 @@ export async function unpackBlobFromFile(
     const dataSectionOffset = Number(header.readBigUInt64LE(0x36));
 
     // ── 2. Read file table ─────────────────────────────────────────────────
+    assertSectionWithinFile(
+      { offset: fileTableOffset, length: fileTableLength },
+      fileStat.size,
+      'file table',
+    );
+    assertFileCountFits(fileCount, fileTableLength);
+
     const ftBuf = Buffer.alloc(fileTableLength);
     await fh.read(ftBuf, 0, fileTableLength, fileTableOffset);
 
@@ -339,6 +362,11 @@ export async function unpackBlobFromFile(
     const dataSectionLength = Number(header.readBigUInt64LE(0x3e));
 
     if (isCompressed) {
+      assertSectionWithinFile(
+        { offset: dataSectionOffset, length: dataSectionLength },
+        fileStat.size,
+        'data section',
+      );
       const zipBuffer = Buffer.alloc(dataSectionLength);
       await fh.read(zipBuffer, 0, dataSectionLength, dataSectionOffset);
       return _extractZipToDir(zipBuffer, targetDir);
@@ -361,7 +389,7 @@ export async function unpackBlobFromFile(
         );
       }
 
-      const targetPath = path.join(targetDir, entry.path);
+      const targetPath = resolveSafeChildPath(targetDir, entry.path);
       try {
         await fs.mkdir(path.dirname(targetPath), { recursive: true });
         const wfh = await fs.open(targetPath, 'w');
@@ -408,6 +436,62 @@ export async function unpackBlobFromFile(
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
+/** A byte window inside a blob file, declared by the (untrusted) header. */
+interface FileWindow {
+  offset: number;
+  length: number;
+}
+
+/**
+ * Validates a header-declared (offset, length) window against the actual blob
+ * file size before a buffer is allocated for it. A tampered header could
+ * declare a multi-GiB length and crash the process at Buffer.alloc — long
+ * before the bounds-checked parsing loop would reject it.
+ *
+ * @throws BfsError if offset/length are not safe integers, are negative, or
+ *         describe a window that extends past the end of the file.
+ */
+function assertSectionWithinFile(
+  window: FileWindow,
+  fileSize: number,
+  label: string,
+): void {
+  const { offset, length } = window;
+  if (
+    !Number.isSafeInteger(offset) ||
+    !Number.isSafeInteger(length) ||
+    offset < 0 ||
+    length < 0
+  ) {
+    throw new BfsError(
+      `${label}: invalid header offset/length (${offset}/${length})`,
+    );
+  }
+  if (offset > fileSize || length > fileSize - offset) {
+    throw new BfsError(
+      `${label}: section out of file bounds (offset ${offset}, length ${length}, file ${fileSize})`,
+    );
+  }
+}
+
+/**
+ * Caps a header-declared file count against the byte budget of the file table.
+ * Each entry needs at least MIN_FILE_ENTRY_SIZE bytes, so a count larger than
+ * the table can hold signals a corrupt or tampered header.
+ *
+ * @throws BfsError if fileCount cannot fit within fileTableLength.
+ */
+function assertFileCountFits(fileCount: number, fileTableLength: number): void {
+  if (!Number.isSafeInteger(fileCount) || fileCount < 0) {
+    throw new BfsError(`Invalid file count in header: ${fileCount}`);
+  }
+  if (fileCount > Math.floor(fileTableLength / MIN_FILE_ENTRY_SIZE)) {
+    throw new BfsError(
+      `File count ${fileCount} exceeds file table capacity (${fileTableLength} bytes)`,
+    );
+  }
+}
+
 /**
  * Extracts a ZIP buffer (from a compressed BFS data section) to targetDir.
  * CRC-32 is verified by extractZip() for each entry.
@@ -422,7 +506,9 @@ async function _extractZipToDir(
   const skipped: SkippedFile[] = [];
 
   for (const entry of zipEntries) {
-    const targetPath = path.join(targetDir, entry.filename);
+    // resolveSafeChildPath runs before the try so an escaping ZIP entry name
+    // aborts extraction with UnsafePathError rather than being skipped.
+    const targetPath = resolveSafeChildPath(targetDir, entry.filename);
     try {
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
       await fs.writeFile(targetPath, entry.data);

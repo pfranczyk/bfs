@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-06-07
+
+### Security
+- **A restore can no longer write files outside the directory you are restoring
+  into.** When restoring or recovering a backup, BFS now rejects any stored file
+  whose path would escape the target directory — an absolute path, a `..`
+  traversal, or a path containing a NUL byte — and stops with a clear error
+  instead of writing that file. This hardens restores against tampered storage:
+  a modified backup can no longer drop a file into your home directory, an
+  autostart location, or other system paths while you restore. Honest backups,
+  encrypted or not, are unaffected. The protection applies to both compressed and
+  uncompressed backups.
+- **A tampered backup header is rejected instead of crashing the process.**
+  Reading a backup whose internal size fields have been altered to implausible
+  values now fails with a clear error rather than attempting an enormous memory
+  allocation, so a malformed or malicious backup cannot take down BFS during a
+  restore or health check.
+
 ## [0.6.1] - 2026-05-31
 
 ### Changed
@@ -383,7 +401,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/pfranczyk/bfs/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/pfranczyk/bfs/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/pfranczyk/bfs/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/pfranczyk/bfs/compare/v0.4.0...v0.5.0

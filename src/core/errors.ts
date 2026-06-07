@@ -14,6 +14,20 @@ export class BfsError extends Error {
   }
 }
 
+/**
+ * Thrown when a backup entry path would escape the restore target directory.
+ * Guards the unpack path-traversal / zip-slip vector when the file table may
+ * originate from an untrusted source (tampered shards on a compromised provider).
+ */
+export class UnsafePathError extends BfsError {
+  readonly entryPath: string;
+  constructor(entryPath: string, reason: string) {
+    super(`Unsafe path in backup (${reason}): ${JSON.stringify(entryPath)}`);
+    this.name = 'UnsafePathError';
+    this.entryPath = entryPath;
+  }
+}
+
 /** Thrown when a shard binary fails magic or checksum validation. */
 export class ShardCorruptedError extends BfsError {
   constructor(message: string) {

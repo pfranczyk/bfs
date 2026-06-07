@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { UnsafePathError } from './errors.js';
 
 /**
  * Returns true when an unknown error is a Node.js ENOENT (file/directory not found).
@@ -33,4 +34,40 @@ export async function writeJsonAtomic(
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
   await fs.rename(tmpPath, filePath);
+}
+
+/**
+ * Resolves a blob-relative entry path against rootDir and asserts it stays inside it.
+ * The path-traversal / zip-slip guard for unpacking a backup whose file table may
+ * originate from an untrusted source (tampered shards on a compromised provider).
+ * Rejects NUL bytes, absolute paths (POSIX or Windows), `..` segments, and any path
+ * that resolves outside rootDir.
+ *
+ * @param rootDir      Directory the entry must be written under.
+ * @param relativePath Entry path as stored in the blob (forward-slash form).
+ * @returns Absolute path, guaranteed contained within rootDir, safe to write.
+ * @throws UnsafePathError if the path is absolute, contains `..` or NUL, or escapes rootDir.
+ */
+export function resolveSafeChildPath(
+  rootDir: string,
+  relativePath: string,
+): string {
+  if (relativePath.includes('\0')) {
+    throw new UnsafePathError(relativePath, 'contains a NUL byte');
+  }
+  if (
+    path.posix.isAbsolute(relativePath) ||
+    path.win32.isAbsolute(relativePath)
+  ) {
+    throw new UnsafePathError(relativePath, 'is an absolute path');
+  }
+  if (relativePath.split(/[/\\]/).some((segment) => segment === '..')) {
+    throw new UnsafePathError(relativePath, 'contains a ".." segment');
+  }
+  const root = path.resolve(rootDir);
+  const resolved = path.resolve(root, relativePath);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    throw new UnsafePathError(relativePath, 'escapes the target directory');
+  }
+  return resolved;
 }

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -10,9 +11,11 @@ import {
 } from '../../src/core/blob-pack.js';
 import {
   parseBlobFileTable,
+  parseBlobFileTableFromFile,
   unpackBlob,
   unpackBlobFromFile,
 } from '../../src/core/blob-unpack.js';
+import { BfsError, UnsafePathError } from '../../src/core/errors.js';
 import { createIgnoreFilter } from '../../src/core/ignore.js';
 import { BLOB_FLAGS } from '../../src/types/index.js';
 
@@ -487,5 +490,189 @@ describe('packBlobToFileZipped', () => {
     );
 
     expect(totalSize).toBe(Buffer.byteLength(content, 'utf8'));
+  });
+});
+
+// ─── Security: path-traversal guard + bound allocation ───────────────────────
+
+/** Recomputes the blob's trailing SHA-256 so a tampered body still verifies. */
+function recomputeTrailingChecksum(blob: Buffer): void {
+  const body = blob.subarray(0, blob.length - 32);
+  const digest = createHash('sha256').update(body).digest();
+  digest.copy(blob, blob.length - 32);
+}
+
+/** Overwrites the first file-table entry's path bytes in place (length must match). */
+function patchFirstEntryPath(blob: Buffer, newName: string): void {
+  const fileTableOffset = Number(blob.readBigUInt64LE(0x26));
+  const pathLen = blob.readUInt16LE(fileTableOffset);
+  const nameBuf = Buffer.from(newName, 'utf8');
+  if (nameBuf.length !== pathLen) {
+    throw new Error(
+      `patch length ${nameBuf.length} !== entry path length ${pathLen}`,
+    );
+  }
+  nameBuf.copy(blob, fileTableOffset + 2);
+}
+
+/** Replaces every occurrence of an equal-length needle in the buffer, in place. */
+function replaceAllEqualLength(
+  buf: Buffer,
+  search: string,
+  replacement: string,
+): number {
+  const needle = Buffer.from(search, 'utf8');
+  const repl = Buffer.from(replacement, 'utf8');
+  if (needle.length !== repl.length)
+    throw new Error('needle/replacement length mismatch');
+  let count = 0;
+  let idx = buf.indexOf(needle);
+  while (idx !== -1) {
+    repl.copy(buf, idx);
+    count += 1;
+    idx = buf.indexOf(needle, idx + repl.length);
+  }
+  return count;
+}
+
+describe('blob-unpack path-traversal guard', () => {
+  let srcDir: string;
+  let outDir: string;
+
+  beforeEach(async () => {
+    srcDir = await makeTempDir();
+    outDir = await makeTempDir();
+  });
+
+  afterEach(async () => {
+    await fs.rm(srcDir, { recursive: true, force: true });
+    await fs.rm(outDir, { recursive: true, force: true });
+  });
+
+  // A recomputed, internally-consistent trailing checksum must NOT let an
+  // escaping path slip through: the guard runs on every entry independently of
+  // whether the blob body verifies. This is the "consistent checksum does not
+  // bypass the guard" proof the threat model calls for.
+  it('should reject an escaping path in a raw blob even with a recomputed checksum (RAM)', async () => {
+    await writeFile(srcDir, 'bbbbbbb', 'payload'); // 7-byte name == len('../evil')
+    const filter = createIgnoreFilter(srcDir);
+    const { blob } = await packBlob(srcDir, filter);
+
+    patchFirstEntryPath(blob, '../evil');
+    recomputeTrailingChecksum(blob);
+
+    await expect(unpackBlob(blob, outDir)).rejects.toThrow(UnsafePathError);
+  });
+
+  it('should reject an escaping path in a raw blob on disk even with a recomputed checksum (streaming)', async () => {
+    await writeFile(srcDir, 'bbbbbbb', 'payload');
+    const filter = createIgnoreFilter(srcDir);
+    const { blob } = await packBlob(srcDir, filter);
+
+    patchFirstEntryPath(blob, '../evil');
+    recomputeTrailingChecksum(blob);
+    const blobPath = path.join(outDir, 'tampered.blob');
+    await fs.writeFile(blobPath, blob);
+
+    await expect(unpackBlobFromFile(blobPath, outDir)).rejects.toThrow(
+      UnsafePathError,
+    );
+  });
+
+  it('should reject an escaping ZIP entry name even with a recomputed checksum', async () => {
+    await writeFile(srcDir, 'bbbbbbb', 'payload');
+    const filter = createIgnoreFilter(srcDir);
+    const { blob } = await packBlob(srcDir, filter, undefined, true); // compressed
+
+    const replaced = replaceAllEqualLength(blob, 'bbbbbbb', '../evil');
+    expect(replaced).toBeGreaterThanOrEqual(2); // local file header + central directory entry
+    recomputeTrailingChecksum(blob);
+
+    await expect(unpackBlob(blob, outDir)).rejects.toThrow(UnsafePathError);
+  });
+});
+
+describe('blob-unpack bound allocation', () => {
+  const HUGE = 2 ** 40; // 1 TiB — would OOM / crash if allocated from a tampered header
+
+  let srcDir: string;
+  let outDir: string;
+
+  beforeEach(async () => {
+    srcDir = await makeTempDir();
+    outDir = await makeTempDir();
+  });
+
+  afterEach(async () => {
+    await fs.rm(srcDir, { recursive: true, force: true });
+    await fs.rm(outDir, { recursive: true, force: true });
+  });
+
+  async function writeFieldAt(
+    blobPath: string,
+    value: number,
+    offset: number,
+    bytes: 4 | 8,
+  ): Promise<void> {
+    const fh = await fs.open(blobPath, 'r+');
+    try {
+      const field = Buffer.alloc(bytes);
+      if (bytes === 8) field.writeBigUInt64LE(BigInt(value));
+      else field.writeUInt32LE(value);
+      await fh.write(field, 0, bytes, offset);
+    } finally {
+      await fh.close();
+    }
+  }
+
+  it('should reject an out-of-bounds file table length before allocating (streaming unpack)', async () => {
+    await writeFile(srcDir, 'a.txt', 'content');
+    const blobPath = path.join(outDir, 'huge-ft.blob');
+    await packBlobToFile(srcDir, blobPath, createIgnoreFilter(srcDir));
+
+    await writeFieldAt(blobPath, HUGE, 0x2e, 8); // file table length
+
+    await expect(unpackBlobFromFile(blobPath, outDir)).rejects.toThrow(
+      BfsError,
+    );
+  });
+
+  it('should reject an out-of-bounds file table length in parseBlobFileTableFromFile', async () => {
+    await writeFile(srcDir, 'a.txt', 'content');
+    const blobPath = path.join(outDir, 'huge-ft2.blob');
+    await packBlobToFile(srcDir, blobPath, createIgnoreFilter(srcDir));
+
+    await writeFieldAt(blobPath, HUGE, 0x2e, 8);
+
+    await expect(parseBlobFileTableFromFile(blobPath)).rejects.toThrow(
+      BfsError,
+    );
+  });
+
+  it('should reject a file count that cannot fit the file table', async () => {
+    await writeFile(srcDir, 'a.txt', 'content');
+    const blobPath = path.join(outDir, 'huge-count.blob');
+    await packBlobToFile(srcDir, blobPath, createIgnoreFilter(srcDir));
+
+    await writeFieldAt(blobPath, 0xffff_ffff, 0x22, 4); // file count
+
+    await expect(parseBlobFileTableFromFile(blobPath)).rejects.toThrow(
+      BfsError,
+    );
+  });
+
+  it('should reject an out-of-bounds data section length before allocating (compressed)', async () => {
+    await writeFile(srcDir, 'a.txt', 'content');
+    const blobPath = path.join(outDir, 'huge-data.blob');
+    await packBlobToFileZipped(srcDir, blobPath, createIgnoreFilter(srcDir));
+
+    const blob = await fs.readFile(blobPath);
+    blob.writeBigUInt64LE(BigInt(HUGE), 0x3e); // data section length
+    recomputeTrailingChecksum(blob); // pass the checksum so the alloc guard is what fires
+    await fs.writeFile(blobPath, blob);
+
+    await expect(unpackBlobFromFile(blobPath, outDir)).rejects.toThrow(
+      BfsError,
+    );
   });
 });
