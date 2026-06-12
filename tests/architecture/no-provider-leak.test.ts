@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 /**
  * Architecture-as-code test.
  *
- * Enforces the BFS rule from CLAUDE.md / PLAN/index.md:
+ * Enforces the BFS rule from CLAUDE.md / architecture/index.md:
  * > Provider sam rządzi tym co się u niego dzieje — konfiguracja, prompty,
  * > walidacja, upload/download/verify. BFS core/CLI jest ŚLEPE na konkretne
  * > typy providerów.

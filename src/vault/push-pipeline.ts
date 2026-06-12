@@ -2,8 +2,7 @@
  * Push pipeline — full implementation of `bfs push`.
  *
  * This module contains the push() function and all its private helpers.
- * It is imported by vault-manager.ts which re-exports push and buildRemotePath
- * for backward compatibility.
+ * vault-manager.ts re-exports push and buildRemotePath as the public entry points.
  *
  * Dependency rule: this file MUST NOT import from ./vault-manager.js.
  */
@@ -35,7 +34,7 @@ import { writeManifest } from './manifest.js';
 import { readState, writeState } from './state.js';
 
 // ─── Push-only V2 constants ──────────────────────────────────────────────────
-// V2_STRIPE_SIZE is intentionally kept in vault-manager.ts (also used by pull).
+// V2_STRIPE_SIZE is intentionally kept in vault-manager.ts because pull needs it too.
 
 /** Minimum stripe size floor (16 MiB). */
 const V2_MIN_STRIPE_SIZE = 16 * 1024 * 1024;
@@ -94,7 +93,7 @@ function computeRamThreshold(maxRamMb: Nullable<number> | undefined, N: number, 
 
 /**
  * Async generator that yields fixed-size stripe chunks for one data shard.
- * Each yield covers one stripe stripe — the shard's slice of each RS stripe row.
+ * Each yield covers one stripe — the shard's slice of each RS stripe row.
  *
  * @param source     - Blob as Buffer (RAM) or file path (disk)
  * @param blobSize   - Total blob byte count
@@ -141,12 +140,12 @@ function _stripedShardStream(source: Buffer | string, blobSize: number, shardInd
   return Readable.from(_stripedShardChunks(source, blobSize, shardIndex, N, stripeSize));
 }
 
-// ─── Shared utilities (duplicated from vault-manager.ts — push-only usage) ──
+// ─── Shared utilities (local copy — push must not import vault-manager) ──
 
 /**
  * Validates that a configured directory (or its parent) exists before use.
- * Duplicated here because pull() in vault-manager.ts also needs this helper
- * and push-pipeline.ts must not import from vault-manager.ts.
+ * A local copy — the no-import-from-vault-manager rule forbids sharing it
+ * through that module.
  */
 async function _validateConfigDir(dir: string, configFlag: string): Promise<void> {
   const target = path.dirname(dir) === dir ? dir : path.dirname(dir);
@@ -182,7 +181,6 @@ async function _hashBlobWithoutChecksum(source: Buffer | string, size: number): 
 /**
  * Builds the remote_path for a shard on a given provider.
  * Uses forward slashes: {config.path}/{vault_name}/{filename}.
- * Exported here; vault-manager.ts re-exports it for heal.ts backward compat.
  */
 export function buildRemotePath(providerConfig: ProviderConfig, vaultName: string, filename: string): string {
   const base = String(providerConfig.config.path ?? '');
@@ -251,7 +249,6 @@ async function _initPushLock(rootDir: string, fromCache: boolean, cachePath: str
 
 /**
  * Classifies an upload failure into a PushLockFailedReason + human detail.
- * Exported for unit testing — callers should not depend on this directly.
  * @internal
  */
 export function _classifyUploadError(e: unknown): { reason: PushLockFailedReason; detail: string } {
@@ -284,7 +281,7 @@ function _computeHealth(uploaded: number, N: number, K: number): VersionHealth {
   if (uploaded === N + K) return VersionHealth.Healthy;
   if (uploaded >= N) return VersionHealth.Degraded;
   if (uploaded >= 1) return VersionHealth.Damaged;
-  throw new BfsError(`push damaged: 0 shards uploaded (required at least ${N} of ${N + K}); .bfs/push.lock retains forensic state`);
+  throw new BfsError(fmt('push_damaged_zero', String(N), String(N + K)));
 }
 
 // ─── Push helpers ─────────────────────────────────────────────────────────────
@@ -338,7 +335,7 @@ async function _packFreshBlob(options: PackFreshBlobOptions): Promise<BlobPackRe
   io.info(t('init_scanning'));
   if (shouldCompress) {
     io.info(t('vault_compressing'));
-    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
     trackFile(cachePath);
     const r = await packBlobToFileZipped(rootDir, cachePath, filter, vaultIdBuf);
     return { blobSource: cachePath, blobSize: r.blobSize, file_count: r.fileCount, total_size: r.totalSize, skipped: r.skipped };
@@ -358,7 +355,7 @@ async function _packFreshBlob(options: PackFreshBlobOptions): Promise<BlobPackRe
     const entries = parseBlobFileTable(r.blob);
     return { blobSource: r.blob, blobSize: r.blob.length, file_count: entries.length, total_size: entries.reduce((s, e) => s + Number(e.size), 0), skipped: r.skipped };
   }
-  await fs.mkdir(cacheDir, { recursive: true });
+  await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
   trackFile(cachePath);
   const r = await packBlobToFile(rootDir, cachePath, filter, vaultIdBuf);
   return { blobSource: cachePath, blobSize: r.blobSize, file_count: r.fileCount, total_size: r.totalSize, skipped: r.skipped };
@@ -489,7 +486,7 @@ async function _resolveTargetVersion(options: TargetVersionOptions): Promise<num
   }
   if (state.working_version > 0 && state.working_version < state.latest_version) {
     const cont = await io.confirm(fmt('vault_push_version_confirm', String(state.working_version), String(state.latest_version), String(targetVersion)));
-    if (!cont) throw new BfsError('Push cancelled.');
+    if (!cont) throw new BfsError(t('push_cancelled'));
   }
   return targetVersion;
 }
@@ -520,7 +517,7 @@ async function _resolvePushPaths(options: PushPathsOptions): Promise<ResolvedPus
   const { rootDir, config } = options;
   const cacheDir = options.cacheDir ?? config.cache_dir ?? path.join(rootDir, '.bfs', 'cache');
   await _validateConfigDir(cacheDir, 'cache-dir');
-  await fs.mkdir(cacheDir, { recursive: true });
+  await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
   const tempDir = options.tempDir ?? config.temp_dir ?? cacheDir;
   if (tempDir !== cacheDir) await _validateConfigDir(tempDir, 'temp-dir');
   const cachePath = path.join(cacheDir, 'push.blob.pending');
@@ -561,9 +558,9 @@ async function _deriveEncryptionKey(options: DeriveEncryptionKeyOptions): Promis
   let password: Nullable<string> = options.password ?? null;
   if (!password) {
     password = await io.askSecret(t('vault_ask_encrypt_password'));
-    if (!password) throw new BfsError('Password required for encrypted vault.');
+    if (!password) throw new BfsError(t('vault_password_required'));
     const confirm = await io.askSecret(t('vault_ask_confirm_password'));
-    if (confirm !== password) throw new BfsError('Passwords do not match.');
+    if (confirm !== password) throw new BfsError(t('vault_passwords_mismatch'));
   }
   const kdf_salt = generateSalt();
   const encKey = await deriveKey(password, kdf_salt);
@@ -707,8 +704,9 @@ async function _uploadOneShard(options: UploadOneShardOptions): Promise<UploadOn
     if (Buffer.isBuffer(blobSource) && !cacheDumpAttempted) {
       cacheDumpAttempted = true;
       try {
-        await fs.mkdir(cacheDir, { recursive: true });
-        await fs.writeFile(cachePath, blobSource);
+        await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
+        await fs.writeFile(cachePath, blobSource, { mode: 0o600 });
+        await fs.chmod(cachePath, 0o600).catch(() => {});
         trackFile(cachePath);
       } catch (writeErr: unknown) {
         lock.blob_pending_path = null;
@@ -798,9 +796,10 @@ async function _handleSkippedFiles(options: HandleSkippedFilesOptions): Promise<
   const { skipped, cachePath, cacheDir, blobSource, io } = options;
   if (skipped.length === 0) return;
   if (Buffer.isBuffer(blobSource)) {
-    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
     trackFile(cachePath);
-    await fs.writeFile(cachePath, blobSource);
+    await fs.writeFile(cachePath, blobSource, { mode: 0o600 });
+    await fs.chmod(cachePath, 0o600).catch(() => {});
   }
   if (options.interactive) {
     const shown = skipped.slice(0, 10);
@@ -810,7 +809,7 @@ async function _handleSkippedFiles(options: HandleSkippedFilesOptions): Promise<
     if (!cont) {
       untrackFile(cachePath);
       await fs.unlink(cachePath).catch(() => {});
-      throw new BfsError('Push cancelled.');
+      throw new BfsError(t('push_cancelled'));
     }
     untrackFile(cachePath);
   } else {
@@ -872,7 +871,7 @@ function _buildLocationMap(options: BuildLocationMapOptions): ShardLocation[] {
  */
 export async function push(rootDir: string, options: PushOptions): Promise<PushResult> {
   const config = await readConfig(rootDir);
-  if (!config) throw new BfsError('No vault config found. Run `bfs init` first.');
+  if (!config) throw new BfsError(t('push_no_config'));
   assertSchemeValid(config);
   if (options.fromCache !== true) await assertNoActiveLock(rootDir, 'push');
   const state = await readState(rootDir);

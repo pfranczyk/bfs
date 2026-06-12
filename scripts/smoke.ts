@@ -27,6 +27,7 @@ import { suiteK } from './suites/suite-k.js';
 import { suiteL } from './suites/suite-l.js';
 import { suiteM } from './suites/suite-m.js';
 import { suiteN } from './suites/suite-n.js';
+import { suiteO } from './suites/suite-o.js';
 
 async function main(): Promise<void> {
   const tmpBase = path.join(os.tmpdir(), `bfs-smoke-${Date.now()}`);
@@ -62,6 +63,7 @@ async function main(): Promise<void> {
       await suiteL(),
       await suiteM(),
       await suiteN(ctx),
+      await suiteO(ctx),
     ];
 
     let totalPass = 0;

@@ -1,10 +1,10 @@
 import readline from 'node:readline';
-import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import chalk from 'chalk';
 import { dbg, stdinState } from '../debug.js';
 import { fmt, t } from '../i18n/index.js';
 import { readConfig } from '../vault/config.js';
 import { readState } from '../vault/state.js';
+import { isPromptCancellation } from './prompt.js';
 import { setReplMode } from './repl-context.js';
 import { CommandAbort } from './ui.js';
 
@@ -74,14 +74,7 @@ function printHelp(): void {
  */
 function handleReplError(err: unknown): void {
   if (err instanceof CommandAbort) return;
-  if (err instanceof AbortPromptError || err instanceof ExitPromptError) {
-    console.log(chalk.dim(t('repl_cancelled')));
-    return;
-  }
-  // Fallback: check constructor name for Inquirer errors — the old inquirer
-  // compat layer (inquirer/dist/ui/prompt.js) can throw ExitPromptError from
-  // a different code path (process.kill SIGINT), and instanceof may fail.
-  if (err instanceof Error && (err.constructor.name === 'AbortPromptError' || err.constructor.name === 'ExitPromptError')) {
+  if (isPromptCancellation(err)) {
     console.log(chalk.dim(t('repl_cancelled')));
     return;
   }
@@ -165,18 +158,16 @@ export async function startRepl(rootDir: string, runCommand: (args: string[]) =>
       // Detach readline's 'keypress' listener before dispatching so that
       // Inquirer gets exclusive access to keypress events.
       //
-      // Root cause of the double-enter bug: readline (terminal=true) receives
-      // input via 'keypress' events emitted by the readline.emitKeypressEvents
-      // transformer. When Inquirer later calls stdin.resume() via its own
-      // readline interface, keystrokes flow through the same transformer and hit
-      // our still-attached 'keypress' listener — readline silently buffers them
-      // and emits a spurious empty/garbage line after the command finishes.
-      //
-      // Fix: remove only the 'keypress' listener (our readline's input handler).
-      // The 'data' listener — the transformer added by emitKeypressEvents — must
-      // stay, otherwise Inquirer can't receive key events either.
-      // Closing readline is intentionally avoided: on Windows it resets TTY
-      // raw-mode, breaking Ctrl+C inside Inquirer prompts.
+      // readline (terminal=true) receives input via 'keypress' events emitted by
+      // the readline.emitKeypressEvents transformer. When Inquirer later calls
+      // stdin.resume() via its own readline interface, keystrokes flow through the
+      // same transformer; if our 'keypress' listener is still attached, readline
+      // silently buffers them and emits a spurious empty/garbage line after the
+      // command finishes. So remove only the 'keypress' listener (our readline's
+      // input handler); the 'data' listener — the transformer added by
+      // emitKeypressEvents — must stay, otherwise Inquirer can't receive key
+      // events either. Closing readline is intentionally avoided: on Windows it
+      // resets TTY raw-mode, breaking Ctrl+C inside Inquirer prompts.
       rl.pause();
       type Fn = (...args: unknown[]) => void;
       const savedKeypress = process.stdin.rawListeners('keypress') as Fn[];
@@ -184,8 +175,8 @@ export async function startRepl(rootDir: string, runCommand: (args: string[]) =>
       process.stdin.resume();
       dbg('stdin keypress detached', stdinState());
 
-      // Absorb OS-level SIGINT during command dispatch.  The old inquirer
-      // compat layer (inquirer/dist/ui/prompt.js) calls process.kill(pid, 'SIGINT')
+      // Absorb OS-level SIGINT during command dispatch. The inquirer compat
+      // layer (inquirer/dist/ui/prompt.js) calls process.kill(pid, 'SIGINT')
       // on Ctrl+C, which would otherwise close the REPL's readline (setting
       // closed=true) and freeze the session.
       const sigintGuard = () => {};

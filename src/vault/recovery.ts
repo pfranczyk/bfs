@@ -285,7 +285,7 @@ export async function recover(rootDir: string, options: RecoveryOptions): Promis
   // blobs, so keep the whole tree owner-only on POSIX (no-op on Windows NTFS).
   await fs.mkdir(path.join(rootDir, '.bfs', 'manifests'), { recursive: true, mode: 0o700 });
   const cacheDir = path.join(rootDir, '.bfs', 'cache');
-  await fs.mkdir(cacheDir, { recursive: true });
+  await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
   // Clear existing cache (recovery starts fresh)
   try {
     const existing = await fs.readdir(cacheDir);

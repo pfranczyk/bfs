@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import { estimateCompressibility } from '../../core/compression.js';
@@ -11,8 +10,8 @@ import type { ProviderConfig } from '../../types/index.js';
 import { PushMode } from '../../types/index.js';
 import { init } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
-import { parseInitProviderSpec } from '../parse-provider-spec.js';
-import { promptWithRawMode } from '../prompt.js';
+import { parseInitProviderSpec, validateProviderIdsUnique } from '../parse-provider-spec.js';
+import { isPromptCancellation, promptWithRawMode } from '../prompt.js';
 import { CommandAbort, error, formatBytes, info, success, warn } from '../ui.js';
 
 // ─── Provider config prompts ───────────────────────────────────────────────────
@@ -310,6 +309,15 @@ export function registerInit(program: Command): void {
         }
       }
 
+      // Provider ids must be unique — a duplicate would silently orphan shards
+      // (lookup by id resolves to the first match). Covers CI and interactive.
+      try {
+        validateProviderIdsUnique(providers.map((p) => p.id));
+      } catch (err) {
+        error(err instanceof Error ? err.message : String(err));
+        throw new CommandAbort();
+      }
+
       // ── Push mode ─────────────────────────────────────────────────────────
       let pushMode: PushMode;
       if (isCi) {
@@ -373,8 +381,7 @@ export function registerInit(program: Command): void {
         });
         success(fmt('init_success', vaultName));
       } catch (err) {
-        if (err instanceof AbortPromptError) throw err;
-        if (err instanceof ExitPromptError) throw err;
+        if (isPromptCancellation(err)) throw err;
         error(err instanceof Error ? err.message : String(err));
         throw new CommandAbort();
       }

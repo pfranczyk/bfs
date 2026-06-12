@@ -1,6 +1,26 @@
+import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import inquirer from 'inquirer';
 
 export { inquirer };
+
+/**
+ * Reports whether an error is an Inquirer prompt cancellation — Esc
+ * (AbortPromptError) or Ctrl+C / closed stdin (ExitPromptError).
+ *
+ * Checks both `instanceof` and the error's constructor name. A bundled build
+ * (tsup) inlines its own copy of `@inquirer/core`, so the class the runtime
+ * `inquirer` dependency throws is a different identity than the one imported
+ * here and `instanceof` alone returns false in `dist/`. The constructor-name
+ * fallback recognizes the cancellation regardless of which copy produced it,
+ * so cancellations stay silent in the published package, not only under tsx.
+ *
+ * @param err - Error caught from a prompt call
+ * @returns true if `err` is a prompt cancellation, false otherwise
+ */
+export function isPromptCancellation(err: unknown): boolean {
+  if (err instanceof AbortPromptError || err instanceof ExitPromptError) return true;
+  return err instanceof Error && (err.constructor.name === 'AbortPromptError' || err.constructor.name === 'ExitPromptError');
+}
 
 // Question type is taken from inquirer.prompt signature — avoids importing
 // QuestionCollection which is not exported as a named member in all inquirer versions.

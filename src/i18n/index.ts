@@ -349,6 +349,8 @@ export interface Strings {
   provider_id_invalid_chars: string;
   /** %s = name */
   provider_add_exists: string;
+  /** %s = provider id */
+  provider_id_duplicate_in_args: string;
   provider_add_type_prompt: string;
   provider_add_dir_prompt: string;
   /** %s = id, %s = data, %s = parity */
@@ -428,6 +430,8 @@ export interface Strings {
   vault_provider_unreachable: string;
   /** %s = provider_id */
   vault_file_missing_on_provider: string;
+  /** %s = provider_id */
+  vault_provider_adapter_missing: string;
   vault_decoding_rs: string;
   vault_ask_decrypt_password: string;
   vault_decrypting: string;
@@ -444,6 +448,35 @@ export interface Strings {
   vault_unencrypted_warning: string;
   /** %s = per-unit encryption limit in GiB */
   gcm_payload_too_large: string;
+  /** %s = data count N, %s = total N+K */
+  push_damaged_zero: string;
+  push_cancelled: string;
+  vault_password_required: string;
+  vault_passwords_mismatch: string;
+  push_no_config: string;
+  // ─── vault — pull / versions / provider runtime ──────────────────────────
+  /** %s = data count N (need), %s = available/found count (got) */
+  pull_not_enough_shards: string;
+  pull_blob_size_unreadable: string;
+  pull_salt_missing: string;
+  /** %s = provider name, %s = piece index */
+  pull_provider_not_found_skip: string;
+  /** %s = piece index */
+  pull_shard_header_invalid_skip: string;
+  /** %s = piece index */
+  pull_shard_hash_mismatch_skip: string;
+  pull_degraded_repair: string;
+  /** %s = required provider count (N+K), %s = given count */
+  scheme_provider_count_mismatch: string;
+  pull_cancelled: string;
+  pull_blob_hash_mismatch: string;
+  pull_no_config: string;
+  no_versions_available: string;
+  /** %s = version number */
+  version_not_found: string;
+  /** %s = provider name */
+  provider_not_found_in_config: string;
+  provider_remove_min: string;
   vault_encoding_rs: string;
   vault_uploading_shards: string;
   /** %s = i+1 (1-based), %s = N+K total */
@@ -458,6 +491,7 @@ export interface Strings {
   vault_pull_write_error_confirm: string;
   vault_degraded_provider_unreachable: string;
   vault_degraded_file_missing: string;
+  vault_degraded_adapter_missing: string;
 
   // ─── recovery operations (vault layer) ──────────────────────────────────
   recovery_ask_version_password: string;
@@ -578,6 +612,9 @@ export interface Strings {
   ftp_size_mismatch_attempt: string;
   /** %s = label, %s = max, %s = sent, %s = reported, %s = diff */
   ftp_size_mismatch_final: string;
+  /** %s = host:port */
+  ftp_insecure_warning: string;
+  ftp_control_chars: string;
 
   // ─── FTP — configureFromFlags + validateConfig ───────────────────────────
   ftp_config_port_invalid: string;

@@ -1,4 +1,3 @@
-import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import { BfsError } from '../../core/errors.js';
@@ -8,7 +7,7 @@ import type { CliProviderInput, ProviderConfig, ProviderIO, VaultConfig } from '
 import { readConfig, writeConfig } from '../../vault/config.js';
 import { listVersions, removeProvider } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
-import { promptWithRawMode } from '../prompt.js';
+import { isPromptCancellation, promptWithRawMode } from '../prompt.js';
 import { CommandAbort, error, info, success, warn } from '../ui.js';
 
 interface ProviderRemoveOpts {
@@ -101,7 +100,7 @@ export function registerProviderRemove(providerCmd: Command): void {
         console.log();
       }
 
-      // ── Strategia: z flagi (CI) lub z promptu (interaktywny) ────────────
+      // ── Strategy: from flag (CI) or from prompt (interactive) ────────────
       const isCi = opts.strategy !== undefined;
       let strategy: 'relocate' | 'rebuild' | 'remove' | 'cancel';
 
@@ -327,8 +326,7 @@ export function registerProviderRemove(providerCmd: Command): void {
             break;
         }
       } catch (err) {
-        if (err instanceof AbortPromptError) throw err;
-        if (err instanceof ExitPromptError) throw err;
+        if (isPromptCancellation(err)) throw err;
         error(err instanceof Error ? err.message : String(err));
         throw new CommandAbort();
       }
@@ -375,10 +373,8 @@ async function promptTypeChoice(currentType: string): Promise<string> {
  * configuration via `configureInteractive`, pushes the resulting entry to
  * the vault config, and returns the new provider's id.
  *
- * Used by `rebuild` interactive flow when the user picks
- * `__new_location__` as the target. Type selection goes through
- * {@link promptTypeChoice} with `fallbackType` (typically the removed
- * provider's type) as the default.
+ * Type selection goes through {@link promptTypeChoice} with `fallbackType`
+ * (typically the removed provider's type) as the default.
  *
  * @param config       - Current vault config (mutated: new provider is pushed)
  * @param rootDir      - Vault root directory (for writing updated config)

@@ -1,6 +1,6 @@
 {
   "name": "bfs-vault",
-  "version": "0.7.0-beta.1",
+  "version": "0.7.0-beta.2",
   "description": "Backup File System — distributed backup with Reed-Solomon erasure coding",
   "type": "module",
   "preferGlobal": true,

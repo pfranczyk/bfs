@@ -119,5 +119,29 @@ export async function suiteA(vaultDir: string): Promise<SuiteResult> {
     }),
   );
 
+  // ── Duplicate provider id rejection ──────────────────────────────────────
+  // bfs init --ci rejects two --provider specs that share an id; a duplicate
+  // would otherwise land in config.json and break push later. Guards exit≠0
+  // and that no config is written.
+
+  tests.push(
+    await runTest('A10', 'bfs init --ci with duplicate --provider id → abort', async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-smoke-ci-a-'));
+      try {
+        const r = runBfs(['init', 'v', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', `local:dup --path ${dir}`, '--provider', `local:dup --path ${dir}`, '--provider', `local:ok --path ${dir}`], dir);
+        assert(r.status !== 0, `expected non-zero exit, got ${r.status ?? 'null'}`);
+        const out = r.stdout + r.stderr;
+        assert(out.includes('dup'), `expected colliding id in message, got: ${out.slice(0, 200)}`);
+        const cfgExists = await fs
+          .stat(path.join(dir, '.bfs', 'config.json'))
+          .then(() => true)
+          .catch(() => false);
+        assert(!cfgExists, 'config.json must NOT be written when a duplicate provider id is given');
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+    }),
+  );
+
   return { name: 'Suite A — CLI bootstrap', tests };
 }

@@ -77,9 +77,9 @@ export function formatMissingAdaptersMessage(missing: readonly MissingAdapter[])
 }
 
 /**
- * Factory for a ProviderError that describes one unregistered type. Used by
- * call sites that encounter an unknown type outside the pull/recovery
- * preflight (where a batch report is preferred).
+ * Factory for a ProviderError that describes one unregistered type — for a
+ * single unknown type, where a batched pull/recovery preflight report is not
+ * appropriate.
  */
 export function missingAdapterError(type: string, adapterPackage: Nullable<string>): ProviderError {
   if (adapterPackage === null) {

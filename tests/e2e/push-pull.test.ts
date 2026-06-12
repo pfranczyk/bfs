@@ -1028,8 +1028,8 @@ describe('Scenariusz 10: pull bez password na encrypted manifest fails czytelnie
     const dest = await tmp();
     try {
       await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
-      // mockIO without answers → askSecret returns '' → triggers
-      // 'Password required for encrypted vault.' in vault-manager.ts:597
+      // mockIO without answers → askSecret returns '' → pull of an encrypted
+      // backup with no password rejects.
       await expect(pull(dest, { io: mockIO(), force: true })).rejects.toThrow(BfsError);
     } finally {
       await fs.rm(dest, { recursive: true, force: true });
@@ -1132,6 +1132,105 @@ describe('Scenariusz 11: mixed-version vault — pull respektuje per-version enc
       await pull(dest, { io: mockIO(), force: true, version: 1, password: 'irrelevant' });
       await assertFilesMatch(dest, v1Hashes);
       expect(deriveKeySpy).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── Scenariusz 13: pull --allow-missing-adapters z brakującym external adapterem ─
+//
+// Regresja: `pull --allow-missing-adapters` z brakującym ZEWNĘTRZNYM adapterem
+// wywraca cały pull błędem BfsError("Unknown provider type: ...") zamiast pominąć
+// ten shard i zdekodować z pozostałych N providerów. CHANGELOG [0.5.0] obiecuje, że
+// flaga pozwala RS dekodować z providerów, które pozostają osiągalne — recovery
+// robi to dobrze (bootstrap connectOne: create w try/catch → null → skip), pull nie.
+//
+// Setup mirroruje realną sytuację: adapter był obecny przy push, odinstalowany
+// przed pull. Push 3 local → shardy na dysku. Potem mutacja config.json: jeden
+// provider dostaje nieistniejący typ external (`ghost-ssh`) z niepustym
+// adapterPackage (klasyfikacja jako external-missing w detectMissingAdapters);
+// jego plik sharda zostaje nietknięty. pull --allow-missing-adapters ma pominąć
+// brakujący provider i odtworzyć z 2 pozostałych local (N=2). Przed fixem:
+// providerRegistry.create() na niezarejestrowanym typie rzuca POZA try → crash.
+describe('Scenariusz 13: pull --allow-missing-adapters z brakującym external adapterem', () => {
+  let root: string;
+  let pdirs: string[];
+
+  beforeEach(async () => {
+    root = await tmp();
+    pdirs = [await tmp(), await tmp(), await tmp()]; // 2/1
+  });
+
+  afterEach(async () => {
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
+  });
+
+  it('should skip the missing external adapter and restore from remaining N providers', async () => {
+    await init(root, {
+      vault_name: 'ghost-vault',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    const originalHashes = await createTestFiles(root);
+    await push(root, { io: mockIO() });
+
+    // Mutate config AFTER a successful push: provider p2 becomes an external
+    // type whose adapter is not registered. Its shard file stays on disk
+    // untouched — only the config classifies it as external-missing.
+    const cfg = await readConfig(root);
+    if (!cfg) throw new Error('readConfig returned null after init');
+    const ghost = cfg.providers.find((p) => p.id === 'p2');
+    if (!ghost) throw new Error('provider p2 not found in config');
+    ghost.type = 'ghost-ssh';
+    ghost.adapterPackage = 'bfs-adapter-ghost@1.0.0';
+    await writeConfig(root, cfg);
+
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
+
+      // With allowMissingAdapters: pull must NOT throw "Unknown provider type",
+      // must skip p2/ghost-ssh, RS-decode from p0+p1 (N=2 available), restore all.
+      await pull(dest, { io: mockIO(), force: true, allowMissingAdapters: true });
+      await assertFilesMatch(dest, originalHashes);
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+
+  it('should abort in preflight without --allow-missing-adapters (contrast)', async () => {
+    await init(root, {
+      vault_name: 'ghost-vault',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    await createTestFiles(root);
+    await push(root, { io: mockIO() });
+
+    const cfg = await readConfig(root);
+    if (!cfg) throw new Error('readConfig returned null after init');
+    const ghost = cfg.providers.find((p) => p.id === 'p2');
+    if (!ghost) throw new Error('provider p2 not found in config');
+    ghost.type = 'ghost-ssh';
+    ghost.adapterPackage = 'bfs-adapter-ghost@1.0.0';
+    await writeConfig(root, cfg);
+
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
+
+      // Without the flag the preflight rejects cleanly with the install hint —
+      // this path already works and proves the missing adapter is detected.
+      await expect(pull(dest, { io: mockIO(), force: true })).rejects.toThrow(BfsError);
     } finally {
       await fs.rm(dest, { recursive: true, force: true });
     }

@@ -15,14 +15,14 @@ import { computeShardHeaderSize, parseShardHeaderFromStream } from '../core/shar
 import { debugEnabled } from '../debug.js';
 import { fmt, t } from '../i18n/index.js';
 import { providerRegistry } from '../providers/provider.js';
-import type { FileEntry, ManifestShard, ProviderConfig, ProviderIO, PullResult, SkippedFile, VaultConfig, VaultState, VersionManifest } from '../types/index.js';
+import type { FileEntry, ManifestShard, ProviderConfig, ProviderIO, PullResult, SkippedFile, StorageProvider, VaultConfig, VaultState, VersionManifest } from '../types/index.js';
 import { type PushMode, VersionHealth } from '../types/index.js';
 import { checkVersionMismatch, detectMissingAdapters, formatMissingAdaptersMessage } from './adapter-preflight.js';
 import { assertSchemeValid, readConfig, writeConfig } from './config.js';
 import { deleteManifest, listManifests, readManifest, writeManifest } from './manifest.js';
 import { DEFAULT_STATE, readState, writeState } from './state.js';
 
-// Re-export push pipeline — public API stays on vault-manager.ts
+// Public push entry points, re-exported from the push pipeline module.
 export {
   _classifyUploadError,
   buildRemotePath,
@@ -31,7 +31,7 @@ export {
 
 // ─── V2 pipeline constants ────────────────────────────────────────────────────
 
-/** Legacy stripe size — used as fallback in pull/recovery for manifests without rs_stripe_size. */
+/** Fallback stripe size for manifests that predate rs_stripe_size. */
 const V2_STRIPE_SIZE = 64 * 1024 * 1024;
 
 // ─── Option types ─────────────────────────────────────────────────────────────
@@ -48,8 +48,6 @@ export interface InitOptions {
   max_ram_mb?: Nullable<number>;
   io: ProviderIO;
 }
-
-// PushOptions moved to src/types/index.ts
 
 export interface PullOptions {
   /** Target version to restore; defaults to latest_version. */
@@ -129,7 +127,7 @@ async function _validateConfigDir(dir: string, configFlag: string): Promise<void
 
 // ─── Shard failure diagnostics ───────────────────────────────────────────────
 
-type ShardFailureReason = 'provider_unreachable' | 'file_missing';
+type ShardFailureReason = 'provider_unreachable' | 'file_missing' | 'adapter_missing';
 
 /**
  * Emits appropriate degradation warnings based on shard failure reasons.
@@ -141,6 +139,9 @@ function _emitDegradedWarnings(failures: Map<number, ShardFailureReason>, io: Pr
   }
   if (reasons.some((r) => r === 'file_missing')) {
     io.warn(t('vault_degraded_file_missing'));
+  }
+  if (reasons.some((r) => r === 'adapter_missing')) {
+    io.warn(t('vault_degraded_adapter_missing'));
   }
 }
 
@@ -170,9 +171,20 @@ async function _downloadShardsToTempFiles(
       options.io.warn(fmt('vault_provider_not_found', ms.provider_id, String(ms.shard_index)));
       continue;
     }
+    // Adapter for pc.type may be unregistered (an external adapter left
+    // uninstalled after passing preflight with --allow-missing-adapters).
+    // create() throws for an unknown type — skip the shard so Reed-Solomon
+    // decodes from the remaining providers, mirroring bootstrap's connectOne.
+    let probe: StorageProvider;
+    try {
+      probe = providerRegistry.create(pc, options.io);
+    } catch {
+      failures.set(ms.shard_index, 'adapter_missing');
+      options.io.warn(fmt('vault_provider_adapter_missing', pc.id));
+      continue;
+    }
     // Check provider health BEFORE authenticate to avoid interactive prompts
     // (e.g. LocalFS asking to create a missing directory during pull)
-    const probe = providerRegistry.create(pc, options.io);
     if (!(await probe.healthCheck())) {
       failures.set(ms.shard_index, 'provider_unreachable');
       options.io.warn(fmt('vault_provider_unreachable', pc.id));
@@ -184,7 +196,7 @@ async function _downloadShardsToTempFiles(
       provider.setVaultName(config.vault_name);
       const stream = await provider.download({ provider_id: ms.provider_id, path: `shard_${ms.shard_index}.bfs.${targetVersion}` });
       const tmpPath = path.join(tmpDir, `shard_${ms.shard_index}`);
-      await pipeline(stream, createWriteStream(tmpPath));
+      await pipeline(stream, createWriteStream(tmpPath, { mode: 0o600 }));
       if (debugEnabled) {
         const stat = await fs.stat(tmpPath);
         process.stderr.write(`[bfs:debug] shard ${ms.shard_index} downloaded: ${stat.size} bytes\n`);
@@ -269,9 +281,13 @@ async function _decodeFromTempFiles(tmpPaths: Map<number, string>, N: number, K:
   // error (e.g. a wrong-key DecryptionError on the actively-read shard) could
   // destroy blobStream during the mkdir await → 'error' emitted with no
   // listener → unhandled exception crashing the process.
-  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
   const blobStream = rsDecodeStriped(payloadStreams, N, K, stripeSize, blobSize, debugLog);
-  await pipeline(blobStream, createWriteStream(outputPath));
+  // outputPath is pull.blob.pending — a full plaintext copy of the restored
+  // data; create it owner-only and tighten an already-existing inode (no-op on
+  // Windows NTFS).
+  await pipeline(blobStream, createWriteStream(outputPath, { mode: 0o600 }));
+  await fs.chmod(outputPath, 0o600).catch(() => {});
 }
 
 /**
@@ -294,12 +310,12 @@ async function _pullV2(config: VaultConfig, manifest: VersionManifest, options: 
   const tmpBase = options.tempDir ?? config.temp_dir ?? path.dirname(outputPath);
   await _validateConfigDir(tmpBase, 'temp-dir');
   const tmpDir = path.join(tmpBase, `pull-v2-${targetVersion}-${Date.now()}`);
-  await fs.mkdir(tmpDir, { recursive: true });
+  await fs.mkdir(tmpDir, { recursive: true, mode: 0o700 });
   const tmpPaths = new Map<number, string>();
   try {
     const { blobSize, kdf_salt, failures } = await _downloadShardsToTempFiles(config, manifest, options, tmpDir, tmpPaths);
-    if (tmpPaths.size < N) throw new BfsError(`Not enough shards: need ${N}, got ${tmpPaths.size}. Some providers may be offline.`);
-    if (blobSize === 0) throw new BfsError('Could not read blob size from any shard header.');
+    if (tmpPaths.size < N) throw new BfsError(fmt('pull_not_enough_shards', String(N), String(tmpPaths.size)));
+    if (blobSize === 0) throw new BfsError(t('pull_blob_size_unreadable'));
     const shardSize = calcShardPayloadSize(blobSize, N);
     const numStripes = Math.ceil(shardSize / stripeSize);
     if (debugEnabled) {
@@ -309,8 +325,8 @@ async function _pullV2(config: VaultConfig, manifest: VersionManifest, options: 
     if (manifest.encrypted) {
       let password: Nullable<string> = options.password ?? null;
       if (!password) password = await options.io.askSecret(t('vault_ask_decrypt_password'));
-      if (!password) throw new BfsError('Password required for encrypted vault.');
-      if (!kdf_salt) throw new BfsError('kdf_salt not found in any shard header.');
+      if (!password) throw new BfsError(t('vault_password_required'));
+      if (!kdf_salt) throw new BfsError(t('pull_salt_missing'));
       options.io.info(t('vault_decrypting'));
       encKey = await deriveKey(password, kdf_salt);
     }
@@ -357,10 +373,19 @@ async function downloadShardSlots(
   for (const ms of manifest.shards) {
     const pc = config.providers.find((p) => p.id === ms.provider_id);
     if (!pc) {
-      io.warn(`Provider "${ms.provider_id}" not found in config — skipping shard ${ms.shard_index}`);
+      io.warn(fmt('pull_provider_not_found_skip', ms.provider_id, String(ms.shard_index)));
       continue;
     }
-    const probe = providerRegistry.create(pc, io);
+    // See _downloadShardsToTempFiles: an unregistered adapter type must skip
+    // the shard, not crash the pull, so Reed-Solomon decodes from the rest.
+    let probe: StorageProvider;
+    try {
+      probe = providerRegistry.create(pc, io);
+    } catch {
+      failures.set(ms.shard_index, 'adapter_missing');
+      io.warn(fmt('vault_provider_adapter_missing', pc.id));
+      continue;
+    }
     if (!(await probe.healthCheck())) {
       failures.set(ms.shard_index, 'provider_unreachable');
       io.warn(fmt('vault_provider_unreachable', pc.id));
@@ -371,13 +396,13 @@ async function downloadShardSlots(
       if (!shardData) continue;
       const { header: meta } = await parseShardHeaderFromStream(Readable.from(shardData));
       if (meta.shard_index !== ms.shard_index || meta.version !== targetVersion || meta.vault_id !== config.vault_id) {
-        io.warn(`Shard ${ms.shard_index} header validation failed — skipping`);
+        io.warn(fmt('pull_shard_header_invalid_skip', String(ms.shard_index)));
         continue;
       }
       shardSlots[ms.shard_index] = extractShardPayload(shardData);
       if (blobSize === 0) blobSize = Number(meta.blob_size);
       if (!kdf_salt && meta.kdf_salt) kdf_salt = meta.kdf_salt;
-      io.progress(`Downloading shard ${ms.shard_index + 1}/${N + K}`, ((ms.shard_index + 1) / (N + K)) * 100);
+      io.progress(fmt('vault_download_shard_progress', String(ms.shard_index + 1), String(N + K)), ((ms.shard_index + 1) / (N + K)) * 100);
     } catch {
       failures.set(ms.shard_index, 'file_missing');
       io.warn(fmt('vault_file_missing_on_provider', pc.id));
@@ -409,7 +434,7 @@ async function fetchShard(pc: ProviderConfig, ms: ManifestShard, config: VaultCo
   const shardStream = await provider.download({ provider_id: ms.provider_id, path: filename });
   const shardData = await streamToBuffer(shardStream);
   if (hashBuffer(extractShardPayload(shardData)) !== ms.shard_hash) {
-    io.warn(`Shard ${ms.shard_index} hash mismatch on download — skipping`);
+    io.warn(fmt('pull_shard_hash_mismatch_skip', String(ms.shard_index)));
     return null;
   }
   return shardData;
@@ -436,14 +461,14 @@ async function decodeAndDecrypt(
   let rsOutput: Buffer;
 
   if (isDegraded) {
-    options.io.info('Pool degraded — performing RS repair…');
+    options.io.info(t('pull_degraded_repair'));
     const repaired = rsRepair(shardSlots, N, K);
-    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
     for (let i = 0; i < N + K; i++) {
       if (shardSlots[i] === null) {
         const repairedShard = repaired[i];
         if (!repairedShard) continue;
-        await fs.writeFile(path.join(cacheDir, `shard_${i}.bfs.${targetVersion}.repaired`), repairedShard).catch(() => {});
+        await fs.writeFile(path.join(cacheDir, `shard_${i}.bfs.${targetVersion}.repaired`), repairedShard, { mode: 0o600 }).catch(() => {});
       }
     }
     rsOutput = rsDecode(
@@ -459,10 +484,10 @@ async function decodeAndDecrypt(
   if (!manifest.encrypted) return { plainBlob: rsOutput, isDegraded };
 
   let password: Nullable<string> = options.password ?? null;
-  if (!password) password = await options.io.askSecret('Enter decryption password:');
-  if (!password) throw new BfsError('Password required for encrypted vault.');
-  if (!kdf_salt) throw new BfsError('kdf_salt not found in any shard header.');
-  options.io.info('Decrypting…');
+  if (!password) password = await options.io.askSecret(t('vault_ask_decrypt_password'));
+  if (!password) throw new BfsError(t('vault_password_required'));
+  if (!kdf_salt) throw new BfsError(t('pull_salt_missing'));
+  options.io.info(t('vault_decrypting'));
   return { plainBlob: await decryptBlob(rsOutput, password, kdf_salt), isDegraded };
 }
 
@@ -479,7 +504,7 @@ async function decodeAndDecrypt(
 export async function init(rootDir: string, options: InitOptions): Promise<void> {
   const { data_shards: N, parity_shards: K } = options.scheme;
   if (options.providers.length !== N + K) {
-    throw new BfsError(`Scheme requires ${N + K} providers, got ${options.providers.length}.`);
+    throw new BfsError(fmt('scheme_provider_count_mismatch', String(N + K), String(options.providers.length)));
   }
 
   // 0700: .bfs/ holds config.json (provider secrets) and cached plaintext
@@ -588,12 +613,12 @@ async function _downloadAndVerifyBlob({
 }: DownloadVerifyBlobOptions): Promise<{ plainBlob: Buffer; shardFailures: Map<number, ShardFailureReason> }> {
   if (!options.force && !options.yes && workingVersion !== 0) {
     const cont = await options.io.confirm(fmt('vault_pull_overwrite_confirm', String(workingVersion), String(targetVersion)));
-    if (!cont) throw new BfsError('Pull cancelled.');
+    if (!cont) throw new BfsError(t('pull_cancelled'));
   }
   let plainBlob: Buffer = Buffer.alloc(0);
   let shardFailures = new Map<number, ShardFailureReason>();
   if (isV2) {
-    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
     trackFile(blobCachePath);
     const decoded = await _pullV2(config, manifest, options, blobCachePath);
     shardFailures = decoded.failures;
@@ -603,7 +628,7 @@ async function _downloadAndVerifyBlob({
     const downloaded = await downloadShardSlots(config, manifest, rootDir, options.io);
     shardFailures = downloaded.failures;
     const available = downloaded.shardSlots.filter((s) => s !== null).length;
-    if (available < N) throw new BfsError(`Not enough shards: need ${N}, got ${available}. Some providers may be offline.`);
+    if (available < N) throw new BfsError(fmt('pull_not_enough_shards', String(N), String(available)));
     options.io.info(t('vault_decoding_rs'));
     const decoded = await decodeAndDecrypt(downloaded.shardSlots, manifest, downloaded.kdf_salt, downloaded.blobSize, targetVersion, cacheDir, options);
     plainBlob = decoded.plainBlob;
@@ -611,7 +636,7 @@ async function _downloadAndVerifyBlob({
   const computedHash = isV2 ? await hashFileExcludingTail(blobCachePath, SHA256_BYTES) : hashBuffer(plainBlob.subarray(0, plainBlob.length - SHA256_BYTES));
   if (computedHash !== manifest.blob_hash) {
     if (isV2) await fs.unlink(blobCachePath).catch(() => {});
-    throw new BfsError('Blob hash mismatch — data corrupted or wrong password.');
+    throw new BfsError(t('pull_blob_hash_mismatch'));
   }
   return { plainBlob, shardFailures };
 }
@@ -636,7 +661,7 @@ async function _interactiveUnpackRetry({ isV2, plainBlob, blobCachePath, initial
     if (!retry) {
       untrackFile(blobCachePath);
       await fs.unlink(blobCachePath).catch(() => {});
-      throw new BfsError('Pull cancelled.');
+      throw new BfsError(t('pull_cancelled'));
     }
     const result = isV2 ? await unpackBlobFromFile(blobCachePath, rootDir) : await unpackBlob(plainBlob, rootDir);
     extracted = result.extracted;
@@ -668,9 +693,12 @@ async function _unpackFiles({ rootDir, manifest, isV2, plainBlob, blobCachePath,
   let { extracted, skipped } = isV2 ? await unpackBlobFromFile(blobCachePath, rootDir) : await unpackBlob(plainBlob, rootDir);
   if (skipped.length > 0) {
     if (!isV2) {
-      await fs.mkdir(path.dirname(blobCachePath), { recursive: true });
+      await fs.mkdir(path.dirname(blobCachePath), { recursive: true, mode: 0o700 });
       trackFile(blobCachePath);
-      await fs.writeFile(blobCachePath, plainBlob);
+      // pull.blob.pending is a full plaintext copy of the restored data; keep it
+      // owner-only even when cacheDir already existed with looser permissions.
+      await fs.writeFile(blobCachePath, plainBlob, { mode: 0o600 });
+      await fs.chmod(blobCachePath, 0o600).catch(() => {});
     }
     if (options.interactive) {
       extracted = await _interactiveUnpackRetry({ isV2, plainBlob, blobCachePath, initialSkipped: skipped, rootDir, io: options.io });
@@ -739,13 +767,13 @@ async function _finalizePullState({ rootDir, cacheDir, state, targetVersion, man
  */
 export async function pull(rootDir: string, options: PullOptions): Promise<PullResult> {
   const config = await readConfig(rootDir);
-  if (!config) throw new BfsError('No vault config found. Run `bfs init` or `bfs recovery` first.');
+  if (!config) throw new BfsError(t('pull_no_config'));
   assertSchemeValid(config);
   await _runPullPreflight(config, options);
 
   const state = await readState(rootDir);
   const targetVersion = options.version ?? state.latest_version;
-  if (targetVersion === 0) throw new BfsError('No versions available. Run `bfs push` first.');
+  if (targetVersion === 0) throw new BfsError(t('no_versions_available'));
 
   // Priority: CLI flag → config.json → default
   const cacheDir = options.cacheDir ?? config.cache_dir ?? path.join(rootDir, '.bfs', 'cache');
@@ -759,7 +787,7 @@ export async function pull(rootDir: string, options: PullOptions): Promise<PullR
   let shardFailures = new Map<number, ShardFailureReason>();
   let plainBlob = cachedBlob;
   if (!loadedFromCache) {
-    if (!manifest) throw new BfsError(`Manifest for version ${targetVersion} not found.`);
+    if (!manifest) throw new BfsError(fmt('version_not_found', String(targetVersion)));
     const result = await _downloadAndVerifyBlob({ config, manifest, rootDir, cacheDir, blobCachePath, isV2, targetVersion, workingVersion: state.working_version, options });
     plainBlob = result.plainBlob;
     shardFailures = result.shardFailures;
@@ -781,7 +809,7 @@ export async function pull(rootDir: string, options: PullOptions): Promise<PullR
  */
 export async function prune(rootDir: string, options: PruneOptions): Promise<void> {
   const config = await readConfig(rootDir);
-  if (!config) throw new BfsError('No vault config found.');
+  if (!config) throw new BfsError(t('push_no_config'));
 
   assertSchemeValid(config);
 
@@ -838,17 +866,17 @@ export async function prune(rootDir: string, options: PruneOptions): Promise<voi
  */
 export async function removeProvider(rootDir: string, providerId: string, options: RemoveProviderOptions): Promise<void> {
   const config = await readConfig(rootDir);
-  if (!config) throw new BfsError('No vault config found.');
+  if (!config) throw new BfsError(t('push_no_config'));
 
   // No assertSchemeValid — rebuild flow needs providers.length > N+K transiently.
 
   if (!config.providers.find((p) => p.id === providerId)) {
-    throw new BfsError(`Provider "${providerId}" not found in config.`);
+    throw new BfsError(fmt('provider_not_found_in_config', providerId));
   }
 
   if (options.strategy === 'remove') {
     if (config.providers.length <= 3) {
-      throw new BfsError('Cannot remove — minimum 3 providers (scheme 2/1) required. Use relocate or rebuild instead.');
+      throw new BfsError(t('provider_remove_min'));
     }
     const updatedProviders = config.providers.filter((p) => p.id !== providerId);
     await writeConfig(rootDir, { ...config, providers: updatedProviders });
@@ -901,7 +929,7 @@ export async function removeProvider(rootDir: string, providerId: string, option
  */
 export async function status(rootDir: string): Promise<StatusInfo> {
   const config = await readConfig(rootDir);
-  if (!config) throw new BfsError('No vault config found. Run `bfs init` first.');
+  if (!config) throw new BfsError(t('push_no_config'));
   const state = await readState(rootDir);
   return { vault_name: config.vault_name, latest_version: state.latest_version, working_version: state.working_version, provider_count: config.providers.length, scheme: config.scheme, encryption_enabled: config.encryption.enabled };
 }
@@ -912,6 +940,6 @@ export async function status(rootDir: string): Promise<StatusInfo> {
  */
 export async function listVersions(rootDir: string): Promise<VersionManifest[]> {
   const config = await readConfig(rootDir);
-  if (!config) throw new BfsError('No vault config found.');
+  if (!config) throw new BfsError(t('push_no_config'));
   return listManifests(rootDir);
 }

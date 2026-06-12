@@ -110,7 +110,7 @@ export function decryptLocationMap(data: Buffer, key: Buffer): ShardLocation[] {
   // adapterPackage undefined → null (legacy shards came from built-in providers).
   // required_inputs undefined → null marks a legacy shard whose secret is still
   // inline in connection_config, so recovery uses it directly instead of
-  // prompting. See PLAN/binary-format.md for the full compatibility rule.
+  // prompting. See architecture/binary-format.md for the full compatibility rule.
   return parsed.map((loc) => ({ ...loc, adapterPackage: loc.adapterPackage ?? null, required_inputs: loc.required_inputs ?? null }));
 }
 

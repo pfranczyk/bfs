@@ -1,4 +1,3 @@
-import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import ora from 'ora';
@@ -7,7 +6,7 @@ import { createCliProviderIO, providerRegistry } from '../../providers/provider.
 import { recover } from '../../vault/recovery.js';
 import { resolveCwd } from '../cwd.js';
 import { parseRecoveryBootstrapSpec } from '../parse-provider-spec.js';
-import { promptWithRawMode } from '../prompt.js';
+import { isPromptCancellation, promptWithRawMode } from '../prompt.js';
 import { CommandAbort, error, formatHealth, success, table } from '../ui.js';
 
 /**
@@ -198,8 +197,7 @@ export function registerRecovery(program: Command): void {
         console.log();
         success(t('recovery_success'));
       } catch (err) {
-        if (err instanceof AbortPromptError) throw err;
-        if (err instanceof ExitPromptError) throw err;
+        if (isPromptCancellation(err)) throw err;
         spinner.fail(t('recovery_failed'));
         error(err instanceof Error ? err.message : String(err));
         throw new CommandAbort();

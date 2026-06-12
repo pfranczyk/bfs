@@ -154,7 +154,6 @@ export class ProviderRegistry {
 
   /**
    * Lists registered provider types with their display names.
-   * Used by CLI to build "select provider type" prompts without hardcoded lists.
    */
   listTypes(): ReadonlyArray<{ type: string; displayName: string }> {
     return [...this.entries.entries()].map(([type, e]) => ({ type, displayName: e.factory.displayName }));
@@ -169,27 +168,22 @@ export class ProviderRegistry {
 
   /**
    * Returns adapter metadata for a given type, or null when the type is
-   * built-in or unknown. Used by `bfs provider add` to populate
-   * ProviderConfig.adapterPackage and by `bfs provider -h` to derive an
-   * install hint when the provider did not set {@link ProviderHelp.installation}.
+   * built-in or unknown.
    */
   getMeta(type: string): Nullable<AdapterRegistrationMeta> {
     return this.entries.get(type)?.meta ?? null;
   }
 
   /**
-   * True when `type` is known to the registry. Used by adapter-preflight
-   * to detect missing plugins before a pull/recovery attempt.
+   * True when `type` is known to the registry.
    */
   has(type: string): boolean {
     return this.entries.has(type);
   }
 
   /**
-   * Propagates the active UI language to every registered factory. Called
-   * by BFS startup (right after {@link import('../i18n/index.js').setLang})
-   * and by tests that exercise `bfs provider -h` rendering. Adapters read
-   * the value from `factory.lang` inside their `help()` implementation.
+   * Propagates the active UI language to every registered factory. Adapters
+   * read the value from `factory.lang` inside their `help()` implementation.
    */
   setLang(lang: string): void {
     for (const entry of this.entries.values()) {
@@ -198,7 +192,7 @@ export class ProviderRegistry {
   }
 }
 
-/** Default registry used by built-in providers and the CLI. */
+/** Default provider registry singleton. */
 export const providerRegistry = new ProviderRegistry();
 
 // ─── CLI ProviderIO ────────────────────────────────────────────────────────────

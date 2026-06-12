@@ -101,7 +101,7 @@ export async function packBlob(rootDir: string, ignoreFilter: IgnoreFilter, vaul
   return _packBlobRaw(metas, rootDir, vaultId, skipped);
 }
 
-/** Raw (uncompressed) RAM path — multiple file table entries, surowe dane. */
+/** Raw (uncompressed) RAM path — multiple file-table entries, one per file. */
 async function _packBlobRaw(metas: FileMeta[], rootDir: string, vaultId: Buffer | undefined, skipped: SkippedFile[]): Promise<{ blob: Buffer; skipped: SkippedFile[] }> {
   const fileDataList: Buffer[] = [];
   const fileEntries: FileEntry[] = [];

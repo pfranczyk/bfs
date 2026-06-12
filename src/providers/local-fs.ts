@@ -278,8 +278,8 @@ export class LocalFsProvider implements StorageProvider {
 
   /**
    * Reads at most `maxBytes` bytes from the start of the shard via
-   * `createReadStream({ start: 0, end: maxBytes - 1 })`. Used by recovery
-   * to load just the header (~16 KB) without buffering the full payload.
+   * `createReadStream({ start: 0, end: maxBytes - 1 })` — enough to read just
+   * the header (~16 KB) without buffering the full payload.
    *
    * @param ref      - RemoteRef of the shard
    * @param maxBytes - Maximum byte count to return (must be > 0)

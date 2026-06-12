@@ -54,6 +54,9 @@ export async function writeJsonAtomic(filePath: string, data: unknown): Promise<
   const tmpPath = `${filePath}.${process.pid}.tmp`;
   const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+  // The temp file is always freshly created, so its create-time mode sticks and
+  // the atomic rename carries 0600 to the destination — keeping forensic lock
+  // files owner-only on POSIX (no-op on Windows NTFS).
+  await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), { encoding: 'utf-8', mode: 0o600 });
   await fs.rename(tmpPath, filePath);
 }

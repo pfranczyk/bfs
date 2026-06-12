@@ -3,8 +3,8 @@
 
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import { Command } from 'commander';
+import { isPromptCancellation } from './cli/prompt.js';
 
 const _require = createRequire(import.meta.url);
 const { version: PKG_VERSION } = _require('../package.json') as { version: string };
@@ -158,7 +158,7 @@ main().catch((err) => {
   if (err instanceof CommandAbort) {
     process.exit(1);
   }
-  if (err instanceof AbortPromptError || err instanceof ExitPromptError) {
+  if (isPromptCancellation(err)) {
     process.exit(130);
   }
   console.error(err instanceof Error ? err.message : String(err));

@@ -125,8 +125,8 @@ async function connectWithInputs(loc: ShardLocation, required: string[], vaultNa
  * entry. Entries declaring required_inputs (secrets stripped from the header)
  * are supplied from the pool first — seeded with the operator's --bootstrap
  * secrets, so providers sharing a credential connect without a prompt — then
- * interactively. Legacy entries (secret still inline) and guest entries
- * (required_inputs empty) connect directly. Anything still unreachable is
+ * interactively. Entries with the secret still inline, and guest entries
+ * (required_inputs empty), connect directly. Anything still unreachable is
  * skipped (degraded mode).
  */
 async function connectProvidersFromMap(locationMap: ShardLocation[], vaultName: string, io: ProviderIO, seedInputs: Map<string, string>): Promise<StorageProvider[]> {

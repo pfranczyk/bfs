@@ -38,10 +38,9 @@ export async function writeConfig(rootDir: string, config: VaultConfig): Promise
 }
 
 /**
- * Validates scheme + providers in the loaded config. Called by commands that
- * interact with providers (push/pull/verify/prune/heal/provider-remove) to
- * fail fast with a user-level message before any provider work starts —
- * instead of letting lower layers throw cryptic internal errors.
+ * Validates scheme + providers in the loaded config. Fails fast with a
+ * user-level message before any provider work starts, instead of letting
+ * lower layers throw cryptic internal errors.
  *
  * @throws BfsError if scheme is missing or corrupted, or providers count does
  *         not equal data_shards + parity_shards.

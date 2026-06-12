@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`bfs pull --allow-missing-adapters` now restores instead of crashing when a
+  provider's adapter is missing.** With the flag set, a backup whose provider
+  uses a third-party adapter that is no longer installed previously still aborted
+  the restore with an "unknown provider type" error — even when enough other
+  providers were reachable to rebuild the data. That provider's piece is now
+  skipped and the backup is reconstructed from the remaining ones, matching how
+  `bfs recovery` already behaves and what the flag promises.
+- **`bfs init` now rejects duplicate provider names instead of silently
+  accepting them.** Passing two `--provider` specs that share a name (or entering
+  the same name twice during interactive setup) previously wrote both into the
+  backup configuration, where later operations resolved the name to the first
+  entry and quietly orphaned the other storage — skewing the redundancy scheme.
+  `bfs init` now aborts with a clear error naming the duplicate, and no
+  configuration is written.
+- **Cancelling an interactive prompt no longer leaks a raw `User force closed
+  the prompt` message in the installed CLI.** In the published package, pressing
+  Ctrl+C at a prompt — or running an interactive command such as `bfs prune`
+  with no terminal attached (piped or closed input) — could print Inquirer's
+  internal force-close text to stderr instead of cancelling quietly. The
+  cancellation is now recognized reliably across `bfs init`, `bfs prune`,
+  `bfs recovery`, and `bfs provider remove`, so it always ends cleanly.
+
+### Added
+- **Warning when a storage provider uses plain (unencrypted) FTP.** Every backup
+  operation that connects to an FTP provider with FTPS disabled now prints a
+  warning naming the server — the storage password and your backup data cross
+  the network in cleartext. The warning appears once per operation (a multi-shard
+  push warns once, not once per shard), so an unintended insecure transport is
+  hard to miss. Enable the provider's `secure` (FTPS) option, or run BFS only
+  over a network you trust.
+
+### Changed
+- **More CLI messages respect `--lang`.** A range of errors and prompts that were
+  previously English-only — across `bfs push`, `bfs pull` / restore, version
+  selection, and `bfs provider remove` — are now shown in the configured
+  language (e.g. "password required", "passwords do not match", "not enough
+  storage pieces", "pull cancelled", "no versions available"). User-facing
+  messages also now broadly avoid the internal term "vault".
+
+### Security
+- **A tampered backup can no longer exhaust your memory while restoring.** When
+  restoring a compressed backup, BFS now limits how much a single stored file —
+  and the archive as a whole — is allowed to expand to, and stops with a clear
+  error if a backup tries to expand far beyond the amount of data it actually
+  holds. This protects against a "decompression bomb": a small, maliciously
+  crafted backup that would otherwise unpack into enough data to crash the
+  machine.
+- **Local backup metadata and cached data are now owner-only.** In addition to
+  `config.json`, BFS now writes `state.json`, the version manifests, and any
+  cached backup data under `.bfs/cache/` with owner-only permissions (`0600`),
+  and creates the cache directory `0700` — matching the protection already
+  applied to the configuration. On POSIX this keeps a backup's metadata
+  (including the storage coordinates recorded in each manifest) and any transient
+  plaintext copy of your data readable only by the owning user. On Windows these
+  POSIX mode bits are a no-op; the access control of the directory holding
+  `.bfs/` remains the practical protection.
+- **FTP paths and backup names containing control characters are rejected.** An
+  FTP provider path or a backup name that contains a line break or NUL byte is
+  now refused — when the provider is configured and again before any path is sent
+  to the server — closing a control-channel injection vector on the FTP command
+  stream.
+
 ## [0.7.0-beta.1] - 2026-06-07
 
 ### Changed

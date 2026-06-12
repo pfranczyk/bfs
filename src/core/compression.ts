@@ -1,5 +1,7 @@
+import { constants as BUFFER_CONSTANTS } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import fs, { type FileHandle } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import * as zlib from 'node:zlib';
 
@@ -23,12 +25,39 @@ const MARKER_16 = 0xffff;
 // Unix -rw-r--r-- (0o100644 << 16, forced unsigned via >>> 0 to avoid signed-int overflow)
 const EXT_ATTR_UNIX = (0o100644 << 16) >>> 0;
 
+// ─── Decompression bomb guard ──────────────────────────────────────────────────
+
+/**
+ * Maximum expansion ratio a single raw-DEFLATE stream can physically achieve.
+ * Real deflate output never exceeds compressedBytes * MAX_DEFLATE_RATIO, so the
+ * total decompressed size of a ZIP is bounded by zipSize * MAX_DEFLATE_RATIO —
+ * a trusted ceiling, since the ZIP size is validated against the real blob size
+ * upstream and cannot be inflated by an attacker.
+ */
+const MAX_DEFLATE_RATIO = 1032;
+
+/**
+ * Fraction of total machine RAM allowed as the absolute decompression ceiling.
+ * Half leaves headroom for the compressed buffer and the in-RAM result set that
+ * the rest of the unpack path holds alongside the decompressed output.
+ */
+const INFLATE_RAM_FRACTION = 0.5;
+
 // ─── Public interfaces ────────────────────────────────────────────────────────
 
 /** Entry returned by extractZip() for each file in the archive. */
 export interface ZipExtractResult {
   filename: string;
   data: Buffer;
+}
+
+/** Options for extractZip(). */
+export interface ExtractZipOptions {
+  /**
+   * Explicit cap (in bytes) on the total decompressed output across all entries.
+   * Overrides the default cap derived from the ZIP size and machine RAM.
+   */
+  maxTotalOutput?: number;
 }
 
 // ─── Internal types ───────────────────────────────────────────────────────────
@@ -339,18 +368,38 @@ function _parseZip64ExtraLfh(extraBuf: Buffer): { compressedSize: number; uncomp
   throw new BfsError('ZIP: ZIP64 extra field (0x0001) not found but size marker is 0xFFFFFFFF');
 }
 
+/**
+ * Computes the trusted upper bound on total decompressed output for a ZIP buffer.
+ * Combines the physical deflate-ratio bound (from the ZIP size, validated against
+ * the real blob size upstream) with an absolute RAM ceiling, so a crafted archive
+ * cannot expand into an out-of-memory condition. An explicit override takes
+ * precedence.
+ * @param zipSize - Size of the ZIP buffer in bytes (equals the blob data section length)
+ * @param override - Optional explicit cap in bytes
+ * @returns Maximum allowed sum of decompressed bytes across all entries
+ */
+function _computeInflateCap(zipSize: number, override?: number): number {
+  if (override !== undefined) return override;
+  return Math.min(zipSize * MAX_DEFLATE_RATIO, Math.floor(os.totalmem() * INFLATE_RAM_FRACTION));
+}
+
 // ─── ZIP extractor (dual-mode: legacy + ZIP64) ──────────────────────────────
 
 /**
  * Extracts all files from a ZIP buffer using sequential Local File Header scan.
  * Supports both legacy ZIP (UInt32 sizes) and ZIP64 (marker + extra field).
- * Verifies CRC-32 for each entry.
+ * Verifies CRC-32 for each entry and caps the total decompressed output to guard
+ * against decompression bombs (see _computeInflateCap).
  * @param zipBuffer - Full ZIP file as Buffer
+ * @param options - Optional extraction options (e.g. an explicit output cap)
  * @returns Array of extracted entries with filename and decompressed data
- * @throws BfsError on corrupt ZIP (bad signature, CRC mismatch, inflate error)
+ * @throws BfsError on corrupt ZIP (bad signature, CRC mismatch, inflate error) or
+ *   when the decompressed output would exceed the allowed limit
  */
-export function extractZip(zipBuffer: Buffer): ZipExtractResult[] {
+export function extractZip(zipBuffer: Buffer, options?: ExtractZipOptions): ZipExtractResult[] {
   const results: ZipExtractResult[] = [];
+  const maxTotalOutput = _computeInflateCap(zipBuffer.length, options?.maxTotalOutput);
+  let totalOutput = 0;
   let pos = 0;
 
   while (pos + 4 <= zipBuffer.length) {
@@ -407,12 +456,21 @@ export function extractZip(zipBuffer: Buffer): ZipExtractResult[] {
     }
 
     const compressedData = zipBuffer.subarray(dataStart, dataEnd);
+    const remaining = maxTotalOutput - totalOutput;
+    if (remaining <= 0) {
+      throw new BfsError(`ZIP: decompressed output exceeds the ${maxTotalOutput}-byte limit (possible decompression bomb)`);
+    }
     let decompressed: Buffer;
     try {
-      decompressed = zlib.inflateRawSync(compressedData);
+      decompressed = zlib.inflateRawSync(compressedData, { maxOutputLength: Math.min(remaining, BUFFER_CONSTANTS.MAX_LENGTH) });
     } catch (e) {
+      const code = e instanceof Error ? (e as NodeJS.ErrnoException).code : undefined;
+      if (code === 'ERR_BUFFER_TOO_LARGE') {
+        throw new BfsError(`ZIP: decompressed output for "${filename}" exceeds the ${maxTotalOutput}-byte limit (possible decompression bomb)`);
+      }
       throw new BfsError(`ZIP: inflate failed for "${filename}": ${e instanceof Error ? e.message : String(e)}`);
     }
+    totalOutput += decompressed.length;
 
     if (decompressed.length !== uncompressedSize) {
       throw new BfsError(`ZIP: size mismatch for "${filename}": expected ${uncompressedSize}, got ${decompressed.length}`);
@@ -557,7 +615,7 @@ export async function estimateCompressibility(rootDir: string): Promise<Compress
 
 /**
  * Returns true if the buffer starts with ZIP Local File Header magic (PK\x03\x04).
- * Used by blob-unpack to detect compressed blobs without reading the full structure.
+ * Detects a compressed blob without reading its full structure.
  * @param buf - Buffer to probe (data section of a BFS blob)
  */
 export function isZipBuffer(buf: Buffer): boolean {

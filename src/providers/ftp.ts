@@ -83,6 +83,9 @@ export class FtpProvider implements StorageProvider {
   private readonly secure: boolean;
   private readonly io: ProviderIO;
   private vaultName: Nullable<string> = null;
+  // One-shot guard so the plaintext-FTP warning fires once per provider instance
+  // (≈ once per push/pull) instead of on every per-operation connect.
+  private plaintextWarned = false;
 
   constructor(config: ProviderConfig, io: ProviderIO) {
     // Lazy init — an incomplete config is allowed so CLI can construct a
@@ -111,6 +114,7 @@ export class FtpProvider implements StorageProvider {
     try {
       this.io.debug(`FTP connecting to ${this.host}:${this.port}`);
       await client.access({ host: this.host, port: this.port, user: this.user, password: this.password, secure: this.secure });
+      if (!this.secure) this.warnInsecureOnce();
       // Belt-and-suspenders binary mode. access() already issues TYPE I via
       // useDefaultSettings(); a bare repeat per session is cheap insurance
       // against any control-channel state drift between auth and STOR.
@@ -125,14 +129,34 @@ export class FtpProvider implements StorageProvider {
   }
 
   /**
+   * Emits the plaintext-FTP warning once per provider instance. A plain
+   * (non-FTPS) connection sends the password and shard bytes in the clear, so
+   * the user is warned — but only on the first connect, to avoid one line per
+   * shard during a push.
+   */
+  private warnInsecureOnce(): void {
+    if (this.plaintextWarned) return;
+    this.plaintextWarned = true;
+    this.io.warn(fmtFor(this.io.lang, 'ftp_insecure_warning', `${this.host}:${this.port}`));
+  }
+
+  /**
    * Returns the remote vault directory path: {basePath}/{vaultName}.
-   * @throws ProviderError if setVaultName() has not been called yet.
+   * @throws ProviderError if setVaultName() has not been called yet, or the
+   *   assembled path carries a line break / NUL (FTP control-channel injection).
    */
   private vaultPath(): string {
     if (this.vaultName === null) {
       throw new ProviderError('setVaultName() must be called before any file operation');
     }
-    return `${this.basePath}/${this.vaultName}`;
+    const full = `${this.basePath}/${this.vaultName}`;
+    // A CR/LF or NUL in a path sent over the FTP control channel could let a
+    // crafted base path or backup name inject extra FTP commands. Reject before
+    // the string reaches CWD/STOR/LIST.
+    if (/[\r\n\0]/.test(full)) {
+      throw new ProviderError(tFor(this.io.lang, 'ftp_control_chars'));
+    }
+    return full;
   }
 
   /**
@@ -182,10 +206,10 @@ export class FtpProvider implements StorageProvider {
   }
 
   /**
-   * Downloads a remote file into a single Buffer.
-   * Used internally by download() and updateShardHeader() — the buffer is
-   * necessary because withClient closes the connection in `finally`, so a
-   * lazy stream would fail after the client disconnects.
+   * Downloads a remote file into a single Buffer. Buffering (rather than
+   * returning a lazy stream) is necessary because withClient closes the
+   * connection in `finally`, so a lazy stream would fail after the client
+   * disconnects.
    */
   private async downloadToBuffer(client: ftp.Client, remotePath: string): Promise<Buffer> {
     const chunks: Buffer[] = [];
@@ -373,9 +397,8 @@ export class FtpProvider implements StorageProvider {
   }
 
   /**
-   * Reads at most `maxBytes` bytes from the start of the shard. Used by
-   * recovery to load just the header (~16 KB) without buffering the full
-   * payload.
+   * Reads at most `maxBytes` bytes from the start of the shard — enough to read
+   * just the header (~16 KB) without buffering the full payload.
    *
    * Strategy:
    *   - If `SIZE` ≤ maxBytes: download the whole file (it's small).
@@ -708,8 +731,13 @@ export class FtpProvider implements StorageProvider {
     const remotePath = config.path;
     if (typeof remotePath !== 'string' || remotePath.length === 0) {
       errors.push(tFor(lang, 'ftp_validate_path_required'));
-    } else if (!remotePath.startsWith('/')) {
-      errors.push(tFor(lang, 'ftp_validate_path_absolute'));
+    } else {
+      if (!remotePath.startsWith('/')) {
+        errors.push(tFor(lang, 'ftp_validate_path_absolute'));
+      }
+      if (/[\r\n\0]/.test(remotePath)) {
+        errors.push(tFor(lang, 'ftp_control_chars'));
+      }
     }
 
     return errors;

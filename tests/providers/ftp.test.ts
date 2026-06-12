@@ -345,6 +345,58 @@ describe('FtpProvider', () => {
     expect(logs.find((l) => l.level === 'info' && l.message.includes('FTP connecting'))).toBeUndefined();
   });
 
+  // ─── plaintext-FTP warning (secure=false) ────────────────────────────────
+
+  // A plain (non-FTPS) connection sends the password and shard bytes in the
+  // clear; the user must be warned. The warning fires once per provider
+  // instance, not once per shard, so a multi-shard push stays quiet after the
+  // first connect.
+  it('should warn once about plaintext FTP across multiple operations when secure=false', async () => {
+    const { io, logs } = createMockProviderIO();
+    const insecure = new FtpProvider(makeConfig({ secure: false }), io);
+    insecure.setVaultName('testvault');
+
+    await uploadBuf(insecure, 'shard_0.bfs.1', Buffer.alloc(64, 1));
+    await uploadBuf(insecure, 'shard_1.bfs.1', Buffer.alloc(64, 2));
+
+    const warns = logs.filter((l) => l.level === 'warn' && l.message.includes('localhost:21'));
+    expect(warns).toHaveLength(1);
+    expect(warns[0]?.message).toContain('not encrypted');
+  });
+
+  it('should not warn about plaintext FTP when secure=true', async () => {
+    const { io, logs } = createMockProviderIO();
+    const secure = new FtpProvider(makeConfig({ secure: true }), io);
+    secure.setVaultName('testvault');
+
+    await uploadBuf(secure, 'shard_0.bfs.1', Buffer.alloc(64, 1));
+
+    const warns = logs.filter((l) => l.level === 'warn' && l.message.includes('not encrypted'));
+    expect(warns).toHaveLength(0);
+  });
+
+  // ─── control-character rejection in path / vault name ────────────────────
+
+  // CR/LF or NUL in a path sent over the FTP control channel could inject extra
+  // FTP commands. Reject at config-validation time and again before any path is
+  // assembled for CWD/STOR/LIST.
+  it('validateConfig should reject a path containing a line break', () => {
+    const { io } = createMockProviderIO();
+    const p = new FtpProvider(makeConfig(), io);
+
+    const errors = p.validateConfig({ host: 'h', port: 21, path: '/backup\r\nDELE secret' });
+
+    expect(errors.some((e) => e.includes('control characters'))).toBe(true);
+  });
+
+  it('should reject a vault name containing a line break before any FTP operation', async () => {
+    const { io } = createMockProviderIO();
+    const p = new FtpProvider(makeConfig(), io);
+    p.setVaultName('vault\r\nDELE secret');
+
+    await expect(uploadBuf(p, 'shard_0.bfs.1', Buffer.alloc(8, 1))).rejects.toThrow(ProviderError);
+  });
+
   // ─── upload / download roundtrip ─────────────────────────────────────────
 
   it('should upload and download identical binary data', async () => {

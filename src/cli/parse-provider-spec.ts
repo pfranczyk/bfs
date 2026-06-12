@@ -64,6 +64,31 @@ export async function parseInitProviderSpec(spec: string, cwd: string): Promise<
 }
 
 /**
+ * Asserts that provider ids are unique — both within `newIds` and against any
+ * already-registered `existingConfigIds`. Shared by every command that
+ * introduces a provider id (init, add, edit) so a duplicate cannot reach
+ * `.bfs/config.json`, where a lookup silently resolves to the first match and
+ * orphans the rest.
+ *
+ * @param newIds            ids being introduced (e.g. all `--provider` ids at init)
+ * @param existingConfigIds ids already present in the backup config; empty at init
+ * @throws Error when an id repeats within `newIds` or collides with an existing id
+ */
+export function validateProviderIdsUnique(newIds: string[], existingConfigIds: string[] = []): void {
+  const existing = new Set(existingConfigIds);
+  const seen = new Set<string>();
+  for (const id of newIds) {
+    if (existing.has(id)) {
+      throw new Error(fmt('provider_add_exists', id));
+    }
+    if (seen.has(id)) {
+      throw new Error(fmt('provider_id_duplicate_in_args', id));
+    }
+    seen.add(id);
+  }
+}
+
+/**
  * Parses a recovery-style bootstrap spec — adapter flags only, with no
  * type or id embedded. Provider type comes from the separate `--provider
  * <type>` flag; id is hardcoded (`recovery-bootstrap`) because the bootstrap

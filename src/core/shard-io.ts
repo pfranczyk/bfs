@@ -37,7 +37,6 @@ const BFSH_PREFIX_SIZE = 8; // magic(4) + format_version(4)
 /**
  * Computes the byte length of the shard header by walking the binary layout
  * without decrypting the location map.
- * Used by providers (updateShardHeader) and vault-manager (extractShardPayload).
  *
  * Every field offset is bounds-checked against the buffer so that malformed
  * input (e.g. a header claiming a 64 KB vault name) raises a typed
@@ -296,7 +295,6 @@ export function buildSidecarBytes(header: ShardHeader, encryptionKey?: Buffer): 
 
 /**
  * Serializes a shard header into a binary Buffer with FORMAT_VERSION=2.
- * Used by buildShardStream for the streaming (large file) pipeline.
  * FORMAT_VERSION=2 shards have layout: [header][encrypted_payload][GCM tag 16B][SHA-256 32B]
  *
  * @param header        - Shard metadata including location map
@@ -486,8 +484,7 @@ function parseSidecarBytes(sidecar: Buffer, vaultKey?: Buffer): ShardHeader {
 
 /**
  * Parses a complete shard header buffer (magic … end of location map, no
- * payload, no checksum) into a ShardHeader. Used by parseShardHeaderFromStream
- * and by the sidecar read-path.
+ * payload, no checksum) into a ShardHeader.
  *
  * @param data          - Buffer containing exactly the serialized header
  * @param encryptionKey - 32-byte key to decrypt the location map (optional)
@@ -541,7 +538,6 @@ export function buildShardHeaderFromBytes(data: Buffer, encryptionKey?: Buffer):
 
 /**
  * Reads all common shard header fields starting at startPos (i.e. after the 4-byte magic).
- * Used by both parseShard and parseShardHeaderOnly to avoid code duplication.
  * Returns all parsed fields plus the buffer position immediately after map_length.
  */
 function parseCommonHeaderFields(data: Buffer, startPos: number) {
@@ -615,7 +611,7 @@ function readLocationMap(data: Buffer, pos: number, mapLength: number, encrypted
     // undefined → null marks a legacy shard whose secret is still inline in
     // connection_config, so recovery uses it directly instead of prompting.
     // Keep this the ONLY normalization point for plain (unencrypted) location
-    // maps; see PLAN/binary-format.md.
+    // maps; see architecture/binary-format.md.
     const locationMap = parsed.map((loc) => ({ ...loc, adapterPackage: loc.adapterPackage ?? null, required_inputs: loc.required_inputs ?? null }));
     return { locationMap, endPos };
   } catch {

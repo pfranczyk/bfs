@@ -36,7 +36,12 @@ export async function readManifest(rootDir: string, version: number): Promise<Nu
  * @throws on write failure.
  */
 export async function writeManifest(rootDir: string, manifest: VersionManifest): Promise<void> {
-  await fs.writeFile(manifestFilePath(rootDir, manifest.version), JSON.stringify(manifest, null, 2), 'utf-8');
+  const filePath = manifestFilePath(rootDir, manifest.version);
+  // Manifests record provider coordinates (host, user, path) for every shard.
+  // Keep them owner-only on POSIX: mode applies on create, chmod restricts an
+  // already-existing inode; both are a no-op on Windows NTFS (ACL-based).
+  await fs.writeFile(filePath, JSON.stringify(manifest, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  await fs.chmod(filePath, 0o600).catch(() => {});
 }
 
 /**

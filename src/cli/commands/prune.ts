@@ -1,9 +1,8 @@
-import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
 import { listVersions, prune } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
-import { inquirer, promptWithRawMode } from '../prompt.js';
+import { inquirer, isPromptCancellation, promptWithRawMode } from '../prompt.js';
 import { CommandAbort, error, success, warn } from '../ui.js';
 
 /**
@@ -94,7 +93,7 @@ export function registerPrune(program: Command): void {
             ]);
             picked = ans.picked;
           } catch (err) {
-            if (!(err instanceof AbortPromptError) && !(err instanceof ExitPromptError)) throw err;
+            if (!isPromptCancellation(err)) throw err;
             // Esc / Ctrl+C → treat as empty selection
           }
           if (picked.includes('__manual__')) {
@@ -102,7 +101,7 @@ export function registerPrune(program: Command): void {
               const { rangeInput } = await promptWithRawMode<{ rangeInput: string }>([{ type: 'input', name: 'rangeInput', message: t('prune_range_prompt'), validate: (v: string) => (v.trim() ? true : t('required')) }]);
               toRemove = parseVersionRange(rangeInput.trim(), allVersions);
             } catch (err) {
-              if (!(err instanceof AbortPromptError) && !(err instanceof ExitPromptError)) throw err;
+              if (!isPromptCancellation(err)) throw err;
               // Esc / Ctrl+C → treat as empty selection
             }
           } else {
@@ -130,7 +129,7 @@ export function registerPrune(program: Command): void {
             const ans = await promptWithRawMode<{ confirmed: boolean }>([{ type: 'confirm', name: 'confirmed', message: fmt('prune_confirm', String(toRemove.length)), default: false }]);
             confirmed = ans.confirmed;
           } catch (err) {
-            if (!(err instanceof AbortPromptError) && !(err instanceof ExitPromptError)) throw err;
+            if (!isPromptCancellation(err)) throw err;
             // Esc / Ctrl+C → treat as decline
           }
           if (!confirmed) {
@@ -143,8 +142,7 @@ export function registerPrune(program: Command): void {
         success(fmt('prune_deleted', toRemove.join(', ')));
       } catch (err) {
         if (err instanceof CommandAbort) throw err;
-        if (err instanceof AbortPromptError) throw err;
-        if (err instanceof ExitPromptError) throw err;
+        if (isPromptCancellation(err)) throw err;
         error(err instanceof Error ? err.message : String(err));
         throw new CommandAbort();
       }

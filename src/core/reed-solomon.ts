@@ -355,9 +355,8 @@ async function _runStripedDecode(
         if (reader !== null) {
           const got = await reader.readInto(flat, i * stripeSize, stripeSize);
           gotValues.push(got);
-          // got=0 means shard returned no data — always mark unavailable so RS
-          // can reconstruct. The old `|| stripe < numStripes - 1` masked this
-          // on non-last stripes, causing silent data corruption (zeros).
+          // got=0 means the shard returned no data for this stripe — mark it
+          // unavailable so RS reconstructs it instead of emitting zeros.
           available.push(got > 0);
         } else {
           gotValues.push(-1);

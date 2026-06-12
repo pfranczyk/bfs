@@ -440,6 +440,28 @@ describe('init', () => {
     });
   });
 
+  // ─── Duplicate provider id rejection ─────────────────────────────────────
+  // bfs init rejects two --provider specs that share an id: a duplicate would
+  // otherwise reach config.json, where a lookup resolves to the first entry and
+  // orphans the rest (runtime-undefined at push). Guards that the CI path
+  // aborts (exit≠0), init() is never called (no config is written), and the
+  // colliding id is named in the error.
+
+  describe('CI: duplicate --provider id is rejected', () => {
+    it('should abort when two --provider specs share the same id', async () => {
+      const result = await runCmd(['init', 'myvault', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'local:dup --path /mnt/d1', '--provider', 'local:dup --path /mnt/d2', '--provider', 'local:ok --path /mnt/d3']);
+
+      expect(result).toBe('abort');
+      expect(mockInit).not.toHaveBeenCalled();
+    });
+
+    it('should name the colliding id in the error when two --provider specs share an id', async () => {
+      await runCmd(['init', 'myvault', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'local:dup --path /mnt/d1', '--provider', 'local:dup --path /mnt/d2', '--provider', 'local:ok --path /mnt/d3']);
+
+      expect(capture.errors.some((e) => e.includes('dup'))).toBe(true);
+    });
+  });
+
   // ─── Regression: inline FTP flags ─────────────────────────────────────────
 
   describe('CI: --provider ftp inline grammar', () => {

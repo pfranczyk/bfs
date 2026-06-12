@@ -28,5 +28,9 @@ export async function readState(rootDir: string): Promise<VaultState> {
  */
 export async function writeState(rootDir: string, state: VaultState): Promise<void> {
   const filePath = path.join(rootDir, '.bfs', 'state.json');
-  await fs.writeFile(filePath, JSON.stringify(state, null, 2), 'utf-8');
+  // state.json sits in .bfs/ next to config.json; keep it owner-only on POSIX
+  // for defense-in-depth. mode applies on create, chmod restricts an
+  // already-existing inode; both are a no-op on Windows NTFS (ACL-based).
+  await fs.writeFile(filePath, JSON.stringify(state, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  await fs.chmod(filePath, 0o600).catch(() => {});
 }

@@ -165,6 +165,48 @@ describe('extractZip', () => {
   });
 });
 
+// ─── extractZip decompression bomb guard ──────────────────────────────────────
+
+// extractZip caps total decompressed output so a crafted archive cannot expand
+// into an out-of-memory condition. The cap is exercised via the maxTotalOutput
+// override because real deflate output never exceeds the physical ratio bound
+// used by the default cap.
+describe('extractZip decompression bomb guard', () => {
+  it('should reject a single entry that exceeds the output cap', () => {
+    const packer = createZipPacker();
+    packer.addFile('big.txt', Buffer.alloc(4096, 0x41));
+    const zip = packer.finalize();
+
+    expect(() => extractZip(zip, { maxTotalOutput: 100 })).toThrow(BfsError);
+  });
+
+  it('should reject cumulative output across entries that exceeds the cap', () => {
+    const packer = createZipPacker();
+    packer.addFile('a.txt', Buffer.alloc(2000, 0x42));
+    packer.addFile('b.txt', Buffer.alloc(2000, 0x43));
+    const zip = packer.finalize();
+
+    // First entry (2000B) fits under 3000; the second pushes the total over.
+    expect(() => extractZip(zip, { maxTotalOutput: 3000 })).toThrow(BfsError);
+  });
+
+  it('should extract normally when total output stays within the cap', () => {
+    const packer = createZipPacker();
+    const a = Buffer.alloc(2000, 0x42);
+    const b = Buffer.alloc(2000, 0x43);
+    packer.addFile('a.txt', a);
+    packer.addFile('b.txt', b);
+    const zip = packer.finalize();
+
+    const results = extractZip(zip, { maxTotalOutput: 5000 });
+
+    expect(results).toHaveLength(2);
+    assert(results[0] !== undefined && results[1] !== undefined);
+    expect(Buffer.compare(results[0].data, a)).toBe(0);
+    expect(Buffer.compare(results[1].data, b)).toBe(0);
+  });
+});
+
 // ─── ZIP64 / legacy compatibility ────────────────────────────────────────────
 
 describe('ZIP64 format', () => {

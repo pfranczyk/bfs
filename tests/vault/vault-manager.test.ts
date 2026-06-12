@@ -224,6 +224,22 @@ describe('push', () => {
     expect(state.working_version).toBe(1);
   });
 
+  // POSIX-only: state.json and manifests carry backup metadata (incl. the
+  // provider coordinates in each manifest), and .bfs/cache/ holds transient
+  // plaintext during a push — all owner-only. Windows NTFS ignores POSIX mode
+  // bits, so the assertion would be a false signal there.
+  it.skipIf(process.platform === 'win32')('should write state.json + manifest 0600 and cache dir 0700 after push', async () => {
+    await createTestFiles(root);
+    await push(root, { io: mockIO() });
+
+    const stateStat = await fs.stat(path.join(root, '.bfs', 'state.json'));
+    expect(stateStat.mode & 0o777).toBe(0o600);
+    const manifestStat = await fs.stat(path.join(root, '.bfs', 'manifests', 'v001.json'));
+    expect(manifestStat.mode & 0o777).toBe(0o600);
+    const cacheStat = await fs.stat(path.join(root, '.bfs', 'cache'));
+    expect(cacheStat.mode & 0o777).toBe(0o700);
+  });
+
   it('should upload shard files to each provider', async () => {
     await createTestFiles(root);
     await push(root, { io: mockIO() });
@@ -370,7 +386,7 @@ describe('push — partial commit', () => {
       throw new ProviderError('Simulated total outage');
     });
 
-    await expect(push(root, { io: mockIO() })).rejects.toThrow(/0 shards uploaded/);
+    await expect(push(root, { io: mockIO() })).rejects.toThrow(/no storage pieces uploaded/);
 
     const state = await readState(root);
     expect(state.latest_version).toBe(0);

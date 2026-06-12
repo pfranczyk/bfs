@@ -50,14 +50,14 @@ export interface PushLock {
   blob_pending_path: Nullable<string>;
 }
 
-/** Pair successfully migrated by `bfs repair` (PR2 — schema only in PR1). */
+/** Pair successfully migrated by `bfs repair`. */
 export interface RepairLockSucceededPair {
   old_name: string;
   new_name: string;
   new_type?: string;
 }
 
-/** Pair that failed Phase A verify in `bfs repair` (PR2 — schema only in PR1). */
+/** Pair that failed Phase A verify in `bfs repair`. */
 export interface RepairLockFailedPair {
   name: string;
   params: string;
@@ -65,7 +65,7 @@ export interface RepairLockFailedPair {
   detail: string;
 }
 
-/** Shard that failed Phase B/C rebuild or header-rewrite in `bfs repair` (PR2 — schema only in PR1). */
+/** Shard that failed Phase B/C rebuild or header-rewrite in `bfs repair`. */
 export interface RepairLockFailedShard {
   version: number;
   shard_index: number;
@@ -75,9 +75,8 @@ export interface RepairLockFailedShard {
 }
 
 /**
- * Forensic-state file (.bfs/repair.lock) written during `bfs repair`.
- * Schema present in PR1 so push.lock and repair.lock can coexist and clear
- * cleans up both proactively; write path activated by PR2.
+ * Forensic-state schema for `.bfs/repair.lock`. The lock is detected by the
+ * active-lock guard and removed by `bfs clear`, alongside push.lock.
  */
 export interface RepairLock {
   format_version: number;

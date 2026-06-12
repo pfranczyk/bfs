@@ -4,6 +4,7 @@ import { createCliProviderIO, providerRegistry, validateProviderId } from '../..
 import type { CliProviderInput, ProviderConfig } from '../../types/index.js';
 import { readConfig, writeConfig } from '../../vault/config.js';
 import { resolveCwd } from '../cwd.js';
+import { validateProviderIdsUnique } from '../parse-provider-spec.js';
 import { promptWithRawMode } from '../prompt.js';
 import { CommandAbort, error, success, warn } from '../ui.js';
 
@@ -62,6 +63,7 @@ export function registerProviderAdd(providerCmd: Command): void {
 
       let name: string;
       let type: string;
+      const existingIds = config.providers.map((p) => p.id);
 
       if (isCi) {
         if (!opts.name?.trim()) {
@@ -75,8 +77,10 @@ export function registerProviderAdd(providerCmd: Command): void {
           error(err instanceof Error ? err.message : String(err));
           throw new CommandAbort();
         }
-        if (config.providers.some((p) => p.id === trimmed)) {
-          error(fmt('provider_add_exists', opts.name));
+        try {
+          validateProviderIdsUnique([trimmed], existingIds);
+        } catch (err) {
+          error(err instanceof Error ? err.message : String(err));
           throw new CommandAbort();
         }
         name = trimmed;
@@ -99,7 +103,11 @@ export function registerProviderAdd(providerCmd: Command): void {
               } catch (err) {
                 return err instanceof Error ? err.message : String(err);
               }
-              if (config.providers.some((p) => p.id === trimmed)) return fmt('provider_add_exists', v);
+              try {
+                validateProviderIdsUnique([trimmed], existingIds);
+              } catch (err) {
+                return err instanceof Error ? err.message : String(err);
+              }
               return true;
             },
           },
