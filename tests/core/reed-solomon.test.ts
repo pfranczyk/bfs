@@ -5,7 +5,7 @@ import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BfsError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
-import { calcShardPayloadSize, rsDecode, rsDecodeStriped, rsEncode, rsEncodeStriped, rsRepair, SHARD_ALIGNMENT } from '../../src/core/reed-solomon.js';
+import { calcShardPayloadSize, rsDecode, rsDecodeStriped, rsEncode, rsEncodeStriped, rsRepair, rsRepairStriped, SHARD_ALIGNMENT } from '../../src/core/reed-solomon.js';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -44,6 +44,54 @@ describe('calcShardPayloadSize', () => {
     const dataShards = 3;
     const min = Math.ceil(dataLen / dataShards);
     expect(calcShardPayloadSize(dataLen, dataShards)).toBeGreaterThanOrEqual(min);
+  });
+});
+
+describe('rsRepairStriped', () => {
+  // Builds a self-consistent striped shard set: all N data shards present, parity
+  // left for the function to compute. The result is the canonical encoding every
+  // single-index repair must reproduce byte-for-byte.
+  function buildStripedSet(N: number, K: number, stripeSize: number, numStripes: number): Buffer[] {
+    const dataSlots: Nullable<Buffer>[] = [];
+    for (let i = 0; i < N; i++) dataSlots.push(makeData(stripeSize * numStripes));
+    for (let j = 0; j < K; j++) dataSlots.push(null);
+    return rsRepairStriped(dataSlots, N, K, stripeSize);
+  }
+
+  it('should reproduce each shard byte-for-byte when repairing it (data and parity, multi-stripe)', () => {
+    const N = 3;
+    const K = 2;
+    const stripeSize = 16; // multiple of SHARD_ALIGNMENT
+    const numStripes = 3;
+    const full = buildStripedSet(N, K, stripeSize, numStripes);
+    expect(full).toHaveLength(N + K);
+
+    for (let m = 0; m < N + K; m++) {
+      const repaired = rsRepairStriped(dropShards(full, [m]), N, K, stripeSize);
+      expect(Buffer.compare(repaired[m] as Buffer, full[m] as Buffer)).toBe(0);
+    }
+  });
+
+  it('should repair a missing data shard so the set still RS-decodes', () => {
+    const N = 2;
+    const K = 1;
+    const stripeSize = 8;
+    const numStripes = 2;
+    const full = buildStripedSet(N, K, stripeSize, numStripes);
+
+    // Drop a DATA shard (index 0) — exercises the reconstruct branch.
+    const repaired = rsRepairStriped(dropShards(full, [0]), N, K, stripeSize);
+    expect(Buffer.compare(repaired[0] as Buffer, full[0] as Buffer)).toBe(0);
+  });
+
+  it('should throw when fewer than N shards are available', () => {
+    const full = buildStripedSet(2, 1, 8, 1);
+    expect(() => rsRepairStriped(dropShards(full, [0, 1]), 2, 1, 8)).toThrow(BfsError);
+  });
+
+  it('should throw when shard size is not a multiple of stripe size', () => {
+    const odd = [makeData(20), makeData(20), makeData(20)];
+    expect(() => rsRepairStriped(odd, 2, 1, 8)).toThrow(BfsError);
   });
 });
 

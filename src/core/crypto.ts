@@ -212,6 +212,46 @@ export function decryptStream(input: Readable, key: Buffer, nonce: Buffer): Read
   return transform;
 }
 
+/**
+ * Encrypts a shard payload with AES-256-GCM using a caller-supplied deterministic
+ * nonce (deriveShardNonce). Output layout: ciphertext || 16-byte GCM tag — the
+ * exact FORMAT_VERSION 2 per-shard payload form, identical to what encryptStream
+ * produces. Used by heal to re-encrypt a repaired shard in memory.
+ * @param plaintext - raw striped RS shard payload
+ * @param key       - 32-byte AES key (deriveKey)
+ * @param nonce     - 12-byte nonce (deriveShardNonce for the shard's version+index)
+ * @returns ciphertext + appended GCM tag
+ */
+export function encryptShardPayload(plaintext: Buffer, key: Buffer, nonce: Buffer): Buffer {
+  const cipher = createCipheriv('aes-256-gcm', key, nonce);
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  return Buffer.concat([ciphertext, cipher.getAuthTag()]);
+}
+
+/**
+ * Decrypts a FORMAT_VERSION 2 shard payload (ciphertext || 16-byte GCM tag)
+ * produced by encryptShardPayload / encryptStream, using a deterministic nonce.
+ * @param payload - ciphertext followed by the 16-byte GCM tag
+ * @param key     - 32-byte AES key (deriveKey)
+ * @param nonce   - 12-byte nonce (deriveShardNonce for the shard's version+index)
+ * @returns decrypted plaintext payload
+ * @throws DecryptionError if the tag verification fails or the payload is too short
+ */
+export function decryptShardPayload(payload: Buffer, key: Buffer, nonce: Buffer): Buffer {
+  if (payload.length < TAG_SIZE) {
+    throw new DecryptionError('Shard payload too short — missing GCM auth tag');
+  }
+  const tag = payload.subarray(payload.length - TAG_SIZE);
+  const ciphertext = payload.subarray(0, payload.length - TAG_SIZE);
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', key, nonce);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  } catch {
+    throw new DecryptionError('Decryption failed — wrong key or corrupted data');
+  }
+}
+
 // ─── Internal helpers ──────────────────────────────────────────────────────
 
 /**

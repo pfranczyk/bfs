@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0-beta.3] - 2026-06-15
+
+### Fixed
+- **Rebuilding a removed provider's data no longer leaves an encrypted backup
+  unrestorable.** `bfs provider remove --strategy rebuild` wrote the reconstructed
+  piece in an outdated, unencrypted on-disk format incompatible with the rest of
+  the backup. `bfs verify` still reported the version healthy, but a `bfs pull`
+  that needed the rebuilt piece could not decrypt it — quietly cutting redundancy
+  until the data could no longer be restored. Rebuilt pieces are now written in the
+  same format as the rest of the backup and restore correctly.
+- **Disaster recovery now succeeds for a backup whose storage was relocated or
+  rebuilt.** After moving a provider to a new address (`bfs provider remove
+  --strategy relocate`) or rebuilding a removed provider's data onto another one,
+  the affected version's stored headers were rewritten in an outdated format. A
+  normal `bfs pull` still restored the data, but if you then lost your local backup
+  metadata and ran `bfs recovery`, the metadata was reconstructed incorrectly —
+  every piece failed its integrity check and the version could not be restored.
+  Recovery now reads the format correctly and restores these backups.
+
+## [0.7.0-beta.2] - 2026-06-11
+
 ### Fixed
 - **`bfs pull --allow-missing-adapters` now restores instead of crashing when a
   provider's adapter is missing.** With the flag set, a backup whose provider
@@ -506,7 +527,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.7.0-beta.1...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.7.0-beta.3...HEAD
+[0.7.0-beta.3]: https://github.com/pfranczyk/bfs/compare/v0.7.0-beta.2...v0.7.0-beta.3
+[0.7.0-beta.2]: https://github.com/pfranczyk/bfs/compare/v0.7.0-beta.1...v0.7.0-beta.2
 [0.7.0-beta.1]: https://github.com/pfranczyk/bfs/compare/v0.6.2...v0.7.0-beta.1
 [0.6.2]: https://github.com/pfranczyk/bfs/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/pfranczyk/bfs/compare/v0.6.0...v0.6.1

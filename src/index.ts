@@ -8,6 +8,7 @@ import { isPromptCancellation } from './cli/prompt.js';
 
 const _require = createRequire(import.meta.url);
 const { version: PKG_VERSION } = _require('../package.json') as { version: string };
+
 // Side-effect imports: register providers in the global registry
 import './providers/local-fs.js';
 import './providers/ftp.js';

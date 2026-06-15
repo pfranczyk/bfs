@@ -248,6 +248,27 @@ export function buildShard(header: ShardHeader, payload: Buffer, encryptionKey?:
 }
 
 /**
+ * Builds a complete FORMAT_VERSION 2 shard binary from a header and its final
+ * stored payload. Layout: [V2 header][payload][SHA-256 checksum] — the same
+ * assembly as buildShardStream, in buffer form. The payload must already be in
+ * stored form (the encrypted ciphertext+GCM tag for an encrypted vault, or the
+ * raw striped RS bytes otherwise); this function does NOT encrypt the payload.
+ * Only the location map inside the header is encrypted, via `encryptionKey`.
+ *
+ * @param header        - Shard metadata including location map (format_version 2)
+ * @param payload       - Final stored shard payload (ciphertext+tag, or raw)
+ * @param encryptionKey - 32-byte key to encrypt the location map (when header.encrypted=true)
+ * @returns Complete V2 shard Buffer ready for storage
+ * @throws BfsError if header.encrypted=true but kdf_salt is missing
+ */
+export function buildShardV2(header: ShardHeader, payload: Buffer, encryptionKey?: Buffer): Buffer {
+  const headerBuf = serializeShardHeader(header, encryptionKey);
+  const body = Buffer.concat([headerBuf, payload]);
+  const checksum = Buffer.from(hashBuffer(body), 'hex');
+  return Buffer.concat([body, checksum]);
+}
+
+/**
  * Builds the serialized header bytes for a shard with the given location map.
  * Equivalent to a shard with an empty payload, minus the trailing checksum:
  * the result spans from the magic to the end of the location map. This is the
@@ -263,7 +284,15 @@ export function buildHeaderBytes(header: ShardHeader, encryptionKey?: Buffer): B
   // The serialized header IS the header-bytes form: a shard with an empty
   // payload, minus the trailing checksum, reduces to exactly the header. Going
   // through buildShard() would hash an empty body only to discard the result.
-  return serializeHeader(header, encryptionKey, FORMAT_VERSION_1);
+  //
+  // Serialize at the shard's ACTUAL format version. Hardcoding V1 here would
+  // downgrade a V2 shard's header (dropping rs_stripe_size, flipping
+  // format_version to 1) whenever updateShardHeader rewrites it during heal
+  // (relocate / rebuild's surviving-shard refresh). A normal pull tolerates that
+  // (it reads the stripe size from the local manifest), but disaster recovery
+  // rebuilds the manifest FROM the shard header — it would then mis-read a V2
+  // shard as legacy V1 and fail to decode the striped, per-shard-encrypted payload.
+  return serializeHeader(header, encryptionKey, header.format_version);
 }
 
 /**

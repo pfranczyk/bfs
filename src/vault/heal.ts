@@ -1,9 +1,9 @@
 import { Readable } from 'node:stream';
-import { deriveKey } from '../core/crypto.js';
+import { decryptShardPayload, deriveKey, deriveShardNonce, encryptShardPayload } from '../core/crypto.js';
 import { BfsError } from '../core/errors.js';
 import { hashBuffer, streamToBuffer } from '../core/hash.js';
-import { rsRepair } from '../core/reed-solomon.js';
-import { buildHeaderBytes, buildShard, buildShardHeaderFromBytes } from '../core/shard-io.js';
+import { rsRepair, rsRepairStriped } from '../core/reed-solomon.js';
+import { buildHeaderBytes, buildShard, buildShardHeaderFromBytes, buildShardV2 } from '../core/shard-io.js';
 import { providerRegistry } from '../providers/provider.js';
 import type {
   ManifestShard,
@@ -116,8 +116,55 @@ async function uploadRepairedShard(targetProviderConfig: ProviderConfig, header:
   const targetProvider = providerRegistry.create(targetProviderConfig, io);
   await targetProvider.authenticate();
   targetProvider.setVaultName(vaultName);
-  const shardBuffer = buildShard(header, payload, encKey);
+  // V2 shards carry a striped header (with rs_stripe_size) and a payload already
+  // in stored form (encrypted ciphertext+tag, or raw); V1 legacy uses buildShard.
+  const shardBuffer = header.format_version >= 2 ? buildShardV2(header, payload, encKey) : buildShard(header, payload, encKey);
   await targetProvider.upload(filename, Readable.from(shardBuffer), shardBuffer.length);
+}
+
+interface RepairShardPayloadOptions {
+  shardSlots: Nullable<Buffer>[];
+  formatVersion: number;
+  dataShards: number;
+  parityShards: number;
+  removedIndex: number;
+  encrypted: boolean;
+  encKey: Buffer | undefined;
+  version: number;
+  rsStripeSize: Nullable<number>;
+}
+
+/**
+ * Rebuilds the removed shard's payload in the exact on-disk form its siblings
+ * use. V2 (format_version >= 2): striped RS repair over the plaintext payloads,
+ * then per-shard AES-GCM re-encryption with the deterministic nonce. V1 legacy:
+ * flat RS repair, payload stored verbatim (V1 encrypts the whole blob before RS,
+ * so shard payloads are ciphertext slices that RS-repair directly). Returns the
+ * final stored payload plus the SHA-256 of the plaintext payload — the value
+ * push records as shard_hash.
+ *
+ * @param options - shard slots, scheme, removed index, encryption context
+ * @returns finalPayload (stored form) and plaintextHash
+ * @throws BfsError if RS repair fails, or a V2 encrypted vault lacks the key or rs_stripe_size
+ */
+function _repairShardPayload(options: RepairShardPayloadOptions): { finalPayload: Buffer; plaintextHash: string } {
+  const { shardSlots, formatVersion, dataShards: N, parityShards: K, removedIndex, encrypted, encKey, version, rsStripeSize } = options;
+  if (formatVersion < 2) {
+    const payload = rsRepair(shardSlots, N, K)[removedIndex];
+    if (!payload) throw new BfsError(`RS repair failed for shard ${removedIndex} in version ${version}.`);
+    return { finalPayload: payload, plaintextHash: hashBuffer(payload) };
+  }
+  if (rsStripeSize === null) {
+    throw new BfsError(`V2 shard header for version ${version} is missing rs_stripe_size; cannot repair.`);
+  }
+  if (encrypted && !encKey) {
+    throw new BfsError(`Encryption key required to repair encrypted version ${version}.`);
+  }
+  const plaintextSlots = encrypted && encKey ? shardSlots.map((s, i) => (s !== null ? decryptShardPayload(s, encKey, deriveShardNonce(encKey, version, i)) : null)) : shardSlots;
+  const plaintext = rsRepairStriped(plaintextSlots, N, K, rsStripeSize)[removedIndex];
+  if (!plaintext) throw new BfsError(`RS repair failed for shard ${removedIndex} in version ${version}.`);
+  const finalPayload = encrypted && encKey ? encryptShardPayload(plaintext, encKey, deriveShardNonce(encKey, version, removedIndex)) : plaintext;
+  return { finalPayload, plaintextHash: hashBuffer(plaintext) };
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -240,13 +287,15 @@ export async function rebuildVersion(rootDir: string, version: number, options: 
     throw new BfsError(`Not enough shards to repair version ${version}: need ${N}, got ${available}.`);
   }
 
-  // RS repair — produces all N+K shard payloads
-  const repaired = rsRepair(shardSlots, N, K);
-  const repairedPayload = repaired[removedShard.shard_index];
-  if (!repairedPayload) {
-    throw new BfsError(`RS repair failed for shard ${removedShard.shard_index} in version ${version}.`);
-  }
-  const repairedPayloadHash = hashBuffer(repairedPayload);
+  // Extract metadata and key from the first available shard — needed to choose
+  // the V1 vs V2 repair path before rebuilding the payload.
+  const shardMeta = await extractShardMeta(shardDataMap, manifest, password);
+  const { encKey, kdf_salt, blobSize, blobHash, formatVersion, vaultId, vaultName, rsStripeSize } = shardMeta;
+
+  // Rebuild the removed shard's payload in the exact on-disk form its siblings
+  // use (V2: striped RS + per-shard GCM; V1 legacy: flat RS). plaintextHash is
+  // the value push records as shard_hash (SHA-256 of the plaintext payload).
+  const { finalPayload, plaintextHash } = _repairShardPayload({ shardSlots, formatVersion, dataShards: N, parityShards: K, removedIndex: removedShard.shard_index, encrypted: manifest.encrypted, encKey, version, rsStripeSize });
 
   // Build new location map: swap removedProvider → targetProvider
   const newLocationMap: ShardLocation[] = manifest.shards.map((ms) => {
@@ -260,7 +309,7 @@ export async function rebuildVersion(rootDir: string, version: number, options: 
         connection_config: split.connection_config,
         required_inputs: split.required_inputs,
         remote_path: buildRemotePath(targetProviderConfig, config.vault_name, `shard_${ms.shard_index}.bfs.${version}`),
-        shard_hash: repairedPayloadHash,
+        shard_hash: plaintextHash,
       };
     }
     const sourceProvider = config.providers.find((p) => p.id === ms.provider_id);
@@ -277,10 +326,6 @@ export async function rebuildVersion(rootDir: string, version: number, options: 
     };
   });
 
-  // Extract metadata and key from the first available shard
-  const shardMeta = await extractShardMeta(shardDataMap, manifest, password);
-  const { encKey, kdf_salt, blobSize, blobHash, formatVersion, vaultId, vaultName } = shardMeta;
-
   // Build and upload the repaired shard to the target provider
   const repairedHeader: ShardHeader = {
     magic: 'BFSS',
@@ -295,12 +340,12 @@ export async function rebuildVersion(rootDir: string, version: number, options: 
     version,
     encrypted: manifest.encrypted,
     kdf_salt,
-    rs_stripe_size: shardMeta.rsStripeSize ?? null,
+    rs_stripe_size: rsStripeSize,
     map_length: 0,
     location_map: newLocationMap,
   };
   const repairedFilename = `shard_${removedShard.shard_index}.bfs.${version}`;
-  await uploadRepairedShard(targetProviderConfig, repairedHeader, repairedPayload, repairedFilename, config.vault_name, encKey, io);
+  await uploadRepairedShard(targetProviderConfig, repairedHeader, finalPayload, repairedFilename, config.vault_name, encKey, io);
 
   // Update location maps on all existing (available) shards
   await updateLocationMaps(rootDir, version, { newLocationMap, io, ...(password !== undefined ? { password } : {}) });
@@ -313,7 +358,7 @@ export async function rebuildVersion(rootDir: string, version: number, options: 
         provider_id: targetProviderId,
         provider_type: targetProviderConfig.type,
         remote_path: buildRemotePath(targetProviderConfig, config.vault_name, `shard_${ms.shard_index}.bfs.${version}`),
-        shard_hash: repairedPayloadHash,
+        shard_hash: plaintextHash,
       };
     }
     return ms;

@@ -181,6 +181,45 @@ export function rsRepair(shards: Nullable<Buffer>[], dataShards: number, parityS
   return repaired;
 }
 
+/**
+ * Repairs missing shards (null slots) using striped Reed-Solomon — the
+ * FORMAT_VERSION 2 layout, where each shard payload is a concatenation of
+ * per-stripe slices. Repair runs stripe-by-stripe (mirroring rsEncodeStriped),
+ * so the result is byte-identical to the original encode. Operates on PLAINTEXT
+ * payloads: callers decrypt encrypted shards before repair and re-encrypt the
+ * result. Does not reconstruct the original blob.
+ *
+ * @param shards       - N+K slots; null marks a missing shard. All present
+ *                       shards must share one length, a multiple of stripeSize.
+ * @param dataShards   - N
+ * @param parityShards - K
+ * @param stripeSize   - bytes per shard per stripe (rs_stripe_size from the header)
+ * @returns complete array of N+K Buffers (originals + repaired)
+ * @throws BfsError when fewer than N shards are available, shard sizes are
+ *         inconsistent with stripeSize, or RS fails
+ */
+export function rsRepairStriped(shards: Nullable<Buffer>[], dataShards: number, parityShards: number, stripeSize: number): Buffer[] {
+  validateParams(dataShards, parityShards);
+  const present = shards.filter((s) => s !== null);
+  if (present.length < dataShards) {
+    throw new BfsError(`Not enough shards to repair: need ${dataShards}, got ${present.length}`);
+  }
+  const shardSize = present[0]?.length ?? 0;
+  if (stripeSize <= 0 || shardSize === 0 || shardSize % stripeSize !== 0) {
+    throw new BfsError(`Striped repair needs shard size as a multiple of stripe size (size=${shardSize}, stripe=${stripeSize})`);
+  }
+  const totalShards = dataShards + parityShards;
+  const numStripes = shardSize / stripeSize;
+  const available = shards.map((s) => s !== null);
+  const anyDataMissing = available.slice(0, dataShards).some((a) => !a);
+  const outputs = Array.from({ length: totalShards }, () => Buffer.alloc(shardSize));
+  const flat = new Uint8Array(totalShards * stripeSize); // reused per stripe
+  for (let s = 0; s < numStripes; s++) {
+    _repairOneStripe({ shards, outputs, flat, stripe: s, stripeSize, dataShards, parityShards, available, anyDataMissing });
+  }
+  return outputs;
+}
+
 // ─── Striped RS (FORMAT_VERSION=2 pipeline) ────────────────────────────────
 
 /** Result of striped RS encoding with inline SHA-256 hashing. */
@@ -284,6 +323,46 @@ function buildFlat(shards: Nullable<Buffer>[], shardSize: number): Uint8Array {
     }
   }
   return flat;
+}
+
+interface RepairStripeCtx {
+  shards: Nullable<Buffer>[];
+  outputs: Buffer[];
+  flat: Uint8Array;
+  stripe: number;
+  stripeSize: number;
+  dataShards: number;
+  parityShards: number;
+  available: boolean[];
+  anyDataMissing: boolean;
+}
+
+/**
+ * Repairs one stripe: loads each present shard's stripe slice into `flat`,
+ * reconstructs missing data shards, re-encodes parity, then copies every shard's
+ * stripe slice into `outputs`. Uses a fresh WASM instance per stripe (the bump
+ * allocator pattern, same as _encodeStripeWithHash).
+ */
+function _repairOneStripe(ctx: RepairStripeCtx): void {
+  const { shards, outputs, flat, stripe, stripeSize, dataShards, parityShards, available, anyDataMissing } = ctx;
+  const totalShards = dataShards + parityShards;
+  flat.fill(0);
+  for (let i = 0; i < totalShards; i++) {
+    const shard = shards[i];
+    if (shard !== null) {
+      flat.set(shard.subarray(stripe * stripeSize, (stripe + 1) * stripeSize), i * stripeSize);
+    }
+  }
+  const rs = newRs();
+  if (anyDataMissing) {
+    const r1 = rs.reconstruct(flat, dataShards, parityShards, available);
+    if (r1 !== 0) throw new BfsError(`Reed-Solomon striped repair failed with code ${r1}`);
+  }
+  const r2 = rs.encode(flat, dataShards, parityShards);
+  if (r2 !== 0) throw new BfsError(`Reed-Solomon striped parity rebuild failed with code ${r2}`);
+  for (let i = 0; i < totalShards; i++) {
+    outputs[i].set(flat.subarray(i * stripeSize, (i + 1) * stripeSize), stripe * stripeSize);
+  }
 }
 
 interface EncodeStripeCtx {
