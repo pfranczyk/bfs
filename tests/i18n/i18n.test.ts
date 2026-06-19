@@ -84,4 +84,23 @@ describe('translation completeness', () => {
       expect(pl[key].length).toBeGreaterThan(0);
     }
   });
+
+  // naming.md: "shard" is an internal term and must never appear in a
+  // user-facing string as a concept noun. Key names may contain it (they are
+  // internal); only the displayed values are checked here. The CLI flags
+  // --data-shards/--parity-shards and the config fields data_shards/parity_shards
+  // are literal identifiers the user types, so messages that name them are
+  // exempt — strip those tokens before checking. User-facing wording for a shard
+  // is "piece" / "część" (or "copy" / "kopia" for the N/K scheme).
+  const stripFlagNames = (s: string): string => s.replace(/(data|parity)[-_]shards?/gi, '');
+
+  it('no English value uses the internal term "shard"', () => {
+    const offenders = enKeys.filter((k) => /shard/i.test(stripFlagNames(en[k])));
+    expect(offenders).toEqual([]);
+  });
+
+  it('no Polish value uses the internal term "shard"', () => {
+    const offenders = plKeys.filter((k) => /shard/i.test(stripFlagNames(pl[k])));
+    expect(offenders).toEqual([]);
+  });
 });

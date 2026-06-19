@@ -1,6 +1,7 @@
 import { Readable } from 'node:stream';
 import { decryptShardPayload, deriveKey, deriveShardNonce, encryptShardPayload } from '../core/crypto.js';
-import { BfsError } from '../core/errors.js';
+import { BfsError, TamperDetectedError } from '../core/errors.js';
+import { assertSafeVaultName } from '../core/fs-utils.js';
 import { hashBuffer, streamToBuffer } from '../core/hash.js';
 import { rsRepair, rsRepairStriped } from '../core/reed-solomon.js';
 import { buildHeaderBytes, buildShard, buildShardHeaderFromBytes, buildShardV2 } from '../core/shard-io.js';
@@ -68,8 +69,15 @@ async function downloadAvailableShards(config: VaultConfig, manifest: VersionMan
 }
 
 /**
- * Extracts shard metadata (blob_size, blob_hash, kdf_salt, etc.) from the first
- * available raw shard binary. Also derives the AES-256-GCM key if the vault is encrypted.
+ * Extracts and cross-validates shard metadata across ALL available raw shards.
+ * Every shard of a version carries the same vault_id, vault_name, blob_hash,
+ * blob_size, rs_stripe_size and kdf_salt, so any divergence between siblings
+ * means a tampered (unencrypted) header — heal refuses rather than silently
+ * adopting a forged field from whichever shard happened to be read first. Also
+ * validates vault_name as a safe path segment (it drives the remote shard path)
+ * and derives the AES-256-GCM key when the vault is encrypted.
+ * @throws TamperDetectedError if available shards disagree on identity fields
+ * @throws UnsafePathError if vault_name is not a safe path segment
  * @throws BfsError if encrypted but kdf_salt is unavailable after scanning all shards
  */
 async function extractShardMeta(
@@ -85,26 +93,46 @@ async function extractShardMeta(
   let vaultId = '';
   let vaultName = '';
   let rsStripeSize: Nullable<number> = null;
+  let seen = false;
 
   for (const [, rawData] of shardDataMap) {
     const meta = buildShardHeaderFromBytes(rawData);
-    blobSize = meta.blob_size;
-    blobHash = meta.blob_hash;
-    formatVersion = meta.format_version;
-    vaultId = meta.vault_id;
-    vaultName = meta.vault_name;
-    rsStripeSize = meta.rs_stripe_size;
+    if (!seen) {
+      blobSize = meta.blob_size;
+      blobHash = meta.blob_hash;
+      formatVersion = meta.format_version;
+      vaultId = meta.vault_id;
+      vaultName = meta.vault_name;
+      rsStripeSize = meta.rs_stripe_size;
+      seen = true;
+    } else {
+      const diffs: string[] = [];
+      if (meta.vault_id !== vaultId) diffs.push('vault_id');
+      if (meta.vault_name !== vaultName) diffs.push('vault_name');
+      if (meta.blob_hash !== blobHash) diffs.push('blob_hash');
+      if (meta.blob_size !== blobSize) diffs.push('blob_size');
+      if (meta.rs_stripe_size !== rsStripeSize) diffs.push('rs_stripe_size');
+      if (diffs.length > 0) {
+        throw new TamperDetectedError(`Shard headers for version ${manifest.version} disagree on: ${diffs.join(', ')}.`);
+      }
+    }
     if (meta.kdf_salt) {
+      if (kdf_salt && !kdf_salt.equals(meta.kdf_salt)) {
+        throw new TamperDetectedError(`Shard headers for version ${manifest.version} disagree on: kdf_salt.`);
+      }
       kdf_salt = meta.kdf_salt;
-      if (manifest.encrypted && password) {
+      if (manifest.encrypted && password && !encKey) {
         encKey = await deriveKey(password, meta.kdf_salt);
       }
     }
-    break;
   }
+
   if (manifest.encrypted && password && !encKey) {
     throw new BfsError('Could not retrieve kdf_salt from available shards.');
   }
+  // vault_name becomes a directory segment on every medium — reject traversal
+  // before it reaches buildRemotePath (the provider chokepoint guards too).
+  assertSafeVaultName(vaultName);
   return { encKey, kdf_salt, blobSize, blobHash, formatVersion, vaultId, vaultName, rsStripeSize };
 }
 
@@ -398,7 +426,11 @@ export async function rebuildAllVersions(rootDir: string, options: RebuildAllVer
       await rebuildVersion(rootDir, version, { removedProviderId, targetProviderId, io, ...(password !== undefined ? { password } : {}) });
       report.repaired++;
       report.versions_repaired.push(version);
-    } catch {
+    } catch (err) {
+      // Tamper is a security event, not a recoverable repair failure: surface it
+      // instead of quietly degrading the version (a forged sibling header must
+      // abort the whole operation, not be absorbed into a degraded report).
+      if (err instanceof TamperDetectedError) throw err;
       // Mark as degraded
       const manifest = await readManifest(rootDir, version);
       if (manifest && manifest.health !== VersionHealth.Degraded) {

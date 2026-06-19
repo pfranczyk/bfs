@@ -247,6 +247,7 @@ export const en: Strings = {
   recovery_opt_name: 'Backup name (subfolder on providers)',
   recovery_opt_password: 'Password (for encrypted backup)',
   recovery_opt_allow_missing_adapters: 'Continue when some external adapters are missing, relying on Reed-Solomon redundancy',
+  recovery_opt_trust_locations: 'Trust the recovered provider locations without per-host confirmation (for unattended/CI recovery; the credential is still sent to whatever host the backup pieces name)',
   /** %s = raw spec */
   recovery_bootstrap_empty: 'Bootstrap spec is empty. Provide adapter flags, e.g. --bootstrap "--path /mnt/usb". Got: "%s"',
   /** %s = validation errors joined */
@@ -293,6 +294,7 @@ export const en: Strings = {
   provider_add_name_prompt: 'New provider name:',
   provider_add_name_required: '--name is required in CI mode',
   provider_id_invalid_chars: 'Provider name "%s" is invalid — only letters, digits, "." "_" "-" are allowed (no whitespace).',
+  vault_name_invalid_chars: 'Backup name "%s" is invalid — only letters, digits, "." "_" "-" are allowed (no path separators, no leading dot, no "..").',
   provider_add_exists: 'Provider "%s" already exists',
   provider_id_duplicate_in_args: 'Provider name "%s" is given more than once — each storage must have a unique name.',
   provider_add_type_prompt: 'Provider type:',
@@ -377,6 +379,10 @@ export const en: Strings = {
   vault_password_required: 'Password required for an encrypted backup.',
   vault_passwords_mismatch: 'Passwords do not match.',
   push_no_config: 'No backup configuration found. Run `bfs init` first.',
+  push_recovered_locations_intro: 'This backup was rebuilt by recovery. Confirm where the backup pieces will be sent before continuing:',
+  push_recovered_location: '  • %s → %s',
+  push_confirm_recovered_locations: 'Send backup data to these locations?',
+  push_recovered_locations_declined: 'Push aborted: recovered provider locations not confirmed. Verify them in `.bfs/config.json` (e.g. with `bfs config`) and retry.',
   pull_not_enough_shards: 'Not enough storage pieces: need %s, got %s. Some storage may be offline.',
   pull_blob_size_unreadable: 'Could not read the backup size from any storage piece.',
   pull_salt_missing: 'This encrypted backup is missing its key material — its storage pieces may be corrupted or incomplete.',
@@ -493,6 +499,10 @@ export const en: Strings = {
   ftp_size_mismatch_final: 'FTP upload size mismatch for "%s" after %s attempts: ' + 'sent %s B, server reports %s B (diff %s). ' + 'Verify the FTP server runs in binary mode (TYPE I).',
   ftp_insecure_warning: 'FTP connection to %s is not encrypted — the storage password and your backup data cross the network in cleartext. Enable FTPS (secure) or use a network you trust.',
   ftp_control_chars: 'FTP path and backup name must not contain line breaks or control characters.',
+  ftp_recovery_confirm_host: 'Recovery wants to send the FTP password to %s (path %s). Send it to this host?',
+  ftp_recovery_target: 'Recovery: connecting to FTP %s (path %s).',
+  ftp_recovery_password: 'FTP password for %s:',
+  ftp_recovery_declined: 'Recovery declined: no FTP password sent to %s.',
 
   // ─── FTP — configureFromFlags + validateConfig ─────────────────────────────
   ftp_config_port_invalid: 'FTP adapter: config "port" must be an integer between 1 and 65535',

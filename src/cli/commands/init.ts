@@ -5,7 +5,7 @@ import chalk from 'chalk';
 import type { Command } from 'commander';
 import { estimateCompressibility } from '../../core/compression.js';
 import { fmt, t } from '../../i18n/index.js';
-import { createCliProviderIO, providerRegistry, validateProviderId } from '../../providers/provider.js';
+import { createCliProviderIO, providerRegistry, validateProviderId, validateVaultName } from '../../providers/provider.js';
 import type { ProviderConfig } from '../../types/index.js';
 import { PushMode } from '../../types/index.js';
 import { init } from '../../vault/vault-manager.js';
@@ -198,6 +198,15 @@ export function registerInit(program: Command): void {
       } else {
         const { name } = await promptWithRawMode<{ name: string }>([{ type: 'input', name: 'name', message: t('init_vault_name_prompt'), validate: (v: string) => (v.trim() ? true : t('init_vault_name_required')) }]);
         vaultName = name.trim();
+      }
+
+      // A vault name becomes a path segment on every medium — reject separators
+      // and traversal before it reaches any provider (footgun + security guard).
+      try {
+        validateVaultName(vaultName);
+      } catch (err) {
+        error(err instanceof Error ? err.message : String(err));
+        throw new CommandAbort();
       }
 
       console.log(chalk.bold(t('init_header')));

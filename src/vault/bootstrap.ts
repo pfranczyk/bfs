@@ -4,7 +4,8 @@ import { BfsError, TamperDetectedError } from '../core/errors.js';
 import { parseShardHeaderFromStream, SHARD_HEADER_READ_BYTES } from '../core/shard-io.js';
 import { fmt, t } from '../i18n/index.js';
 import { providerRegistry } from '../providers/provider.js';
-import type { ProviderConfig, ProviderIO, RemoteRef, ShardHeader, ShardLocation, StorageProvider } from '../types/index.js';
+import type { ProviderConfig, ProviderIO, RecoverySecret, RemoteRef, ShardHeader, ShardLocation, StorageProvider } from '../types/index.js';
+import { divergentShardIndices } from './location-map.js';
 
 // ─── Result types ─────────────────────────────────────────────────────────────
 
@@ -121,18 +122,82 @@ async function connectWithInputs(loc: ShardLocation, required: string[], vaultNa
 }
 
 /**
- * Creates, authenticates and connects a StorageProvider for each location-map
- * entry. Entries declaring required_inputs (secrets stripped from the header)
- * are supplied from the pool first — seeded with the operator's --bootstrap
- * secrets, so providers sharing a credential connect without a prompt — then
- * interactively. Entries with the secret still inline, and guest entries
- * (required_inputs empty), connect directly. Anything still unreachable is
- * skipped (degraded mode).
+ * Connects a provider that owns its credential interaction via
+ * connectForRecovery (the provider shows the target host and collects/reuses the
+ * secret itself). The hook authenticates; on success the provider joins the
+ * connected set and any returned secret is added to the pool for sibling reuse.
+ * The secret is NOT written back into connection_config — BFS is blind to which
+ * field it is — so it is never persisted to config.json by this path. Returns
+ * null (degraded skip) when the operator declines or the connection fails.
  */
-async function connectProvidersFromMap(locationMap: ShardLocation[], vaultName: string, io: ProviderIO, seedInputs: Map<string, string>): Promise<StorageProvider[]> {
+async function connectViaRecoveryHook(provider: StorageProvider, loc: ShardLocation, vaultName: string, io: ProviderIO, pool: RecoverySecret[], trustLocations: boolean): Promise<Nullable<StorageProvider>> {
+  const hook = provider.connectForRecovery;
+  if (!hook) return null; // caller guarantees the hook exists; defensive
+  try {
+    const secret = await hook.call(provider, io, pool, { trustLocation: trustLocations });
+    provider.setVaultName(vaultName);
+    if (secret !== null && secret !== undefined && secret.length > 0) {
+      pool.push({ value: secret, origin: loc.provider_id });
+      // Persist the collected secret into config.json (parity with the legacy
+      // path and with a normal config) so a later non-interactive pull/push can
+      // reconnect. required_inputs names the stripped secret field — BFS knows
+      // it is a secret (getSecretFields → required_inputs); only "which field is
+      // the host" is opaque to it, and the provider already showed that.
+      const fields = loc.required_inputs ?? [];
+      if (fields.length === 1) {
+        const field = fields[0];
+        if (field) loc.connection_config[field] = secret;
+      }
+    }
+    return provider;
+  } catch {
+    return null; // operator declined or the provider was unreachable → degraded skip
+  }
+}
+
+/**
+ * Creates and connects a StorageProvider for each location-map entry.
+ *
+ * A provider that implements connectForRecovery owns the whole credential step:
+ * BFS dispatches to it — INDEPENDENT of the entry's required_inputs — so a
+ * crafted map cannot bypass the "show host before secret" guard by omitting
+ * required_inputs. The pool of secrets collected this way is carried between
+ * such providers (blind courier) for reuse.
+ *
+ * A provider without the hook uses the legacy path: entries declaring
+ * required_inputs are prompted via io.askSecret (cannot show the host); inline
+ * and guest entries connect directly. Anything still unreachable is skipped
+ * (degraded mode).
+ *
+ * Pool seeding: the connectForRecovery pool starts EMPTY for interactive
+ * recovery — the operator's bootstrap secret is never auto-sent to a (possibly
+ * redirected) sibling without them seeing the host. It is seeded from the
+ * bootstrap credential ONLY under --trust-locations (trustLocations=true), where
+ * the operator pre-approved the recovered locations for an unattended run.
+ */
+async function connectProvidersFromMap(locationMap: ShardLocation[], vaultName: string, io: ProviderIO, seedInputs: Map<string, string>, trustLocations: boolean): Promise<StorageProvider[]> {
   const providers: StorageProvider[] = [];
-  const inputPool = new Map(seedInputs);
+  const inputPool = new Map(seedInputs); // legacy fallback pool (field → value)
+  // connectForRecovery pool (value + origin). Empty for interactive recovery;
+  // seeded from the bootstrap credential only when the operator opted into
+  // unattended recovery with --trust-locations.
+  const recoveryPool: RecoverySecret[] = trustLocations ? [...seedInputs.values()].map((value) => ({ value, origin: 'bootstrap' })) : [];
   for (const loc of locationMap) {
+    // Build an instance to detect the recovery hook. Dispatch is by provider
+    // capability, not by the entry's required_inputs.
+    let probe: Nullable<StorageProvider> = null;
+    try {
+      probe = providerRegistry.create({ id: loc.provider_id, type: loc.provider_type, adapterPackage: loc.adapterPackage, config: { ...loc.connection_config } }, io);
+    } catch {
+      probe = null;
+    }
+
+    if (probe && typeof probe.connectForRecovery === 'function') {
+      const connected = await connectViaRecoveryHook(probe, loc, vaultName, io, recoveryPool, trustLocations);
+      if (connected) providers.push(connected);
+      continue;
+    }
+
     const required = loc.required_inputs;
     const provider = required && required.length > 0 ? await connectWithInputs(loc, required, vaultName, io, inputPool) : await connectOne(loc, loc.connection_config, vaultName, io);
     if (provider) providers.push(provider);
@@ -141,27 +206,44 @@ async function connectProvidersFromMap(locationMap: ShardLocation[], vaultName: 
 }
 
 /**
- * Fetches a shard from a different provider and compares critical header fields
- * against the bootstrap shard's metadata. Detects tampering or data corruption.
- * If no second provider is reachable, logs a warning and continues.
+ * Cross-checks the bootstrap shard against the other shards in its location map
+ * BEFORE any credential is sent. Each sibling is read with NO secret — built
+ * from the stripped connection_config and connected with a bare authenticate;
+ * a provider that needs a credential just to connect (e.g. FTP) throws here and
+ * is skipped, so consensus never sends a secret. For every reachable sibling the
+ * header fields and — for unencrypted vaults — the location_map contents are
+ * compared with the bootstrap shard; any divergence aborts recovery. This is the
+ * gate that stops a forged, unencrypted location map from redirecting a provider
+ * to an attacker host. When no sibling is reachable without a secret it warns and
+ * continues — the per-provider connectForRecovery host gate is the remaining
+ * defense.
  *
- * @throws TamperDetectedError if any header field differs between the two shards
+ * @throws TamperDetectedError when a reachable sibling's header or location_map
+ *   diverges from the bootstrap shard
  */
-async function runConsensusCheck(bootstrapProvider: StorageProvider, providers: StorageProvider[], locationMap: ShardLocation[], meta: Omit<ShardHeader, 'location_map'>, version: number, io: ProviderIO): Promise<void> {
-  const consensusProviders = providers.filter((p) => p.id !== bootstrapProvider.id);
-  if (consensusProviders.length === 0) {
-    io.warn(t('bootstrap_single_provider_warn'));
-    return;
-  }
+async function runConsensusCheck(bootstrapProvider: StorageProvider, vaultName: string, locationMap: ShardLocation[], meta: Omit<ShardHeader, 'location_map'>, version: number, io: ProviderIO): Promise<void> {
+  let checked = 0;
+  for (const loc of locationMap) {
+    if (loc.provider_id === bootstrapProvider.id) continue;
 
-  const consensusProvider = consensusProviders[0]; // length > 0 guarantees element
-  const consensusLoc = locationMap.find((loc) => loc.provider_id === consensusProvider.id);
-  if (!consensusLoc) return;
+    let sibling: StorageProvider;
+    try {
+      sibling = providerRegistry.create({ id: loc.provider_id, type: loc.provider_type, adapterPackage: loc.adapterPackage, config: { ...loc.connection_config } }, io);
+      await sibling.authenticate();
+      sibling.setVaultName(vaultName);
+    } catch {
+      continue; // unreachable without a secret — skip for consensus
+    }
 
-  try {
-    const consensusBytes = await consensusProvider.downloadHeader({ provider_id: consensusProvider.id, path: `shard_${consensusLoc.shard_index}.bfs.${version}` }, SHARD_HEADER_READ_BYTES);
-    const { header: cm, payloadStream: cps } = await parseShardHeaderFromStream(Readable.from(consensusBytes));
-    cps.on('error', () => {}).destroy();
+    let cm: ShardHeader;
+    try {
+      const bytes = await sibling.downloadHeader({ provider_id: loc.provider_id, path: `shard_${loc.shard_index}.bfs.${version}` }, SHARD_HEADER_READ_BYTES);
+      const parsed = await parseShardHeaderFromStream(Readable.from(bytes));
+      parsed.payloadStream.on('error', () => {}).destroy();
+      cm = parsed.header;
+    } catch {
+      continue; // header unreadable — skip this sibling
+    }
 
     const mismatch: string[] = [];
     if (cm.vault_id !== meta.vault_id) mismatch.push('vault_id');
@@ -170,13 +252,21 @@ async function runConsensusCheck(bootstrapProvider: StorageProvider, providers: 
     if (cm.data_shards !== meta.data_shards) mismatch.push('data_shards');
     if (cm.parity_shards !== meta.parity_shards) mismatch.push('parity_shards');
     if (cm.encrypted !== meta.encrypted) mismatch.push('encrypted');
+    // Unencrypted maps are plaintext on every shard, so a divergence means a
+    // forged map redirecting a provider. Encrypted maps are MAC-protected —
+    // tampering is already caught at decrypt — so skip the comparison there.
+    if (!meta.encrypted && divergentShardIndices(locationMap, cm.location_map).length > 0) {
+      mismatch.push('location_map');
+    }
 
     if (mismatch.length > 0) {
-      throw new TamperDetectedError(`Consensus check failed: shard headers from providers "${bootstrapProvider.id}" ` + `and "${consensusProvider.id}" differ in fields: ${mismatch.join(', ')}.`);
+      throw new TamperDetectedError(`Consensus check failed: shard headers from providers "${bootstrapProvider.id}" and "${loc.provider_id}" differ in fields: ${mismatch.join(', ')}.`);
     }
-  } catch (err) {
-    if (err instanceof TamperDetectedError) throw err;
-    // Consensus provider unreachable — warn but continue
+    checked++;
+  }
+
+  if (checked === 0) {
+    io.warn(t('bootstrap_single_provider_warn'));
   }
 }
 
@@ -195,7 +285,15 @@ async function runConsensusCheck(bootstrapProvider: StorageProvider, providers: 
  * @throws BfsError if no shards found or fewer than N shards available
  * @throws TamperDetectedError if consensus check fails
  */
-export async function bootstrapFromProvider(bootstrapProvider: StorageProvider, vaultName: string, io: ProviderIO, targetVersion?: number, passwords?: string[], transportInputs?: Record<string, string>): Promise<BootstrapResult> {
+export async function bootstrapFromProvider(
+  bootstrapProvider: StorageProvider,
+  vaultName: string,
+  io: ProviderIO,
+  targetVersion?: number,
+  passwords?: string[],
+  transportInputs?: Record<string, string>,
+  trustLocations = false,
+): Promise<BootstrapResult> {
   bootstrapProvider.setVaultName(vaultName);
 
   // Discover available versions from file listing
@@ -276,12 +374,17 @@ export async function bootstrapFromProvider(bootstrapProvider: StorageProvider, 
     location_map = meta.location_map;
   }
 
-  // Connect to all providers discovered in the location map, then run consensus
-  // check. The operator's --bootstrap secrets seed the pool, so providers that
-  // share a credential connect without an extra prompt.
+  // Consensus BEFORE connecting with credentials: cross-check the bootstrap
+  // shard against its siblings (read without secrets) so a forged location map
+  // aborts here, before any secret could reach an attacker host.
+  await runConsensusCheck(bootstrapProvider, vaultName, location_map, meta, version, io);
+
+  // Connect to all providers discovered in the location map. A provider that
+  // implements connectForRecovery owns its credential prompt (and shows its
+  // host before sending the secret); others fall back to the legacy
+  // required_inputs path.
   const seedInputs = new Map<string, string>(Object.entries(transportInputs ?? {}));
-  const providers = await connectProvidersFromMap(location_map, vaultName, io, seedInputs);
-  await runConsensusCheck(bootstrapProvider, providers, location_map, meta, version, io);
+  const providers = await connectProvidersFromMap(location_map, vaultName, io, seedInputs, trustLocations);
 
   return { vault_id: meta.vault_id, vault_name: meta.vault_name, version, location_map, scheme: { data_shards: meta.data_shards, parity_shards: meta.parity_shards }, encrypted: meta.encrypted, kdf_salt: meta.kdf_salt, encKey, providers };
 }

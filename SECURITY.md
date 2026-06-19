@@ -30,11 +30,12 @@ BFS is pre-1.0 and ships frequently. Security fixes are released against the
 for older releases — upgrade to the newest stable version to receive security
 updates.
 
-Prerelease builds (e.g. `0.7.0-beta.x`, installed with `npm install -g
-bfs-vault@beta`) are for evaluation only. They are **not** the supported stable
+Prerelease builds (e.g. `0.7.0-rc.x`, installed with `npm install -g
+bfs-vault@rc`) are for evaluation only. They are **not** the supported stable
 channel: their on-disk format and behavior may change before the matching stable
 release, and a fix lands in the next prerelease or stable build — not as a patch
-to an earlier beta. Do not rely on a beta for your only copy of important data.
+to an earlier prerelease. Do not rely on a prerelease for your only copy of
+important data.
 
 | Version                  | Security updates                              |
 | ------------------------ | --------------------------------------------- |
@@ -263,6 +264,17 @@ it, so a typical single-server setup recovers without extra prompts; only
 locations with a *different* credential are prompted for. A location that needs
 no secret at all — an anonymous or guest resource — is never prompted, because
 the shard location map records that it requires no input.
+
+Before any storage password is sent during recovery, BFS shows the destination
+host it is about to send it to and lets you decline — so a tampered location map
+in an unencrypted backup cannot redirect your password to an attacker's server.
+The recovered locations are also cross-checked across providers (see *Integrity
+of a restored backup → Cross-provider consensus*), and the first write after
+recovery — a push, or a `bfs provider remove` that relocates or rebuilds storage
+— re-confirms each destination before data is sent there. Unattended recovery can
+pre-approve the recovered hosts with `bfs recovery --trust-locations`, skipping
+the per-destination prompt. An encrypted backup's location map is authenticated
+by its AES-GCM tag and was never exposed to this redirection.
 
 Known limitations:
 

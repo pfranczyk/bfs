@@ -26,6 +26,22 @@ export function validateProviderId(id: string): void {
   }
 }
 
+/**
+ * Validates a vault name before it becomes a directory segment on every medium
+ * ({base}/{vaultName}/shard_...). Reuses the provider-id charset (letters,
+ * digits, ".", "_", "-") and additionally rejects a leading dot and any ".."
+ * so the name cannot escape or hide under the base path. The runtime providers
+ * keep their own assertSafeVaultName floor; this is the friendly early gate at
+ * init time.
+ * @throws BfsError when the name is empty, has disallowed characters, starts
+ *   with ".", or contains "..".
+ */
+export function validateVaultName(name: string): void {
+  if (!PROVIDER_ID_PATTERN.test(name) || name.startsWith('.') || name.includes('..')) {
+    throw new BfsError(fmt('vault_name_invalid_chars', name));
+  }
+}
+
 // ─── Provider Factory ─────────────────────────────────────────────────────────
 
 /**

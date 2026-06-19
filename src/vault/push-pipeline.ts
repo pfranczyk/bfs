@@ -21,7 +21,7 @@ import { BfsError, ProviderError, PushCacheNoLockError, PushCacheUnavailableErro
 import { hashBuffer, hashStream, SHA256_BYTES } from '../core/hash.js';
 import { createIgnoreFilter } from '../core/ignore.js';
 import { calcShardPayloadSize, rsEncodeStriped } from '../core/reed-solomon.js';
-import { buildShardStream, serializeShardHeader, uuidToBuffer } from '../core/shard-io.js';
+import { buildShardStream, serializeShardHeader, uuidToBuffer, V2_MAX_STRIPE_SIZE } from '../core/shard-io.js';
 import { fmt, t } from '../i18n/index.js';
 import { providerRegistry } from '../providers/provider.js';
 import type { ManifestShard, ProviderConfig, ProviderIO, PushOptions, PushResult, ShardHeader, ShardLocation, StorageProvider, VaultConfig, VaultState, VersionManifest } from '../types/index.js';
@@ -31,6 +31,7 @@ import { splitLocationSecrets } from './location-map.js';
 import type { PushLock, PushLockFailedReason } from './lockfile.js';
 import { assertNoActiveLock, pushLockPath, readLock, removeLock, writeLockAtomic } from './lockfile.js';
 import { writeManifest } from './manifest.js';
+import { confirmRecoveredLocations } from './recovered-locations.js';
 import { readState, writeState } from './state.js';
 
 // ─── Push-only V2 constants ──────────────────────────────────────────────────
@@ -38,8 +39,6 @@ import { readState, writeState } from './state.js';
 
 /** Minimum stripe size floor (16 MiB). */
 const V2_MIN_STRIPE_SIZE = 16 * 1024 * 1024;
-/** Maximum stripe size cap — keeps pull portable to 4 GB RAM systems (256 MiB). */
-const V2_MAX_STRIPE_SIZE = 256 * 1024 * 1024;
 /** packBlob() uses Buffer.concat — cap to avoid excessive RAM from double-buffering. */
 const V2_MAX_BLOB_IN_RAM = 4 * 1024 * 1024 * 1024;
 
@@ -441,7 +440,9 @@ async function _writePushResults(options: WritePushResultsOptions): Promise<void
   };
   await writeManifest(rootDir, manifest);
   if (manifestShards.length >= 1) {
-    await writeState(rootDir, { latest_version: Math.max(state.latest_version, targetVersion), working_version: targetVersion });
+    // A completed push confirms the provider locations are trusted — clear the
+    // post-recovery "unconfirmed" gate so later pushes run unprompted.
+    await writeState(rootDir, { latest_version: Math.max(state.latest_version, targetVersion), working_version: targetVersion, locations_confirmed: true });
   }
   const fullSuccess = lock.failed.length === 0 && lock.uploaded.length === N + K;
   if (fullSuccess) {
@@ -875,6 +876,13 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
   assertSchemeValid(config);
   if (options.fromCache !== true) await assertNoActiveLock(rootDir, 'push');
   const state = await readState(rootDir);
+  // First write after recovery: the config came from an untrusted location map,
+  // so show the operator where shards will go and require confirmation before
+  // uploading anything (defends against a recovered config pointing at an
+  // attacker host). Cleared on the first confirmed push (see _writePushResults).
+  if (state.locations_confirmed === false) {
+    await confirmRecoveredLocations(config, options.io);
+  }
   const { data_shards: N, parity_shards: K } = config.scheme;
   const { cacheDir, tempDir, cachePath } = await _resolvePushPaths({ rootDir, cacheDir: options.cacheDir, tempDir: options.tempDir, config });
   const targetVersion = await _resolveTargetVersion({ mode: options.mode, config, state, io: options.io });

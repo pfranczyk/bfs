@@ -2,10 +2,11 @@ import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import * as ftp from 'basic-ftp';
 import { ProviderError } from '../core/errors.js';
+import { assertSafeVaultName } from '../core/fs-utils.js';
 import { hashBuffer, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
 import { buildShardHeaderFromBytes, computeShardHeaderSize, SHARD_HEADER_READ_BYTES } from '../core/shard-io.js';
 import { fmtFor, t, tFor } from '../i18n/index.js';
-import type { CliProviderInput, ProviderConfig, ProviderHelp, ProviderIO, RemoteRef, ShardHeader, ShardIdentity, StorageProvider, VerifyShardResult } from '../types/index.js';
+import type { CliProviderInput, ProviderConfig, ProviderHelp, ProviderIO, RecoverySecret, RemoteRef, ShardHeader, ShardIdentity, StorageProvider, VerifyShardResult } from '../types/index.js';
 import { findStringFlag, readJsonObjectFile } from './flags.js';
 import { finishVerifyShard, throwSidecarUnsupported } from './header-verify.js';
 import { type ProviderFactory, providerRegistry } from './provider.js';
@@ -78,7 +79,9 @@ export class FtpProvider implements StorageProvider {
   private readonly host: string;
   private readonly port: number;
   private readonly user: string;
-  private readonly password: string;
+  // Mutable: connectForRecovery() collects the password interactively at recovery
+  // time (it is stripped from the location map) and assigns it before connecting.
+  private password: string;
   private readonly basePath: string;
   private readonly secure: boolean;
   private readonly io: ProviderIO;
@@ -149,6 +152,10 @@ export class FtpProvider implements StorageProvider {
     if (this.vaultName === null) {
       throw new ProviderError('setVaultName() must be called before any file operation');
     }
+    // Path-traversal floor (BFS-core invariant) runs before the FTP-specific
+    // control-channel guard below: separators / '..' would let a crafted name
+    // escape the base directory on the remote just as on a local disk.
+    assertSafeVaultName(this.vaultName);
     const full = `${this.basePath}/${this.vaultName}`;
     // A CR/LF or NUL in a path sent over the FTP control channel could let a
     // crafted base path or backup name inject extra FTP commands. Reject before
@@ -243,6 +250,61 @@ export class FtpProvider implements StorageProvider {
    */
   setVaultName(name: string): void {
     this.vaultName = name;
+  }
+
+  /**
+   * Recovery hook: shows the operator the FTP target (host[:port] and path) and
+   * lets them decline BEFORE any credential is sent. This is the defense against
+   * a recovery whose location map was redirected to a hostile host — the
+   * operator sees exactly where the password would go and can refuse. Once the
+   * host is approved, a pooled secret (collected for a sibling) is tried first,
+   * then the password is prompted with retry until one authenticates.
+   *
+   * @param io   - ProviderIO for the host confirmation and password prompt
+   * @param pool - secrets already collected this recovery, tried before prompting
+   * @returns the password that authenticated (added to the recovery pool)
+   * @throws ProviderError when the operator declines (host or blank password)
+   */
+  async connectForRecovery(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<string | null> {
+    const target = this.port === 21 ? this.host : `${this.host}:${this.port}`;
+    const remotePath = this.basePath.length > 0 ? this.basePath : '/';
+    if (options?.trustLocation === true) {
+      // Operator pre-approved the recovered locations (unattended recovery via
+      // `bfs recovery --trust-locations`) — surface the target for the log but
+      // do not block on a confirmation.
+      io.info(fmtFor(this.io.lang, 'ftp_recovery_target', target, remotePath));
+    } else {
+      const approved = await io.confirm(fmtFor(this.io.lang, 'ftp_recovery_confirm_host', target, remotePath));
+      if (!approved) {
+        throw new ProviderError(fmtFor(this.io.lang, 'ftp_recovery_declined', target));
+      }
+    }
+    // Host approved — reuse a pooled secret if one authenticates here (newest
+    // first), otherwise prompt with retry. Unbounded retry mirrors the legacy
+    // recovery path: at this critical moment the operator keeps trying until the
+    // password works or they give up with a blank entry.
+    for (let i = pool.length - 1; i >= 0; i--) {
+      this.password = pool[i].value;
+      try {
+        await this.authenticate();
+        return this.password;
+      } catch {
+        // pooled secret did not authenticate here — fall through to prompting
+      }
+    }
+    for (;;) {
+      const secret = await io.askSecret(fmtFor(this.io.lang, 'ftp_recovery_password', target));
+      if (secret.length === 0) {
+        throw new ProviderError(fmtFor(this.io.lang, 'ftp_recovery_declined', target));
+      }
+      this.password = secret;
+      try {
+        await this.authenticate();
+        return secret;
+      } catch {
+        // wrong password — re-prompt
+      }
+    }
   }
 
   /**

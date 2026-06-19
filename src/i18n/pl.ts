@@ -247,6 +247,7 @@ export const pl: Strings = {
   recovery_opt_name: 'Nazwa kopii zapasowej (podfolder na nośnikach)',
   recovery_opt_password: 'Hasło (dla zaszyfrowanej kopii zapasowej)',
   recovery_opt_allow_missing_adapters: 'Kontynuuj mimo brakujących zewnętrznych adapterów, korzystając z nadmiarowości Reed-Solomon',
+  recovery_opt_trust_locations: 'Zaufaj odzyskanym lokalizacjom nośników bez potwierdzania każdego hosta (do recovery bezobsługowego/CI; sekret i tak trafia na host wskazany w kawałkach kopii)',
   /** %s = raw spec */
   recovery_bootstrap_empty: 'Spec --bootstrap jest pusty. Podaj flagi adaptera, np. --bootstrap "--path /mnt/usb". Otrzymano: "%s"',
   /** %s = validation errors joined */
@@ -293,6 +294,7 @@ export const pl: Strings = {
   provider_add_name_prompt: 'Nazwa nowego nośnika:',
   provider_add_name_required: '--name jest wymagane w trybie CI',
   provider_id_invalid_chars: 'Nazwa providera "%s" jest nieprawidłowa — dozwolone są wyłącznie litery, cyfry oraz ". _ -" (bez białych znaków).',
+  vault_name_invalid_chars: 'Nazwa kopii zapasowej "%s" jest nieprawidłowa — dozwolone są wyłącznie litery, cyfry oraz ". _ -" (bez separatorów ścieżki, bez wiodącej kropki, bez "..").',
   provider_add_exists: 'Provider "%s" już istnieje',
   provider_id_duplicate_in_args: 'Nazwa nośnika "%s" podana więcej niż raz — każdy nośnik musi mieć unikalną nazwę.',
   provider_add_type_prompt: 'Typ providera:',
@@ -377,6 +379,10 @@ export const pl: Strings = {
   vault_password_required: 'Wymagane hasło dla zaszyfrowanej kopii zapasowej.',
   vault_passwords_mismatch: 'Hasła nie są zgodne.',
   push_no_config: 'Nie znaleziono konfiguracji kopii zapasowej. Uruchom najpierw `bfs init`.',
+  push_recovered_locations_intro: 'Ta kopia została odtworzona przez recovery. Potwierdź, dokąd trafią części kopii, zanim cokolwiek wyślesz:',
+  push_recovered_location: '  • %s → %s',
+  push_confirm_recovered_locations: 'Wysłać dane kopii do tych lokalizacji?',
+  push_recovered_locations_declined: 'Wysyłanie przerwane: lokalizacje nośników po recovery niepotwierdzone. Sprawdź je w `.bfs/config.json` (np. `bfs config`) i spróbuj ponownie.',
   pull_not_enough_shards: 'Za mało części: potrzeba %s, dostępne %s. Część nośników może być offline.',
   pull_blob_size_unreadable: 'Nie udało się odczytać rozmiaru kopii z żadnej części.',
   pull_salt_missing: 'Tej zaszyfrowanej kopii brakuje materiału klucza — części mogą być uszkodzone lub niekompletne.',
@@ -494,6 +500,10 @@ export const pl: Strings = {
   ftp_size_mismatch_final: 'Niezgodność rozmiaru uploadu FTP dla "%s" po %s próbach: ' + 'wysłano %s B, serwer raportuje %s B (różnica %s). ' + 'Sprawdź, czy serwer FTP działa w trybie binarnym (TYPE I).',
   ftp_insecure_warning: 'Połączenie FTP z %s nie jest szyfrowane — hasło do nośnika i dane kopii zapasowej wędrują przez sieć jawnym tekstem. Włącz FTPS (secure) lub korzystaj z zaufanej sieci.',
   ftp_control_chars: 'Ścieżka FTP i nazwa kopii zapasowej nie mogą zawierać znaków końca linii ani znaków sterujących.',
+  ftp_recovery_confirm_host: 'Odzyskiwanie chce wysłać hasło FTP do %s (ścieżka %s). Wysłać je na ten host?',
+  ftp_recovery_target: 'Odzyskiwanie: łączenie z FTP %s (ścieżka %s).',
+  ftp_recovery_password: 'Hasło FTP do %s:',
+  ftp_recovery_declined: 'Odzyskiwanie przerwane: nie wysłano hasła FTP do %s.',
 
   // ─── FTP — configureFromFlags + validateConfig ─────────────────────────────
   ftp_config_port_invalid: 'Adapter FTP: pole "port" w configu musi być liczbą całkowitą 1–65535',

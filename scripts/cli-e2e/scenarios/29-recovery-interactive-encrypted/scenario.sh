@@ -1,12 +1,14 @@
 # shellcheck shell=bash
-# Interactive recovery, TWO sequential prompts via PTY: an ENCRYPTED stripped
-# vault recovered by bootstrapping from a LOCAL provider. Recovery must:
+# Interactive recovery, multiple sequential prompts via PTY: an ENCRYPTED
+# stripped vault recovered by bootstrapping from a LOCAL provider. Recovery must:
 #   1. prompt for the ENCRYPTION password (to decrypt the location map in the
 #      bootstrap shard header), then
-#   2. prompt for the FTP transport password (stripped from headers by K2),
-# both answered through a real pseudo-terminal. Proves multi-prompt works end
-# to end through real `bfs` — exactly the case a piped stdin cannot drive
-# (inquirer feeds only the first prompt per process under a pipe).
+#   2. for each FTP sibling, confirm the destination host and (for the first)
+#      prompt for the FTP transport password (stripped from headers by K2); the
+#      second sibling confirms its host but reuses the pooled password.
+# All answered through a real pseudo-terminal. Proves multi-prompt works end to
+# end through real `bfs` — exactly the case a piped stdin cannot drive (inquirer
+# feeds only the first prompt per process under a pipe).
 
 SCENARIO_NAME="interactive recovery, 2 prompts (encryption + FTP password)"
 SCENARIO_DESC="encrypted stripped vault, recovery prompts twice via PTY, restore"
@@ -32,14 +34,16 @@ scenario_run() {
   assert_no_file "$vault/.bfs/config.json"
 
   # No --password flag → recovery prompts for the encryption password first (to
-  # decrypt the location map), then for the FTP transport password. Answers are
-  # fed in that order as each prompt's anchor appears.
+  # decrypt the location map), then reconnects each FTP sibling: confirm host (y)
+  # → FTP password for the first sibling, then confirm host (y) for the second
+  # sibling (its password is reused from the pool, so no second password prompt).
+  # Answers are fed in that order as each prompt's anchor appears.
   local answers
-  answers='[{"anchor":"Enter password for version","value":"'"$encpw"'"},{"anchor":"required to reconnect during recovery","value":"'"${FTP_PASS[0]}"'"}]'
+  answers='[{"anchor":"Enter password for version","value":"'"$encpw"'"},{"anchor":"Send it to this host","value":"y"},{"anchor":"FTP password for","value":"'"${FTP_PASS[0]}"'"},{"anchor":"Send it to this host","value":"y"}]'
   run_bfs_pty "$vault" "$answers" --lang en recovery --provider local --name "$name" \
     --bootstrap "--path $(winpath "${PV_LOCALDIR[0]}")"
   assert_ok
-  assert_out_contains "PROMPTS_FED=2/2"
+  assert_out_contains "PROMPTS_FED=4/4"
   assert_file "$vault/.bfs/config.json"
   assert_file "$vault/.bfs/manifests/v001.json"
 

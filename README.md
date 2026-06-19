@@ -15,10 +15,10 @@ bfs pull
 ## Features
 
 - **Reed-Solomon erasure coding** — configurable N data + K parity shards
-- **Deflate compression** — enabled by default, per-file ZIP with smart skip for already-compressed formats (images, video, archives)
-- **AES-256-GCM encryption** — optional, Argon2id key derivation
+- **Deflate compression** — on by default; the whole backup is packed into a single deflate-compressed ZIP. At `bfs init` a directory scan suggests whether to enable it, defaulting to off when the data is mostly already-compressed (images, video, archives). Override per push with `--compress` / `--no-compress`
+- **AES-256-GCM encryption** — on by default (opt out with `bfs init --no-enc`), Argon2id key derivation
 - **Provider-agnostic** — local disk, USB drives, network mounts, FTP/FTPS (SSH — coming soon)
-- **Versioned backups** — every push creates a new numbered version
+- **Versioned backups** — by default every push creates a new numbered version; can be configured to overwrite the current version instead
 - **Self-describing shards** — each shard contains the full location map; one shard is enough to discover the rest
 - **Resilient pushes** — when a provider fails mid-push, BFS finishes with the rest and records which targets failed; retry just those without re-uploading the whole backup
 - **Disaster recovery** — rebuild `.bfs/` config from a single shard when everything else is lost
@@ -37,16 +37,17 @@ bfs pull
 npm install -g bfs-vault
 ```
 
-To try a prerelease (beta) build instead of the latest stable:
+To try the latest prerelease (release candidate) instead of the latest stable:
 
 ```bash
-npm install -g bfs-vault@beta
+npm install -g bfs-vault@rc
 ```
 
-> **Beta note:** the `0.7.0` line is in beta. Its on-disk format and the provider
-> adapter contract may still change before the stable `0.7.0` release. The plain
-> `npm install -g bfs-vault` command always installs the latest **stable**
-> version, never a beta. Evaluate betas on test data, not your only copy.
+> **Prerelease note:** the `0.7.0` line is in release-candidate testing. Its
+> on-disk format and the provider adapter contract are not finalized until the
+> stable `0.7.0` release. The plain `npm install -g bfs-vault` command always
+> installs the latest **stable** version, never a prerelease. Evaluate
+> prereleases on test data, not your only copy.
 
 ## Quick start
 
@@ -54,7 +55,7 @@ npm install -g bfs-vault@beta
 # 1. Go to the directory you want to back up
 cd ~/documents
 
-# 2. Initialize vault (interactive — asks for providers, scheme, encryption)
+# 2. Initialize vault (interactive — asks for providers, scheme, encryption, compression, and RAM limit)
 bfs init documents
 
 # 3. Back up

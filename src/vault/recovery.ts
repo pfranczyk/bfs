@@ -10,6 +10,7 @@ import { PushMode, VersionHealth } from '../types/index.js';
 import { checkVersionMismatch, detectMissingAdapters, formatMissingAdaptersMessage } from './adapter-preflight.js';
 import { type BootstrapResult, bootstrapFromProvider, parseVersionFromFilename } from './bootstrap.js';
 import { writeConfig } from './config.js';
+import { divergentShardIndices } from './location-map.js';
 import { readManifest, writeManifest } from './manifest.js';
 import { writeState } from './state.js';
 import { verifyAll } from './verify.js';
@@ -40,6 +41,14 @@ export interface RecoveryOptions {
    * — their absence means the BFS installation itself is broken.
    */
   allowMissingAdapters?: boolean;
+  /**
+   * Unattended recovery (`bfs recovery --trust-locations`): the operator
+   * pre-approves the recovered provider locations, so providers connect without
+   * blocking on a per-host confirmation and the rebuilt config is marked
+   * confirmed (the next push won't re-prompt). For the rare 1% who automate
+   * recovery (e.g. rebuilding a whole VM); interactive recovery leaves it off.
+   */
+  trustLocations?: boolean;
 }
 
 export interface RecoveryReport {
@@ -193,6 +202,10 @@ async function processVersion(version: number, entries: Array<{ shardIndex: numb
     if (secondaryMeta.version !== primaryMeta.version) mismatch.push('version');
     if (secondaryMeta.data_shards !== primaryMeta.data_shards) mismatch.push('data_shards');
     if (secondaryMeta.parity_shards !== primaryMeta.parity_shards) mismatch.push('parity_shards');
+    // Unencrypted maps are plaintext on every shard; a divergence between two
+    // shards of the same version means a forged map redirecting a provider.
+    // Soft-flag the version (not a hard throw — this loops over many versions).
+    if (!primaryMeta.encrypted && divergentShardIndices(primaryMeta.location_map, secondaryMeta.location_map).length > 0) mismatch.push('location_map');
     if (mismatch.length > 0) {
       io.warn(fmt('recovery_consensus_failed', String(version), mismatch.join(', ')));
       consensusOk = false;
@@ -299,7 +312,7 @@ export async function recover(rootDir: string, options: RecoveryOptions): Promis
   // ── 2. Bootstrap ──────────────────────────────────────────────────────────
   const passwordPool: string[] = options.passwords ? [...options.passwords] : [];
 
-  const bootstrap = await bootstrapFromProvider(bootstrapProvider, vaultName, io, undefined, passwordPool, options.bootstrapInputs);
+  const bootstrap = await bootstrapFromProvider(bootstrapProvider, vaultName, io, undefined, passwordPool, options.bootstrapInputs, options.trustLocations === true);
 
   // Save bootstrap shard to cache
   bootstrapProvider.setVaultName(vaultName);
@@ -369,7 +382,10 @@ export async function recover(rootDir: string, options: RecoveryOptions): Promis
   await writeConfig(rootDir, config);
 
   // ── 6. Reconstruct state.json ─────────────────────────────────────────────
-  await writeState(rootDir, { latest_version: latestVerified, working_version: 0 });
+  // Mark the rebuilt config unconfirmed (it came from an untrusted location map)
+  // so the first push/heal shows the locations and requires confirmation — unless
+  // the operator already pre-approved them with --trust-locations (unattended).
+  await writeState(rootDir, { latest_version: latestVerified, working_version: 0, locations_confirmed: options.trustLocations === true });
 
   // ── 7. Run verify to update health ────────────────────────────────────────
   const verifyReport = await verifyAll(rootDir, io);

@@ -8,7 +8,7 @@ import type { Readable, TransformCallback } from 'node:stream';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { ProviderError, ShardCorruptedError } from '../core/errors.js';
-import { isEnoent } from '../core/fs-utils.js';
+import { assertSafeVaultName, isEnoent } from '../core/fs-utils.js';
 import { hashBuffer, SHA256_BYTES } from '../core/hash.js';
 import { computeShardHeaderSize, readShardHeader } from '../core/shard-io.js';
 import { fmt, fmtFor, t, tFor } from '../i18n/index.js';
@@ -57,6 +57,7 @@ export class LocalFsProvider implements StorageProvider {
     if (this.vaultName === null) {
       throw new ProviderError('setVaultName() must be called before any file operation');
     }
+    assertSafeVaultName(this.vaultName);
     return path.join(this.basePath, this.vaultName);
   }
 

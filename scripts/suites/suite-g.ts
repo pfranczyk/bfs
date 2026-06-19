@@ -6,7 +6,7 @@ import { createMockProviderIO } from '../../src/providers/provider.js';
 import type { ProviderConfig } from '../../src/types/index.js';
 import { PushMode } from '../../src/types/index.js';
 import { init } from '../../src/vault/vault-manager.js';
-import { assert, denyRead, restoreRead, runBfs, runTest } from '../smoke-runner.js';
+import { assert, denyRead, restoreRead, runBfs, runTest, skipTest } from '../smoke-runner.js';
 import type { SmokeContext, SuiteResult, TestResult } from '../smoke-types.js';
 import { fileExists } from '../smoke-vault.js';
 
@@ -95,32 +95,47 @@ export async function suiteG(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── G4: bfs push abort + cache (nieczytalnny plik) ────────────────────────
+  // ── G4/G5: bfs push abort on an unreadable file, then resume from cache ────
+  // The abort is staged by making a file unreadable (denyRead). POSIX root
+  // bypasses file-mode permission checks, so chmod 000 cannot make the file
+  // unreadable for the push process — the precondition is impossible as root
+  // (e.g. a docker-executor CI runner). Skip the abort/cache assertions there,
+  // but still create a healthy version so G6/G7 (which pull it) have data.
+  const cannotDenyRead = typeof process.getuid === 'function' && process.getuid() === 0;
 
-  tests.push(
-    await runTest('G4', 'bfs push — abort + push.blob.pending on unreadable file', async () => {
-      denyRead(secretBinPath);
-      try {
+  if (cannotDenyRead) {
+    tests.push(skipTest('G4', 'bfs push — abort + push.blob.pending on unreadable file', 'running as root — chmod cannot make a file unreadable'));
+    tests.push(skipTest('G5', 'bfs push --cache — upload from cache after abort', 'depends on the G4 abort cache (skipped as root)'));
+    tests.push(
+      await runTest('G5b', 'bfs push (healthy) — version for G6/G7 when G4/G5 skipped as root', () => {
         const r = runBfs(['push'], gVaultDir, undefined, gEnv);
-        assert(r.status === 1, `expected exit 1, got ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
-        const out = r.stdout + r.stderr;
-        assert(/could not be read|nie można było odczytać/i.test(out), `expected push_skipped_header in: ${out.slice(0, 500)}`);
-        assert(out.includes('bfs push --cache'), `expected "bfs push --cache" hint in: ${out.slice(0, 500)}`);
-        assert(await fileExists(path.join(gVaultDir, '.bfs', 'cache', 'push.blob.pending')), 'push.blob.pending should exist after abort');
-      } finally {
-        restoreRead(secretBinPath);
-      }
-    }),
-  );
+        assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+      }),
+    );
+  } else {
+    tests.push(
+      await runTest('G4', 'bfs push — abort + push.blob.pending on unreadable file', async () => {
+        denyRead(secretBinPath);
+        try {
+          const r = runBfs(['push'], gVaultDir, undefined, gEnv);
+          assert(r.status === 1, `expected exit 1, got ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+          const out = r.stdout + r.stderr;
+          assert(/could not be read|nie można było odczytać/i.test(out), `expected push_skipped_header in: ${out.slice(0, 500)}`);
+          assert(out.includes('bfs push --cache'), `expected "bfs push --cache" hint in: ${out.slice(0, 500)}`);
+          assert(await fileExists(path.join(gVaultDir, '.bfs', 'cache', 'push.blob.pending')), 'push.blob.pending should exist after abort');
+        } finally {
+          restoreRead(secretBinPath);
+        }
+      }),
+    );
 
-  // ── G5: bfs push --cache (upload z cache) ─────────────────────────────────
-
-  tests.push(
-    await runTest('G5', 'bfs push --cache — upload from cache after abort', () => {
-      const r = runBfs(['push', '--cache'], gVaultDir, undefined, gEnv);
-      assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
-    }),
-  );
+    tests.push(
+      await runTest('G5', 'bfs push --cache — upload from cache after abort', () => {
+        const r = runBfs(['push', '--cache'], gVaultDir, undefined, gEnv);
+        assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+      }),
+    );
+  }
 
   // ── G6: bfs pull -y abort + pull.blob.pending (EISDIR) ────────────────────
 

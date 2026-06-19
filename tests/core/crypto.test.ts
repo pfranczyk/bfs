@@ -227,6 +227,39 @@ describe('crypto', () => {
       TIMEOUT,
     );
 
+    // For an encrypted vault the GCM auth tag is the ONLY integrity protection of
+    // the location_map — bootstrap consensus deliberately skips comparing
+    // encrypted maps and relies on decryption catching tampering. So a flipped
+    // byte must be rejected even with the CORRECT key (not just a wrong key).
+    // Layout from encryptWithKey: nonce(12B) + ciphertext + tag(16B).
+    it(
+      'should throw DecryptionError when the ciphertext is tampered with the correct key',
+      async () => {
+        const key = await deriveKey('password', generateSalt());
+        const encrypted = encryptLocationMap(SAMPLE_LOCATIONS, key);
+
+        const tampered = Buffer.from(encrypted);
+        tampered[12] ^= 0xff; // first ciphertext byte, just past the 12-byte nonce
+
+        expect(() => decryptLocationMap(tampered, key)).toThrow(DecryptionError);
+      },
+      TIMEOUT,
+    );
+
+    it(
+      'should throw DecryptionError when the GCM tag is tampered with the correct key',
+      async () => {
+        const key = await deriveKey('password', generateSalt());
+        const encrypted = encryptLocationMap(SAMPLE_LOCATIONS, key);
+
+        const tampered = Buffer.from(encrypted);
+        tampered[tampered.length - 1] ^= 0xff; // last byte = end of the 16-byte tag
+
+        expect(() => decryptLocationMap(tampered, key)).toThrow(DecryptionError);
+      },
+      TIMEOUT,
+    );
+
     it(
       'should produce different ciphertexts on each call (random nonce)',
       async () => {

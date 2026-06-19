@@ -25,9 +25,11 @@ scenario_run() {
   rm -rf "$vault/.bfs"
   assert_no_file "$vault/.bfs/config.json"
 
-  # Recover by bootstrapping from the FTP provider p1 (shard_1).
+  # Recover by bootstrapping from the FTP provider p1 (shard_1). Unattended
+  # (CI) recovery: --trust-locations pre-approves the recovered hosts so the
+  # per-host credential confirmation does not block a non-interactive run.
   run_bfs "$vault" recovery --provider ftp --name "$name" \
-    --bootstrap "$(ftp_bootstrap_spec 1)"
+    --bootstrap "$(ftp_bootstrap_spec 1)" --trust-locations
   assert_ok
   assert_file "$vault/.bfs/config.json"
   assert_file "$vault/.bfs/manifests/v001.json"

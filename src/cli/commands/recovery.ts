@@ -39,7 +39,8 @@ export function registerRecovery(program: Command): void {
     .option('--name <vaultName>', t('recovery_opt_name'))
     .option('--password <password>', t('recovery_opt_password'), (val: string, prev: string[]) => [...prev, val], [] as string[])
     .option('--allow-missing-adapters', t('recovery_opt_allow_missing_adapters'))
-    .action(async (opts: { provider?: string; bootstrap?: string; name?: string; password: string[]; allowMissingAdapters?: boolean }, cmd: Command) => {
+    .option('--trust-locations', t('recovery_opt_trust_locations'))
+    .action(async (opts: { provider?: string; bootstrap?: string; name?: string; password: string[]; allowMissingAdapters?: boolean; trustLocations?: boolean }, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
       const io = createCliProviderIO(rootDir);
 
@@ -184,6 +185,7 @@ export function registerRecovery(program: Command): void {
           ...(opts.password.length > 0 ? { passwords: opts.password } : {}),
           ...(Object.keys(bootstrapInputs).length > 0 ? { bootstrapInputs } : {}),
           ...(opts.allowMissingAdapters === true ? { allowMissingAdapters: true } : {}),
+          ...(opts.trustLocations === true ? { trustLocations: true } : {}),
           io: wrappedIo,
         });
 

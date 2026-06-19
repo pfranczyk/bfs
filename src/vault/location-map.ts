@@ -1,5 +1,48 @@
 import { providerRegistry } from '../providers/provider.js';
-import type { ProviderIO } from '../types/index.js';
+import type { ProviderIO, ShardLocation } from '../types/index.js';
+
+/** Recursively sorts object keys so two structurally-equal values stringify
+ * identically regardless of key insertion order. */
+function sortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value !== null && typeof value === 'object') {
+    const src = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(src).sort()) out[key] = sortKeys(src[key]);
+    return out;
+  }
+  return value;
+}
+
+/** Canonical JSON (sorted keys) for order-independent equality of map entries. */
+function canonical(value: unknown): string {
+  return JSON.stringify(sortKeys(value));
+}
+
+/**
+ * Returns the shard_index values whose location-map entries differ between two
+ * maps (provider_type, connection_config, required_inputs, remote_path). Only
+ * indices present in BOTH maps are compared. Every shard in a version carries
+ * the identical location map, so any per-entry divergence between two shards of
+ * the same version signals a forged (unencrypted) map — used by recovery
+ * consensus to detect a redirected provider. Returns [] when the maps agree.
+ *
+ * @param a - one shard's location map
+ * @param b - another shard's location map (same version)
+ * @returns shard_index values that diverge between the two maps
+ */
+export function divergentShardIndices(a: ShardLocation[], b: ShardLocation[]): number[] {
+  const byIndex = new Map(b.map((entry) => [entry.shard_index, entry]));
+  const diverged: number[] = [];
+  for (const ea of a) {
+    const eb = byIndex.get(ea.shard_index);
+    if (!eb) continue; // index only on one side — different shard set, not a per-entry forgery
+    const differs =
+      ea.provider_type !== eb.provider_type || ea.remote_path !== eb.remote_path || canonical(ea.required_inputs ?? []) !== canonical(eb.required_inputs ?? []) || canonical(ea.connection_config) !== canonical(eb.connection_config);
+    if (differs) diverged.push(ea.shard_index);
+  }
+  return diverged;
+}
 
 /**
  * Returns the secret field names an adapter of the given type declares. The

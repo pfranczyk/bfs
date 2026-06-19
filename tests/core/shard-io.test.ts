@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { generateSalt } from '../../src/core/crypto.js';
 import { BfsError, DecryptionError, ShardCorruptedError } from '../../src/core/errors.js';
 import { hashBuffer, streamToBuffer } from '../../src/core/hash.js';
-import { buildShard, buildShardStream, buildSidecarBytes, matchShardIdentity, parseShardHeaderFromStream, readShardHeader, serializeShardHeader } from '../../src/core/shard-io.js';
+import { buildShard, buildShardHeaderFromBytes, buildShardStream, buildSidecarBytes, matchShardIdentity, parseShardHeaderFromStream, readShardHeader, serializeShardHeader } from '../../src/core/shard-io.js';
 import type { RemoteRef, ShardHeader, ShardLocation, StorageProvider } from '../../src/types/index.js';
 
 // ─── Test fixtures ─────────────────────────────────────────────────────────
@@ -40,7 +40,10 @@ function makeHeader(overrides: Partial<ShardHeader> = {}): ShardHeader {
     version: 1,
     encrypted: false,
     kdf_salt: null,
-    rs_stripe_size: null,
+    // serializeShardHeader emits V2, where rs_stripe_size is a required positive
+    // field (the read path now rejects 0); default to a legal stripe so generic
+    // fixtures round-trip. Tests that exercise the clamp override this per case.
+    rs_stripe_size: 64 * 1024 * 1024,
     map_length: 0, // computed during build
     location_map: TEST_LOCATIONS,
     ...overrides,
@@ -548,6 +551,66 @@ describe('shard-io', () => {
       const header = makeHeader();
       const mismatch = matchShardIdentity(header, { vault_id: 'different', shard_index: 9, version: 9 });
       expect(mismatch?.field).toBe('vault_id');
+    });
+  });
+
+  // ─── rs_stripe_size clamp from an untrusted header ───────────────────────
+  //
+  // rsDecodeStriped allocates memory proportional to rs_stripe_size, which is
+  // read verbatim from the shard header. Push limits the stripe to
+  // V2_MAX_STRIPE_SIZE (256 MiB), but the READ path does not — a crafted header
+  // with rs_stripe_size of several GiB (or 0) drives an OOM/RangeError on pull
+  // or recovery. The parser must reject rs_stripe_size == 0 and
+  // > V2_MAX_STRIPE_SIZE (256 MiB) with a typed ShardCorruptedError, and accept
+  // any legal value (including small stripes for tiny blobs) without throwing.
+  describe('rs_stripe_size clamp (V2 header read path)', () => {
+    const V2_MAX_STRIPE_SIZE = 256 * 1024 * 1024;
+
+    it('should reject an oversized rs_stripe_size (> 256 MiB) with ShardCorruptedError', () => {
+      // serializeShardHeader does NOT clamp at write time, so we can emit a
+      // well-formed V2 header carrying a 512 MiB stripe. The header is
+      // structurally valid — the only thing wrong is the out-of-range stripe.
+      const header = makeHeader({ encrypted: false, rs_stripe_size: 512 * 1024 * 1024 });
+      const headerBytes = serializeShardHeader(header);
+
+      expect(() => buildShardHeaderFromBytes(headerBytes)).toThrow(ShardCorruptedError);
+    });
+
+    it('should reject rs_stripe_size == 0 with ShardCorruptedError', () => {
+      const header = makeHeader({ encrypted: false, rs_stripe_size: 0 });
+      const headerBytes = serializeShardHeader(header);
+
+      expect(() => buildShardHeaderFromBytes(headerBytes)).toThrow(ShardCorruptedError);
+    });
+
+    it('should accept rs_stripe_size exactly at the cap (256 MiB) and reject cap+1', () => {
+      // Pins the boundary so the fix must be `> cap` (cap itself legal), not
+      // `>= cap` — both would pass a 512-MiB-only test, so this nails off-by-one.
+      const atCap = makeHeader({ encrypted: false, rs_stripe_size: V2_MAX_STRIPE_SIZE });
+      const overCap = makeHeader({ encrypted: false, rs_stripe_size: V2_MAX_STRIPE_SIZE + 1 });
+
+      const atCapBytes = serializeShardHeader(atCap);
+      const overCapBytes = serializeShardHeader(overCap);
+
+      expect(() => buildShardHeaderFromBytes(atCapBytes)).not.toThrow();
+      expect(buildShardHeaderFromBytes(atCapBytes).rs_stripe_size).toBe(V2_MAX_STRIPE_SIZE);
+      expect(() => buildShardHeaderFromBytes(overCapBytes)).toThrow(ShardCorruptedError);
+    });
+
+    it('should accept a legal rs_stripe_size (64 MiB and 1 MiB) without throwing', () => {
+      const big = makeHeader({ encrypted: false, rs_stripe_size: 64 * 1024 * 1024 });
+      const small = makeHeader({ encrypted: false, rs_stripe_size: 1 * 1024 * 1024 });
+
+      const bigBytes = serializeShardHeader(big);
+      const smallBytes = serializeShardHeader(small);
+
+      expect(() => buildShardHeaderFromBytes(bigBytes)).not.toThrow();
+      expect(() => buildShardHeaderFromBytes(smallBytes)).not.toThrow();
+
+      // Sanity: 64 MiB is below the cap, so it is a legal value, not an accident.
+      expect(64 * 1024 * 1024).toBeLessThanOrEqual(V2_MAX_STRIPE_SIZE);
+      expect(buildShardHeaderFromBytes(bigBytes).rs_stripe_size).toBe(64 * 1024 * 1024);
+      expect(buildShardHeaderFromBytes(smallBytes).rs_stripe_size).toBe(1 * 1024 * 1024);
     });
   });
 });

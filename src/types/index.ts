@@ -73,6 +73,10 @@ export interface ProviderConfig {
 export interface VaultState {
   latest_version: number; // highest version present on providers (0 = no pushes)
   working_version: number; // version currently on disk (0 = no pull/push)
+  // false after `bfs recovery` rebuilt the config from an untrusted location
+  // map, until the first push/heal shows the operator the provider locations and
+  // they confirm. Absent = legacy / never recovered = treated as confirmed.
+  locations_confirmed?: boolean;
 }
 
 // ─── Version manifest (.bfs/manifests/vNNN.json) ─────────────
@@ -567,6 +571,36 @@ export interface StorageProvider {
    * @returns          { ok: true } or { ok: false, reason, detail }
    */
   verifyShard(ref: RemoteRef, expected: ShardIdentity): Promise<VerifyShardResult>;
+
+  // ─── Recovery credential handling (optional) ────────────────
+  /**
+   * Recovery-only hook: connect to this provider during `bfs recovery`, owning
+   * the entire credential interaction. The provider MUST show the operator the
+   * connection target (host/endpoint) BEFORE collecting or reusing any secret —
+   * BFS-core is blind to which config field is the destination vs the secret, so
+   * only the provider can present a meaningful target (see
+   * architecture/decisions.md → "Provider jest właścicielem sekretu i weryfikacji
+   * celu"). It may reuse a secret from `pool` (collected for other providers,
+   * each labelled with its origin) or collect a fresh one via io.askSecret, MUST
+   * let the operator decline, then connect + authenticate.
+   *
+   * Optional: when a provider does not implement it, BFS falls back to prompting
+   * for the location map's `required_inputs` via io.askSecret — the legacy path,
+   * which cannot show the host and stays vulnerable to a redirected location map.
+   *
+   * @param io   - ProviderIO for showing the target and collecting the secret
+   * @param pool - secrets already collected this recovery, offered for reuse
+   * @param options.trustLocation - when true, the operator has pre-approved the
+   *   recovered locations (unattended recovery, `bfs recovery --trust-locations`),
+   *   so the provider connects WITHOUT blocking on a host confirmation. It may
+   *   still surface the target for the log. Default/false: confirm before
+   *   sending the secret. Interactive recovery — the 99% case — leaves it false.
+   * @returns the secret to add to the pool (reusable across siblings), or null
+   *          when the provider uses no reusable secret (anonymous / token)
+   * @throws when the operator declines or the connection/authentication fails —
+   *         BFS treats it as a degraded skip of this provider
+   */
+  connectForRecovery?(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<string | null>;
 }
 
 export interface RemoteRef {
@@ -580,6 +614,16 @@ export interface ShardIdentity {
   vault_id: string; // vault UUID — detects a foreign shard
   shard_index: number; // 0..N+K-1 — detects a wrong shard index
   version: number; // shard version — detects a wrong version
+}
+
+/**
+ * A transport secret collected during recovery, labelled with the provider it
+ * was first supplied for. BFS carries these between providers as a blind courier
+ * (StorageProvider.connectForRecovery) — it never inspects the value.
+ */
+export interface RecoverySecret {
+  readonly value: string;
+  readonly origin: string; // provider id the secret was collected for
 }
 
 /**

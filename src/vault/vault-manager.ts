@@ -20,6 +20,7 @@ import { type PushMode, VersionHealth } from '../types/index.js';
 import { checkVersionMismatch, detectMissingAdapters, formatMissingAdaptersMessage } from './adapter-preflight.js';
 import { assertSchemeValid, readConfig, writeConfig } from './config.js';
 import { deleteManifest, listManifests, readManifest, writeManifest } from './manifest.js';
+import { confirmRecoveredLocations } from './recovered-locations.js';
 import { DEFAULT_STATE, readState, writeState } from './state.js';
 
 // Public push entry points, re-exported from the push pipeline module.
@@ -862,7 +863,13 @@ export async function prune(rootDir: string, options: PruneOptions): Promise<voi
  * - 'relocate': updates shard headers with new connection info.
  * - 'rebuild': downloads remaining shards, RS-repairs, uploads to target provider.
  *
- * @throws BfsError on validation failure or missing required options.
+ * When the config is unconfirmed after a disaster recovery
+ * (state.locations_confirmed === false), the network-writing strategies
+ * ('relocate'/'rebuild') first require the operator to confirm the provider
+ * locations and clear the flag once the heal completes; 'remove' is not gated.
+ *
+ * @throws BfsError on validation failure, missing required options, or when the
+ *   operator declines the post-recovery location confirmation.
  */
 export async function removeProvider(rootDir: string, providerId: string, options: RemoveProviderOptions): Promise<void> {
   const config = await readConfig(rootDir);
@@ -872,6 +879,20 @@ export async function removeProvider(rootDir: string, providerId: string, option
 
   if (!config.providers.find((p) => p.id === providerId)) {
     throw new BfsError(fmt('provider_not_found_in_config', providerId));
+  }
+
+  // relocate/rebuild authenticate to every provider in the recovered config to
+  // rewrite shard headers (and rebuild uploads a reconstructed shard). After a
+  // disaster recovery that config came from an untrusted --no-enc location map,
+  // so confirm the locations before contacting any host. 'remove' performs no
+  // network write, so it is not gated. Cleared on the first confirmed heal.
+  let clearLocationsConfirmed = false;
+  if (options.strategy === 'relocate' || options.strategy === 'rebuild') {
+    const state = await readState(rootDir);
+    if (state.locations_confirmed === false) {
+      await confirmRecoveredLocations(config, options.io);
+      clearLocationsConfirmed = true;
+    }
   }
 
   if (options.strategy === 'remove') {
@@ -902,6 +923,7 @@ export async function removeProvider(rootDir: string, providerId: string, option
       ...(options.password !== undefined ? { password: options.password } : {}),
       ...(options.newType !== undefined ? { newType: options.newType } : {}),
     });
+    if (clearLocationsConfirmed) await _clearLocationsConfirmed(rootDir);
     return;
   }
 
@@ -920,7 +942,17 @@ export async function removeProvider(rootDir: string, providerId: string, option
     // Remove old provider from config (target provider is already in config)
     const updatedProviders = config.providers.filter((p) => p.id !== providerId);
     await writeConfig(rootDir, { ...config, providers: updatedProviders });
+    if (clearLocationsConfirmed) await _clearLocationsConfirmed(rootDir);
   }
+}
+
+/**
+ * Clears the post-recovery "unconfirmed locations" flag after a confirmed heal,
+ * so subsequent write operations run unprompted.
+ */
+async function _clearLocationsConfirmed(rootDir: string): Promise<void> {
+  const state = await readState(rootDir);
+  await writeState(rootDir, { ...state, locations_confirmed: true });
 }
 
 /**

@@ -288,6 +288,7 @@ export interface Strings {
   recovery_opt_name: string;
   recovery_opt_password: string;
   recovery_opt_allow_missing_adapters: string;
+  recovery_opt_trust_locations: string;
   /** %s = raw spec */
   recovery_bootstrap_empty: string;
   /** %s = validation errors joined */
@@ -347,6 +348,8 @@ export interface Strings {
   provider_add_name_required: string;
   /** %s = id */
   provider_id_invalid_chars: string;
+  /** %s = name */
+  vault_name_invalid_chars: string;
   /** %s = name */
   provider_add_exists: string;
   /** %s = provider id */
@@ -454,6 +457,11 @@ export interface Strings {
   vault_password_required: string;
   vault_passwords_mismatch: string;
   push_no_config: string;
+  push_recovered_locations_intro: string;
+  /** %s = provider name, %s = location description */
+  push_recovered_location: string;
+  push_confirm_recovered_locations: string;
+  push_recovered_locations_declined: string;
   // ─── vault — pull / versions / provider runtime ──────────────────────────
   /** %s = data count N (need), %s = available/found count (got) */
   pull_not_enough_shards: string;
@@ -615,6 +623,14 @@ export interface Strings {
   /** %s = host:port */
   ftp_insecure_warning: string;
   ftp_control_chars: string;
+  /** %s = host[:port], %s = path */
+  ftp_recovery_confirm_host: string;
+  /** %s = host[:port], %s = path */
+  ftp_recovery_target: string;
+  /** %s = host[:port] */
+  ftp_recovery_password: string;
+  /** %s = host[:port] */
+  ftp_recovery_declined: string;
 
   // ─── FTP — configureFromFlags + validateConfig ───────────────────────────
   ftp_config_port_invalid: string;

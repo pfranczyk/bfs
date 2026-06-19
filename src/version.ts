@@ -2,7 +2,7 @@
  * Current BFS release version. Must stay in sync with package.json — update
  * both together for a release. Used for diagnostic display ("BFS x.y.z").
  */
-export const BFS_VERSION = '0.7.0-beta.3';
+export const BFS_VERSION = '0.7.0-rc.1';
 
 /**
  * Provider contract API version.
@@ -85,5 +85,11 @@ export const BFS_VERSION = '0.7.0-beta.3';
  *           VerifyShardResult classifying the shard identity check
  *           (ok / not_found / mismatch / auth_failed / corrupted /
  *           unverifiable) without requiring the vault key.
+ *         • connectForRecovery(io, pool, options?) — OPTIONAL, added without a
+ *           bump: lets an adapter show the destination host and collect/reuse
+ *           the transport secret during `bfs recovery`, so a forged --no-enc
+ *           location map cannot phish the secret before the operator sees the
+ *           target. Adapters that omit it fall back to the legacy
+ *           required_inputs prompt flow (and stay exposed).
  */
 export const BFS_PROVIDER_API_VERSION = 2;

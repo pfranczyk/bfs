@@ -41,6 +41,26 @@ export function resolveSafeChildPath(rootDir: string, relativePath: string): str
 }
 
 /**
+ * Asserts a vault name is a single safe path segment before it is joined into a
+ * storage path ({base}/{vaultName}/shard_...). Rejects path separators and the
+ * relative segments `.` / `..` so a crafted or careless name cannot escape the
+ * provider's base directory. This is the same BFS-core path-traversal invariant
+ * as resolveSafeChildPath, scoped to a single segment; medium-specific dangers
+ * (e.g. FTP control-channel CR/LF/NUL) remain the provider's responsibility.
+ *
+ * @param vaultName Vault name used as a directory segment on the medium.
+ * @throws UnsafePathError if it contains "/", "\\", or is "." / "..".
+ */
+export function assertSafeVaultName(vaultName: string): void {
+  if (vaultName.includes('/') || vaultName.includes('\\')) {
+    throw new UnsafePathError(vaultName, 'contains a path separator');
+  }
+  if (vaultName === '.' || vaultName === '..') {
+    throw new UnsafePathError(vaultName, 'is a relative path segment');
+  }
+}
+
+/**
  * Atomically writes JSON to a file via .tmp + rename.
  * On POSIX and Windows, rename is atomic when source and destination are on
  * the same filesystem (parent directory of filePath). A crash mid-write leaves

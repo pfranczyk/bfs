@@ -143,5 +143,53 @@ export async function suiteA(vaultDir: string): Promise<SuiteResult> {
     }),
   );
 
+  // ── Vault name path-traversal rejection ──────────────────────────────────
+  // A vault name becomes a path segment under each provider's base path
+  // ({base}/{vault_name}/shard_...). init must reject names containing path
+  // separators or '..' so a name like '../evil' or 'a/b' cannot write shards
+  // outside the configured base. Guards exit≠0 AND that no traversal/separator
+  // directory materialises on disk. Does NOT assert the exact i18n message —
+  // only exit code and the absence of a side-effect.
+
+  tests.push(
+    await runTest('A11', 'bfs init --ci --name "../evil" → abort, no traversal dir', async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-smoke-trav-'));
+      try {
+        const r = runBfs(['init', '../evil', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', `local:p1 --path ${dir}`, '--provider', `local:p2 --path ${dir}`, '--provider', `local:p3 --path ${dir}`], dir);
+        assert(r.status !== 0, `expected non-zero exit, got ${r.status ?? 'null'}`);
+
+        // The escape target would be a sibling 'evil' dir next to `dir`
+        // (dir/../evil). It must not exist.
+        const escaped = await fs
+          .stat(path.join(path.dirname(dir), 'evil'))
+          .then(() => true)
+          .catch(() => false);
+        assert(!escaped, 'vault name "../evil" must NOT create a directory outside the base path');
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+        await fs.rm(path.join(path.dirname(dir), 'evil'), { recursive: true, force: true }).catch(() => {});
+      }
+    }),
+  );
+
+  tests.push(
+    await runTest('A12', 'bfs init --ci --name "a/b" → abort, no nested dir', async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-smoke-trav-'));
+      try {
+        const r = runBfs(['init', 'a/b', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', `local:p1 --path ${dir}`, '--provider', `local:p2 --path ${dir}`, '--provider', `local:p3 --path ${dir}`], dir);
+        assert(r.status !== 0, `expected non-zero exit, got ${r.status ?? 'null'}`);
+
+        // A 'a/b' name would create a nested base/a/b shard directory.
+        const nested = await fs
+          .stat(path.join(dir, 'a', 'b'))
+          .then(() => true)
+          .catch(() => false);
+        assert(!nested, 'vault name "a/b" must NOT create a nested directory under the base path');
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+    }),
+  );
+
   return { name: 'Suite A — CLI bootstrap', tests };
 }

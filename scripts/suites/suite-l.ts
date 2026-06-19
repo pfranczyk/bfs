@@ -170,13 +170,16 @@ export async function suiteL(): Promise<SuiteResult> {
     // password and port — only host was passed. With --bootstrap, every
     // adapter flag reaches FtpProvider.configureFromFlags, so FTP can
     // authenticate and rebuild .bfs/ from the existing shards.
+    //
+    // --trust-locations skips the host-gate confirmation; the non-interactive
+    // harness cannot answer it, so without the flag recovery rebuilds nothing.
     tests.push(
       await runTest('L7', 'bfs recovery z FTP via --bootstrap', async () => {
         // Wipe restoreDir to simulate disaster — only providers retain shards.
         await fs.rm(restoreDir, { recursive: true, force: true });
         await fs.mkdir(restoreDir, { recursive: true });
 
-        const r = runBfs(['recovery', '--provider', 'ftp', '--name', 'ftp-test-vault', '--bootstrap', FTP_FLAGS], restoreDir);
+        const r = runBfs(['recovery', '--provider', 'ftp', '--name', 'ftp-test-vault', '--bootstrap', FTP_FLAGS, '--trust-locations'], restoreDir);
         assert(r.status === 0, `recovery exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
 
         const manifestPath = path.join(restoreDir, '.bfs', 'manifests', 'v001.json');
@@ -185,6 +188,25 @@ export async function suiteL(): Promise<SuiteResult> {
           .then(() => true)
           .catch(() => false);
         assert(manifestExists, `expected .bfs/manifests/v001.json after recovery, missing in:\n${r.stdout}\n${r.stderr}`);
+      }),
+    );
+
+    // Without --trust-locations the host-gate confirmation goes unanswered, so it
+    // refuses and rebuilds nothing. The cancelled prompt exits 0, so the refusal
+    // shows as the missing manifest, not a non-zero exit.
+    tests.push(
+      await runTest('L7b', 'bfs recovery z FTP bez --trust-locations → host-gate nie odbudowuje', async () => {
+        await fs.rm(restoreDir, { recursive: true, force: true });
+        await fs.mkdir(restoreDir, { recursive: true });
+
+        const r = runBfs(['recovery', '--provider', 'ftp', '--name', 'ftp-test-vault', '--bootstrap', FTP_FLAGS], restoreDir);
+
+        const manifestPath = path.join(restoreDir, '.bfs', 'manifests', 'v001.json');
+        const manifestExists = await fs
+          .stat(manifestPath)
+          .then(() => true)
+          .catch(() => false);
+        assert(!manifestExists, `host-gate must block recovery without --trust-locations, but the manifest was rebuilt:\n${r.stdout}\n${r.stderr}`);
       }),
     );
   } finally {

@@ -8,8 +8,10 @@
 #
 # Closes the e2e gap left by K2 (Issue 8): credentials are stripped from shard
 # headers, so recovery on a mixed local+FTP vault asks for the FTP password.
-# Guards that the prompt actually fires (PROMPTS_FED=1/1) and the restore is
-# byte-for-byte correct after the operator supplies it.
+# Each FTP sibling first confirms its destination host, then (for the first one)
+# prompts for the password; the second sibling confirms its host but reuses the
+# pooled secret. Guards that all prompts fire (PROMPTS_FED=3/3) and the restore
+# is byte-for-byte correct after the operator supplies the secret.
 
 SCENARIO_NAME="interactive recovery prompt (local bootstrap → FTP password)"
 SCENARIO_DESC="stripped vault, recovery prompts for FTP secret via PTY, restore"
@@ -34,17 +36,21 @@ scenario_run() {
   rm -rf "$vault/.bfs"
   assert_no_file "$vault/.bfs/config.json"
 
-  # Bootstrap from the LOCAL provider p0 → its config has no secret, so the
-  # seed pool is empty and recovery must prompt for the FTP "password" field.
-  # The first FTP provider triggers one askSecret; the typed value is pooled,
-  # so the second FTP provider connects without a second prompt.
+  # Bootstrap from the LOCAL provider p0 → its config has no secret, so the seed
+  # pool is empty and recovery must reconnect each FTP sibling interactively.
+  # connectForRecovery() confirms the destination host BEFORE asking for the
+  # password: confirm host (y) → FTP password. The typed password is pooled, so
+  # the second FTP sibling still confirms its host but reuses the pooled secret
+  # without a second password prompt. Hence the prompt sequence for two FTP
+  # siblings is: confirm, password, confirm.
   local answers
-  answers='[{"anchor":"required to reconnect during recovery","value":"'"${FTP_PASS[0]}"'"}]'
+  answers='[{"anchor":"Send it to this host","value":"y"},{"anchor":"FTP password for","value":"'"${FTP_PASS[0]}"'"},{"anchor":"Send it to this host","value":"y"}]'
   run_bfs_pty "$vault" "$answers" --lang en recovery --provider local --name "$name" \
     --bootstrap "--path $(winpath "${PV_LOCALDIR[0]}")"
   assert_ok
-  # The prompt must have actually rendered and been answered — not bypassed.
-  assert_out_contains "PROMPTS_FED=1/1"
+  # All three prompts (confirm, password, confirm) must have rendered and been
+  # answered — not bypassed.
+  assert_out_contains "PROMPTS_FED=3/3"
   assert_file "$vault/.bfs/config.json"
   assert_file "$vault/.bfs/manifests/v001.json"
 

@@ -8,10 +8,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 // which init/push/heal resolve by string "local".
 import '../../src/providers/local-fs.js';
 import { packBlob } from '../../src/core/blob-pack.js';
+import { BfsError } from '../../src/core/errors.js';
 import { hashBuffer, SHA256_BYTES } from '../../src/core/hash.js';
 import { createIgnoreFilter } from '../../src/core/ignore.js';
 import { rsEncode } from '../../src/core/reed-solomon.js';
-import { buildShard, parseShardHeaderFromStream, uuidToBuffer } from '../../src/core/shard-io.js';
+import { buildShard, buildShardHeaderFromBytes, buildShardV2, computeShardHeaderSize, parseShardHeaderFromStream, uuidToBuffer } from '../../src/core/shard-io.js';
 import { createMockProviderIO, providerRegistry } from '../../src/providers/provider.js';
 import type { ProviderConfig, ProviderIO, ShardHeader, ShardLocation, VaultConfig, VersionManifest } from '../../src/types/index.js';
 import { PushMode, VersionHealth } from '../../src/types/index.js';
@@ -486,5 +487,80 @@ describe('relocateProvider secret stripping', () => {
         expect(loc.required_inputs).toEqual(['password']);
       }
     }
+  });
+});
+
+// ─── S4 — heal cross-validates metadata between shards (RED) ──────────────────
+//
+// Today `extractShardMeta` (src/vault/heal.ts) takes blob_hash / vault_name /
+// kdf_salt / rsStripeSize / blob_size / vault_id / format_version from the FIRST
+// available shard binary and `break`s — zero cross-validation against the other
+// available siblings. So an attacker who rewrites a single sibling's header (the
+// `--no-enc` header is guarded only by an unkeyed trailing checksum, which
+// buildShardV2 recomputes on forge) can feed heal divergent metadata that it
+// silently trusts.
+//
+// GREEN contract: extractShardMeta compares blob_hash / vault_name (and the
+// other identity fields) across ALL available shards; any divergence throws
+// (TamperDetectedError / BfsError). It also runs assertSafeVaultName on the
+// adopted vault_name.
+//
+// RED today: a 2+1 vault with shard_1's header blob_hash (or vault_name) forged
+// to differ from shard_0's is fed to rebuildVersion (rebuild shard_2 onto p3).
+// Heal reads shard_0 first, breaks, never inspects the divergent shard_1, and
+// completes without throwing.
+
+/**
+ * Forges one shard file in place: parses its V2 header, mutates a single header
+ * field, and re-seals with a freshly recomputed trailing SHA-256 (buildShardV2),
+ * so the shard stays byte-valid. Models the unkeyed-checksum tamper on a
+ * `--no-enc` shard.
+ */
+async function forgeShardHeaderField(shardPath: string, mutate: (header: ShardHeader) => void): Promise<void> {
+  const shard = await fs.readFile(shardPath);
+  const headerSize = computeShardHeaderSize(shard);
+  const payload = shard.subarray(headerSize, shard.length - SHA256_BYTES);
+  const header = buildShardHeaderFromBytes(shard.subarray(0, headerSize));
+  mutate(header);
+  await fs.writeFile(shardPath, buildShardV2(header, payload));
+}
+
+describe('extractShardMeta cross-validation (S4)', () => {
+  let dirs: string[];
+
+  beforeEach(() => {
+    dirs = [];
+  });
+
+  afterEach(async () => {
+    await cleanup(dirs);
+  });
+
+  it('should throw when an available shard header diverges in blob_hash during rebuild', async () => {
+    const setup = await setupVault({ encrypted: false });
+    dirs = [setup.root, ...setup.providerDirs];
+
+    // Forge shard_1 (provider p1, an AVAILABLE sibling that heal downloads):
+    // change its header blob_hash so it no longer matches shard_0's.
+    const shard1Path = path.join(setup.providerDirs[1], 'heal-test', 'shard_1.bfs.1');
+    await forgeShardHeaderField(shard1Path, (h) => {
+      h.blob_hash = 'f'.repeat(64);
+    });
+
+    // Rebuild shard_2 (removed p2) onto the spare p3. extractShardMeta scans the
+    // available shards (shard_0, shard_1) — they now disagree on blob_hash.
+    await expect(rebuildVersion(setup.root, 1, { removedProviderId: 'p2', targetProviderId: 'p3', io: setup.io })).rejects.toThrow(BfsError);
+  });
+
+  it('should throw when an available shard header diverges in vault_name during rebuild', async () => {
+    const setup = await setupVault({ encrypted: false });
+    dirs = [setup.root, ...setup.providerDirs];
+
+    const shard1Path = path.join(setup.providerDirs[1], 'heal-test', 'shard_1.bfs.1');
+    await forgeShardHeaderField(shard1Path, (h) => {
+      h.vault_name = 'rogue-vault';
+    });
+
+    await expect(rebuildVersion(setup.root, 1, { removedProviderId: 'p2', targetProviderId: 'p3', io: setup.io })).rejects.toThrow(BfsError);
   });
 });

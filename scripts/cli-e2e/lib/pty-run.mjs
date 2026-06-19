@@ -31,16 +31,26 @@ const answers = JSON.parse(process.env.PTY_ANSWERS ?? '[]');
 const timeoutMs = Number(process.env.PTY_TIMEOUT ?? 90000);
 const repoRoot = path.dirname(path.dirname(entry));
 
-const child = spawn(process.execPath, ['--import', 'tsx', entry, '--cwd', vaultCwd, ...bfsArgs], { name: 'xterm-color', cols: 100, rows: 40, cwd: repoRoot, env: process.env });
+// Wide terminal so inquirer never wraps a long prompt line. At a narrow width
+// (Linux pty honours `cols`; Windows ConPTY does not), inquirer hard-wraps the
+// message to the column count, which can split an answer anchor across a line
+// break so indexOf() never matches — the driver then times out. A column count
+// far beyond any prompt avoids the wrap entirely.
+const child = spawn(process.execPath, ['--import', 'tsx', entry, '--cwd', vaultCwd, ...bfsArgs], { name: 'xterm-color', cols: 1000, rows: 40, cwd: repoRoot, env: process.env });
 
-let full = '';
+// biome-ignore lint/suspicious/noControlCharactersInRegex: ESC (\x1b) is required to strip ANSI terminal escapes from PTY output
+const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+let full = ''; // raw output, mirrored to stdout for scenario assertions
+let clean = ''; // ANSI-stripped view used for anchor matching
 let searchFrom = 0;
 let idx = 0;
 
 const feedReadyAnswers = () => {
   while (idx < answers.length) {
     const { anchor, value } = answers[idx];
-    const pos = full.indexOf(anchor, searchFrom);
+    // Match against ANSI-stripped text: inquirer interleaves cursor/colour
+    // escapes with the prompt, which would otherwise break a substring anchor.
+    const pos = clean.indexOf(anchor, searchFrom);
     if (pos === -1) return;
     child.write(`${value}\r`);
     searchFrom = pos + anchor.length;
@@ -60,6 +70,7 @@ const killTimer = setTimeout(() => {
 
 child.onData((data) => {
   full += data;
+  clean = full.replace(ANSI, '');
   process.stdout.write(data);
   feedReadyAnswers();
 });

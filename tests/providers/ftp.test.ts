@@ -3,12 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BfsError, ProviderError } from '../../src/core/errors.js';
+import { BfsError, ProviderError, UnsafePathError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
 import { buildShard, parseShardHeaderFromStream } from '../../src/core/shard-io.js';
 import { FtpProvider } from '../../src/providers/ftp.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
-import type { CliProviderInput, ProviderConfig, ShardHeader, ShardLocation } from '../../src/types/index.js';
+import type { CliProviderInput, ProviderConfig, ProviderIO, ShardHeader, ShardLocation } from '../../src/types/index.js';
 
 async function writeJsonConfig(content: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-ftp-cfg-'));
@@ -395,6 +395,18 @@ describe('FtpProvider', () => {
     p.setVaultName('vault\r\nDELE secret');
 
     await expect(uploadBuf(p, 'shard_0.bfs.1', Buffer.alloc(8, 1))).rejects.toThrow(ProviderError);
+  });
+
+  it('should reject a vault name with a parent-traversal segment before any FTP operation', async () => {
+    // vaultPath() guards only CR/LF/NUL today, so '../evil' builds an escaping
+    // remote path ({base}/../evil) and the upload genuinely proceeds to STOR
+    // there. The safe-segment rule is a BFS-core invariant (same as local-fs),
+    // so traversal must throw the core UnsafePathError before any FTP command.
+    const { io } = createMockProviderIO();
+    const p = new FtpProvider(makeConfig(), io);
+    p.setVaultName('../evil');
+
+    await expect(uploadBuf(p, 'shard_0.bfs.1', Buffer.alloc(8, 1))).rejects.toThrow(UnsafePathError);
   });
 
   // ─── upload / download roundtrip ─────────────────────────────────────────
@@ -1045,6 +1057,124 @@ describe('FtpProvider', () => {
       const result = await provider.verifyShard({ provider_id: 'test-ftp', path: 'shard_0.bfs.1' }, IDENTITY);
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.reason).toBe('corrupted');
+    });
+  });
+
+  // ─── connectForRecovery — show the host BEFORE collecting the secret ────────
+  //
+  // The recovery credential-phishing defence is an optional provider hook:
+  //   connectForRecovery(io, pool): Promise<string | null>
+  // Contract: the provider MUST surface the connection target (host:port) to the
+  // operator BEFORE it collects or sends any secret, may reuse a secret from the
+  // supplied pool, connects + authenticates itself, and returns the secret to add
+  // to the pool (labelled with its id) or null when there is no reusable secret.
+  // Declining the host MUST throw before any secret is collected.
+  describe('connectForRecovery', () => {
+    type RecoverySecret = { value: string; origin: string };
+    type WithRecovery = FtpProvider & { connectForRecovery(io: ProviderIO, pool: readonly RecoverySecret[]): Promise<string | null> };
+
+    /**
+     * Builds a recording io: askSecret returns `secret` and pushes a marker into
+     * `order` so a test can assert the host was shown (info/confirm) before the
+     * secret was requested.
+     */
+    function recordingIo(secret: string): { io: ProviderIO; order: string[] } {
+      const order: string[] = [];
+      const io: ProviderIO = {
+        lang: 'en',
+        workDir: process.cwd(),
+        async ask(): Promise<string> {
+          return '';
+        },
+        async askSecret(): Promise<string> {
+          order.push('askSecret');
+          return secret;
+        },
+        async confirm(message: string): Promise<boolean> {
+          order.push(`confirm:${message}`);
+          return true;
+        },
+        async choose(_m: string, options: string[]): Promise<string> {
+          return options[0] ?? '';
+        },
+        info(message: string): void {
+          order.push(`info:${message}`);
+        },
+        debug(): void {},
+        warn(): void {},
+        progress(): void {},
+      };
+      return { io, order };
+    }
+
+    it('should show host:port before collecting the password, then return the typed secret', async () => {
+      const { io, order } = recordingIo('victim-pw');
+      const ftpProvider = new FtpProvider(makeConfig({ host: '203.0.113.7', port: 2121, user: 'victim' }), io) as WithRecovery;
+      ftpProvider.setVaultName('testvault');
+
+      const returned = await ftpProvider.connectForRecovery(io, []);
+
+      // The host:port must appear in an io call (info/confirm) BEFORE askSecret.
+      const askIndex = order.indexOf('askSecret');
+      const hostIndex = order.findIndex((e) => e.includes('203.0.113.7:2121') || e.includes('203.0.113.7'));
+      expect(hostIndex).toBeGreaterThanOrEqual(0);
+      expect(askIndex).toBeGreaterThanOrEqual(0);
+      expect(hostIndex).toBeLessThan(askIndex);
+      // The collected secret is returned so the pool can reuse it across siblings.
+      expect(returned).toBe('victim-pw');
+    });
+
+    it('should still show the host when reusing a pooled secret', async () => {
+      const { io, order } = recordingIo('unused-fresh');
+      const ftpProvider = new FtpProvider(makeConfig({ host: '198.51.100.4', port: 21, user: 'victim' }), io) as WithRecovery;
+      ftpProvider.setVaultName('testvault');
+
+      const pool: RecoverySecret[] = [{ value: 'pooled-pw', origin: 'p0' }];
+      await ftpProvider.connectForRecovery(io, pool);
+
+      const hostShown = order.some((e) => e.includes('198.51.100.4'));
+      expect(hostShown).toBe(true);
+    });
+
+    // Decline path: confirm → false must throw before askSecret is reached, so
+    // the secret is never collected — a forged host cannot phish the password.
+    it('should refuse and collect no secret when the operator declines the host', async () => {
+      const order: string[] = [];
+      let askSecretCalled = false;
+      const io: ProviderIO = {
+        lang: 'en',
+        workDir: process.cwd(),
+        async ask(): Promise<string> {
+          return '';
+        },
+        async askSecret(): Promise<string> {
+          askSecretCalled = true;
+          order.push('askSecret');
+          return 'never-collected';
+        },
+        async confirm(message: string): Promise<boolean> {
+          order.push(`confirm:${message}`);
+          return false;
+        },
+        async choose(_m: string, options: string[]): Promise<string> {
+          return options[0] ?? '';
+        },
+        info(message: string): void {
+          order.push(`info:${message}`);
+        },
+        debug(): void {},
+        warn(): void {},
+        progress(): void {},
+      };
+      const ftpProvider = new FtpProvider(makeConfig({ host: '203.0.113.7', port: 2121, user: 'victim' }), io) as WithRecovery;
+      ftpProvider.setVaultName('testvault');
+
+      // The host:port is shown in the confirm prompt, the call rejects with a
+      // ProviderError, and askSecret is never invoked — no secret leaves the box.
+      await expect(ftpProvider.connectForRecovery(io, [])).rejects.toBeInstanceOf(ProviderError);
+      expect(askSecretCalled).toBe(false);
+      const declinedAt = order.findIndex((e) => e.startsWith('confirm:') && e.includes('203.0.113.7'));
+      expect(declinedAt).toBeGreaterThanOrEqual(0);
     });
   });
 });

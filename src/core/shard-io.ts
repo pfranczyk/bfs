@@ -14,6 +14,15 @@ const SALT_SIZE = 16;
 const INITIAL_READ_SIZE = 4096;
 
 /**
+ * Maximum striped-RS stripe size a V2 shard header may declare (256 MiB).
+ * rsDecodeStriped allocates (N+K) × stripe_size on the read path, so a crafted
+ * header carrying a multi-GiB stripe would drive an OOM during pull/recovery.
+ * Push never writes above this cap (push-pipeline imports it); the header parser
+ * rejects anything above it — or zero — as a corrupted shard.
+ */
+export const V2_MAX_STRIPE_SIZE = 256 * 1024 * 1024;
+
+/**
  * Default byte budget for header reads — both the in-shard header (downloadHeader)
  * and the sidecar (downloadHeaderSidecar). A shard header is a few hundred bytes
  * to a few KB; 16 KB is a comfortable bound that avoids pulling the full payload.
@@ -609,6 +618,12 @@ function parseCommonHeaderFields(data: Buffer, startPos: number) {
   if (format_version >= FORMAT_VERSION_2) {
     rs_stripe_size = data.readUInt32LE(pos);
     pos += 4;
+    // Clamp the untrusted stripe size before it feeds rsDecodeStriped's
+    // (N+K) × stripe_size allocation. Zero is invalid; anything above the cap
+    // push enforces is a crafted/corrupted header, not a recoverable shard.
+    if (rs_stripe_size === 0 || rs_stripe_size > V2_MAX_STRIPE_SIZE) {
+      throw new ShardCorruptedError(`rs_stripe_size ${rs_stripe_size} is out of range (1..${V2_MAX_STRIPE_SIZE})`);
+    }
   }
 
   const map_length = data.readUInt32LE(pos);

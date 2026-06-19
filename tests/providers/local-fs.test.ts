@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BfsError, ProviderError } from '../../src/core/errors.js';
+import { BfsError, ProviderError, UnsafePathError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
 import { buildShard, parseShardHeaderFromStream } from '../../src/core/shard-io.js';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
@@ -558,6 +558,82 @@ describe('LocalFsProvider', () => {
       const result = await provider.verifyShard({ provider_id: 'test-local', path: 'shard_0.bfs.1' }, IDENTITY);
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.reason).toBe('corrupted');
+    });
+  });
+
+  // ─── vault name runtime guard (path traversal) ──────────────────────────────
+  // A vault name becomes a path segment under basePath ({basePath}/{vaultName}/
+  // shard_...). With no guard the name escapes the root for real: list() reads
+  // the parent directory, and upload() (recursive mkdir + write) lands the shard
+  // outside the configured base. The provider must refuse it where the path is
+  // built (vaultDir()). The safe-segment rule is a BFS-core invariant, so it
+  // throws the core UnsafePathError — the same type the unpack-path traversal
+  // guard (resolveSafeChildPath) raises — not a provider-specific ProviderError.
+  // Scope is separators / '..' only; control chars / NUL are a transport concern
+  // (covered in ftp.test.ts) and stay out of this filesystem-segment floor.
+  //
+  // Each case points the base path one level below a throwaway temp root, so the
+  // escape resolves *inside* that root: the RED is a genuine escape (not an
+  // incidental OS error) and nothing is left behind on disk.
+  describe('vault name runtime guard', () => {
+    async function withBase(run: (base: string) => Promise<void>): Promise<void> {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-lf-trav-'));
+      const base = path.join(root, 'base');
+      await fs.mkdir(base);
+      try {
+        await run(base);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    }
+
+    // upload() recursively creates the resolved directory and writes the shard
+    // there, so today the write SUCCEEDS at an escaping / separator-injected path
+    // — exactly the vulnerability. The guard must reject before the write.
+    const ESCAPING_NAMES: ReadonlyArray<[label: string, name: string]> = [
+      ['bare dot-dot (escapes to parent)', '..'],
+      ['parent-traversal prefix', '../evil'],
+      ['forward-slash separator', 'a/b'],
+      ['backslash separator', 'a\\b'],
+    ];
+
+    for (const [label, name] of ESCAPING_NAMES) {
+      it(`should reject upload() for a vault name with ${label}`, async () => {
+        await withBase(async (base) => {
+          const { io } = createMockProviderIO();
+          const p = new LocalFsProvider(makeConfig(base), io);
+          p.setVaultName(name);
+
+          await expect(uploadBuf(p, 'shard_0.bfs.1', Buffer.from('x'))).rejects.toThrow(UnsafePathError);
+        });
+      });
+    }
+
+    // Concrete read-escape demonstration: with '..', list() resolves base/.. =
+    // the parent directory and returns its contents today. The guard must turn
+    // that into UnsafePathError.
+    it('should reject list() for a vault name that escapes to the parent dir', async () => {
+      await withBase(async (base) => {
+        const { io } = createMockProviderIO();
+        const p = new LocalFsProvider(makeConfig(base), io);
+        p.setVaultName('..');
+
+        await expect(p.list()).rejects.toThrow(UnsafePathError);
+      });
+    });
+
+    // Control case — proves the guard is not overly broad: a normal name still
+    // works end-to-end (list returns, upload succeeds).
+    it('should accept a normal vault name (no false positive)', async () => {
+      await withBase(async (base) => {
+        const { io } = createMockProviderIO();
+        const p = new LocalFsProvider(makeConfig(base), io);
+        p.setVaultName('my-backup');
+
+        await expect(p.list()).resolves.toEqual([]);
+        const ref = await uploadBuf(p, 'shard_0.bfs.1', Buffer.from('payload'));
+        expect(ref.path).toBe('shard_0.bfs.1');
+      });
     });
   });
 });

@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0-rc.1] - 2026-06-19
+
+### Security
+- **`bfs init` now rejects backup names that could write outside the configured
+  storage location.** A backup name containing a path separator or `..`
+  previously became part of the folder path on every storage, so a careless or
+  pasted name could place backup data — and later delete it — outside the
+  intended directory, on local disks and over FTP alike. `bfs init` now rejects
+  such names with a clear error before any configuration is written.
+- **A malformed backup header can no longer exhaust memory during `bfs pull` or
+  `bfs recovery`.** A tampered or corrupted backup piece could declare an
+  absurdly large internal chunk size that the restore path tried to allocate up
+  front, aborting the operation — most dangerous when recovering from storage
+  you do not fully control. Such headers are now rejected as corrupted with a
+  clear error instead.
+- **Recovery can no longer be tricked into sending your storage password to an
+  attacker.** Restoring an unencrypted backup with `bfs recovery` trusted the
+  recovered piece's record of where the other pieces live; a single tampered
+  piece could redirect a provider to the attacker's host, so the password you
+  typed went there — and it stuck in the rebuilt configuration, so your next push
+  would ship data there too. Recovery now shows each destination before any
+  password is sent and lets you decline, cross-checks the recovered locations
+  across pieces and aborts on a mismatch, and the first write after recovery —
+  whether a push or a `bfs provider remove` that relocates or rebuilds storage —
+  confirms where data will go. Unattended recovery can opt out of the
+  per-destination prompt with `bfs recovery --trust-locations`. (Encrypted
+  backups were never exposed — their location record is authenticated.)
+- **Rebuilding a removed provider now aborts if the remaining pieces disagree
+  about the backup's identity.** `bfs provider remove --strategy rebuild` took
+  the backup metadata from the first piece it read; a tampered piece in an
+  unencrypted backup could feed it forged values unnoticed. It now cross-checks
+  the available pieces and refuses to rebuild on a mismatch.
+
+### Changed
+- **Adapter contract (`bfs-vault/provider`): optional `connectForRecovery` hook.**
+  Storage adapters may now implement `connectForRecovery(io, pool, options?)` to
+  show the operator the destination host before any secret is sent during
+  `bfs recovery` (the built-in FTP adapter does). Adapters that don't implement it
+  fall back to the previous prompt flow and remain exposed to the recovery
+  credential-phishing vector for unencrypted backups — implement the hook to opt
+  into the defense. No `BFS_PROVIDER_API_VERSION` bump (the method is optional).
+
 ## [0.7.0-beta.3] - 2026-06-15
 
 ### Fixed
@@ -527,7 +569,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.7.0-beta.3...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.7.0-rc.1...HEAD
+[0.7.0-rc.1]: https://github.com/pfranczyk/bfs/compare/v0.7.0-beta.3...v0.7.0-rc.1
 [0.7.0-beta.3]: https://github.com/pfranczyk/bfs/compare/v0.7.0-beta.2...v0.7.0-beta.3
 [0.7.0-beta.2]: https://github.com/pfranczyk/bfs/compare/v0.7.0-beta.1...v0.7.0-beta.2
 [0.7.0-beta.1]: https://github.com/pfranczyk/bfs/compare/v0.6.2...v0.7.0-beta.1
