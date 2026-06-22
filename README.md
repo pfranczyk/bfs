@@ -37,18 +37,6 @@ bfs pull
 npm install -g bfs-vault
 ```
 
-To try the latest prerelease (release candidate) instead of the latest stable:
-
-```bash
-npm install -g bfs-vault@rc
-```
-
-> **Prerelease note:** the `0.7.0` line is in release-candidate testing. Its
-> on-disk format and the provider adapter contract are not finalized until the
-> stable `0.7.0` release. The plain `npm install -g bfs-vault` command always
-> installs the latest **stable** version, never a prerelease. Evaluate
-> prereleases on test data, not your only copy.
-
 ## Quick start
 
 ```bash

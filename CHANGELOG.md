@@ -7,40 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.7.0-rc.1] - 2026-06-19
+## [0.7.0] - 2026-06-22
 
-### Security
-- **`bfs init` now rejects backup names that could write outside the configured
-  storage location.** A backup name containing a path separator or `..`
-  previously became part of the folder path on every storage, so a careless or
-  pasted name could place backup data — and later delete it — outside the
-  intended directory, on local disks and over FTP alike. `bfs init` now rejects
-  such names with a clear error before any configuration is written.
-- **A malformed backup header can no longer exhaust memory during `bfs pull` or
-  `bfs recovery`.** A tampered or corrupted backup piece could declare an
-  absurdly large internal chunk size that the restore path tried to allocate up
-  front, aborting the operation — most dangerous when recovering from storage
-  you do not fully control. Such headers are now rejected as corrupted with a
-  clear error instead.
-- **Recovery can no longer be tricked into sending your storage password to an
-  attacker.** Restoring an unencrypted backup with `bfs recovery` trusted the
-  recovered piece's record of where the other pieces live; a single tampered
-  piece could redirect a provider to the attacker's host, so the password you
-  typed went there — and it stuck in the rebuilt configuration, so your next push
-  would ship data there too. Recovery now shows each destination before any
-  password is sent and lets you decline, cross-checks the recovered locations
-  across pieces and aborts on a mismatch, and the first write after recovery —
-  whether a push or a `bfs provider remove` that relocates or rebuilds storage —
-  confirms where data will go. Unattended recovery can opt out of the
-  per-destination prompt with `bfs recovery --trust-locations`. (Encrypted
-  backups were never exposed — their location record is authenticated.)
-- **Rebuilding a removed provider now aborts if the remaining pieces disagree
-  about the backup's identity.** `bfs provider remove --strategy rebuild` took
-  the backup metadata from the first piece it read; a tampered piece in an
-  unencrypted backup could feed it forged values unnoticed. It now cross-checks
-  the available pieces and refuses to rebuild on a mismatch.
+### Added
+- **Warning when a backup is not encrypted.** `bfs init --no-enc` and every
+  `bfs push` of an unencrypted backup now print a warning: part of your data
+  is directly readable on a single storage device, and the addresses and
+  usernames of all your storage are visible on every device. Encryption (the
+  default) avoids both.
+- **Encrypted backups that are too large are now refused with a clear error.**
+  A single encryption key can only safely protect a limited amount of data, so
+  `bfs push` on an encrypted backup now stops with an explanatory message when
+  the per-unit data size would exceed that limit, suggesting you raise the data
+  count in the scheme (`bfs scheme set`) or back up a smaller directory —
+  instead of silently weakening the encryption.
+- **Security policy published (`SECURITY.md`).** The repository now documents how
+  to report a vulnerability privately, which versions receive security updates,
+  and a threat model: what each storage provider can and cannot see with and
+  without encryption, the metadata that stays in cleartext, how storage
+  credentials are handled, the per-key encryption size limit, and the
+  interactive nature of disaster recovery.
+- **Provider adapter contract v2 (`bfs-vault/provider`) — BREAKING for third-party adapters.** `BFS_PROVIDER_API_VERSION` is now `2`. `StorageProvider` gained four required methods — `usesSidecar`, `uploadHeaderSidecar`, `downloadHeaderSidecar` and `verifyShard` — so an adapter compiled against version 1 no longer satisfies the interface: it must implement all four methods and declare `requiresApiVersion: 2`. An adapter missing the methods is rejected with a clear incompatibility error when BFS instantiates it — so even a precompiled adapter that slips past registration fails loudly rather than silently. The built-in local disk and FTP adapters are already updated. A provider whose medium cannot rewrite a shard header in place (append-only object stores, APIs without partial writes) returns `usesSidecar() === true` and stores the updated header in a sidecar file using the standard **BFSH** binary format (magic + version + serialized header + SHA-256); providers that rewrite in place (the built-in local disk and FTP adapters) return `false` and are otherwise unchanged. The sidecar read-path is already active in `bfs verify`: when an adapter reports `usesSidecar() === true`, a present sidecar is read in preference to the in-shard header, so its `downloadHeaderSidecar` must work from this release. `verifyShard` lets a provider confirm a shard's identity (vault id, index, version) on its own medium; it has no consumer yet and is wired into the upcoming repair and recovery flows.
+- **Warning when a storage provider uses plain (unencrypted) FTP.** Every backup
+  operation that connects to an FTP provider with FTPS disabled now prints a
+  warning naming the server — the storage password and your backup data cross
+  the network in cleartext. The warning appears once per operation (a multi-shard
+  push warns once, not once per shard), so an unintended insecure transport is
+  hard to miss. Enable the provider's `secure` (FTPS) option, or run BFS only
+  over a network you trust.
 
 ### Changed
+- **Backups created with `bfs init` are now encrypted by default.** Both the
+  interactive setup and the non-interactive `bfs init --ci` enable encryption
+  unless you pass the new `--no-enc` flag to store the backup unencrypted. The
+  encryption password is still chosen on the first `bfs push`, so a
+  non-interactive push on a default (encrypted) backup now fails loudly when no
+  password is supplied, instead of silently writing plaintext. Existing backups
+  are unaffected — their encryption setting is read from their own
+  configuration. The `--enc` flag is still accepted for script compatibility
+  but is no longer needed.
+- **Storage passwords are no longer copied into your backup.** A provider's
+  password (and any other credential it marks as secret) is now kept only in
+  the local backup configuration and is no longer written into the data
+  distributed to your storage. This takes effect from the next `bfs push`;
+  data written by earlier versions keeps the old credentials until pushed
+  again. When you recover a backup on a fresh machine, BFS asks for the
+  storage password only when it is actually needed — and a shared password
+  entered once via `--bootstrap` is reused for every storage location that
+  uses it, so a typical single-server setup recovers without extra prompts.
+- **More CLI messages respect `--lang`.** A range of errors and prompts that were
+  previously English-only — across `bfs push`, `bfs pull` / restore, version
+  selection, and `bfs provider remove` — are now shown in the configured
+  language (e.g. "password required", "passwords do not match", "not enough
+  storage pieces", "pull cancelled", "no versions available"). User-facing
+  messages also now broadly avoid the internal term "vault".
 - **Adapter contract (`bfs-vault/provider`): optional `connectForRecovery` hook.**
   Storage adapters may now implement `connectForRecovery(io, pool, options?)` to
   show the operator the destination host before any secret is sent during
@@ -48,27 +68,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fall back to the previous prompt flow and remain exposed to the recovery
   credential-phishing vector for unencrypted backups — implement the hook to opt
   into the defense. No `BFS_PROVIDER_API_VERSION` bump (the method is optional).
-
-## [0.7.0-beta.3] - 2026-06-15
-
-### Fixed
-- **Rebuilding a removed provider's data no longer leaves an encrypted backup
-  unrestorable.** `bfs provider remove --strategy rebuild` wrote the reconstructed
-  piece in an outdated, unencrypted on-disk format incompatible with the rest of
-  the backup. `bfs verify` still reported the version healthy, but a `bfs pull`
-  that needed the rebuilt piece could not decrypt it — quietly cutting redundancy
-  until the data could no longer be restored. Rebuilt pieces are now written in the
-  same format as the rest of the backup and restore correctly.
-- **Disaster recovery now succeeds for a backup whose storage was relocated or
-  rebuilt.** After moving a provider to a new address (`bfs provider remove
-  --strategy relocate`) or rebuilding a removed provider's data onto another one,
-  the affected version's stored headers were rewritten in an outdated format. A
-  normal `bfs pull` still restored the data, but if you then lost your local backup
-  metadata and ran `bfs recovery`, the metadata was reconstructed incorrectly —
-  every piece failed its integrity check and the version could not be restored.
-  Recovery now reads the format correctly and restores these backups.
-
-## [0.7.0-beta.2] - 2026-06-11
 
 ### Fixed
 - **`bfs pull --allow-missing-adapters` now restores instead of crashing when a
@@ -92,23 +91,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   internal force-close text to stderr instead of cancelling quietly. The
   cancellation is now recognized reliably across `bfs init`, `bfs prune`,
   `bfs recovery`, and `bfs provider remove`, so it always ends cleanly.
-
-### Added
-- **Warning when a storage provider uses plain (unencrypted) FTP.** Every backup
-  operation that connects to an FTP provider with FTPS disabled now prints a
-  warning naming the server — the storage password and your backup data cross
-  the network in cleartext. The warning appears once per operation (a multi-shard
-  push warns once, not once per shard), so an unintended insecure transport is
-  hard to miss. Enable the provider's `secure` (FTPS) option, or run BFS only
-  over a network you trust.
-
-### Changed
-- **More CLI messages respect `--lang`.** A range of errors and prompts that were
-  previously English-only — across `bfs push`, `bfs pull` / restore, version
-  selection, and `bfs provider remove` — are now shown in the configured
-  language (e.g. "password required", "passwords do not match", "not enough
-  storage pieces", "pull cancelled", "no versions available"). User-facing
-  messages also now broadly avoid the internal term "vault".
+- **Rebuilding a removed provider's data no longer leaves an encrypted backup
+  unrestorable.** `bfs provider remove --strategy rebuild` wrote the reconstructed
+  piece in an outdated, unencrypted on-disk format incompatible with the rest of
+  the backup. `bfs verify` still reported the version healthy, but a `bfs pull`
+  that needed the rebuilt piece could not decrypt it — quietly cutting redundancy
+  until the data could no longer be restored. Rebuilt pieces are now written in the
+  same format as the rest of the backup and restore correctly.
+- **Disaster recovery now succeeds for a backup whose storage was relocated or
+  rebuilt.** After moving a provider to a new address (`bfs provider remove
+  --strategy relocate`) or rebuilding a removed provider's data onto another one,
+  the affected version's stored headers were rewritten in an outdated format. A
+  normal `bfs pull` still restored the data, but if you then lost your local backup
+  metadata and ran `bfs recovery`, the metadata was reconstructed incorrectly —
+  every piece failed its integrity check and the version could not be restored.
+  Recovery now reads the format correctly and restores these backups.
 
 ### Security
 - **A tampered backup can no longer exhaust your memory while restoring.** When
@@ -127,53 +124,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plaintext copy of your data readable only by the owning user. On Windows these
   POSIX mode bits are a no-op; the access control of the directory holding
   `.bfs/` remains the practical protection.
-- **FTP paths and backup names containing control characters are rejected.** An
-  FTP provider path or a backup name that contains a line break or NUL byte is
-  now refused — when the provider is configured and again before any path is sent
-  to the server — closing a control-channel injection vector on the FTP command
-  stream.
-
-## [0.7.0-beta.1] - 2026-06-07
-
-### Changed
-- **Backups created with `bfs init` are now encrypted by default.** Both the
-  interactive setup and the non-interactive `bfs init --ci` enable encryption
-  unless you pass the new `--no-enc` flag to store the backup unencrypted. The
-  encryption password is still chosen on the first `bfs push`, so a
-  non-interactive push on a default (encrypted) backup now fails loudly when no
-  password is supplied, instead of silently writing plaintext. Existing backups
-  are unaffected — their encryption setting is read from their own
-  configuration. The `--enc` flag is still accepted for script compatibility
-  but is no longer needed.
-- **Storage passwords are no longer copied into your backup.** A provider's
-  password (and any other credential it marks as secret) is now kept only in
-  the local backup configuration and is no longer written into the data
-  distributed to your storage. This takes effect from the next `bfs push`;
-  data written by earlier versions keeps the old credentials until pushed
-  again. When you recover a backup on a fresh machine, BFS asks for the
-  storage password only when it is actually needed — and a shared password
-  entered once via `--bootstrap` is reused for every storage location that
-  uses it, so a typical single-server setup recovers without extra prompts.
-
-### Added
-- **Warning when a backup is not encrypted.** `bfs init --no-enc` and every
-  `bfs push` of an unencrypted backup now print a warning: part of your data
-  is directly readable on a single storage device, and the addresses and
-  usernames of all your storage are visible on every device. Encryption (the
-  default) avoids both.
-- **Encrypted backups that are too large are now refused with a clear error.**
-  A single encryption key can only safely protect a limited amount of data, so
-  `bfs push` on an encrypted backup now stops with an explanatory message when
-  the per-unit data size would exceed that limit, suggesting you raise the data
-  count in the scheme (`bfs scheme set`) or back up a smaller directory —
-  instead of silently weakening the encryption.
-- **Security policy published (`SECURITY.md`).** The repository now documents how
-  to report a vulnerability privately, which versions receive security updates,
-  and a threat model: what each storage provider can and cannot see with and
-  without encryption, the metadata that stays in cleartext, how storage
-  credentials are handled, the per-key encryption size limit, and the
-  interactive nature of disaster recovery.
-- **Provider adapter contract v2 (`bfs-vault/provider`) — BREAKING for third-party adapters.** `BFS_PROVIDER_API_VERSION` is now `2`. `StorageProvider` gained four required methods — `usesSidecar`, `uploadHeaderSidecar`, `downloadHeaderSidecar` and `verifyShard` — so an adapter compiled against version 1 no longer satisfies the interface: it must implement all four methods and declare `requiresApiVersion: 2`. An adapter missing the methods is rejected with a clear incompatibility error when BFS instantiates it — so even a precompiled adapter that slips past registration fails loudly rather than silently. The built-in local disk and FTP adapters are already updated. A provider whose medium cannot rewrite a shard header in place (append-only object stores, APIs without partial writes) returns `usesSidecar() === true` and stores the updated header in a sidecar file using the standard **BFSH** binary format (magic + version + serialized header + SHA-256); providers that rewrite in place (the built-in local disk and FTP adapters) return `false` and are otherwise unchanged. The sidecar read-path is already active in `bfs verify`: when an adapter reports `usesSidecar() === true`, a present sidecar is read in preference to the in-shard header, so its `downloadHeaderSidecar` must work from this release. `verifyShard` lets a provider confirm a shard's identity (vault id, index, version) on its own medium; it has no consumer yet and is wired into the upcoming repair and recovery flows.
+- **Backup names and FTP paths are rejected when they contain unsafe characters.**
+  A backup name containing a path separator or `..` would otherwise become part of
+  the folder path on every storage, so a careless or pasted name could place backup
+  data — and later delete it — outside the intended directory, on local disks and
+  over FTP alike; `bfs init` rejects such names with a clear error before any
+  configuration is written. A backup name or FTP provider path that contains a
+  control character (a line break or NUL byte) is likewise refused — when the
+  provider is configured and again before any path is sent to the server — closing
+  a control-channel injection vector on the FTP command stream.
+- **A malformed backup header can no longer exhaust memory during `bfs pull` or
+  `bfs recovery`.** A tampered or corrupted backup piece could declare an
+  absurdly large internal chunk size that the restore path tried to allocate up
+  front, aborting the operation — most dangerous when recovering from storage
+  you do not fully control. Such headers are now rejected as corrupted with a
+  clear error instead.
+- **Recovery can no longer be tricked into sending your storage password to an
+  attacker.** Restoring an unencrypted backup with `bfs recovery` trusted the
+  recovered piece's record of where the other pieces live; a single tampered
+  piece could redirect a provider to the attacker's host, so the password you
+  typed went there — and it stuck in the rebuilt configuration, so your next push
+  would ship data there too. Recovery now shows each destination before any
+  password is sent and lets you decline, cross-checks the recovered locations
+  across pieces and aborts on a mismatch, and the first write after recovery —
+  whether a push or a `bfs provider remove` that relocates or rebuilds storage —
+  confirms where data will go. Unattended recovery can opt out of the
+  per-destination prompt with `bfs recovery --trust-locations`. (Encrypted
+  backups were never exposed — their location record is authenticated.)
+- **Rebuilding a removed provider now aborts if the remaining pieces disagree
+  about the backup's identity.** `bfs provider remove --strategy rebuild` took
+  the backup metadata from the first piece it read; a tampered piece in an
+  unencrypted backup could feed it forged values unnoticed. It now cross-checks
+  the available pieces and refuses to rebuild on a mismatch.
 
 ## [0.6.2] - 2026-06-07
 
@@ -569,11 +551,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.7.0-rc.1...HEAD
-[0.7.0-rc.1]: https://github.com/pfranczyk/bfs/compare/v0.7.0-beta.3...v0.7.0-rc.1
-[0.7.0-beta.3]: https://github.com/pfranczyk/bfs/compare/v0.7.0-beta.2...v0.7.0-beta.3
-[0.7.0-beta.2]: https://github.com/pfranczyk/bfs/compare/v0.7.0-beta.1...v0.7.0-beta.2
-[0.7.0-beta.1]: https://github.com/pfranczyk/bfs/compare/v0.6.2...v0.7.0-beta.1
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/pfranczyk/bfs/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/pfranczyk/bfs/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/pfranczyk/bfs/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/pfranczyk/bfs/compare/v0.5.0...v0.6.0
