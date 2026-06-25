@@ -53,6 +53,7 @@ export const pl: Strings = {
   cmd_provider_add_desc: 'Dodaj nowy nośnik do konfiguracji kopii zapasowej',
   cmd_provider_list_desc: 'Wylistuj skonfigurowane providery',
   cmd_provider_remove_desc: 'Usuń lub zastąp provider (z opcją naprawy)',
+  cmd_provider_edit_desc: 'Zmień ustawienia połączenia providera lokalnie (offline)',
 
   // ─── Global / shared ─────────────────────────────────────────────────────
   global_settings_group: 'Ustawienia BFS (globalne)',
@@ -72,6 +73,13 @@ export const pl: Strings = {
   init_provider_name_required: 'Nazwa jest wymagana',
   init_provider_type_prompt: 'Typ providera:',
   init_dir_path_prompt: 'Ścieżka do katalogu:',
+  probe_connection: 'Sprawdzam połączenie z providerem „%s"…',
+  probe_failed: 'Nie udało się połączyć z providerem „%s": %s',
+  probe_validate_failed: 'Niepoprawna konfiguracja providera „%s": %s',
+  probe_failed_prompt: 'Opcje ponownego połączenia — co zrobić?',
+  probe_choice_retry: 'Spróbuj ponownie',
+  probe_choice_reenter: 'Wprowadź dane providera ponownie',
+  probe_choice_abort: 'Przerwij',
   init_opt_ci: 'Tryb nieinteraktywny (CI/skrypty): pomija prompty',
   init_opt_enc: 'Szyfrowanie jest domyślnie włączone; flaga zachowana dla zgodności',
   init_opt_no_enc: 'Wyłącz szyfrowanie — zapisz kopię zapasową bez szyfrowania',
@@ -351,6 +359,18 @@ export const pl: Strings = {
   provider_remove_next_step_3: '  3. `bfs prune` — opcjonalnie usuń stare zdegradowane wersje',
   provider_relocate_success: 'Provider "%s" przeniesiony.',
   provider_rebuild_success: 'Provider "%s" zastąpiony. Uruchom `bfs push`, aby zaktualizować schemat.',
+
+  // ─── provider edit ────────────────────────────────────────────────────────
+  provider_edit_opt_ci: 'Tryb nieinteraktywny (CI/skrypty)',
+  provider_edit_id_required: 'Nazwa providera jest wymagana w trybie --ci.',
+  provider_edit_not_found: 'Provider "%s" nie istnieje.',
+  provider_edit_current: 'Obecna konfiguracja providera "%s":',
+  provider_edit_prompt: 'Wybierz provider do edycji:',
+  provider_edit_configure_failed: 'Nie udało się odczytać nowej konfiguracji: %s',
+  provider_edit_invalid_config: 'Niepoprawna konfiguracja: %s',
+  provider_edit_no_changes: 'Bez zmian — konfiguracja providera "%s" pozostaje bez zmian.',
+  provider_edit_success: 'Provider "%s" zaktualizowany.',
+  provider_edit_synced_hint: 'Istniejące kopie nadal wskazują starą lokalizację w nagłówkach; następny `bfs push` je zaktualizuje.',
 
   // ─── vault operations ────────────────────────────────────────────────────
   vault_download_shards: 'Pobieranie wersji %s…',

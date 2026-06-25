@@ -322,5 +322,51 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
+  // ── provider edit --ci (RED: command not implemented yet) ──────────────────
+  // Offline, local-only edit of an existing provider's connection-config.
+  // Same id, same type; no medium contact. These assertions are RED until
+  // `bfs provider edit` ships in GREEN.
+  const cliP5Dir = path.join(ctx.sourceDir, 'cli-p5');
+  const cliP5NewDir = path.join(ctx.sourceDir, 'cli-p5-new');
+
+  tests.push(
+    await runTest('B17', 'setup: cli-p5 directories + add provider for edit', async () => {
+      await fs.mkdir(cliP5Dir, { recursive: true });
+      await fs.mkdir(cliP5NewDir, { recursive: true });
+      const configFile = path.join(ctx.sourceDir, 'cli-p5-config.json');
+      await fs.writeFile(configFile, JSON.stringify({ path: cliP5Dir }), 'utf8');
+      const r = runBfs(['provider', 'add', '--ci', '--name', 'cli-p5', '--type', 'local', '--config-file', configFile], cliVaultDir);
+      assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('B18', 'bfs provider edit --ci (new path) — exit 0 + id in output', async () => {
+      const configFile = path.join(ctx.sourceDir, 'cli-p5-new-config.json');
+      await fs.writeFile(configFile, JSON.stringify({ path: cliP5NewDir }), 'utf8');
+      const r = runBfs(['provider', 'edit', 'cli-p5', '--ci', '--config-file', configFile], cliVaultDir);
+      assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('cli-p5'), `expected cli-p5 in output: ${out.slice(0, 200)}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('B19', 'bfs provider list — cli-p5 shows the new path', () => {
+      const r = runBfs(['provider', 'list'], cliVaultDir);
+      assert(r.status === 0, `exit ${r.status ?? 'null'}\n${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes(cliP5NewDir), `expected new path ${cliP5NewDir} in provider list: ${out.slice(0, 400)}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('B20', 'bfs provider edit nonexistent id — non-zero exit', () => {
+      const configFile = path.join(ctx.sourceDir, 'cli-p5-new-config.json');
+      const r = runBfs(['provider', 'edit', 'does-not-exist', '--ci', '--config-file', configFile], cliVaultDir);
+      assert(r.status !== 0, `expected non-zero exit for nonexistent provider, got ${r.status}`);
+    }),
+  );
+
   return { name: 'Suite B — CLI init (subprocess)', tests };
 }

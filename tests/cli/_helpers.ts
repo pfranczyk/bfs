@@ -16,6 +16,7 @@ import { registerClear } from '../../src/cli/commands/clear.js';
 import { registerConfig } from '../../src/cli/commands/config.js';
 import { registerInit } from '../../src/cli/commands/init.js';
 import { registerProviderAdd } from '../../src/cli/commands/provider-add.js';
+import { registerProviderEdit } from '../../src/cli/commands/provider-edit.js';
 import { registerProviderList } from '../../src/cli/commands/provider-list.js';
 import { registerProviderRemove } from '../../src/cli/commands/provider-remove.js';
 import { registerPrune } from '../../src/cli/commands/prune.js';
@@ -61,6 +62,7 @@ export function buildTestProgram(): Command {
   const providerCmd = program.command('provider').description('Zarządzaj providerami');
   registerProviderAdd(providerCmd);
   registerProviderList(providerCmd);
+  registerProviderEdit(providerCmd);
   registerProviderRemove(providerCmd);
 
   applyExitOverride(program);

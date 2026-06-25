@@ -6,6 +6,7 @@ import { readConfig, writeConfig } from '../../vault/config.js';
 import { resolveCwd } from '../cwd.js';
 import { validateProviderIdsUnique } from '../parse-provider-spec.js';
 import { promptWithRawMode } from '../prompt.js';
+import { probeProviderWithRecovery } from '../provider-probe.js';
 import { CommandAbort, error, success, warn } from '../ui.js';
 
 interface ProviderAddOpts {
@@ -132,11 +133,10 @@ export function registerProviderAdd(providerCmd: Command): void {
       const meta = providerRegistry.getMeta(type);
       const adapterPackage = meta ? `${meta.packageName}@${meta.packageVersion}` : null;
 
-      const placeholder = factory.create({ id: name, type, adapterPackage, config: {} }, io);
-
       let providerConfig: Record<string, unknown>;
-      try {
-        if (isCi) {
+      if (isCi) {
+        const placeholder = factory.create({ id: name, type, adapterPackage, config: {} }, io);
+        try {
           const input: CliProviderInput = {
             name,
             // allowUnknownOption(true) parks every token BFS didn't bind
@@ -145,28 +145,30 @@ export function registerProviderAdd(providerCmd: Command): void {
             rawArgs: [...cmd.args],
           };
           providerConfig = await placeholder.configureFromFlags(input);
-        } else {
-          providerConfig = await placeholder.configureInteractive(io);
+        } catch (err) {
+          error(fmt('provider_add_configure_failed', err instanceof Error ? err.message : String(err)));
+          throw new CommandAbort();
         }
-      } catch (err) {
-        error(fmt('provider_add_configure_failed', err instanceof Error ? err.message : String(err)));
-        throw new CommandAbort();
-      }
 
-      const instance = factory.create({ id: name, type, adapterPackage, config: providerConfig }, io);
-      const errors = instance.validateConfig(providerConfig);
-      if (errors.length > 0) {
-        error(fmt('provider_add_validate_failed', errors.join('; ')));
-        throw new CommandAbort();
-      }
+        const instance = factory.create({ id: name, type, adapterPackage, config: providerConfig }, io);
+        const errors = instance.validateConfig(providerConfig);
+        if (errors.length > 0) {
+          error(fmt('provider_add_validate_failed', errors.join('; ')));
+          throw new CommandAbort();
+        }
 
-      instance.setVaultName(config.vault_name);
-      try {
-        await instance.probeConnection();
-      } catch (err) {
-        error(fmt('provider_add_probe_failed', err instanceof Error ? err.message : String(err)));
-        warn(t('provider_add_probe_unsaved'));
-        throw new CommandAbort();
+        instance.setVaultName(config.vault_name);
+        try {
+          await instance.probeConnection();
+        } catch (err) {
+          error(fmt('provider_add_probe_failed', err instanceof Error ? err.message : String(err)));
+          warn(t('provider_add_probe_unsaved'));
+          throw new CommandAbort();
+        }
+      } else {
+        // Interactive: validate + probe with in-place recovery (retry / re-enter
+        // / abort), so a typo in a connection field doesn't discard the session.
+        providerConfig = await probeProviderWithRecovery({ factory, ref: { id: name, type, adapterPackage }, io, vaultName: config.vault_name });
       }
 
       const newProvider: ProviderConfig = { id: name, type, adapterPackage, config: providerConfig };

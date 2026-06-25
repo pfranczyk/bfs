@@ -16,6 +16,7 @@ import { registerClear } from './cli/commands/clear.js';
 import { registerConfig } from './cli/commands/config.js';
 import { registerInit } from './cli/commands/init.js';
 import { registerProviderAdd } from './cli/commands/provider-add.js';
+import { registerProviderEdit } from './cli/commands/provider-edit.js';
 import { registerProviderList } from './cli/commands/provider-list.js';
 import { registerProviderRemove } from './cli/commands/provider-remove.js';
 import { registerPrune } from './cli/commands/prune.js';
@@ -77,6 +78,7 @@ function buildProgram(): Command {
   const providerCmd = program.command('provider').description(t('cmd_provider_desc'));
   registerProviderAdd(providerCmd);
   registerProviderList(providerCmd);
+  registerProviderEdit(providerCmd);
   registerProviderRemove(providerCmd);
   // Append per-provider help aggregation after Commander's standard preamble.
   // Each registered provider contributes a structured ProviderHelp block.

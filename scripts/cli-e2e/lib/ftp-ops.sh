@@ -10,12 +10,31 @@ _ftp_op() {
   # MSYS2_ENV_CONV_EXCL stops Git-Bash/MSYS from rewriting the POSIX remote
   # paths in FC_BASE/FC_PATHS into Windows paths (e.g. "/" → "C:/Program
   # Files/Git/") when handing them to the native node.exe. No-op on Linux.
-  MSYS2_ENV_CONV_EXCL="FC_BASE;FC_PATHS" \
+  MSYS2_ENV_CONV_EXCL="FC_BASE;FC_PATHS;FC_FILE;FC_FROM;FC_TO" \
     FC_HOST="${FTP_HOST[$e]}" FC_PORT="${FTP_PORT[$e]}" FC_USER="${FTP_USER[$e]}" \
     FC_PASS="${FTP_PASS[$e]}" FC_SECURE="${FTP_SECURE[$e]}" FC_BASE="${FTP_BASE[$e]}" \
-    FC_MODE="$mode" FC_RUN="${FC_RUN:-}" FC_PATHS="${FC_PATHS:-}" \
+    FC_MODE="$mode" FC_RUN="${FC_RUN:-}" FC_PATHS="${FC_PATHS:-}" FC_FILE="${FC_FILE:-}" \
+    FC_FROM="${FC_FROM:-}" FC_TO="${FC_TO:-}" \
     "$TSX" "$SCRIPT_DIR/lib/ftp-ops.ts" </dev/null 2>&1 |
     sed 's/^/  [ftp-ops] /'
+}
+
+# ftp_rename <endpoint-index> <from-remote> <to-remote> — move a remote directory
+# within the harness namespace (the parent of <to> is created first). Simulates a
+# storage relocation an operator then points a provider at via `bfs provider edit`.
+ftp_rename() {
+  local e="$1" from="$2" to="$3"
+  FC_FROM="$from" FC_TO="$to" _ftp_op "$e" rename
+}
+
+# ftp_touch <endpoint-index> <remote-file-path> — plant a 1-byte regular file at
+# the given remote path. Used to build a "path segment is a file" obstacle: a
+# directory op nested under it fails 550 on any compliant FTP server, so a
+# probe-failure trigger stays deterministic regardless of how permissive the
+# account is about creating directories.
+ftp_touch() {
+  local e="$1" file="$2"
+  FC_FILE="$file" _ftp_op "$e" file
 }
 
 # ftp_prepare_pool — create every FTP provider's remote base directory before

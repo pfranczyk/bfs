@@ -57,6 +57,7 @@ export interface Strings {
   cmd_provider_add_desc: string;
   cmd_provider_list_desc: string;
   cmd_provider_remove_desc: string;
+  cmd_provider_edit_desc: string;
 
   // ─── Global / shared ─────────────────────────────────────────────────────
   global_settings_group: string;
@@ -78,6 +79,16 @@ export interface Strings {
   init_provider_name_required: string;
   init_provider_type_prompt: string;
   init_dir_path_prompt: string;
+  /** %s = provider id */
+  probe_connection: string;
+  /** %s = provider id, %s = error message */
+  probe_failed: string;
+  /** %s = provider id, %s = validation errors */
+  probe_validate_failed: string;
+  probe_failed_prompt: string;
+  probe_choice_retry: string;
+  probe_choice_reenter: string;
+  probe_choice_abort: string;
   init_opt_ci: string;
   init_opt_enc: string;
   init_opt_no_enc: string;
@@ -421,6 +432,24 @@ export interface Strings {
   provider_relocate_success: string;
   /** %s = id */
   provider_rebuild_success: string;
+
+  // ─── provider edit ────────────────────────────────────────────────────────
+  provider_edit_opt_ci: string;
+  provider_edit_id_required: string;
+  /** %s = id */
+  provider_edit_not_found: string;
+  /** %s = id */
+  provider_edit_current: string;
+  provider_edit_prompt: string;
+  /** %s = error */
+  provider_edit_configure_failed: string;
+  /** %s = reasons */
+  provider_edit_invalid_config: string;
+  /** %s = id */
+  provider_edit_no_changes: string;
+  /** %s = id */
+  provider_edit_success: string;
+  provider_edit_synced_hint: string;
 
   // ─── vault operations ────────────────────────────────────────────────────
   /** %s = version */

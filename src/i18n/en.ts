@@ -53,6 +53,7 @@ export const en: Strings = {
   cmd_provider_add_desc: 'Add a new provider to the backup configuration',
   cmd_provider_list_desc: 'List configured providers',
   cmd_provider_remove_desc: 'Remove or replace a provider (with heal option)',
+  cmd_provider_edit_desc: "Edit a provider's connection settings locally (offline)",
 
   // ─── Global / shared ─────────────────────────────────────────────────────
   global_settings_group: 'BFS Settings (global)',
@@ -72,6 +73,13 @@ export const en: Strings = {
   init_provider_name_required: 'Name is required',
   init_provider_type_prompt: 'Provider type:',
   init_dir_path_prompt: 'Directory path:',
+  probe_connection: 'Checking connection to provider "%s"…',
+  probe_failed: 'Could not connect to provider "%s": %s',
+  probe_validate_failed: 'Invalid config for provider "%s": %s',
+  probe_failed_prompt: 'Reconnection options — what would you like to do?',
+  probe_choice_retry: 'Retry connection',
+  probe_choice_reenter: "Re-enter this provider's settings",
+  probe_choice_abort: 'Abort',
   init_opt_ci: 'Non-interactive mode (CI/scripts): skip prompts',
   init_opt_enc: 'Encryption is enabled by default; this flag is kept for compatibility',
   init_opt_no_enc: 'Disable encryption — store the backup unencrypted',
@@ -351,6 +359,18 @@ export const en: Strings = {
   provider_remove_next_step_3: '  3. `bfs prune` — optionally delete old degraded versions',
   provider_relocate_success: 'Provider "%s" relocated.',
   provider_rebuild_success: 'Provider "%s" replaced. Run `bfs push` to update the scheme.',
+
+  // ─── provider edit ────────────────────────────────────────────────────────
+  provider_edit_opt_ci: 'Non-interactive mode (CI/scripts)',
+  provider_edit_id_required: 'Provider name is required in --ci mode.',
+  provider_edit_not_found: 'Provider "%s" not found.',
+  provider_edit_current: 'Current configuration of "%s":',
+  provider_edit_prompt: 'Select a provider to edit:',
+  provider_edit_configure_failed: 'Could not read the new configuration: %s',
+  provider_edit_invalid_config: 'Invalid configuration: %s',
+  provider_edit_no_changes: 'No changes — provider "%s" configuration is unchanged.',
+  provider_edit_success: 'Provider "%s" updated.',
+  provider_edit_synced_hint: 'Existing backups still record the old location in their headers; the next `bfs push` updates them.',
 
   // ─── vault operations ────────────────────────────────────────────────────
   vault_download_shards: 'Downloading version %s…',

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0-rc.1] - 2026-06-25
+
+### Added
+- **`bfs provider edit <name>` command.** Change an existing provider's
+  connection settings (path, host, port, user, password) locally, without
+  contacting the storage. It works offline — when the medium is unplugged, or
+  when its path differs between machines (e.g. a USB drive that is `E:/` on
+  Windows and `/mnt/usb1` on Linux). Run it non-interactively with `--ci` and
+  the adapter's own flags (`--path`, `--config-file`, …), or interactively to
+  re-enter the configuration after seeing the current one (secrets masked).
+  Rotating a storage password is fully local: credentials live only in the
+  local configuration and are never written into your backup. After changing a
+  non-secret coordinate (host, path, …), BFS notes that the next `bfs push`
+  updates the stored backup headers to match. The provider's name and type are
+  unchanged, and the redundancy scheme is left intact.
+- **Interactive `bfs init` checks each storage before accepting it.** When you
+  set up a storage device during interactive setup, BFS now verifies it is
+  reachable and usable (a full round-trip to the configured base path, not just
+  a login) before moving on. If the check fails — a transient network error, or
+  a typo in the host, port, password, or path — you can retry, re-enter the
+  settings, or abort, without losing the rest of the setup. This catches a
+  storage that would otherwise look fine at setup and only fail later on the
+  first `bfs push`.
+
+### Changed
+- **A failed storage check in interactive `bfs provider add` is now
+  recoverable.** When adding a provider interactively, a rejected configuration
+  or a failed connection check no longer abandons the operation — you can retry,
+  re-enter the settings, or abort in place, the same as during interactive
+  setup. The non-interactive (`--ci`) path is unchanged.
+
 ## [0.7.0] - 2026-06-22
 
 ### Added
@@ -551,7 +582,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.8.0-rc.1...HEAD
+[0.8.0-rc.1]: https://github.com/pfranczyk/bfs/compare/v0.7.0...v0.8.0-rc.1
 [0.7.0]: https://github.com/pfranczyk/bfs/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/pfranczyk/bfs/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/pfranczyk/bfs/compare/v0.6.0...v0.6.1

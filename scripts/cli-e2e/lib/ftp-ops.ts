@@ -9,11 +9,19 @@
 //                       init lists a provider's base path and fails if absent,
 //                       so the harness must create it first (like a local
 //                       provider's `mkdir -p`).
+//             'file'  → upload a 1-byte regular file at FC_FILE (parent dir
+//                       ensured first). Used to plant a "path segment is a file"
+//                       obstacle so a directory op nested under it fails 550 on
+//                       any compliant server, regardless of write permissions.
+//             'rename'→ move FC_FROM → FC_TO (the parent of FC_TO is ensured
+//                       first). Simulates a storage relocation an operator then
+//                       points a provider at with `bfs provider edit`.
 //             'run'   → remove FC_BASE/bfs-e2e-<FC_RUN> only.
 //             'all'   → remove every FC_BASE/bfs-e2e-* directory.
 //
 // Destructive modes only ever touch directories named `bfs-e2e-*`.
 
+import { Readable } from 'node:stream';
 import { Client, type FileInfo } from 'basic-ftp';
 
 function env(name: string, fallback = ''): string {
@@ -48,6 +56,24 @@ async function main(): Promise<void> {
         if (p) {
           await client.ensureDir(p);
         }
+      }
+    } else if (mode === 'file') {
+      const filePath = env('FC_FILE');
+      if (filePath) {
+        const dir = filePath.replace(/\/[^/]*$/, '') || '/';
+        await client.ensureDir(dir);
+        // ensureDir leaves CWD in `dir`; uploadFrom with the absolute path
+        // still STORs to the right place (same pattern as probeConnection).
+        await client.uploadFrom(Readable.from(Buffer.from('x')), filePath);
+      }
+    } else if (mode === 'rename') {
+      const from = env('FC_FROM');
+      const to = env('FC_TO');
+      if (from && to) {
+        const parent = to.replace(/\/[^/]*$/, '') || '/';
+        await client.ensureDir(parent);
+        // ensureDir leaves CWD in `parent`; rename uses absolute paths.
+        await client.rename(from, to);
       }
     } else if (mode === 'all') {
       let entries: FileInfo[];

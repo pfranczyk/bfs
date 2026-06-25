@@ -12,6 +12,7 @@ import { init } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { parseInitProviderSpec, validateProviderIdsUnique } from '../parse-provider-spec.js';
 import { isPromptCancellation, promptWithRawMode } from '../prompt.js';
+import { probeProviderWithRecovery } from '../provider-probe.js';
 import { CommandAbort, error, formatBytes, info, success, warn } from '../ui.js';
 
 // ─── Provider config prompts ───────────────────────────────────────────────────
@@ -21,13 +22,14 @@ import { CommandAbort, error, formatBytes, info, success, warn } from '../ui.js'
  * The type list comes from providerRegistry; each provider owns its own
  * configuration flow via StorageProvider.configureInteractive().
  *
- * @param index   - Provider index (for display purposes)
- * @param workDir - BFS working directory exposed to the adapter through
- *                  `io.workDir` so its prompts / path resolution respect
- *                  `bfs --cwd`
- * @returns         A ProviderConfig ready for use in VaultConfig.providers
+ * @param index     - Provider index (for display purposes)
+ * @param workDir   - BFS working directory exposed to the adapter through
+ *                    `io.workDir` so its prompts / path resolution respect
+ *                    `bfs --cwd`
+ * @param vaultName - Vault name the connectivity probe resolves its path against
+ * @returns           A ProviderConfig ready for use in VaultConfig.providers
  */
-async function promptProvider(index: number, workDir: string): Promise<ProviderConfig> {
+async function promptProvider(index: number, workDir: string, vaultName: string): Promise<ProviderConfig> {
   console.log(chalk.bold(fmt('init_provider_header', String(index + 1))));
 
   const { id } = await promptWithRawMode<{ id: string }>([
@@ -56,11 +58,11 @@ async function promptProvider(index: number, workDir: string): Promise<ProviderC
   }
   const meta = providerRegistry.getMeta(type);
   const adapterPackage = meta ? `${meta.packageName}@${meta.packageVersion}` : null;
+  const providerId = id.trim();
   const io = createCliProviderIO(workDir);
-  const placeholder = factory.create({ id: id.trim(), type, adapterPackage, config: {} }, io);
-  const config = await placeholder.configureInteractive(io);
+  const config = await probeProviderWithRecovery({ factory, ref: { id: providerId, type, adapterPackage }, io, vaultName });
 
-  return { id: id.trim(), type, adapterPackage, config };
+  return { id: providerId, type, adapterPackage, config };
 }
 
 /**
@@ -313,7 +315,7 @@ export function registerInit(program: Command): void {
       } else {
         providers = [];
         for (let i = 0; i < total; i++) {
-          const prov = await promptProvider(i, rootDir);
+          const prov = await promptProvider(i, rootDir, vaultName);
           providers.push(prov);
         }
       }

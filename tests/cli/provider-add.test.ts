@@ -18,8 +18,12 @@ vi.mock('inquirer', () => ({
 }));
 
 import inquirer from 'inquirer';
+import { ProviderError } from '../../src/core/errors.js';
 import { FtpProvider } from '../../src/providers/ftp.js';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
+import * as providerMod from '../../src/providers/provider.js';
+import { providerRegistry } from '../../src/providers/provider.js';
+import type { ProviderIO, StorageProvider } from '../../src/types/index.js';
 import { readConfig, writeConfig } from '../../src/vault/config.js';
 
 const mockReadConfig = vi.mocked(readConfig);
@@ -365,5 +369,201 @@ describe('provider add', () => {
 
     expect(result).toBe('abort');
     expect(mockWriteConfig).not.toHaveBeenCalled();
+  });
+});
+
+// Interactive `bfs provider add` — connectivity probe + recovery loop.
+//
+// Mirrors interactive `bfs init`: right after configureInteractive() returns,
+// the command validates the medium with a full storage round-trip via
+// probeConnection() inside a retry loop. On a ProviderError it warns via
+// io.warn and asks io.choose with three options in a fixed order:
+//   [0] RETRY    — re-probe the same config
+//   [1] RE-ENTER — re-run configureInteractive for that provider
+//   [2] ABORT    — clean cancellation (CommandAbort); provider NOT saved
+// This keeps a connection failure — transient, or a typo in host/port/
+// password/path — recoverable in place, instead of aborting the whole command
+// (and discarding the operator's input) on the first probe error.
+//
+// The recovery option is selected by INDEX in the offered list (documented
+// order RETRY/RE-ENTER/ABORT), so these tests stay independent of the prompt's
+// i18n wording. The CI path (configureFromFlags) deliberately has NO recovery
+// loop — these tests only exercise the interactive path.
+const PROBE_TYPE = 'mockaddprobe';
+
+interface AddProbeState {
+  /** One outcome consumed per probeConnection() call: 'fail' throws, 'ok' resolves. */
+  attempts: string[];
+  /** Count of probeConnection() invocations — the acceptance gate. */
+  probeCalls: number;
+  /** Count of configureInteractive() invocations — proves RE-ENTER re-ran it. */
+  configCalls: number;
+  /** Vault names passed to setVaultName(), in call order. */
+  setVaultNames: string[];
+  /** Message the thrown ProviderError carries on a 'fail' outcome. */
+  failMessage?: string;
+}
+
+/**
+ * Registers a mock provider type whose probeConnection() follows the scripted
+ * `attempts` (extra calls past the array succeed) and is the acceptance gate.
+ * validateConfig() always passes so recovery is driven solely by the probe.
+ */
+function registerAddProbeProvider(state: AddProbeState): void {
+  providerRegistry.register(PROBE_TYPE, {
+    lang: 'en',
+    displayName: 'Mock Add Probe',
+    create: () =>
+      ({
+        async authenticate(): Promise<void> {
+          return;
+        },
+        async probeConnection(): Promise<void> {
+          const outcome = state.attempts[state.probeCalls] ?? 'ok';
+          state.probeCalls += 1;
+          if (outcome === 'fail') throw new ProviderError(state.failMessage ?? 'mock probe round-trip failed');
+        },
+        setVaultName(name: string): void {
+          state.setVaultNames.push(name);
+        },
+        async configureInteractive(_io: ProviderIO): Promise<Record<string, unknown>> {
+          state.configCalls += 1;
+          return { marker: state.configCalls };
+        },
+        validateConfig(): string[] {
+          return [];
+        },
+        usesSidecar: () => false,
+        uploadHeaderSidecar: async () => {},
+        downloadHeaderSidecar: async () => null,
+        verifyShard: async () => ({ ok: true }),
+      }) as unknown as StorageProvider,
+    help: () => ({ usage: '', description: '', flags: [], examples: [] }),
+  });
+}
+
+/**
+ * Installs a ProviderIO (via spying on createCliProviderIO) whose `choose`
+ * returns the option at `pickIndex` — picking the recovery action by its
+ * documented position (0=RETRY, 1=RE-ENTER, 2=ABORT) rather than its
+ * not-yet-translated text. Records warn() lines and every choose() call.
+ */
+function installAddProbeIO(pickIndex: number): { warns: string[]; chooseCalls: Array<{ message: string; options: string[] }> } {
+  const warns: string[] = [];
+  const chooseCalls: Array<{ message: string; options: string[] }> = [];
+  const io: ProviderIO = {
+    lang: 'en',
+    workDir: '/work',
+    ask: vi.fn(async () => ''),
+    askSecret: vi.fn(async () => ''),
+    confirm: vi.fn(async () => false),
+    async choose(message: string, options: string[]): Promise<string> {
+      chooseCalls.push({ message, options });
+      return options[pickIndex] ?? options[0] ?? '';
+    },
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: (m: string) => {
+      warns.push(m);
+    },
+    progress: vi.fn(),
+  };
+  vi.spyOn(providerMod, 'createCliProviderIO').mockReturnValue(io);
+  return { warns, chooseCalls };
+}
+
+describe('interactive provider add — connectivity probe + recovery', () => {
+  let capture: ReturnType<typeof captureConsole>;
+
+  beforeEach(() => {
+    capture = captureConsole();
+    mockWriteConfig.mockResolvedValue(undefined);
+    mockReadConfig.mockResolvedValue(makeConfig() as never); // 2/1 scheme, dysk-1..3
+  });
+
+  afterEach(() => {
+    capture.restore();
+    mockPrompt.mockReset();
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+    (providerRegistry as unknown as { entries: Map<string, unknown> }).entries.delete(PROBE_TYPE);
+  });
+
+  it('RETRY: should re-probe the same config and save the provider after a transient failure', async () => {
+    // First probe fails, retry succeeds. configureInteractive runs exactly once
+    // (RETRY does not re-enter), and the provider is persisted with parity++.
+    const state: AddProbeState = { attempts: ['fail', 'ok'], probeCalls: 0, configCalls: 0, setVaultNames: [] };
+    registerAddProbeProvider(state);
+    const { chooseCalls } = installAddProbeIO(0); // pick RETRY (index 0)
+    mockPrompt.mockResolvedValueOnce({ name: 'new-disk' } as never).mockResolvedValueOnce({ type: PROBE_TYPE } as never);
+
+    const result = await runCmd(['provider', 'add']);
+
+    expect(chooseCalls.length).toBeGreaterThanOrEqual(1);
+    expect(state.probeCalls).toBeGreaterThanOrEqual(2); // fail + retry
+    expect(state.configCalls).toBe(1); // no re-entry on RETRY
+    // The probe gate wired the vault name before probing — a dropped
+    // setVaultName() would leave probeConnection() unable to resolve its path.
+    expect(state.setVaultNames).toContain('test-vault');
+    expect(result).toBe('ok');
+    expect(mockWriteConfig).toHaveBeenCalledOnce();
+    const [, writtenConfig] = mockWriteConfig.mock.calls[0];
+    expect(writtenConfig.providers.some((p: { id: string }) => p.id === 'new-disk')).toBe(true);
+    expect(writtenConfig.scheme.parity_shards).toBe(2); // 1 + 1
+    expect(writtenConfig.scheme.data_shards).toBe(2); // unchanged
+  });
+
+  it('RE-ENTER: should re-run configureInteractive and save the provider with new config', async () => {
+    // First probe fails; RE-ENTER re-runs configureInteractive, next probe ok.
+    const state: AddProbeState = { attempts: ['fail', 'ok'], probeCalls: 0, configCalls: 0, setVaultNames: [] };
+    registerAddProbeProvider(state);
+    const { chooseCalls } = installAddProbeIO(1); // pick RE-ENTER (index 1)
+    mockPrompt.mockResolvedValueOnce({ name: 'new-disk' } as never).mockResolvedValueOnce({ type: PROBE_TYPE } as never);
+
+    const result = await runCmd(['provider', 'add']);
+
+    expect(chooseCalls.length).toBeGreaterThanOrEqual(1);
+    expect(state.configCalls).toBeGreaterThan(1); // re-entered
+    expect(result).toBe('ok');
+    expect(mockWriteConfig).toHaveBeenCalledOnce();
+  });
+
+  it('ABORT: should end via clean cancellation without saving the provider', async () => {
+    const state: AddProbeState = { attempts: ['fail'], probeCalls: 0, configCalls: 0, setVaultNames: [] };
+    registerAddProbeProvider(state);
+    const { chooseCalls } = installAddProbeIO(2); // pick ABORT (index 2)
+    mockPrompt.mockResolvedValueOnce({ name: 'new-disk' } as never).mockResolvedValueOnce({ type: PROBE_TYPE } as never);
+
+    const result = await runCmd(['provider', 'add']);
+
+    expect(chooseCalls.length).toBeGreaterThanOrEqual(1);
+    // Clean cancellation — CommandAbort (abort) or a prompt cancellation
+    // (cancelled), never an uncaught error type.
+    expect(['abort', 'cancelled']).toContain(result);
+    expect(mockWriteConfig).not.toHaveBeenCalled();
+  });
+
+  // Message-agnosticism: the recovery loop must fire for ANY ProviderError,
+  // regardless of the failure text — every real connection failure surfaces the
+  // same recoverable prompt, not a special-cased symptom.
+  const FAILURE_MESSAGES: Array<{ field: string; message: string }> = [
+    { field: 'wrong host (ENOTFOUND-style)', message: 'getaddrinfo ENOTFOUND no-such-host.invalid' },
+    { field: 'wrong port (ECONNREFUSED-style)', message: 'connect ECONNREFUSED 192.0.2.1:9921' },
+    { field: 'wrong password (530 login incorrect)', message: '530 Login incorrect.' },
+    { field: 'wrong path (550 no such directory)', message: '550 No such file or directory.' },
+  ];
+
+  it.each(FAILURE_MESSAGES)('RE-ENTER recovery fires for any ProviderError — $field', async ({ message }) => {
+    const state: AddProbeState = { attempts: ['fail', 'ok'], probeCalls: 0, configCalls: 0, setVaultNames: [], failMessage: message };
+    registerAddProbeProvider(state);
+    const { chooseCalls } = installAddProbeIO(1); // pick RE-ENTER (index 1)
+    mockPrompt.mockResolvedValueOnce({ name: 'new-disk' } as never).mockResolvedValueOnce({ type: PROBE_TYPE } as never);
+
+    const result = await runCmd(['provider', 'add']);
+
+    expect(chooseCalls.length).toBeGreaterThanOrEqual(1);
+    expect(state.configCalls).toBeGreaterThan(1);
+    expect(result).toBe('ok');
+    expect(mockWriteConfig).toHaveBeenCalledOnce();
   });
 });

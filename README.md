@@ -37,6 +37,18 @@ bfs pull
 npm install -g bfs-vault
 ```
 
+### Prerelease (testers)
+
+Release candidates are published under a separate npm dist-tag, so the stable
+install above always stays on the latest stable release. To track the latest
+release candidate instead:
+
+```bash
+npm install -g bfs-vault@rc
+```
+
+Or pin an exact build, e.g. `npm install -g bfs-vault@0.8.0-rc.1`.
+
 ## Quick start
 
 ```bash
@@ -70,6 +82,7 @@ bfs pull
 | `bfs config [--cache-dir <path>] [--temp-dir <path>] [--max-ram <MB>] [--on <feature>] [--off <feature>]` | View or change per-backup settings (cache dir, temp dir, RAM limit, toggle compression/encryption) |
 | `bfs provider add` | Add a new provider to the vault |
 | `bfs provider list` | List configured providers |
+| `bfs provider edit [name]` | Edit a provider's connection settings locally (offline — no storage contact) |
 | `bfs provider remove [name]` | Remove or replace a provider (with heal option) |
 
 Global options:
