@@ -30,17 +30,9 @@ BFS is pre-1.0 and ships frequently. Security fixes are released against the
 for older releases — upgrade to the newest stable version to receive security
 updates.
 
-Prerelease builds (e.g. `0.7.0-rc.x`, installed with `npm install -g
-bfs-vault@rc`) are for evaluation only. They are **not** the supported stable
-channel: their on-disk format and behavior may change before the matching stable
-release, and a fix lands in the next prerelease or stable build — not as a patch
-to an earlier prerelease. Do not rely on a prerelease for your only copy of
-important data.
-
 | Version                  | Security updates                              |
 | ------------------------ | --------------------------------------------- |
 | Latest stable release    | ✅ Yes                                        |
-| Prerelease / beta builds | ⚠️ Evaluation only — fixed in the next build  |
 | Older releases           | ❌ No                                         |
 
 ## Encryption Defaults

@@ -37,18 +37,6 @@ bfs pull
 npm install -g bfs-vault
 ```
 
-### Prerelease (testers)
-
-Release candidates are published under a separate npm dist-tag, so the stable
-install above always stays on the latest stable release. To track the latest
-release candidate instead:
-
-```bash
-npm install -g bfs-vault@rc
-```
-
-Or pin an exact build, e.g. `npm install -g bfs-vault@0.8.0-rc.1`.
-
 ## Quick start
 
 ```bash
