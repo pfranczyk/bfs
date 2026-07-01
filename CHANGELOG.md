@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-07-01
+
+### Changed
+- **Polish CLI uses everyday storage wording.** In the Polish locale, storage
+  devices are now consistently called „nośnik" across every command and prompt.
+  Wording only — no change in behavior.
+
+### Fixed
+- **A warning during `bfs push` no longer scrambles the progress line.** When a
+  storage device reports a warning while a push is running, the progress
+  indicator is paused for the message instead of the two overwriting each other
+  in the terminal. `bfs pull` and `bfs recovery` already behaved this way.
+- **Clearer `bfs recovery` messages.** When recovery cannot rebuild or read the
+  latest backup version, the two messages now describe the problem in terms of
+  your backup version instead of an internal term.
+
 ## [0.8.0] - 2026-06-28
 
 ### Added
@@ -582,7 +598,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/pfranczyk/bfs/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/pfranczyk/bfs/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/pfranczyk/bfs/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/pfranczyk/bfs/compare/v0.6.1...v0.6.2

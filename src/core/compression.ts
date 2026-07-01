@@ -152,7 +152,24 @@ function _buildEocdZip64Marker(): Buffer {
 
 // ─── ZIP building blocks (always ZIP64) ───────────────────────────────────────
 
-function _buildLfh(filenameBuf: Buffer, crc32: number, compressedSize: number, uncompressedSize: number, dosTime: number, dosDate: number): Buffer {
+/** Fields for an always-ZIP64 Local File Header. */
+interface Zip64LfhFields {
+  /** UTF-8 filename bytes. */
+  filenameBuf: Buffer;
+  /** CRC-32 of the uncompressed data. */
+  crc32: number;
+  /** Compressed (deflated) size in bytes. */
+  compressedSize: number;
+  /** Uncompressed size in bytes. */
+  uncompressedSize: number;
+  /** DOS-format modification time. */
+  dosTime: number;
+  /** DOS-format modification date. */
+  dosDate: number;
+}
+
+function _buildLfh(fields: Zip64LfhFields): Buffer {
+  const { filenameBuf, crc32, compressedSize, uncompressedSize, dosTime, dosDate } = fields;
   const extra = _buildZip64ExtraLfh(compressedSize, uncompressedSize);
   const buf = Buffer.alloc(30 + filenameBuf.length + extra.length);
   let pos = 0;
@@ -261,7 +278,7 @@ export function createZipPacker(): ZipPackerInternal {
     const crc32 = zlib.crc32(data);
     const { dosTime, dosDate } = _toDosDateTime();
 
-    const lfh = _buildLfh(filenameBuf, crc32, compressed.length, data.length, dosTime, dosDate);
+    const lfh = _buildLfh({ filenameBuf, crc32, compressedSize: compressed.length, uncompressedSize: data.length, dosTime, dosDate });
     const dd = _buildDataDescriptor(crc32, compressed.length, data.length);
 
     cdEntries.push({ filename: filenameBuf, crc32, compressedSize: compressed.length, uncompressedSize: data.length, localHeaderOffset: currentOffset, dosTime, dosDate });
@@ -320,7 +337,7 @@ export function createStreamingZipPacker(handle: FileHandle): StreamingZipPacker
     const crc32 = zlib.crc32(data);
     const { dosTime, dosDate } = _toDosDateTime();
 
-    const lfh = _buildLfh(filenameBuf, crc32, compressed.length, data.length, dosTime, dosDate);
+    const lfh = _buildLfh({ filenameBuf, crc32, compressedSize: compressed.length, uncompressedSize: data.length, dosTime, dosDate });
     const dd = _buildDataDescriptor(crc32, compressed.length, data.length);
 
     cdEntries.push({ filename: filenameBuf, crc32, compressedSize: compressed.length, uncompressedSize: data.length, localHeaderOffset: currentOffset, dosTime, dosDate });

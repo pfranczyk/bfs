@@ -8,6 +8,7 @@ import { PushMode, VersionHealth } from '../../types/index.js';
 import { push } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { isReplMode } from '../repl-context.js';
+import { createSpinnerIo } from '../spinner-io.js';
 import { CommandAbort, error, info, success, warn } from '../ui.js';
 
 /**
@@ -71,45 +72,7 @@ export function registerPush(program: Command): void {
 
         const spinner = ora({ color: 'cyan' });
         const io = createCliProviderIO(rootDir);
-
-        // Wrap io: info/progress update spinner; interactive methods pause it first
-        const wrappedIo = {
-          ...io,
-          info(msg: string): void {
-            spinner.text = chalk.dim(msg);
-          },
-          progress(label: string, percent: number): void {
-            spinner.text = `${label} ${chalk.dim(`${Math.round(percent)}%`)}`;
-          },
-          async confirm(message: string): Promise<boolean> {
-            const wasSpinning = spinner.isSpinning;
-            spinner.stop();
-            const result = await io.confirm(message);
-            if (wasSpinning) spinner.start();
-            return result;
-          },
-          async ask(message: string): Promise<string> {
-            const wasSpinning = spinner.isSpinning;
-            spinner.stop();
-            const result = await io.ask(message);
-            if (wasSpinning) spinner.start();
-            return result;
-          },
-          async askSecret(message: string): Promise<string> {
-            const wasSpinning = spinner.isSpinning;
-            spinner.stop();
-            const result = await io.askSecret(message);
-            if (wasSpinning) spinner.start();
-            return result;
-          },
-          async choose(message: string, options: string[]): Promise<string> {
-            const wasSpinning = spinner.isSpinning;
-            spinner.stop();
-            const result = await io.choose(message, options);
-            if (wasSpinning) spinner.start();
-            return result;
-          },
-        };
+        const wrappedIo = createSpinnerIo(io, spinner);
 
         spinner.start(t('push_preparing'));
 

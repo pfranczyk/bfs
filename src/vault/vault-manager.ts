@@ -227,21 +227,34 @@ async function _downloadShardsToTempFiles(
   return { blobSize, kdf_salt, failures };
 }
 
+/** Inputs for {@link _decodeFromTempFiles} — phase 2 of the V2 pull. */
+interface DecodeFromTempFilesOptions {
+  /** Map of shard_index → temp file path (only present shards). */
+  tmpPaths: Map<number, string>;
+  /** Number of data shards. */
+  N: number;
+  /** Number of parity shards. */
+  K: number;
+  /** Bytes per shard per stripe (from manifest or V2_STRIPE_SIZE). */
+  stripeSize: number;
+  /** Total blob byte count (from shard header). */
+  blobSize: number;
+  /** Version being decoded (used to derive the per-shard nonce). */
+  targetVersion: number;
+  /** AES-256-GCM key for per-shard decryption; undefined if not encrypted. */
+  encKey: Buffer | undefined;
+  /** Destination file for the decoded blob. */
+  outputPath: string;
+  /** ProviderIO for progress messages. */
+  io: ProviderIO;
+}
+
 /**
  * Phase 2 of V2 pull: opens fresh streams from temp files, RS-decodes, writes blob.
  * Each shard stream is opened independently — no cross-stream race conditions.
- *
- * @param tmpPaths      - Map of shard_index → temp file path (only present shards)
- * @param N             - Number of data shards
- * @param K             - Number of parity shards
- * @param stripeSize    - Bytes per shard per stripe (from manifest or V2_STRIPE_SIZE)
- * @param blobSize      - Total blob byte count (from shard header)
- * @param targetVersion - Version being decoded (used to derive per-shard nonce)
- * @param encKey        - AES-256-GCM key for per-shard decryption; undefined if not encrypted
- * @param outputPath    - Destination file for the decoded blob
- * @param io            - ProviderIO for progress messages
  */
-async function _decodeFromTempFiles(tmpPaths: Map<number, string>, N: number, K: number, stripeSize: number, blobSize: number, targetVersion: number, encKey: Buffer | undefined, outputPath: string, io: ProviderIO): Promise<void> {
+async function _decodeFromTempFiles(options: DecodeFromTempFilesOptions): Promise<void> {
+  const { tmpPaths, N, K, stripeSize, blobSize, targetVersion, encKey, outputPath, io } = options;
   const payloadStreams: Nullable<Readable>[] = new Array(N + K).fill(null);
   for (const [shardIdx, tmpPath] of tmpPaths) {
     // Belt-and-suspenders error sinks for the per-shard decode fan-out, each
@@ -283,7 +296,7 @@ async function _decodeFromTempFiles(tmpPaths: Map<number, string>, N: number, K:
   // destroy blobStream during the mkdir await → 'error' emitted with no
   // listener → unhandled exception crashing the process.
   await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
-  const blobStream = rsDecodeStriped(payloadStreams, N, K, stripeSize, blobSize, debugLog);
+  const blobStream = rsDecodeStriped(payloadStreams, { N, K, stripeSize, blobSize, debugLog });
   // outputPath is pull.blob.pending — a full plaintext copy of the restored
   // data; create it owner-only and tighten an already-existing inode (no-op on
   // Windows NTFS).
@@ -331,7 +344,7 @@ async function _pullV2(config: VaultConfig, manifest: VersionManifest, options: 
       options.io.info(t('vault_decrypting'));
       encKey = await deriveKey(password, kdf_salt);
     }
-    await _decodeFromTempFiles(tmpPaths, N, K, stripeSize, blobSize, targetVersion, encKey, outputPath, options.io);
+    await _decodeFromTempFiles({ tmpPaths, N, K, stripeSize, blobSize, targetVersion, encKey, outputPath, io: options.io });
     return { isDegraded: tmpPaths.size < N + K, failures };
   } finally {
     for (const [, p] of tmpPaths) await fs.unlink(p).catch(() => {});
@@ -393,7 +406,7 @@ async function downloadShardSlots(
       continue;
     }
     try {
-      const shardData = await fetchShard(pc, ms, config, cacheDir, targetVersion, io);
+      const shardData = await fetchShard({ pc, ms, config, cacheDir, targetVersion, io });
       if (!shardData) continue;
       const { header: meta } = await parseShardHeaderFromStream(Readable.from(shardData));
       if (meta.shard_index !== ms.shard_index || meta.version !== targetVersion || meta.vault_id !== config.vault_id) {
@@ -412,11 +425,28 @@ async function downloadShardSlots(
   return { shardSlots, blobSize, kdf_salt, failures };
 }
 
+/** Inputs for {@link fetchShard}. */
+interface FetchShardOptions {
+  /** Provider config to download from. */
+  pc: ProviderConfig;
+  /** Manifest entry for the shard (index, provider, hash). */
+  ms: ManifestShard;
+  /** Vault config (vault_name, vault_id). */
+  config: VaultConfig;
+  /** Local cache directory checked before the network. */
+  cacheDir: string;
+  /** Version being pulled (shard filename suffix). */
+  targetVersion: number;
+  /** ProviderIO for warnings. */
+  io: ProviderIO;
+}
+
 /**
  * Fetches a single shard: tries the local cache first, then downloads from the provider.
  * Validates the payload hash. Returns null if the shard should be skipped.
  */
-async function fetchShard(pc: ProviderConfig, ms: ManifestShard, config: VaultConfig, cacheDir: string, targetVersion: number, io: ProviderIO): Promise<Nullable<Buffer>> {
+async function fetchShard(options: FetchShardOptions): Promise<Nullable<Buffer>> {
+  const { pc, ms, config, cacheDir, targetVersion, io } = options;
   const filename = `shard_${ms.shard_index}.bfs.${targetVersion}`;
   const cacheFile = path.join(cacheDir, filename);
 
@@ -441,6 +471,24 @@ async function fetchShard(pc: ProviderConfig, ms: ManifestShard, config: VaultCo
   return shardData;
 }
 
+/** Inputs for {@link decodeAndDecrypt}. */
+interface DecodeAndDecryptArgs {
+  /** Downloaded shard payloads (null = missing, triggers RS repair). */
+  shardSlots: Nullable<Buffer>[];
+  /** Version manifest (scheme, encrypted flag). */
+  manifest: VersionManifest;
+  /** KDF salt from a shard header (encrypted vaults). */
+  kdf_salt: Nullable<Buffer>;
+  /** Plain blob size before RS encode (padding removal). */
+  blobSize: number;
+  /** Version being decoded (repaired-shard cache filename). */
+  targetVersion: number;
+  /** Cache directory where repaired shards are written. */
+  cacheDir: string;
+  /** Pull options (io, password). */
+  options: PullOptions;
+}
+
 /**
  * RS-decodes the shard slots into a single blob and optionally decrypts it.
  * In degraded mode (some slots null), runs RS repair and caches the repaired shards.
@@ -448,15 +496,8 @@ async function fetchShard(pc: ProviderConfig, ms: ManifestShard, config: VaultCo
  *
  * @throws BfsError if fewer than N shards are available, password is missing, or kdf_salt not found
  */
-async function decodeAndDecrypt(
-  shardSlots: Nullable<Buffer>[],
-  manifest: VersionManifest,
-  kdf_salt: Nullable<Buffer>,
-  blobSize: number,
-  targetVersion: number,
-  cacheDir: string,
-  options: PullOptions,
-): Promise<{ plainBlob: Buffer; isDegraded: boolean }> {
+async function decodeAndDecrypt(args: DecodeAndDecryptArgs): Promise<{ plainBlob: Buffer; isDegraded: boolean }> {
+  const { shardSlots, manifest, kdf_salt, blobSize, targetVersion, cacheDir, options } = args;
   const { data_shards: N, parity_shards: K } = manifest.scheme;
   const isDegraded = shardSlots.some((s) => s === null);
   let rsOutput: Buffer;
@@ -631,7 +672,7 @@ async function _downloadAndVerifyBlob({
     const available = downloaded.shardSlots.filter((s) => s !== null).length;
     if (available < N) throw new BfsError(fmt('pull_not_enough_shards', String(N), String(available)));
     options.io.info(t('vault_decoding_rs'));
-    const decoded = await decodeAndDecrypt(downloaded.shardSlots, manifest, downloaded.kdf_salt, downloaded.blobSize, targetVersion, cacheDir, options);
+    const decoded = await decodeAndDecrypt({ shardSlots: downloaded.shardSlots, manifest, kdf_salt: downloaded.kdf_salt, blobSize: downloaded.blobSize, targetVersion, cacheDir, options });
     plainBlob = decoded.plainBlob;
   }
   const computedHash = isV2 ? await hashFileExcludingTail(blobCachePath, SHA256_BYTES) : hashBuffer(plainBlob.subarray(0, plainBlob.length - SHA256_BYTES));

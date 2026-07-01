@@ -282,7 +282,7 @@ describe('rsEncodeStriped / rsDecodeStriped', () => {
     const parityBuf = await fs.readFile(parityPath0);
     const shardStreams: (Readable | null)[] = [...dataShards.map((s) => Readable.from(s)), Readable.from(parityBuf)];
 
-    const decoded = await streamToBuffer(rsDecodeStriped(shardStreams, N, K, stripeSize, blob.length));
+    const decoded = await streamToBuffer(rsDecodeStriped(shardStreams, { N, K, stripeSize, blobSize: blob.length }));
 
     expect(decoded).toEqual(blob);
   });
@@ -305,7 +305,7 @@ describe('rsEncodeStriped / rsDecodeStriped', () => {
     // Drop shard 0 — recover using shard 1 + parity
     const shardStreams: (Readable | null)[] = [null, Readable.from(shard1), Readable.from(parityBuf)];
 
-    const decoded = await streamToBuffer(rsDecodeStriped(shardStreams, N, K, stripeSize, blob.length));
+    const decoded = await streamToBuffer(rsDecodeStriped(shardStreams, { N, K, stripeSize, blobSize: blob.length }));
 
     expect(decoded).toEqual(blob);
   });
@@ -325,7 +325,7 @@ describe('rsEncodeStriped / rsDecodeStriped', () => {
     const parityBuf = await fs.readFile(parityPath0);
     const shardStreams: (Readable | null)[] = [...dataShards.map((s) => Readable.from(s)), Readable.from(parityBuf)];
 
-    const decoded = await streamToBuffer(rsDecodeStriped(shardStreams, N, K, stripeSize, blob.length));
+    const decoded = await streamToBuffer(rsDecodeStriped(shardStreams, { N, K, stripeSize, blobSize: blob.length }));
 
     expect(decoded).toEqual(blob);
   });

@@ -312,7 +312,7 @@ export async function recover(rootDir: string, options: RecoveryOptions): Promis
   // ── 2. Bootstrap ──────────────────────────────────────────────────────────
   const passwordPool: string[] = options.passwords ? [...options.passwords] : [];
 
-  const bootstrap = await bootstrapFromProvider(bootstrapProvider, vaultName, io, undefined, passwordPool, options.bootstrapInputs, options.trustLocations === true);
+  const bootstrap = await bootstrapFromProvider(bootstrapProvider, { vaultName, io, passwords: passwordPool, transportInputs: options.bootstrapInputs, trustLocations: options.trustLocations === true });
 
   // Save bootstrap shard to cache
   bootstrapProvider.setVaultName(vaultName);

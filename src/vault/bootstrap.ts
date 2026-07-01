@@ -121,6 +121,22 @@ async function connectWithInputs(loc: ShardLocation, required: string[], vaultNa
   }
 }
 
+/** Arguments for {@link connectViaRecoveryHook}. */
+interface RecoveryHookArgs {
+  /** Provider instance (already created) implementing connectForRecovery. */
+  provider: StorageProvider;
+  /** Location-map entry being connected. */
+  loc: ShardLocation;
+  /** Vault subdirectory name on the provider. */
+  vaultName: string;
+  /** ProviderIO for the credential interaction. */
+  io: ProviderIO;
+  /** Shared secret pool carried between recovery-hook providers (blind courier). */
+  pool: RecoverySecret[];
+  /** When true, the operator pre-approved the recovered locations (unattended run). */
+  trustLocations: boolean;
+}
+
 /**
  * Connects a provider that owns its credential interaction via
  * connectForRecovery (the provider shows the target host and collects/reuses the
@@ -130,7 +146,8 @@ async function connectWithInputs(loc: ShardLocation, required: string[], vaultNa
  * field it is — so it is never persisted to config.json by this path. Returns
  * null (degraded skip) when the operator declines or the connection fails.
  */
-async function connectViaRecoveryHook(provider: StorageProvider, loc: ShardLocation, vaultName: string, io: ProviderIO, pool: RecoverySecret[], trustLocations: boolean): Promise<Nullable<StorageProvider>> {
+async function connectViaRecoveryHook(args: RecoveryHookArgs): Promise<Nullable<StorageProvider>> {
+  const { provider, loc, vaultName, io, pool, trustLocations } = args;
   const hook = provider.connectForRecovery;
   if (!hook) return null; // caller guarantees the hook exists; defensive
   try {
@@ -193,7 +210,7 @@ async function connectProvidersFromMap(locationMap: ShardLocation[], vaultName: 
     }
 
     if (probe && typeof probe.connectForRecovery === 'function') {
-      const connected = await connectViaRecoveryHook(probe, loc, vaultName, io, recoveryPool, trustLocations);
+      const connected = await connectViaRecoveryHook({ provider: probe, loc, vaultName, io, pool: recoveryPool, trustLocations });
       if (connected) providers.push(connected);
       continue;
     }
@@ -203,6 +220,22 @@ async function connectProvidersFromMap(locationMap: ShardLocation[], vaultName: 
     if (provider) providers.push(provider);
   }
   return providers;
+}
+
+/** Arguments for {@link runConsensusCheck}. */
+interface ConsensusCheckArgs {
+  /** Already-authenticated provider the recovery started from. */
+  bootstrapProvider: StorageProvider;
+  /** Vault subdirectory name on each provider. */
+  vaultName: string;
+  /** Location map parsed from the bootstrap shard header. */
+  locationMap: ShardLocation[];
+  /** Bootstrap shard header fields (everything except the location map). */
+  meta: Omit<ShardHeader, 'location_map'>;
+  /** Version being bootstrapped. */
+  version: number;
+  /** ProviderIO for connecting siblings and warning. */
+  io: ProviderIO;
 }
 
 /**
@@ -221,7 +254,8 @@ async function connectProvidersFromMap(locationMap: ShardLocation[], vaultName: 
  * @throws TamperDetectedError when a reachable sibling's header or location_map
  *   diverges from the bootstrap shard
  */
-async function runConsensusCheck(bootstrapProvider: StorageProvider, vaultName: string, locationMap: ShardLocation[], meta: Omit<ShardHeader, 'location_map'>, version: number, io: ProviderIO): Promise<void> {
+async function runConsensusCheck(args: ConsensusCheckArgs): Promise<void> {
+  const { bootstrapProvider, vaultName, locationMap, meta, version, io } = args;
   let checked = 0;
   for (const loc of locationMap) {
     if (loc.provider_id === bootstrapProvider.id) continue;
@@ -270,6 +304,22 @@ async function runConsensusCheck(bootstrapProvider: StorageProvider, vaultName: 
   }
 }
 
+/** Options for {@link bootstrapFromProvider}. */
+export interface BootstrapOptions {
+  /** Vault subdirectory name on the provider. */
+  vaultName: string;
+  /** ProviderIO for authenticating additional providers. */
+  io: ProviderIO;
+  /** Specific version to bootstrap; undefined = latest found. */
+  targetVersion?: number | undefined;
+  /** Known passwords to try for encrypted vaults (asks interactively if none work). */
+  passwords?: string[] | undefined;
+  /** Stripped transport secrets seeded into sibling connections (field → value). */
+  transportInputs?: Record<string, string> | undefined;
+  /** When true, seed sibling recovery from the bootstrap credential (unattended run). */
+  trustLocations?: boolean | undefined;
+}
+
 /**
  * Bootstraps discovery from a single storage provider.
  * Downloads one shard, parses its header (optionally decrypting the location map),
@@ -277,23 +327,14 @@ async function runConsensusCheck(bootstrapProvider: StorageProvider, vaultName: 
  * and returns the discovered metadata and connected providers.
  *
  * @param bootstrapProvider - Already authenticated provider to start from
- * @param vaultName         - Vault subdirectory name on the provider
- * @param targetVersion     - Specific version to bootstrap; null/undefined = latest found
- * @param passwords         - Known passwords to try for encrypted vaults (asks interactively if none work)
- * @param io                - ProviderIO for authenticating additional providers
+ * @param options           - vault name, IO, and optional version / passwords / transport inputs / trust flag
  * @returns BootstrapResult
  * @throws BfsError if no shards found or fewer than N shards available
  * @throws TamperDetectedError if consensus check fails
  */
-export async function bootstrapFromProvider(
-  bootstrapProvider: StorageProvider,
-  vaultName: string,
-  io: ProviderIO,
-  targetVersion?: number,
-  passwords?: string[],
-  transportInputs?: Record<string, string>,
-  trustLocations = false,
-): Promise<BootstrapResult> {
+export async function bootstrapFromProvider(bootstrapProvider: StorageProvider, options: BootstrapOptions): Promise<BootstrapResult> {
+  const { vaultName, io, targetVersion, passwords, transportInputs } = options;
+  const trustLocations = options.trustLocations ?? false;
   bootstrapProvider.setVaultName(vaultName);
 
   // Discover available versions from file listing
@@ -377,7 +418,7 @@ export async function bootstrapFromProvider(
   // Consensus BEFORE connecting with credentials: cross-check the bootstrap
   // shard against its siblings (read without secrets) so a forged location map
   // aborts here, before any secret could reach an attacker host.
-  await runConsensusCheck(bootstrapProvider, vaultName, location_map, meta, version, io);
+  await runConsensusCheck({ bootstrapProvider, vaultName, locationMap: location_map, meta, version, io });
 
   // Connect to all providers discovered in the location map. A provider that
   // implements connectForRecovery owns its credential prompt (and shows its

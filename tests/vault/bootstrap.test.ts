@@ -196,7 +196,7 @@ describe('connectProvidersFromMap dispatch to connectForRecovery', () => {
     const bootstrap = makeBootstrapProvider(0, map);
     const io = recordingIo();
 
-    await bootstrapFromProvider(bootstrap, VAULT_NAME, io, 1);
+    await bootstrapFromProvider(bootstrap, { vaultName: VAULT_NAME, io, targetVersion: 1 });
 
     const spy = recoverySpies.get('p1');
     expect(spy).toBeDefined();
@@ -215,7 +215,7 @@ describe('connectProvidersFromMap dispatch to connectForRecovery', () => {
     const bootstrap = makeBootstrapProvider(0, map);
     const io = recordingIo();
 
-    await bootstrapFromProvider(bootstrap, VAULT_NAME, io, 1);
+    await bootstrapFromProvider(bootstrap, { vaultName: VAULT_NAME, io, targetVersion: 1 });
 
     // No connectForRecovery spy was ever created for a no-hook provider.
     expect(recoverySpies.size).toBe(0);
@@ -230,7 +230,7 @@ describe('connectProvidersFromMap dispatch to connectForRecovery', () => {
     const bootstrap = makeBootstrapProvider(0, map);
     const io = recordingIo();
 
-    await bootstrapFromProvider(bootstrap, VAULT_NAME, io, 1);
+    await bootstrapFromProvider(bootstrap, { vaultName: VAULT_NAME, io, targetVersion: 1 });
 
     const spy = recoverySpies.get('p1');
     expect(spy).toBeDefined();
@@ -328,6 +328,6 @@ describe('runConsensusCheck location_map cross-check (S2)', () => {
 
     const { io } = createMockProviderIO({});
 
-    await expect(bootstrapFromProvider(bootstrap, VAULT_NAME, io, 1)).rejects.toThrow(TamperDetectedError);
+    await expect(bootstrapFromProvider(bootstrap, { vaultName: VAULT_NAME, io, targetVersion: 1 })).rejects.toThrow(TamperDetectedError);
   });
 });

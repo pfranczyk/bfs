@@ -7,6 +7,7 @@ import { createCliProviderIO } from '../../providers/provider.js';
 import { pull } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { isReplMode } from '../repl-context.js';
+import { createSpinnerIo } from '../spinner-io.js';
 import { CommandAbort, error, info, success, warn } from '../ui.js';
 
 /**
@@ -47,51 +48,7 @@ export function registerPull(program: Command): void {
         const rootDir = resolveCwd(cmd);
         const spinner = ora({ color: 'cyan' });
         const io = createCliProviderIO(rootDir);
-
-        // Wrap io: info/progress update spinner text; interactive methods pause it
-        const wrappedIo = {
-          ...io,
-          info(msg: string): void {
-            spinner.text = chalk.dim(msg);
-          },
-          progress(label: string, percent: number): void {
-            spinner.text = `${label} ${chalk.dim(`${Math.round(percent)}%`)}`;
-          },
-          async confirm(message: string): Promise<boolean> {
-            const wasSpinning = spinner.isSpinning;
-            spinner.stop();
-            const result = await io.confirm(message);
-            if (wasSpinning) spinner.start();
-            return result;
-          },
-          async ask(message: string): Promise<string> {
-            const wasSpinning = spinner.isSpinning;
-            spinner.stop();
-            const result = await io.ask(message);
-            if (wasSpinning) spinner.start();
-            return result;
-          },
-          async askSecret(message: string): Promise<string> {
-            const wasSpinning = spinner.isSpinning;
-            spinner.stop();
-            const result = await io.askSecret(message);
-            if (wasSpinning) spinner.start();
-            return result;
-          },
-          async choose(message: string, options: string[]): Promise<string> {
-            const wasSpinning = spinner.isSpinning;
-            spinner.stop();
-            const result = await io.choose(message, options);
-            if (wasSpinning) spinner.start();
-            return result;
-          },
-          warn(msg: string): void {
-            const wasSpinning = spinner.isSpinning;
-            if (wasSpinning) spinner.stop();
-            io.warn(msg);
-            if (wasSpinning) spinner.start();
-          },
-        };
+        const wrappedIo = createSpinnerIo(io, spinner);
 
         // Mode B: no .bfs/, requires --provider --path --name
         // Mode A: standard (with .bfs/)

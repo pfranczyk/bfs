@@ -77,6 +77,59 @@ function buildFileTableEntry(entry: FileEntry, hashBytes: Buffer): Buffer {
   return buf;
 }
 
+/** Variable inputs for a BFS blob header; offsets and timestamp are derived. */
+interface BlobHeaderFields {
+  /** Number of file-table entries (1 for a compressed blob: "bfs.pack.zip"). */
+  fileCount: number;
+  /** Flags bitfield (BLOB_FLAGS): bit0 = encrypted, bit1 = compressed. */
+  flags: number;
+  /** Byte length of the serialized file table (the data section starts after it). */
+  fileTableLength: number;
+  /** Byte length of the data section (plain blob, before RS/encryption). */
+  dataSectionLength: number | bigint;
+  /** Optional 16-byte vault UUID; zero-filled when absent. */
+  vaultId?: Buffer | undefined;
+}
+
+/**
+ * Builds the fixed 70-byte BFS blob header (magic … data-section length).
+ * Offsets are derived from HEADER_SIZE + fileTableLength; the created
+ * timestamp is stamped at call time. Throws if the written size drifts from
+ * HEADER_SIZE (off-by-one guard).
+ */
+function _buildBlobHeader(fields: BlobHeaderFields): Buffer {
+  const fileTableOffset = BigInt(HEADER_SIZE);
+  const dataSectionOffset = fileTableOffset + BigInt(fields.fileTableLength);
+  const header = Buffer.alloc(HEADER_SIZE);
+  let pos = 0;
+  header.write('BFS', pos, 'ascii'); // 0x00 magic, bytes 0-2 of "BFS\0"
+  pos += 3;
+  header.writeUInt8(0, pos); // 0x03 magic NUL terminator (completes "BFS\0")
+  pos += 1;
+  header.writeUInt16LE(1, pos); // 0x04 format version = 1
+  pos += 2;
+  (fields.vaultId ?? Buffer.alloc(16)).copy(header, pos); // 0x06 vault UUID (16B, zero-filled when absent)
+  pos += 16;
+  header.writeUInt32LE(fields.flags, pos); // 0x16 flags bitfield
+  pos += 4;
+  header.writeBigUInt64LE(BigInt(Date.now()), pos); // 0x1A created timestamp (unix ms)
+  pos += 8;
+  header.writeUInt32LE(fields.fileCount, pos); // 0x22 file count
+  pos += 4;
+  header.writeBigUInt64LE(fileTableOffset, pos); // 0x26 file table offset (= HEADER_SIZE)
+  pos += 8;
+  header.writeBigUInt64LE(BigInt(fields.fileTableLength), pos); // 0x2E file table length
+  pos += 8;
+  header.writeBigUInt64LE(dataSectionOffset, pos); // 0x36 data section offset (after file table)
+  pos += 8;
+  header.writeBigUInt64LE(BigInt(fields.dataSectionLength), pos); // 0x3E data section length
+  pos += 8;
+  if (pos !== HEADER_SIZE) {
+    throw new BfsError(`_buildBlobHeader offset mismatch: wrote ${pos} B, expected ${HEADER_SIZE} B`);
+  }
+  return header;
+}
+
 /**
  * Packs a directory into a BFS blob (custom binary format) held in RAM.
  * Files that cannot be read are skipped and listed in `skipped`.
@@ -157,38 +210,9 @@ async function _packBlobCompressed(metas: FileMeta[], rootDir: string, vaultId: 
 
 /**
  * Assembles a complete BFS blob: header + fileTable + dataSection + trailing SHA-256.
- * Mutation note: header Buffer is built inline for performance — no external state.
  */
 function _assembleBlobBuffer(fileCount: number, flags: number, fileTable: Buffer, dataSection: Buffer, vaultId?: Buffer): Buffer {
-  const fileTableOffset = BigInt(HEADER_SIZE);
-  const dataSectionOffset = fileTableOffset + BigInt(fileTable.length);
-  const header = Buffer.alloc(HEADER_SIZE);
-  let pos = 0;
-  header.write('BFS', pos, 'ascii');
-  pos += 3;
-  header.writeUInt8(0, pos);
-  pos += 1;
-  header.writeUInt16LE(1, pos);
-  pos += 2;
-  (vaultId ?? Buffer.alloc(16)).copy(header, pos);
-  pos += 16;
-  header.writeUInt32LE(flags, pos);
-  pos += 4;
-  header.writeBigUInt64LE(BigInt(Date.now()), pos);
-  pos += 8;
-  header.writeUInt32LE(fileCount, pos);
-  pos += 4;
-  header.writeBigUInt64LE(fileTableOffset, pos);
-  pos += 8;
-  header.writeBigUInt64LE(BigInt(fileTable.length), pos);
-  pos += 8;
-  header.writeBigUInt64LE(dataSectionOffset, pos);
-  pos += 8;
-  header.writeBigUInt64LE(BigInt(dataSection.length), pos);
-  pos += 8;
-  if (pos !== HEADER_SIZE) {
-    throw new BfsError(`_assembleBlobBuffer header offset mismatch: wrote ${pos} B, expected ${HEADER_SIZE} B`);
-  }
+  const header = _buildBlobHeader({ fileCount, flags, fileTableLength: fileTable.length, dataSectionLength: dataSection.length, vaultId });
   const blobBody = Buffer.concat([header, fileTable, dataSection]);
   const checksum = Buffer.from(hashBuffer(blobBody), 'hex');
   return Buffer.concat([blobBody, checksum]);
@@ -258,39 +282,8 @@ export async function packBlobToFile(rootDir: string, outputPath: string, ignore
   }
   const fileTable = fileTableParts.length > 0 ? Buffer.concat(fileTableParts) : Buffer.alloc(0);
 
-  const fileTableOffset = BigInt(HEADER_SIZE);
-  const dataSectionOffset = fileTableOffset + BigInt(fileTable.length);
   const dataSectionLength = currentDataOffset;
-
-  // ── Build header ───────────────────────────────────────────────────────
-  const header = Buffer.alloc(HEADER_SIZE);
-  let pos = 0;
-  header.write('BFS', pos, 'ascii');
-  pos += 3;
-  header.writeUInt8(0, pos);
-  pos += 1;
-  header.writeUInt16LE(1, pos);
-  pos += 2;
-  const vaultIdBuf = vaultId ?? Buffer.alloc(16);
-  vaultIdBuf.copy(header, pos);
-  pos += 16;
-  header.writeUInt32LE(0, pos);
-  pos += 4;
-  header.writeBigUInt64LE(BigInt(Date.now()), pos);
-  pos += 8;
-  header.writeUInt32LE(entries.length, pos);
-  pos += 4;
-  header.writeBigUInt64LE(fileTableOffset, pos);
-  pos += 8;
-  header.writeBigUInt64LE(BigInt(fileTable.length), pos);
-  pos += 8;
-  header.writeBigUInt64LE(dataSectionOffset, pos);
-  pos += 8;
-  header.writeBigUInt64LE(dataSectionLength, pos);
-  pos += 8;
-  if (pos !== HEADER_SIZE) {
-    throw new BfsError(`packBlobToFile header offset mismatch: wrote ${pos} B, expected ${HEADER_SIZE} B`);
-  }
+  const header = _buildBlobHeader({ fileCount: entries.length, flags: 0, fileTableLength: fileTable.length, dataSectionLength, vaultId });
 
   // ── Pass 2: write header + file table + data section + checksum ────────
   const hasher = createHash('sha256');
@@ -364,35 +357,7 @@ export async function packBlobToFileZipped(rootDir: string, outputPath: string, 
     const fileTable = buildFileTableEntry(zipEntry, Buffer.from(zipHashHex, 'hex'));
 
     // Build BFS header with known data_section_length
-    const fileTableOffset = BigInt(HEADER_SIZE);
-    const dataSectionOffset = fileTableOffset + BigInt(fileTable.length);
-    const header = Buffer.alloc(HEADER_SIZE);
-    let pos = 0;
-    header.write('BFS', pos, 'ascii');
-    pos += 3;
-    header.writeUInt8(0, pos);
-    pos += 1;
-    header.writeUInt16LE(1, pos);
-    pos += 2;
-    (vaultId ?? Buffer.alloc(16)).copy(header, pos);
-    pos += 16;
-    header.writeUInt32LE(BLOB_FLAGS.COMPRESSED, pos);
-    pos += 4;
-    header.writeBigUInt64LE(BigInt(Date.now()), pos);
-    pos += 8;
-    header.writeUInt32LE(1, pos);
-    pos += 4;
-    header.writeBigUInt64LE(fileTableOffset, pos);
-    pos += 8;
-    header.writeBigUInt64LE(BigInt(fileTable.length), pos);
-    pos += 8;
-    header.writeBigUInt64LE(dataSectionOffset, pos);
-    pos += 8;
-    header.writeBigUInt64LE(BigInt(zipSize), pos);
-    pos += 8;
-    if (pos !== HEADER_SIZE) {
-      throw new BfsError(`packBlobToFileZipped header offset mismatch: wrote ${pos} B, expected ${HEADER_SIZE} B`);
-    }
+    const header = _buildBlobHeader({ fileCount: 1, flags: BLOB_FLAGS.COMPRESSED, fileTableLength: fileTable.length, dataSectionLength: zipSize, vaultId });
 
     // Seek to start, overwrite placeholder with real header + file table
     await outputHandle.write(header, 0, header.length, 0);

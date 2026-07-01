@@ -285,26 +285,38 @@ export async function rsEncodeStriped(source: Readable, parityPaths: string[], N
   return { dataShardHashes: hashers.slice(0, N).map((h) => h.digest('hex')), parityShardHashes: hashers.slice(N).map((h) => h.digest('hex')) };
 }
 
+/** Decode parameters for {@link rsDecodeStriped}. */
+interface RsDecodeStripedOptions {
+  /** Number of data shards. */
+  N: number;
+  /** Number of parity shards. */
+  K: number;
+  /** Bytes per shard per stripe (must match the encode-time value). */
+  stripeSize: number;
+  /** Exact blob size before RS encode (used to strip padding). */
+  blobSize: number;
+  /** Optional debug-log sink (routed from `bfs --debug`). */
+  debugLog?: ((msg: string) => void) | undefined;
+}
+
 /**
  * Decodes a blob from N+K striped shard streams.
  * Missing shards (null) are recovered by Reed-Solomon reconstruction.
  * Returns a Readable of the reconstructed blob, trimmed to `blobSize`.
  *
  * @param shardStreams - N+K decrypted shard payload streams (null = missing)
- * @param N           - number of data shards
- * @param K           - number of parity shards
- * @param stripeSize  - bytes per shard per stripe (must match encode)
- * @param blobSize    - exact blob size before RS encode (for padding removal)
+ * @param options      - decode parameters (scheme, stripe/blob sizes, optional debug log)
  * @returns Readable stream of the reconstructed blob
  */
-export function rsDecodeStriped(shardStreams: Nullable<Readable>[], N: number, K: number, stripeSize: number, blobSize: number, debugLog?: (msg: string) => void): Readable {
+export function rsDecodeStriped(shardStreams: Nullable<Readable>[], options: RsDecodeStripedOptions): Readable {
+  const { N, K, stripeSize, blobSize, debugLog } = options;
   validateParams(N, K);
   const totalShards = N + K;
   const shardSize = calcShardPayloadSize(blobSize, N);
   const numStripes = Math.ceil(shardSize / stripeSize);
   const output = new PassThrough();
 
-  void _runStripedDecode(shardStreams, N, K, totalShards, stripeSize, numStripes, blobSize, output, debugLog);
+  void _runStripedDecode({ shardStreams, N, K, totalShards, stripeSize, numStripes, blobSize, output, debugLog });
   return output;
 }
 
@@ -400,21 +412,34 @@ async function _encodeStripeWithHash(ctx: EncodeStripeCtx): Promise<void> {
   }
 }
 
+/** Context for {@link _runStripedDecode}, the async driver behind rsDecodeStriped. */
+interface StripedDecodeCtx {
+  /** N+K decrypted shard payload streams (null = missing). */
+  shardStreams: Nullable<Readable>[];
+  /** Number of data shards. */
+  N: number;
+  /** Number of parity shards. */
+  K: number;
+  /** Total shard count (N + K). */
+  totalShards: number;
+  /** Bytes per shard per stripe (must match the encode-time value). */
+  stripeSize: number;
+  /** Number of stripes to process (ceil(shardSize / stripeSize)). */
+  numStripes: number;
+  /** Exact blob size before RS encode (used to strip padding). */
+  blobSize: number;
+  /** Sink the reconstructed blob is pushed into (and destroyed on error). */
+  output: PassThrough;
+  /** Optional debug-log sink (routed from `bfs --debug`). */
+  debugLog: ((msg: string) => void) | undefined;
+}
+
 /**
  * Async driver for rsDecodeStriped.
  * Runs in background; errors are forwarded to the output PassThrough.
  */
-async function _runStripedDecode(
-  shardStreams: Nullable<Readable>[],
-  N: number,
-  K: number,
-  totalShards: number,
-  stripeSize: number,
-  numStripes: number,
-  blobSize: number,
-  output: PassThrough,
-  debugLog: ((msg: string) => void) | undefined,
-): Promise<void> {
+async function _runStripedDecode(ctx: StripedDecodeCtx): Promise<void> {
+  const { shardStreams, N, K, totalShards, stripeSize, numStripes, blobSize, output, debugLog } = ctx;
   const readers = shardStreams.map((s) => (s !== null ? new _ShardReader(s) : null));
   const flat = new Uint8Array(totalShards * stripeSize);
   let bytesEmitted = 0;

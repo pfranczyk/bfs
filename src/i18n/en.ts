@@ -497,8 +497,8 @@ export const en: Strings = {
   recovery_consensus_vault_id_mismatch: 'Version %s: backup identity mismatch — skipping',
   recovery_consensus_filename_mismatch: 'Version %s: filename/header mismatch — skipping',
   recovery_consensus_failed: 'Version %s: consensus failed (fields: %s) — marking as untrusted',
-  recovery_no_manifests: 'Could not reconstruct any valid manifest from the available providers.',
-  recovery_manifest_unreadable: 'Manifest for latest version %s could not be read after recovery.',
+  recovery_no_manifests: 'Could not reconstruct any valid backup version from the available providers.',
+  recovery_manifest_unreadable: 'The latest backup version %s could not be read after recovery.',
 
   // ─── Provider runtime errors (FTP + LocalFS shared shape) ──────────────────
   provider_short_shard: 'File "%s" is too short to contain a valid payload after the header',

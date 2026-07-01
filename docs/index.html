@@ -32,7 +32,7 @@
   <section class="min-h-screen flex flex-col items-center justify-center px-6 text-center">
     <div class="max-w-3xl">
       <div class="inline-block mb-6 px-3 py-1 rounded-full border border-slate-700 text-xs text-slate-400 tracking-widest uppercase">
-        v0.8.0 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 24
+        v0.8.1 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 24
       </div>
 
       <h1 class="text-7xl font-black tracking-tight mb-4 bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
@@ -105,7 +105,7 @@
           <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat0_desc">
             ZIP/Deflate compression is on by default.
             BFS detects already-compressed files (photos, videos, archives)
-            and skips them — no wasted CPU, smaller shards.
+            and skips them — no wasted CPU, smaller pieces.
           </p>
         </div>
 
@@ -143,7 +143,7 @@
         <div class="sm:col-span-2 bg-gradient-to-r from-slate-900 to-slate-800 border border-indigo-500/40 rounded-2xl p-6 flex gap-5 items-start">
           <div class="text-4xl mt-0.5 shrink-0">🕸️</div>
           <div>
-            <h3 class="text-lg font-semibold mb-2" data-i18n="feat5_title">Lost Everything? One Shard Is Enough</h3>
+            <h3 class="text-lg font-semibold mb-2" data-i18n="feat5_title">Lost Everything? One Piece Is Enough</h3>
             <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat5_desc">
               Every piece of your backup carries a map to all the others.
               Find one surviving drive, run <span class="text-white font-mono">bfs recovery</span> —
@@ -169,7 +169,7 @@
             <span class="w-7 h-7 rounded-full bg-slate-700 text-sm font-bold flex items-center justify-center text-white">1</span>
             <span class="text-slate-300 font-medium" data-i18n="step1_label">Initialize (one command, mix any storage)</span>
           </div>
-          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step1_comment"># 2 data shards + 1 parity = 3 providers (mix local disks and FTP/FTPS)</span>
+          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step1_comment"># 2 data + 1 parity = 3 providers (mix local disks and FTP/FTPS)</span>
 <span class="code-cmd">bfs</span> init <span class="code-string">mybackup</span> <span class="code-flag">--ci</span> <span class="code-flag">--data-shards</span> 2 <span class="code-flag">--parity-shards</span> 1 \
   <span class="code-flag">--provider</span> <span class="code-string">"local:disk1 --path /mnt/disk1"</span> \
   <span class="code-flag">--provider</span> <span class="code-string">"local:usb   --path /mnt/usb"</span> \
@@ -193,7 +193,7 @@
             <span class="w-7 h-7 rounded-full bg-slate-700 text-sm font-bold flex items-center justify-center text-white">3</span>
             <span class="text-slate-300 font-medium" data-i18n="step3_label">New machine? Recover from any one drive</span>
           </div>
-          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step3_comment"># Plug in ANY ONE drive — BFS reads the shard map and finds the rest.
+          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step3_comment"># Plug in ANY ONE drive — BFS reads the recovery map and finds the rest.
 # --name = backup name (same as `bfs init mybackup`); --bootstrap = same adapter flags.</span>
 <span class="code-cmd">bfs</span> recovery <span class="code-flag">--provider</span> local <span class="code-flag">--name</span> <span class="code-string">mybackup</span> \
   <span class="code-flag">--bootstrap</span> <span class="code-string">"--path /mnt/disk1"</span>
@@ -219,7 +219,7 @@
           <tbody class="divide-y divide-slate-800">
             <tr class="hover:bg-slate-900/50 transition-colors">
               <td class="px-6 py-4 font-mono text-green-400">bfs init</td>
-              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_init">Initialize vault in current directory</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_init">Initialize a backup in the current directory</td>
             </tr>
             <tr class="hover:bg-slate-900/50 transition-colors">
               <td class="px-6 py-4 font-mono text-green-400">bfs push</td>
@@ -231,15 +231,15 @@
             </tr>
             <tr class="hover:bg-slate-900/50 transition-colors">
               <td class="px-6 py-4 font-mono text-green-400">bfs status</td>
-              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_status">Show vault health and version info</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_status">Show backup health and version info</td>
             </tr>
             <tr class="hover:bg-slate-900/50 transition-colors">
               <td class="px-6 py-4 font-mono text-green-400">bfs verify</td>
-              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_verify">Check shard availability across providers</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_verify">Check piece availability across providers</td>
             </tr>
             <tr class="hover:bg-slate-900/50 transition-colors">
               <td class="px-6 py-4 font-mono text-green-400">bfs recovery</td>
-              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_recovery">Rebuild vault config from provider shards</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_recovery">Rebuild backup config from provider pieces</td>
             </tr>
             <tr class="hover:bg-slate-900/50 transition-colors">
               <td class="px-6 py-4 font-mono text-green-400">bfs prune</td>
@@ -259,7 +259,7 @@
   <footer class="border-t border-slate-800 py-10 px-6 text-center text-slate-500 text-sm">
     <p class="mb-2">
       <span class="text-white font-semibold">BFS</span>
-      &nbsp;v0.8.0
+      &nbsp;v0.8.1
       &nbsp;·&nbsp;
       <a href="https://github.com/pfranczyk/BFS/blob/main/LICENSE" class="hover:text-white transition-colors">AGPL-3.0</a>
       &nbsp;·&nbsp;
@@ -285,33 +285,33 @@
                                                 feat1_title:   'Your Eyes Only',
                                                 feat1_desc:    'Optional AES-256-GCM encryption with Argon2id key derivation. When enabled, each drive holds one piece — encrypted, incomplete, and useless on its own.',
                                                 feat0_title:   'Smaller Backups, Automatically',
-                                                feat0_desc:    'ZIP/Deflate compression is on by default. BFS detects already-compressed files (photos, videos, archives) and skips them — no wasted CPU, smaller shards.',
+                                                feat0_desc:    'ZIP/Deflate compression is on by default. BFS detects already-compressed files (photos, videos, archives) and skips them — no wasted CPU, smaller pieces.',
                                                 feat3_title:   'Use Whatever Storage You Have',
                                                 feat3_desc:    'USB drives, external HDDs, NAS, FTP/FTPS servers, network folders — anything that can hold a file. Mix and match across providers. No cloud subscription required. No vendor lock-in.',
                                                 feat4_title:   'Every Push Is a Snapshot',
                                                 feat4_desc:    'Each backup creates a new numbered version. Keep the last 7, or 30, or all of them. Verify health, prune old ones, restore from any point.',
                                                 qs_title:      'Quick Start',
                                                 step1_label:   'Initialize (one command, mix any storage)',
-                                                step1_comment: '# 2 data shards + 1 parity = 3 providers (mix local disks and FTP/FTPS)',
+                                                step1_comment: '# 2 data + 1 parity = 3 providers (mix local disks and FTP/FTPS)',
                                                 step2_label:   'Backup &amp; restore',
                                                 step2_comment: '# Each push creates a new versioned snapshot',
                                                 step2_c1:      '# backup → new version',
                                                 step2_c2:      '# restore latest version',
                                                 step3_label:   'New machine? Recover from any one drive',
-                                                step3_comment: '# Plug in ANY ONE drive — BFS reads the shard map and finds the rest.\n# --name = backup name (same as `bfs init mybackup`); --bootstrap = same adapter flags.',
+                                                step3_comment: '# Plug in ANY ONE drive — BFS reads the recovery map and finds the rest.\n# --name = backup name (same as `bfs init mybackup`); --bootstrap = same adapter flags.',
                                                 step3_c1:      '# restore files as usual',
                                                 cmd_title:     'Commands',
                                                 cmd_th_cmd:    'Command',
                                                 cmd_th_desc:   'Description',
-                                                cmd_init:      'Initialize vault in current directory',
+                                                cmd_init:      'Initialize a backup in the current directory',
                                                 cmd_push:      'Backup current directory → new version',
                                                 cmd_pull:      'Restore files from backup',
-                                                cmd_status:    'Show vault health and version info',
-                                                cmd_verify:    'Check shard availability across providers',
-                                                cmd_recovery:  'Rebuild vault config from provider shards',
+                                                cmd_status:    'Show backup health and version info',
+                                                cmd_verify:    'Check piece availability across providers',
+                                                cmd_recovery:  'Rebuild backup config from provider pieces',
                                                 cmd_prune:     'Delete old backup versions',
                                                 cmd_versions:  'List all versions with health status',
-                                                feat5_title:   'Lost Everything? One Shard Is Enough',
+                                                feat5_title:   'Lost Everything? One Piece Is Enough',
                                                 feat5_desc:    'Every piece of your backup carries a map to all the others. Find one surviving drive, run <span class="text-white font-mono">bfs recovery</span> — your config, your files, everything comes back.',
                                                 feat6_title:   'Failures Don\'t Stop a Backup',
                                                 feat6_desc:    'One drive offline mid-backup? BFS doesn\'t give up. It keeps uploading to the rest and remembers exactly which ones failed — so later you fix and retry only those, not the whole thing.',
@@ -333,23 +333,23 @@
                                                 feat4_desc:    'Każdy backup tworzy nową numerowaną wersję. Zachowaj ostatnie 7, 30 lub wszystkie. Sprawdzaj stan, usuwaj stare, odtwarzaj z dowolnego momentu.',
                                                 qs_title:      'Szybki start',
                                                 step1_label:   'Inicjalizacja (jedna komenda, dowolny mix nośników)',
-                                                step1_comment: '# 2 shardy danych + 1 parzystości = 3 providery (dyski lokalne + FTP/FTPS)',
+                                                step1_comment: '# 2 fragmenty danych + 1 parzystości = 3 nośniki (dyski lokalne + FTP/FTPS)',
                                                 step2_label:   'Backup i odtworzenie',
                                                 step2_comment: '# Każdy push tworzy nowy snapshot z numerem wersji',
                                                 step2_c1:      '# backup → nowa wersja',
                                                 step2_c2:      '# odtworzenie najnowszej wersji',
                                                 step3_label:   'Nowa maszyna? Odtworzysz z jednego nośnika',
-                                                step3_comment: '# Podłącz JEDEN dowolny nośnik — BFS przeczyta mapę z jego sharda i znajdzie resztę.\n# --name = nazwa backupu (jak `bfs init mybackup`); --bootstrap = te same flagi adaptera.',
+                                                step3_comment: '# Podłącz JEDEN dowolny nośnik — BFS przeczyta mapę z jego fragmentu i znajdzie resztę.\n# --name = nazwa backupu (jak `bfs init mybackup`); --bootstrap = te same flagi adaptera.',
                                                 step3_c1:      '# odtworzenie plików jak zwykle',
                                                 cmd_title:     'Komendy',
                                                 cmd_th_cmd:    'Komenda',
                                                 cmd_th_desc:   'Opis',
-                                                cmd_init:      'Inicjalizacja vaulta w bieżącym katalogu',
+                                                cmd_init:      'Inicjalizacja kopii zapasowej w bieżącym katalogu',
                                                 cmd_push:      'Backup bieżącego katalogu → nowa wersja',
                                                 cmd_pull:      'Odtworzenie plików z backupu',
-                                                cmd_status:    'Pokaż stan vaulta i informacje o wersjach',
-                                                cmd_verify:    'Sprawdź dostępność shardów u providerów',
-                                                cmd_recovery:  'Odbuduj konfigurację vaulta z shardów',
+                                                cmd_status:    'Pokaż stan kopii zapasowej i informacje o wersjach',
+                                                cmd_verify:    'Sprawdź dostępność fragmentów na nośnikach',
+                                                cmd_recovery:  'Odbuduj konfigurację kopii zapasowej z fragmentów',
                                                 cmd_prune:     'Usuń stare wersje backupu',
                                                 cmd_versions:  'Wylistuj wszystkie wersje ze stanem zdrowia',
                                                 feat5_title:   'Straciłeś wszystko? Wystarczy jeden fragment',

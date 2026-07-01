@@ -136,11 +136,30 @@ async function extractShardMeta(
   return { encKey, kdf_salt, blobSize, blobHash, formatVersion, vaultId, vaultName, rsStripeSize };
 }
 
+/** Arguments for {@link uploadRepairedShard}. */
+interface UploadRepairedShardOptions {
+  /** Target provider config the repaired shard is written to. */
+  targetProviderConfig: ProviderConfig;
+  /** Shard header to serialize (V2 striped or V1 legacy, by format_version). */
+  header: ShardHeader;
+  /** Shard payload in stored form (encrypted ciphertext+tag, or raw). */
+  payload: Buffer;
+  /** Remote filename (shard_{index}.bfs.{version}). */
+  filename: string;
+  /** Vault subdirectory name on the target provider. */
+  vaultName: string;
+  /** Encryption key for the header location map (undefined when unencrypted). */
+  encKey: Buffer | undefined;
+  /** ProviderIO for authenticating the target provider. */
+  io: ProviderIO;
+}
+
 /**
  * Builds the repaired shard binary and uploads it to the target provider.
  * @throws BfsError if the target provider cannot be authenticated
  */
-async function uploadRepairedShard(targetProviderConfig: ProviderConfig, header: ShardHeader, payload: Buffer, filename: string, vaultName: string, encKey: Buffer | undefined, io: ProviderIO): Promise<void> {
+async function uploadRepairedShard(options: UploadRepairedShardOptions): Promise<void> {
+  const { targetProviderConfig, header, payload, filename, vaultName, encKey, io } = options;
   const targetProvider = providerRegistry.create(targetProviderConfig, io);
   await targetProvider.authenticate();
   targetProvider.setVaultName(vaultName);
@@ -373,7 +392,7 @@ export async function rebuildVersion(rootDir: string, version: number, options: 
     location_map: newLocationMap,
   };
   const repairedFilename = `shard_${removedShard.shard_index}.bfs.${version}`;
-  await uploadRepairedShard(targetProviderConfig, repairedHeader, finalPayload, repairedFilename, config.vault_name, encKey, io);
+  await uploadRepairedShard({ targetProviderConfig, header: repairedHeader, payload: finalPayload, filename: repairedFilename, vaultName: config.vault_name, encKey, io });
 
   // Update location maps on all existing (available) shards
   await updateLocationMaps(rootDir, version, { newLocationMap, io, ...(password !== undefined ? { password } : {}) });

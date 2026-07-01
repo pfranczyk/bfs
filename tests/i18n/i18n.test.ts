@@ -103,4 +103,18 @@ describe('translation completeness', () => {
     const offenders = plKeys.filter((k) => /shard/i.test(stripFlagNames(pl[k])));
     expect(offenders).toEqual([]);
   });
+
+  // naming.md: "manifest" is an internal term (per-version snapshot metadata)
+  // and must never appear in a user-facing string. Unlike "shard" there is no
+  // CLI flag or config field the user types that contains it, so the check is
+  // unconditional. User-facing wording for a manifest's contents is "version".
+  it('no English value uses the internal term "manifest"', () => {
+    const offenders = enKeys.filter((k) => /manifest/i.test(en[k]));
+    expect(offenders).toEqual([]);
+  });
+
+  it('no Polish value uses the internal term "manifest"', () => {
+    const offenders = plKeys.filter((k) => /manifest/i.test(pl[k]));
+    expect(offenders).toEqual([]);
+  });
 });

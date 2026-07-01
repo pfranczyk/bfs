@@ -32,7 +32,7 @@ export function exceedsGcmPlaintextLimit(plaintextBytes: number): boolean {
   return plaintextBytes > GCM_MAX_PLAINTEXT_BYTES;
 }
 
-// Argon2id KDF parameters (RFC 9106 recommended: 64 MiB, 3 iterations)
+/** Argon2id KDF parameters (RFC 9106 recommended: 64 MiB memory, 3 iterations). */
 export const ARGON2_PARAMS = {
   memoryCost: 65536, // 64 MiB
   timeCost: 3,
