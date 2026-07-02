@@ -1,10 +1,11 @@
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import ora from 'ora';
-import { LockConcurrentActiveError, LockPartialStatePushError, PushCacheNoLockError, PushCacheUnavailableError, PushSkippedError } from '../../core/errors.js';
+import { LockConcurrentActiveError, LockPartialStatePushError, PushCacheNoLockError, PushCacheUnavailableError, PushDriftError, PushSkippedError } from '../../core/errors.js';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO } from '../../providers/provider.js';
 import { PushMode, VersionHealth } from '../../types/index.js';
+import { _formatDriftList } from '../../vault/push-pipeline.js';
 import { push } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { isReplMode } from '../repl-context.js';
@@ -35,6 +36,7 @@ export function registerPush(program: Command): void {
     .option('--max-ram <mb>', t('push_opt_max_ram'))
     .option('--no-compress', t('push_opt_no_compress'))
     .option('--compress', t('push_opt_compress'))
+    .option('--allow-drift', t('push_opt_allow_drift'))
     .action(
       async (
         opts: {
@@ -47,6 +49,7 @@ export function registerPush(program: Command): void {
           maxRam?: string;
           /** Commander: false when --no-compress, true when --compress, true by default. */
           compress?: boolean;
+          allowDrift?: boolean;
         },
         cmd: Command,
       ) => {
@@ -84,6 +87,7 @@ export function registerPush(program: Command): void {
             ...(opts.cacheDir !== undefined ? { cacheDir: opts.cacheDir } : {}),
             ...(opts.maxRam !== undefined ? { maxRamMb: parseInt(opts.maxRam, 10) } : {}),
             ...(compressOverride !== undefined ? { compressOverride } : {}),
+            ...(opts.allowDrift !== undefined ? { allowDrift: opts.allowDrift } : {}),
             fromCache: opts.cache ?? false,
             interactive: isReplMode(),
             io: wrappedIo,
@@ -130,6 +134,14 @@ export function registerPush(program: Command): void {
           if (err instanceof LockPartialStatePushError) {
             spinner.fail(t('push_failed'));
             error(fmt('lock_partial_state_push', String(err.version)));
+            throw new CommandAbort();
+          }
+          if (err instanceof PushDriftError) {
+            const { changed, vanished, appeared } = err.drift;
+            spinner.fail(t('push_failed'));
+            warn(fmt('push_drift_header', String(changed.length + vanished.length + appeared.length)));
+            console.log(chalk.yellow(_formatDriftList(err.drift)));
+            info(t('push_drift_hint'));
             throw new CommandAbort();
           }
           if (err instanceof PushSkippedError) {

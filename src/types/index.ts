@@ -121,6 +121,30 @@ export interface ManifestShard {
 
 export type { SkippedFile };
 
+// ─── Catalog drift (blob ↔ directory currency) ────────────────
+
+/** One file's identity in a catalog snapshot: byte size + rounded mtime. */
+export interface CatalogSnapshotEntry {
+  size: number;
+  mtimeMs: number;
+}
+
+/** Relative path (forward-slash) → file identity, capturing a directory at one instant. */
+export type CatalogSnapshot = Map<string, CatalogSnapshotEntry>;
+
+/**
+ * Files that diverged between two catalog snapshots bracketing the pack window.
+ * Empty arrays mean the packed blob still matches the directory 1:1.
+ */
+export interface CatalogDrift {
+  /** Present in both snapshots but size or mtime differs. */
+  readonly changed: readonly string[];
+  /** Present in the earlier snapshot, absent in the later one. */
+  readonly vanished: readonly string[];
+  /** Absent in the earlier snapshot, present in the later one. */
+  readonly appeared: readonly string[];
+}
+
 /** Result returned by push() — successful, partial, or damaged. */
 export interface PushResult {
   version: number;
@@ -159,6 +183,14 @@ export interface PushOptions {
    * Defaults to false (standalone CLI: abort with PushSkippedError).
    */
   interactive?: boolean;
+  /**
+   * When true, accepts a detected blob↔directory drift (files changed on disk
+   * during packing) and proceeds with the upload. The blob stays fully
+   * restorable regardless; the flag waives only currency, never recoverability.
+   * When false/absent: interactive mode prompts, non-interactive mode throws
+   * PushDriftError.
+   */
+  allowDrift?: boolean;
   /** Directory for temporary parity files during push. Defaults to cacheDir. */
   tempDir?: string;
   /** Overrides cache directory for push.blob.pending. Defaults to {rootDir}/.bfs/cache. */

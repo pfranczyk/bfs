@@ -66,5 +66,25 @@ export async function suiteF(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
+  tests.push(
+    await runTest('F6', 'bfs --lang en push --help → --allow-drift (English)', () => {
+      const r = runBfs(['--lang', 'en', 'push', '--help'], ctx.vaultDir, undefined, langEnv);
+      assert(r.status === 0, `exit ${r.status ?? 'null'}\nstderr: ${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('--allow-drift'), `expected --allow-drift flag in: ${out.slice(0, 500)}`);
+      assert(out.includes('packing'), `expected English drift description in: ${out.slice(0, 500)}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('F7', 'bfs --lang pl push --help → --allow-drift (Polish)', () => {
+      const r = runBfs(['--lang', 'pl', 'push', '--help'], ctx.vaultDir, undefined, langEnv);
+      assert(r.status === 0, `exit ${r.status ?? 'null'}\nstderr: ${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('--allow-drift'), `expected --allow-drift flag in: ${out.slice(0, 500)}`);
+      assert(out.includes('pakowania'), `expected Polish drift description in: ${out.slice(0, 500)}`);
+    }),
+  );
+
   return { name: 'Suite F — Language switching', tests };
 }

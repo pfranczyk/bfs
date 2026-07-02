@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-02
+
+### Added
+- **`bfs push` now flags files that change on disk while it runs.** After packing,
+  push compares each file's size and modification time against a snapshot taken
+  before packing and reports anything that changed, disappeared, or was added
+  mid-run. In an interactive terminal you choose whether to accept the backup
+  (still fully restorable, just not current for those files) or retry without
+  touching them; a non-interactive push stops by default, and the new
+  `--allow-drift` flag accepts the drift instead. Accepting never sacrifices
+  recoverability — only how up-to-date the backup is.
+
+### Fixed
+- **A large uncompressed backup can no longer become unrestorable if a file
+  changes while the backup is being written.** With compression turned off and a
+  backup too large to build in memory, a file modified mid-run could leave the
+  backup's stored checksum out of step with its stored data, so a later
+  `bfs pull` refused to restore it. Backups written this way are now always
+  restorable.
+
 ## [0.8.1] - 2026-07-01
 
 ### Changed

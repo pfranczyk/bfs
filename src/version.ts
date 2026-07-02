@@ -2,7 +2,7 @@
  * Current BFS release version. Must stay in sync with package.json — update
  * both together for a release. Used for diagnostic display ("BFS x.y.z").
  */
-export const BFS_VERSION = '0.8.1';
+export const BFS_VERSION = '0.9.0';
 
 /**
  * Provider contract API version.

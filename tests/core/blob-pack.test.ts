@@ -1,13 +1,62 @@
 import { createHash } from 'node:crypto';
+import type { Mode, PathLike } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, assert, beforeEach, describe, expect, it } from 'vitest';
+import { Readable } from 'node:stream';
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest';
 import { estimateBlobSize, packBlob, packBlobToFile, packBlobToFileZipped } from '../../src/core/blob-pack.js';
 import { parseBlobFileTable, parseBlobFileTableFromFile, unpackBlob, unpackBlobFromFile } from '../../src/core/blob-unpack.js';
 import { BfsError, UnsafePathError } from '../../src/core/errors.js';
 import { createIgnoreFilter } from '../../src/core/ignore.js';
 import { BLOB_FLAGS } from '../../src/types/index.js';
+
+// Shared, hoisted TOCTOU target: when armed, the mocked fs.open below performs a
+// real on-disk rewrite of a source file the moment the output handle is opened
+// for writing — reproducing an external process mutating a file between
+// packBlobToFile's hash pass and its write pass. Null = pure call-through.
+const toctou = vi.hoisted(() => ({ target: null as { outputPath: string; sourceFile: string; replacement: Buffer } | null }));
+
+// Shared, hoisted mid-stream read failure: when armed, the mocked fs.open wraps
+// the source file's read stream so it emits one chunk and then errors —
+// simulating an I/O fault (bad sector, unplugged medium) partway through reading
+// a file during the write pass, after some of its bytes were already written.
+const streamFail = vi.hoisted(() => ({ target: null as { path: string } | null }));
+
+// Mock at the module boundary so blob-pack (writer) and blob-unpack (reader)
+// share one mocked module — an ESM namespace export cannot be spied in place.
+// Default behaviour is a faithful call-through; only an armed target triggers
+// the rewrite / fault, so every other test in this file sees the real fs.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const open = async (p: PathLike, flags?: string | number, mode?: Mode): Promise<FileHandle> => {
+    const handle = await actual.open(p, flags, mode);
+    const t = toctou.target;
+    if (t && p === t.outputPath && String(flags) === 'w') {
+      await actual.writeFile(t.sourceFile, t.replacement); // real fs.writeFile — bypasses the mocked open, no recursion
+    }
+    const sf = streamFail.target;
+    if (sf && p === sf.path && String(flags) === 'r') {
+      // Replace the read stream with one that yields a partial chunk then errors.
+      handle.createReadStream = (() => {
+        let emitted = false;
+        return new Readable({
+          read(this: Readable) {
+            if (!emitted) {
+              emitted = true;
+              this.push(Buffer.alloc(256, 0xaa)); // partial bytes reach the output
+            } else {
+              this.destroy(new Error('EIO: simulated mid-stream read error'));
+            }
+          },
+        });
+      }) as FileHandle['createReadStream'];
+    }
+    return handle;
+  };
+  return { ...actual, open };
+});
 
 async function makeTempDir(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'bfs-test-'));
@@ -290,6 +339,119 @@ describe('packBlobToFile', () => {
     // No unreadable files in this test — skipped should be empty
     expect(skipped).toHaveLength(0);
     expect(fileCount).toBe(1);
+  });
+});
+
+// ─── packBlobToFile TOCTOU (file mutated between hash pass and write pass) ─────
+
+// packBlobToFile hashes and stats every file in pass 1, builds the file table
+// from those hashes + sizes, then re-reads and streams each file to disk in
+// pass 2 without re-stat or re-hash. If a file changes on disk between the two
+// passes — exactly like an external process writing during a push — the file
+// table records the OLD hash/size while the data section holds the NEW bytes,
+// producing a silently corrupt blob that fails to restore. The spy calls the
+// real fs.open and, the moment the OUTPUT handle is opened for writing (which
+// happens after pass 1 completes and before any pass-2 read), performs a real
+// on-disk rewrite of the source file — reproducing the race deterministically.
+describe('packBlobToFile TOCTOU (file changes between hash and write pass)', () => {
+  let srcDir: string;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    srcDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-toctou-src-'));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-toctou-out-'));
+  });
+
+  afterEach(async () => {
+    toctou.target = null;
+    streamFail.target = null;
+    await fs.rm(srcDir, { recursive: true, force: true });
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should restore a backup whose file was overwritten with same-length content mid-pack', async () => {
+    const N = 1024;
+    const A = Buffer.alloc(N, 0xaa);
+    const B = Buffer.alloc(N, 0xbb); // same length: only the per-file hash diverges
+    const keep = Buffer.alloc(512, 0xcc); // control file, never mutated
+    const sourceFile = path.join(srcDir, 'data.bin');
+    await fs.writeFile(sourceFile, A);
+    await fs.writeFile(path.join(srcDir, 'keep.bin'), keep);
+    const ignoreFilter = createIgnoreFilter(srcDir);
+    const outputPath = path.join(tmpDir, 'toctou-same-len.blob');
+    const destDir = path.join(tmpDir, 'dst-same-len');
+    await fs.mkdir(destDir);
+
+    toctou.target = { outputPath, sourceFile, replacement: B }; // arm the mid-pack rewrite
+    try {
+      await packBlobToFile(srcDir, outputPath, ignoreFilter);
+    } finally {
+      toctou.target = null;
+    }
+
+    // Integrity invariant: a backup packBlobToFile wrote must restore without a
+    // corruption error, and every unmutated file must come back byte-for-byte.
+    // RED today — the file table carries hash(A) while the data section holds B,
+    // so unpackBlobFromFile rejects with "File hash mismatch for: data.bin"
+    // before any file is restored.
+    await unpackBlobFromFile(outputPath, destDir);
+    expect(await fs.readFile(path.join(destDir, 'keep.bin'))).toEqual(keep);
+  });
+
+  it('should restore a backup whose file shrank mid-pack (offset/length skew)', async () => {
+    const A = Buffer.alloc(2048, 0xaa);
+    const B = Buffer.alloc(512, 0xbb); // shorter: data section ends before the file table claims
+    const keep = Buffer.alloc(512, 0xcc); // control file after data.bin — its offset skews when data.bin shrinks
+    const sourceFile = path.join(srcDir, 'data.bin');
+    await fs.writeFile(sourceFile, A);
+    await fs.writeFile(path.join(srcDir, 'keep.bin'), keep);
+    const ignoreFilter = createIgnoreFilter(srcDir);
+    const outputPath = path.join(tmpDir, 'toctou-shrink.blob');
+    const destDir = path.join(tmpDir, 'dst-shrink');
+    await fs.mkdir(destDir);
+
+    toctou.target = { outputPath, sourceFile, replacement: B }; // arm the mid-pack rewrite
+    try {
+      await packBlobToFile(srcDir, outputPath, ignoreFilter);
+    } finally {
+      toctou.target = null;
+    }
+
+    // Integrity invariant: shrinking data.bin between passes skews the data_offset
+    // of every later entry. keep.bin sorts after data.bin, so its recorded window
+    // runs past the real bytes. A correct pack must still restore keep.bin
+    // byte-for-byte. RED today — unpackBlobFromFile rejects with
+    // "Data section out of bounds for file: data.bin".
+    await unpackBlobFromFile(outputPath, destDir);
+    expect(await fs.readFile(path.join(destDir, 'keep.bin'))).toEqual(keep);
+  });
+
+  it('should restore remaining files when one file errors mid-stream during the write pass', async () => {
+    const aData = Buffer.alloc(2000, 0xaa); // a.bin faults partway through the write pass
+    const bData = Buffer.alloc(1000, 0xbb); // control file (sorts after a.bin) — must survive
+    const aPath = path.join(srcDir, 'a.bin');
+    await fs.writeFile(aPath, aData);
+    await fs.writeFile(path.join(srcDir, 'b.bin'), bData);
+    const ignoreFilter = createIgnoreFilter(srcDir);
+    const outputPath = path.join(tmpDir, 'midstream.blob');
+    const destDir = path.join(tmpDir, 'dst-midstream');
+    await fs.mkdir(destDir);
+
+    streamFail.target = { path: aPath }; // a.bin's read stream yields a partial chunk then errors
+    let skipped: Awaited<ReturnType<typeof packBlobToFile>>['skipped'] = [];
+    try {
+      ({ skipped } = await packBlobToFile(srcDir, outputPath, ignoreFilter));
+    } finally {
+      streamFail.target = null;
+    }
+
+    // a.bin's partial bytes must not corrupt the blob: b.bin has to restore
+    // byte-for-byte and the trailing checksum must stay valid. RED before the fix
+    // — orphaned partial bytes of a.bin shift b.bin's offset and misplace the
+    // checksum, so unpackBlobFromFile rejects the whole restore.
+    await unpackBlobFromFile(outputPath, destDir);
+    expect(await fs.readFile(path.join(destDir, 'b.bin'))).toEqual(bData);
+    expect(skipped.map((s) => s.path)).toContain('a.bin');
   });
 });
 

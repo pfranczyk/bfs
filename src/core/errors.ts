@@ -1,3 +1,5 @@
+import type { CatalogDrift } from '../types/index.js';
+
 /** A file that was skipped during pack (unreadable) or unpack (unwritable). */
 export interface SkippedFile {
   /** Relative path of the file (in rootDir for push; in blob for pull). */
@@ -74,6 +76,22 @@ export class PushSkippedError extends BfsError {
     this.name = 'PushSkippedError';
     this.skipped = skipped;
     this.cachePath = cachePath;
+  }
+}
+
+/**
+ * Thrown by push() (non-interactive, without --allow-drift) when the source
+ * directory changed during packing — one or more files were modified, removed,
+ * or appeared inside the pack window. The blob is fully restorable; this signals
+ * that it is not current with the directory. Carries the per-file drift breakdown.
+ */
+export class PushDriftError extends BfsError {
+  readonly drift: CatalogDrift;
+  constructor(drift: CatalogDrift) {
+    const count = drift.changed.length + drift.vanished.length + drift.appeared.length;
+    super(`${count} file(s) changed on disk during packing; the backup is restorable but not current.`);
+    this.name = 'PushDriftError';
+    this.drift = drift;
   }
 }
 

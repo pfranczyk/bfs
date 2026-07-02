@@ -234,6 +234,27 @@ read the data and recompute them after altering it. Robust protection against
 deliberate tampering comes from an encrypted backup's AES-GCM tag, which is bound
 to a key you hold and cannot be forged without it.
 
+### Currency of a packed backup
+
+`bfs push` reads each file exactly once while packing, so the resulting blob is
+always internally consistent and restorable. To catch files that change on disk
+*while* a push runs, it brackets the pack with two directory snapshots — each
+file's size and modification time (`mtime`) before packing and again after — and
+reports any file that changed, vanished, or appeared in between. In an
+interactive terminal you are asked whether to accept the drifted backup (still
+fully restorable, just not current for that file) or retry without touching
+files; a non-interactive push refuses by default and requires `--allow-drift` to
+accept. `--allow-drift` waives only *currency* — never *recoverability*, which
+the single-read pack guarantees for every blob.
+
+This check compares size and `mtime`, not file contents: a change that preserves
+**both** a file's size and its `mtime` is not detected. Doing so requires
+deliberately forging the modification time — a user who does that is knowingly
+corrupting their own backup — so it is out of scope, alongside the other
+cleartext-trust limitations of an unencrypted backup. The check is designed to
+surface accidental mid-push edits and ordinary saves, not an adversary forging
+timestamps.
+
 ## Cryptographic Limits
 
 AES-GCM can safely encrypt only a bounded amount of data under one

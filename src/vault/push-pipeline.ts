@@ -17,15 +17,16 @@ import { parseBlobFileTable } from '../core/blob-unpack.js';
 import { trackFile, untrackFile } from '../core/cleanup.js';
 import { deriveKey, deriveShardNonce, encryptStream, exceedsGcmPlaintextLimit, GCM_MAX_PLAINTEXT_BYTES, generateSalt } from '../core/crypto.js';
 import type { SkippedFile } from '../core/errors.js';
-import { BfsError, ProviderError, PushCacheNoLockError, PushCacheUnavailableError, PushSkippedError } from '../core/errors.js';
+import { BfsError, ProviderError, PushCacheNoLockError, PushCacheUnavailableError, PushDriftError, PushSkippedError } from '../core/errors.js';
 import { hashBuffer, hashStream, SHA256_BYTES } from '../core/hash.js';
 import { createIgnoreFilter } from '../core/ignore.js';
 import { calcShardPayloadSize, rsEncodeStriped } from '../core/reed-solomon.js';
 import { buildShardStream, serializeShardHeader, uuidToBuffer, V2_MAX_STRIPE_SIZE } from '../core/shard-io.js';
 import { fmt, t } from '../i18n/index.js';
 import { providerRegistry } from '../providers/provider.js';
-import type { ManifestShard, ProviderConfig, ProviderIO, PushOptions, PushResult, ShardHeader, ShardLocation, StorageProvider, VaultConfig, VaultState, VersionManifest } from '../types/index.js';
+import type { CatalogDrift, ManifestShard, ProviderConfig, ProviderIO, PushOptions, PushResult, ShardHeader, ShardLocation, StorageProvider, VaultConfig, VaultState, VersionManifest } from '../types/index.js';
 import { BLOB_FLAGS, PushMode, VersionHealth } from '../types/index.js';
+import { catalogHasDrift, diffCatalog, snapshotCatalog } from './catalog-verify.js';
 import { assertSchemeValid, readConfig } from './config.js';
 import { splitLocationSecrets } from './location-map.js';
 import type { PushLock, PushLockFailedReason } from './lockfile.js';
@@ -819,6 +820,69 @@ async function _handleSkippedFiles(options: HandleSkippedFilesOptions): Promise<
   }
 }
 
+/** Max drift entries shown in a list before collapsing the rest into a counter. */
+const DRIFT_LIST_LIMIT = 10;
+
+/**
+ * Renders a drift breakdown as an indented, labelled file list for prompts and
+ * warnings. Truncates to DRIFT_LIST_LIMIT lines with a "… and N more" tail.
+ *
+ * @param drift - Drift buckets to render
+ * @returns Multi-line string; each line is `  - <label>: <path>`
+ */
+export function _formatDriftList(drift: CatalogDrift): string {
+  const lines: string[] = [];
+  const buckets: Array<[string, readonly string[]]> = [
+    [t('push_drift_label_changed'), drift.changed],
+    [t('push_drift_label_vanished'), drift.vanished],
+    [t('push_drift_label_appeared'), drift.appeared],
+  ];
+  for (const [label, paths] of buckets) {
+    for (const p of paths) {
+      if (lines.length >= DRIFT_LIST_LIMIT) break;
+      lines.push(`  - ${label}: ${p}`);
+    }
+  }
+  const total = drift.changed.length + drift.vanished.length + drift.appeared.length;
+  if (total > lines.length) lines.push(`  ... and ${total - lines.length} more`);
+  return lines.join('\n');
+}
+
+interface HandleCatalogDriftOptions {
+  drift: CatalogDrift;
+  allowDrift?: boolean | undefined;
+  interactive?: boolean | undefined;
+  io: ProviderIO;
+}
+
+/**
+ * Decision gate for a detected blob↔directory drift. No-op when there is no
+ * drift. With allowDrift it warns and proceeds (any mode). Interactive mode
+ * prompts to accept or retry; declining throws BfsError. Non-interactive without
+ * allowDrift throws PushDriftError. Every outcome keeps the blob restorable —
+ * the gate governs currency, never recoverability.
+ *
+ * @param options - drift, allowDrift, interactive, io
+ * @throws BfsError when the user declines the interactive prompt
+ * @throws PushDriftError in non-interactive mode when drift is not allowed
+ */
+export async function _handleCatalogDrift(options: HandleCatalogDriftOptions): Promise<void> {
+  const { drift, io } = options;
+  if (!catalogHasDrift(drift)) return;
+  const count = drift.changed.length + drift.vanished.length + drift.appeared.length;
+  const fileList = _formatDriftList(drift);
+  if (options.allowDrift) {
+    io.warn(fmt('push_drift_accepted', String(count), fileList));
+    return;
+  }
+  if (options.interactive) {
+    const cont = await io.confirm(fmt('push_drift_confirm', String(count), fileList));
+    if (!cont) throw new BfsError(t('push_cancelled'));
+    return;
+  }
+  throw new PushDriftError(drift);
+}
+
 interface BuildLocationMapOptions {
   config: VaultConfig;
   targetVersion: number;
@@ -889,6 +953,11 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
   const lock = await _initPushLock(rootDir, options.fromCache === true, cachePath, targetVersion, config);
   const maxRamMb = options.maxRamMb ?? config.max_ram_mb;
   const shouldCompress = options.compressOverride !== undefined ? options.compressOverride : (config.compression?.enabled ?? true);
+  // Bracket the pack window with two stat snapshots to detect files that change
+  // on disk while packing (currency). Skipped for --cache: the blob comes from an
+  // earlier pack, so there is no fresh window to bracket.
+  const driftFilter = options.fromCache !== true ? createIgnoreFilter(rootDir) : null;
+  const snapshotBefore = driftFilter ? await snapshotCatalog(rootDir, driftFilter) : null;
   const { blobSource, blobSize, file_count, total_size, skipped } = await _loadOrPackBlob({
     rootDir,
     cachePath,
@@ -902,6 +971,11 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
     io: options.io,
   });
   await _handleSkippedFiles({ skipped, cachePath, cacheDir, blobSource, interactive: options.interactive, io: options.io });
+  if (driftFilter && snapshotBefore) {
+    const snapshotAfter = await snapshotCatalog(rootDir, driftFilter);
+    const drift = diffCatalog(snapshotBefore, snapshotAfter, new Set(skipped.map((s) => s.path)));
+    await _handleCatalogDrift({ drift, allowDrift: options.allowDrift, interactive: options.interactive, io: options.io });
+  }
   const { shouldEncrypt, kdf_salt, encKey } = await _deriveEncryptionKey({ config, password: options.password, io: options.io });
   const blob_hash = await _hashBlobWithoutChecksum(blobSource, blobSize);
   const stripeSize = computeStripeSize({ maxRamMb, N, K, blobSize });

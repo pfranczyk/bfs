@@ -199,6 +199,17 @@ export interface Strings {
   push_opt_no_compress: string;
   push_opt_compress: string;
   push_compress_conflict: string;
+  push_opt_allow_drift: string;
+  push_drift_label_changed: string;
+  push_drift_label_vanished: string;
+  push_drift_label_appeared: string;
+  /** %s = count, %s = file list */
+  push_drift_confirm: string;
+  /** %s = count, %s = file list */
+  push_drift_accepted: string;
+  /** %s = count */
+  push_drift_header: string;
+  push_drift_hint: string;
   vault_compressing: string;
   vault_decompressing: string;
   opt_temp_dir_desc: string;

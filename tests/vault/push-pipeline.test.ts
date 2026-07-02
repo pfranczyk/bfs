@@ -2,16 +2,43 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BfsError, PushDriftError } from '../../src/core/errors.js';
 import { parseShardHeaderFromStream } from '../../src/core/shard-io.js';
 import { fmt } from '../../src/i18n/index.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
-import type { ProviderIO } from '../../src/types/index.js';
-import { PushMode } from '../../src/types/index.js';
+import type { CatalogDrift, ProviderIO } from '../../src/types/index.js';
+import { PushMode, VersionHealth } from '../../src/types/index.js';
 import { readConfig } from '../../src/vault/config.js';
+import { _handleCatalogDrift } from '../../src/vault/push-pipeline.js';
 import { recover } from '../../src/vault/recovery.js';
-import { init, push } from '../../src/vault/vault-manager.js';
+import { init, pull, push } from '../../src/vault/vault-manager.js';
 import { registerSecretProvider, SecretLocalProvider, secretProviderConfig, unregisterSecretProvider } from '../helpers/secret-local-provider.js';
+
+// Hoisted mid-pack mutation target. When armed, the mocked fs.readFile below
+// performs a real on-disk rewrite of `mutateFile` the moment `triggerFile` is
+// read during packing — reproducing an external process changing a file inside
+// the pack window, so snapshotAfter diverges from snapshotBefore (drift).
+// Null = pure call-through, so every other test in this file sees the real fs.
+const midPack = vi.hoisted(() => ({ target: null as { triggerFile: string; mutateFile: string; mutateContent: Buffer } | null }));
+
+// Mock at the module boundary so the whole push pipeline shares one mocked
+// module. Only readFile is overridden; default behaviour is a faithful
+// call-through, and the rewrite fires solely for an armed target. Both the
+// named and default exports are patched so `import fs from 'node:fs/promises'`
+// and `import * as fs` observe the same override.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const readFile = (async (p: unknown, options: unknown) => {
+    const t = midPack.target;
+    if (t && typeof p === 'string' && p === t.triggerFile) {
+      await actual.writeFile(t.mutateFile, t.mutateContent); // real writeFile — bypasses the mock
+    }
+    return actual.readFile(p as never, options as never);
+  }) as typeof actual.readFile;
+  const patched = { ...actual, readFile };
+  return { ...patched, default: patched };
+});
 
 beforeEach(() => {
   registerSecretProvider();
@@ -154,5 +181,140 @@ describe('recovery with a stripped location map', () => {
 
     await fs.rm(root, { recursive: true, force: true });
     for (const d of dirs) await fs.rm(d, { recursive: true, force: true });
+  });
+});
+
+describe('push catalog drift verification', () => {
+  /** Inline ProviderIO with a fixed confirm answer and a warn collector. */
+  function driftIO(confirmAnswer: boolean, warns: string[]): ProviderIO {
+    return {
+      lang: 'en',
+      workDir: process.cwd(),
+      ask: async () => '',
+      askSecret: async () => '',
+      confirm: async () => confirmAnswer,
+      choose: async () => '',
+      info: () => {},
+      debug: () => {},
+      warn: (message: string) => {
+        warns.push(message);
+      },
+      progress: () => {},
+    };
+  }
+
+  const realDrift: CatalogDrift = { changed: ['data.bin'], vanished: [], appeared: [] };
+  const noDrift: CatalogDrift = { changed: [], vanished: [], appeared: [] };
+
+  describe('_handleCatalogDrift decision gate', () => {
+    it('should resolve and emit no warning when there is no drift', async () => {
+      const warns: string[] = [];
+
+      await _handleCatalogDrift({ drift: noDrift, io: driftIO(true, warns) });
+
+      expect(warns).toEqual([]);
+    });
+
+    it('should accept drift and warn when allowDrift is true', async () => {
+      const warns: string[] = [];
+
+      await _handleCatalogDrift({ drift: realDrift, allowDrift: true, io: driftIO(false, warns) });
+
+      expect(warns.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('should resolve when interactive and the user confirms', async () => {
+      const warns: string[] = [];
+
+      await expect(_handleCatalogDrift({ drift: realDrift, interactive: true, io: driftIO(true, warns) })).resolves.toBeUndefined();
+    });
+
+    it('should reject with BfsError when interactive and the user declines', async () => {
+      const warns: string[] = [];
+
+      await expect(_handleCatalogDrift({ drift: realDrift, interactive: true, io: driftIO(false, warns) })).rejects.toThrow(BfsError);
+    });
+
+    it('should reject with PushDriftError when non-interactive and drift is not allowed', async () => {
+      const warns: string[] = [];
+
+      await expect(_handleCatalogDrift({ drift: realDrift, io: driftIO(false, warns) })).rejects.toThrow(PushDriftError);
+    });
+  });
+
+  // End-to-end proof: a source file changes inside the pack window (mtime + size),
+  // so snapshotAfter diverges from snapshotBefore. The mocked fs.readFile rewrites
+  // `a-first.bin` the instant `z-last.bin` is read during packing — the earlier
+  // file's blob bytes are already captured, matching a real mid-push mutation.
+  describe('end-to-end mid-pack drift', () => {
+    async function tmpDir(): Promise<string> {
+      return fs.mkdtemp(path.join(os.tmpdir(), 'bfs-drift-'));
+    }
+
+    async function initVault(root: string, dirs: string[]): Promise<void> {
+      await init(root, {
+        vault_name: 'drift',
+        scheme: { data_shards: 2, parity_shards: 1 },
+        encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+        providers: dirs.map((d, i) => secretProviderConfig(`p${i}`, d)),
+        push_mode: PushMode.NewVersion,
+        io: createMockProviderIO().io,
+      });
+    }
+
+    afterEach(() => {
+      midPack.target = null;
+    });
+
+    it('should reject a non-interactive push when a file drifts mid-pack', async () => {
+      const root = await tmpDir();
+      const dirs = [await tmpDir(), await tmpDir(), await tmpDir()];
+      const firstAbs = path.join(root, 'a-first.bin');
+      const lastAbs = path.join(root, 'z-last.bin');
+      await fs.writeFile(firstAbs, Buffer.alloc(256, 0xaa));
+      await fs.writeFile(lastAbs, Buffer.alloc(256, 0xbb));
+      await initVault(root, dirs);
+
+      // Grow a-first.bin (size + mtime change) while z-last.bin is being packed.
+      midPack.target = { triggerFile: lastAbs, mutateFile: firstAbs, mutateContent: Buffer.alloc(512, 0xcc) };
+      try {
+        await expect(push(root, { io: createMockProviderIO().io })).rejects.toThrow(PushDriftError);
+      } finally {
+        midPack.target = null;
+      }
+
+      await fs.rm(root, { recursive: true, force: true });
+      for (const d of dirs) await fs.rm(d, { recursive: true, force: true });
+    });
+
+    it('should accept mid-pack drift with allowDrift and restore the unchanged files', async () => {
+      const root = await tmpDir();
+      const dirs = [await tmpDir(), await tmpDir(), await tmpDir()];
+      const firstAbs = path.join(root, 'a-first.bin');
+      const lastAbs = path.join(root, 'z-last.bin');
+      const lastContent = Buffer.alloc(256, 0xbb); // never mutated — must restore byte-for-byte
+      await fs.writeFile(firstAbs, Buffer.alloc(256, 0xaa));
+      await fs.writeFile(lastAbs, lastContent);
+      await initVault(root, dirs);
+
+      midPack.target = { triggerFile: lastAbs, mutateFile: firstAbs, mutateContent: Buffer.alloc(512, 0xcc) };
+      let result: Awaited<ReturnType<typeof push>>;
+      try {
+        result = await push(root, { allowDrift: true, io: createMockProviderIO().io });
+      } finally {
+        midPack.target = null;
+      }
+
+      expect(result.health).toBe(VersionHealth.Healthy);
+
+      // The accepted backup must still be recoverable: pull version 1 back and
+      // confirm the file that did NOT drift comes back byte-for-byte.
+      await pull(root, { version: result.version, force: true, io: createMockProviderIO().io });
+      const restored = await fs.readFile(lastAbs);
+      assert(restored.equals(lastContent), 'z-last.bin did not restore byte-for-byte');
+
+      await fs.rm(root, { recursive: true, force: true });
+      for (const d of dirs) await fs.rm(d, { recursive: true, force: true });
+    });
   });
 });
