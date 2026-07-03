@@ -2,12 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { Readable } from 'node:stream';
+import { Readable, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { parseBlobFileTable, parseBlobFileTableFromFile, unpackBlob, unpackBlobFromFile } from '../core/blob-unpack.js';
 import { trackFile, untrackFile } from '../core/cleanup.js';
 import { decryptBlob, decryptStream, deriveKey, deriveShardNonce } from '../core/crypto.js';
-import { BfsError, PullSkippedError } from '../core/errors.js';
+import { BfsError, PullSkippedError, ShardCorruptedError } from '../core/errors.js';
 import { hashBuffer, hashFileExcludingTail, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
 import { DEFAULT_BFSIGNORE_CONTENT } from '../core/ignore-defaults.js';
 import { calcShardPayloadSize, rsDecode, rsDecodeStriped, rsRepair } from '../core/reed-solomon.js';
@@ -128,7 +128,7 @@ async function _validateConfigDir(dir: string, configFlag: string): Promise<void
 
 // ─── Shard failure diagnostics ───────────────────────────────────────────────
 
-type ShardFailureReason = 'provider_unreachable' | 'file_missing' | 'adapter_missing';
+type ShardFailureReason = 'provider_unreachable' | 'file_missing' | 'adapter_missing' | 'corrupt';
 
 /**
  * Emits appropriate degradation warnings based on shard failure reasons.
@@ -143,6 +143,9 @@ function _emitDegradedWarnings(failures: Map<number, ShardFailureReason>, io: Pr
   }
   if (reasons.some((r) => r === 'adapter_missing')) {
     io.warn(t('vault_degraded_adapter_missing'));
+  }
+  if (reasons.some((r) => r === 'corrupt')) {
+    io.warn(t('vault_degraded_corrupt'));
   }
 }
 
@@ -304,6 +307,68 @@ async function _decodeFromTempFiles(options: DecodeFromTempFilesOptions): Promis
   await fs.chmod(outputPath, 0o600).catch(() => {});
 }
 
+/** Inputs for {@link _validateShardIntegrity} — phase 1.5 of the V2 pull. */
+interface ValidateShardsOptions {
+  /** shard_index → temp path (present shards); corrupt entries are removed in place. */
+  tmpPaths: Map<number, string>;
+  /** AES-256-GCM key when the vault is encrypted; undefined otherwise. */
+  encKey: Buffer | undefined;
+  /** Version being decoded — derives the per-shard nonce. */
+  targetVersion: number;
+  /** Shard failure map; corrupt shards are added with reason 'corrupt'. */
+  failures: Map<number, ShardFailureReason>;
+}
+
+/**
+ * Phase 1.5 of V2 pull: reads each downloaded shard end-to-end through the SAME
+ * integrity path the decoder uses — trailing-checksum verification plus, when
+ * encrypted, per-shard GCM decryption. A shard that fails is dropped from
+ * `tmpPaths` and recorded as 'corrupt', so Reed-Solomon reconstructs it from the
+ * remaining healthy shards + parity, exactly as it does for a missing shard.
+ * Without this, a present-but-corrupt shard would surface its error mid-decode
+ * and abort the whole restore even when the redundancy to survive it is intact.
+ * Streams are drained, never buffered — peak RAM stays O(chunk), not O(shard).
+ *
+ * @param options - tmpPaths (mutated: corrupt removed), encKey, targetVersion, failures (mutated)
+ * @returns nothing; mutates `tmpPaths` and `failures` in place
+ */
+async function _validateShardIntegrity(options: ValidateShardsOptions): Promise<void> {
+  const { tmpPaths, encKey, targetVersion, failures } = options;
+  for (const [shardIdx, tmpPath] of [...tmpPaths]) {
+    try {
+      const fileStream = createReadStream(tmpPath);
+      fileStream.on('error', () => {});
+      const { payloadStream } = await parseShardHeaderFromStream(fileStream);
+      payloadStream.on('error', () => {});
+      // Same read-path as decode: checksum-verified payload, then per-shard GCM
+      // when encrypted. Drain into a null sink — the trailing SHA-256 (and GCM
+      // auth tag) are finalized at end-of-stream, so a clean drain proves the
+      // shard decodes; any mismatch rejects the pipeline.
+      const validated = encKey ? decryptStream(payloadStream, encKey, deriveShardNonce(encKey, targetVersion, shardIdx)) : payloadStream;
+      await pipeline(
+        validated,
+        new Writable({
+          write(_chunk, _enc, cb) {
+            cb();
+          },
+        }),
+      );
+    } catch (err) {
+      // Only a physically corrupt shard (bad trailing checksum / truncation) is
+      // excluded and reconstructed from parity. A GCM DecryptionError with an
+      // intact checksum means the bytes are sound but authentication failed — a
+      // wrong password fails this way on every shard, so rethrow it to surface a
+      // clear password error instead of a misleading "not enough shards".
+      if (!(err instanceof ShardCorruptedError)) throw err;
+      tmpPaths.delete(shardIdx);
+      failures.set(shardIdx, 'corrupt');
+      if (debugEnabled) {
+        process.stderr.write(`[bfs:debug] shard ${shardIdx} failed integrity check: ${err.message}\n`);
+      }
+    }
+  }
+}
+
 /**
  * V2 pull path: two-phase approach — first downloads all shards to temp files,
  * then opens fresh file streams for RS decode. Eliminates race conditions between
@@ -344,6 +409,12 @@ async function _pullV2(config: VaultConfig, manifest: VersionManifest, options: 
       options.io.info(t('vault_decrypting'));
       encKey = await deriveKey(password, kdf_salt);
     }
+    // Pre-validate every downloaded shard end-to-end before decode: a present
+    // but corrupt shard (bit rot, truncation, tamper) is excluded here and
+    // reconstructed from the healthy shards + parity, instead of poisoning the
+    // decode and aborting the whole restore.
+    await _validateShardIntegrity({ tmpPaths, encKey, targetVersion, failures });
+    if (tmpPaths.size < N) throw new BfsError(fmt('pull_not_enough_shards', String(N), String(tmpPaths.size)));
     await _decodeFromTempFiles({ tmpPaths, N, K, stripeSize, blobSize, targetVersion, encKey, outputPath, io: options.io });
     return { isDegraded: tmpPaths.size < N + K, failures };
   } finally {

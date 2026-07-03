@@ -188,7 +188,14 @@ enforced separately, in layers:
   a per-shard SHA-256 before reconstruction — the in-shard header+payload checksum
   for shards in the current striped format, or the per-shard payload hash recorded
   in the manifest for older non-striped shards — so a shard that a storage device
-  silently corrupted or that the transport truncated is rejected before reconstruction. `bfs verify` and `bfs
+  silently corrupted or that the transport truncated is set aside before
+  reconstruction and the backup is rebuilt from the remaining healthy shards plus
+  parity, the same path as a shard that is missing entirely. Corrupting up to `K`
+  shards is therefore as survivable as losing `K` providers, and a single damaged
+  shard cannot deny an otherwise-recoverable restore. A wrong password is
+  distinguished from corruption: it fails a shard's authentication tag (not its
+  checksum) on every shard, so it surfaces as a password error rather than being
+  mistaken for damage. `bfs verify` and `bfs
   recovery` read only the shard header window (see *Format validation*): they
   confirm a shard is present and carries a consistent header, but do not
   re-check its payload bytes.

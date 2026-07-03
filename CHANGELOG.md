@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-07-03
+
+### Fixed
+- **Damaged (not just missing) backup data on one storage device no longer blocks
+  a restore when the redundancy to recover it is intact.** If the data on a device
+  was silently corrupted — bit rot, an interrupted transfer, a partial write —
+  rather than the device being unreachable, `bfs pull` previously aborted the
+  entire restore, even though the remaining devices plus the parity were enough to
+  rebuild the backup. BFS now detects the damaged data, sets that device aside,
+  and reconstructs the backup from the healthy ones — exactly as it already did
+  for a device that is gone. Corrupting up to the parity count of devices is now
+  as survivable as losing that many. A wrong decryption password is still reported
+  clearly, not mistaken for corruption.
+
 ## [0.9.0] - 2026-07-02
 
 ### Added
@@ -618,7 +632,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/pfranczyk/bfs/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/pfranczyk/bfs/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/pfranczyk/bfs/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/pfranczyk/bfs/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/pfranczyk/bfs/compare/v0.6.2...v0.7.0

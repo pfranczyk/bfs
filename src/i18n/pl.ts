@@ -437,6 +437,7 @@ export const pl: Strings = {
   vault_degraded_provider_unreachable: 'Pula zdegradowana: jeden lub więcej nośników jest niedostępnych. Użyj `bfs provider remove`, aby zastąpić nośnik, a następnie `bfs push`, aby przywrócić redundancję.',
   vault_degraded_file_missing: 'Pula zdegradowana: dane kopii zostały usunięte ze sprawnego nośnika. Uruchom `bfs push`, aby odtworzyć kopię.',
   vault_degraded_adapter_missing: 'Pula zdegradowana: jeden lub więcej nośników wymaga niezainstalowanego adaptera. Zainstaluj brakujący adapter (zobacz ostrzeżenie powyżej), a następnie ponów `bfs pull`, aby dołączyć te fragmenty.',
+  vault_degraded_corrupt: 'Pula zdegradowana: część kopii nie przeszła weryfikacji integralności (uszkodzenie lub manipulacja) i została odtworzona z nadmiarowości. Uruchom `bfs push`, aby ponownie utworzyć czystą kopię.',
 
   // ─── recovery operations (vault layer) ──────────────────────────────────
   recovery_ask_version_password: 'Podaj hasło dla wersji %s (zostaw puste, aby pominąć):',

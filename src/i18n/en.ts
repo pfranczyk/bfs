@@ -437,6 +437,7 @@ export const en: Strings = {
   vault_degraded_provider_unreachable: 'Pool degraded: one or more providers are unreachable. Use `bfs provider remove` to replace the provider, then `bfs push` to restore redundancy.',
   vault_degraded_file_missing: 'Pool degraded: backup data was deleted from a healthy provider. Run `bfs push` to re-create the backup.',
   vault_degraded_adapter_missing: 'Pool degraded: one or more providers need an adapter that is not installed. Install the missing adapter (see the warning above), then run `bfs pull` again to include those pieces.',
+  vault_degraded_corrupt: 'Pool degraded: part of the backup failed its integrity check (corruption or tampering) and was rebuilt from redundancy. Run `bfs push` to re-create a clean backup.',
 
   // ─── recovery operations (vault layer) ──────────────────────────────────
   recovery_ask_version_password: 'Enter password for version %s (or leave blank to skip):',

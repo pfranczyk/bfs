@@ -11,6 +11,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as cryptoModule from '../../src/core/crypto.js';
 import { BfsError, DecryptionError } from '../../src/core/errors.js';
+import { computeShardHeaderSize } from '../../src/core/shard-io.js';
 // Side-effect import: rejestruje typ "local" w ProviderRegistry
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
@@ -117,6 +118,21 @@ async function shardExists(providerDir: string, vaultName: string, shardIndex: n
   } catch {
     return false;
   }
+}
+
+/**
+ * Corrupts a shard file in place with a length-preserving bit-flip in the middle
+ * of its payload. The trailing SHA-256 is deliberately NOT recomputed, so the
+ * shard reads as corrupt — for an encrypted shard the flip also breaks the
+ * per-shard GCM auth tag. Mirrors the cli-e2e corrupt-shard driver.
+ */
+async function corruptShardPayload(shardPath: string): Promise<void> {
+  const shard = await fs.readFile(shardPath);
+  const headerSize = computeShardHeaderSize(shard);
+  const payloadEnd = shard.length - 32; // exclusive; leave the trailing checksum intact
+  const pos = headerSize + Math.floor((payloadEnd - headerSize) / 2);
+  shard.writeUInt8(shard.readUInt8(pos) ^ 0x01, pos);
+  await fs.writeFile(shardPath, shard);
 }
 
 // ─── Scenariusz 1: BEZ szyfrowania, 3/1, 4 local providery ─────────────────
@@ -1282,6 +1298,111 @@ describe('Scenariusz 12: pull ze złym hasłem na encrypted vault', () => {
       // check fails. Must surface as a single DecryptionError, never an
       // uncaught 'error' event from a sibling decrypt stream.
       await expect(pull(dest, { io: mockIO(), force: true, password: 'wrong-password' })).rejects.toThrow(DecryptionError);
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+});
+
+// Corrupt-but-present shard → reconstruct from parity.
+//
+// Regression (critical bug): V2 pull tolerated a MISSING shard (reconstruct
+// from parity) but not a CORRUPT one — a single rotten-but-present shard sank
+// the whole restore (trailing SHA / GCM auth tag → output.destroy) even though
+// N healthy shards + parity were more than enough. Fix: pre-validate every
+// shard before decode → a corrupt shard is treated like a missing one and
+// erasure-decoded from the rest. The bit-flip preserves length, targeting the
+// corruption that got=0 (a missing shard) does NOT represent.
+describe('pull with a corrupt shard reconstructs from parity', () => {
+  const PASSWORD = 'corrupt-shard-pass-321';
+  let root: string;
+  let pdirs: string[];
+
+  beforeEach(async () => {
+    root = await tmp();
+    pdirs = [await tmp(), await tmp(), await tmp()]; // 2/1
+  });
+
+  afterEach(async () => {
+    for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
+  });
+
+  it('should exclude a corrupt data shard and reconstruct from parity (encrypted)', async () => {
+    await init(root, {
+      vault_name: 'corrupt-data',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: true, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    const originalHashes = await createTestFiles(root);
+    await push(root, { io: mockIO(), password: PASSWORD });
+
+    // Corrupt data shard 0; shard 1 (data) + shard 2 (parity) stay healthy —
+    // exactly N=2 good shards, enough to reconstruct the excluded one.
+    await corruptShardPayload(path.join(pdirs[0] ?? '', 'corrupt-data', 'shard_0.bfs.1'));
+
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
+      await pull(dest, { io: mockIO(), force: true, password: PASSWORD });
+      await assertFilesMatch(dest, originalHashes);
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+
+  it('should exclude a corrupt data shard and reconstruct from parity (unencrypted)', async () => {
+    await init(root, {
+      vault_name: 'corrupt-plain',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    const originalHashes = await createTestFiles(root);
+    await push(root, { io: mockIO() });
+
+    // No encryption: the only integrity guard is the trailing SHA-256 (no GCM),
+    // exercising the encKey===undefined branch of _validateShardIntegrity.
+    await corruptShardPayload(path.join(pdirs[0] ?? '', 'corrupt-plain', 'shard_0.bfs.1'));
+
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
+      await pull(dest, { io: mockIO(), force: true });
+      await assertFilesMatch(dest, originalHashes);
+    } finally {
+      await fs.rm(dest, { recursive: true, force: true });
+    }
+  });
+
+  it('should exclude a corrupt parity shard and still restore (encrypted)', async () => {
+    await init(root, {
+      vault_name: 'corrupt-parity',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: true, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: pdirs.map((d, i) => localProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+
+    const originalHashes = await createTestFiles(root);
+    await push(root, { io: mockIO(), password: PASSWORD });
+
+    // Corrupt the parity shard (index 2 = N..N+K-1); both data shards stay
+    // healthy. The unneeded-but-corrupt parity must be excluded, not abort.
+    await corruptShardPayload(path.join(pdirs[2] ?? '', 'corrupt-parity', 'shard_2.bfs.1'));
+
+    const dest = await tmp();
+    try {
+      await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
+      await pull(dest, { io: mockIO(), force: true, password: PASSWORD });
+      await assertFilesMatch(dest, originalHashes);
     } finally {
       await fs.rm(dest, { recursive: true, force: true });
     }

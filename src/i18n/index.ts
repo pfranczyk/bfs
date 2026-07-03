@@ -540,6 +540,7 @@ export interface Strings {
   vault_degraded_provider_unreachable: string;
   vault_degraded_file_missing: string;
   vault_degraded_adapter_missing: string;
+  vault_degraded_corrupt: string;
 
   // ─── recovery operations (vault layer) ──────────────────────────────────
   recovery_ask_version_password: string;
