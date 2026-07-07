@@ -14,6 +14,7 @@ export const en: Strings = {
   repl_help_cmd_prune: 'Delete old versions (e.g. 1-5, --keep-last 3)',
   repl_help_cmd_verify: 'Check storage health and redundancy',
   repl_help_cmd_recovery: 'Disaster recovery',
+  repl_help_cmd_repair: 'Repair a provider location (path/credential change)',
   repl_help_cmd_provider_add: 'Add a provider',
   repl_help_cmd_provider_list: 'List providers',
   repl_help_cmd_provider_remove: 'Remove a provider',
@@ -253,6 +254,7 @@ export const en: Strings = {
   verify_col_tolerance: 'Tolerance',
   /** %s = filename, %s = provider id, %s = reason */
   verify_shard_check_failed: 'File "%s" on provider "%s" failed integrity check: %s',
+  verify_header_advisory: 'Version %s: %s header file(s) missing or damaged. Run "bfs repair --restore-headers" to rebuild them — otherwise recovery of an unencrypted backup may be affected.',
 
   // ─── recovery ─────────────────────────────────────────────────────────────
   recovery_provider_type_prompt: 'Bootstrap provider type:',
@@ -514,7 +516,6 @@ export const en: Strings = {
   provider_stat_failed: 'Failed to stat "%s": %s',
   provider_header_read_failed: 'Failed to read header "%s": %s',
   provider_download_header_invalid_max_bytes: 'header read size must be greater than 0 (got %s)',
-  sidecar_not_supported: 'storage type "%s" does not support separate header files',
   provider_adapter_incompatible: 'Provider adapter "%s" is not compatible with this BFS (missing required method "%s" from provider API v%s). Reinstall or upgrade the adapter.',
   verify_shard_not_found: 'file at "%s" does not exist',
   verify_shard_mismatch: 'file header field "%s" mismatch: expected "%s", got "%s"',
@@ -568,4 +569,35 @@ export const en: Strings = {
   local_probe_step_read: 'Probe failed at read: %s',
   local_probe_step_compare_local: 'Probe failed at compare: read bytes differ from written',
   local_probe_step_cleanup: 'Probe failed at cleanup: %s',
+
+  // ─── repair (spec parsing) ─────────────────────────────────────────────────
+  repair_spec_odd_args: 'Each provider name must be followed by its params string.',
+  repair_unknown_provider: 'Provider "%s" not found in backup config.',
+  repair_duplicate_provider_in_args: 'Provider "%s" repeated in repair arguments.',
+  repair_spec_invalid_params: 'Invalid repair params: "%s". Use adapter flags (e.g. --path) or a type:name migration.',
+
+  // ─── repair (command) ──────────────────────────────────────────────────────
+  cmd_repair_desc: 'Repair a provider location after a path change or credential rotation',
+  repair_opt_version: 'Versions to repair: latest (default), all, 5, 1-10, 1-10,15',
+  repair_opt_password: 'Encryption password for the backup (repeatable)',
+  repair_opt_password_file: 'Read an encryption password from a file (repeatable)',
+  repair_opt_ci: 'Non-interactive: never prompt; fail if a password is required and none matches',
+  repair_opt_rebuild: 'Reconstruct a lost backup part with Reed-Solomon (downloads the other parts)',
+  repair_opt_force_unverified: 'Continue a migration when a backup part cannot be verified (not when it is missing or altered)',
+  repair_no_versions: 'No matching versions to repair.',
+  repair_foreign_shard_detected: 'A backup part for version %s belongs to a different backup — aborting.',
+  repair_wrong_version_shard: 'A backup part for version %s does not match its expected version — aborting.',
+  repair_force_unverified_warn: 'Continuing despite an unverifiable backup part for version %s.',
+  repair_ask_vault_password: 'Encryption password for version %s:',
+  repair_wrong_vault_password_retry: 'Wrong password for version %s — try again (blank to skip):',
+  repair_pool_password_failed: 'No supplied password decrypts version %s.',
+  repair_password_required_ci: 'No password matched version %s. Pass --password to provide more.',
+  repair_password_exhausted: 'Password attempts exhausted for version %s.',
+  repair_edit_invalid_config: 'Invalid provider config: %s',
+  repair_success: 'Repair completed for %s.',
+  repair_opt_restore_headers: 'Rebuild missing or damaged header files for the selected versions',
+  repair_restore_headers_success: 'Header files restored for %s version(s).',
+  repair_restore_headers_no_pairs: 'The --restore-headers option takes no provider arguments.',
+  repair_restore_headers_rebuild_conflict: 'The --restore-headers and --rebuild options cannot be combined.',
+  repair_partial: 'Repair partial — failed: %s. See .bfs/repair.lock; retry after fixing the cause.',
 };

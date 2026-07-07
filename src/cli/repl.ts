@@ -8,7 +8,7 @@ import { isPromptCancellation } from './prompt.js';
 import { setReplMode } from './repl-context.js';
 import { CommandAbort } from './ui.js';
 
-const COMMANDS = ['init', 'push', 'pull', 'status', 'versions', 'prune', 'verify', 'recovery', 'provider add', 'provider list', 'provider remove', 'scheme set', 'clear', 'help', 'exit', 'quit'];
+const COMMANDS = ['init', 'push', 'pull', 'status', 'versions', 'prune', 'verify', 'recovery', 'repair', 'provider add', 'provider list', 'provider remove', 'scheme set', 'clear', 'help', 'exit', 'quit'];
 
 /**
  * Prints the REPL welcome banner with vault info (if available).
@@ -51,6 +51,7 @@ function printHelp(): void {
     ['prune <range>', t('repl_help_cmd_prune')],
     ['verify', t('repl_help_cmd_verify')],
     ['recovery --provider <t> --path <p> --name <n>', t('repl_help_cmd_recovery')],
+    ['repair <name> "<params>"', t('repl_help_cmd_repair')],
     ['provider add', t('repl_help_cmd_provider_add')],
     ['provider list', t('repl_help_cmd_provider_list')],
     ['provider remove <id>', t('repl_help_cmd_provider_remove')],

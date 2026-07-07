@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-07
+
+### Added
+- **`bfs repair` — fix a backup's storage locations without re-uploading it.**
+  When a storage device's path changes (a USB drive mounted elsewhere, a restore
+  on a different machine or OS), its credentials rotate, its data is lost, or you
+  move it to a different kind of storage, `bfs repair <device> "<new settings>"`
+  updates where the backup expects that device and rewrites the other devices'
+  internal location records so a fresh recovery finds everything at its new
+  address — no full re-upload. `--rebuild` reconstructs a device's lost data from
+  the remaining devices and parity (Reed-Solomon); a migration form
+  (`<device> "<new-type>:<new-name> …"`) moves a device to a different storage
+  type. `--version` scopes which versions are rewritten, and encrypted backups
+  take `--password` (or prompt). Each run is integrity-checked first — a foreign
+  or mismatched part aborts before any change — and a partial failure leaves a
+  `.bfs/repair.lock` for a safe, idempotent retry.
+- **`bfs verify` flags missing or damaged header files, and `bfs repair
+  --restore-headers` rebuilds them.** After a storage device is relocated, each
+  part keeps a small header file next to it recording where every part now
+  lives. If one is deleted or corrupted, `bfs verify` reports it — the backup
+  stays otherwise healthy — and points you at the fix; `bfs repair
+  --restore-headers` rebuilds the missing or damaged header files for the
+  selected versions from the current configuration, without re-uploading any
+  data. This matters most for unencrypted backups, where a lost header could
+  otherwise trip up a recovery.
+
+### Fixed
+- **A push that fails partway through no longer errors out in a confusing way.**
+  When an upload to one storage device failed mid-push (the device rejected the
+  data or the connection dropped), cleanup of the temporary working files could
+  race and surface an unrelated "file not found" error — occasionally crashing
+  the command — instead of reporting the partial failure cleanly. Such a push
+  now fails gracefully and preserves its retry state, so `bfs push --cache` can
+  pick up where it left off.
+
 ## [0.9.1] - 2026-07-03
 
 ### Fixed
@@ -632,7 +667,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/pfranczyk/bfs/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/pfranczyk/bfs/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/pfranczyk/bfs/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/pfranczyk/bfs/compare/v0.8.0...v0.8.1

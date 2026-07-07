@@ -27,6 +27,20 @@ ftp_rename() {
   FC_FROM="$from" FC_TO="$to" _ftp_op "$e" rename
 }
 
+# ftp_sha <endpoint-index> <remote-file> — print the remote file's SHA-256 (hex)
+# to stdout and return 0, or return 3 when the file is absent. Bypasses the
+# [ftp-ops] log prefix / stderr merge of _ftp_op so the caller can capture the
+# hash cleanly: h="$(ftp_sha 0 /path/shard_0.bfs.1)". Used by the sidecar e2e to
+# prove a repair left the shard payload untouched and dropped an hdr_ sidecar.
+ftp_sha() {
+  local e="$1" file="$2"
+  MSYS2_ENV_CONV_EXCL="FC_BASE;FC_FILE" \
+    FC_HOST="${FTP_HOST[$e]}" FC_PORT="${FTP_PORT[$e]}" FC_USER="${FTP_USER[$e]}" \
+    FC_PASS="${FTP_PASS[$e]}" FC_SECURE="${FTP_SECURE[$e]}" FC_BASE="${FTP_BASE[$e]}" \
+    FC_MODE="sha" FC_FILE="$file" \
+    "$TSX" "$SCRIPT_DIR/lib/ftp-ops.ts" </dev/null 2>/dev/null
+}
+
 # ftp_touch <endpoint-index> <remote-file-path> — plant a 1-byte regular file at
 # the given remote path. Used to build a "path segment is a file" obstacle: a
 # directory op nested under it fails 550 on any compliant FTP server, so a
@@ -35,6 +49,15 @@ ftp_rename() {
 ftp_touch() {
   local e="$1" file="$2"
   FC_FILE="$file" _ftp_op "$e" file
+}
+
+# ftp_mkdir <endpoint-index> <remote-path> — create a single remote directory
+# (and parents) within the harness namespace. Used to pre-create a NEW provider's
+# base dir before `bfs repair` migrates/rebuilds a shard onto it — BFS requires a
+# provider's base path to already exist.
+ftp_mkdir() {
+  local e="$1" remote="$2"
+  FC_PATHS="${remote}|" _ftp_op "$e" mkdir
 }
 
 # ftp_prepare_pool — create every FTP provider's remote base directory before

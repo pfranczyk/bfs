@@ -32,7 +32,7 @@
   <section class="min-h-screen flex flex-col items-center justify-center px-6 text-center">
     <div class="max-w-3xl">
       <div class="inline-block mb-6 px-3 py-1 rounded-full border border-slate-700 text-xs text-slate-400 tracking-widest uppercase">
-        v0.9.1 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 24
+        v0.10.0 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 24
       </div>
 
       <h1 class="text-7xl font-black tracking-tight mb-4 bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
@@ -235,11 +235,15 @@
             </tr>
             <tr class="hover:bg-slate-900/50 transition-colors">
               <td class="px-6 py-4 font-mono text-green-400">bfs verify</td>
-              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_verify">Check piece availability across providers</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_verify">Check piece availability across providers; flag missing/damaged header files</td>
             </tr>
             <tr class="hover:bg-slate-900/50 transition-colors">
               <td class="px-6 py-4 font-mono text-green-400">bfs recovery</td>
               <td class="px-6 py-4 text-slate-300" data-i18n="cmd_recovery">Rebuild backup config from provider pieces</td>
+            </tr>
+            <tr class="hover:bg-slate-900/50 transition-colors">
+              <td class="px-6 py-4 font-mono text-green-400">bfs repair</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_repair">Fix storage locations without re-uploading — repoint a moved device, rebuild a lost piece, or restore missing/damaged header files</td>
             </tr>
             <tr class="hover:bg-slate-900/50 transition-colors">
               <td class="px-6 py-4 font-mono text-green-400">bfs prune</td>
@@ -259,7 +263,7 @@
   <footer class="border-t border-slate-800 py-10 px-6 text-center text-slate-500 text-sm">
     <p class="mb-2">
       <span class="text-white font-semibold">BFS</span>
-      &nbsp;v0.9.1
+      &nbsp;v0.10.0
       &nbsp;·&nbsp;
       <a href="https://github.com/pfranczyk/BFS/blob/main/LICENSE" class="hover:text-white transition-colors">AGPL-3.0</a>
       &nbsp;·&nbsp;
@@ -307,8 +311,9 @@
                                                 cmd_push:      'Backup current directory → new version',
                                                 cmd_pull:      'Restore files from backup',
                                                 cmd_status:    'Show backup health and version info',
-                                                cmd_verify:    'Check piece availability across providers',
+                                                cmd_verify:    'Check piece availability across providers; flag missing/damaged header files',
                                                 cmd_recovery:  'Rebuild backup config from provider pieces',
+                                                cmd_repair:    'Fix storage locations without re-uploading — repoint a moved device, rebuild a lost piece, or restore missing/damaged header files',
                                                 cmd_prune:     'Delete old backup versions',
                                                 cmd_versions:  'List all versions with health status',
                                                 feat5_title:   'Lost Everything? One Piece Is Enough',
@@ -348,8 +353,9 @@
                                                 cmd_push:      'Backup bieżącego katalogu → nowa wersja',
                                                 cmd_pull:      'Odtworzenie plików z backupu',
                                                 cmd_status:    'Pokaż stan kopii zapasowej i informacje o wersjach',
-                                                cmd_verify:    'Sprawdź dostępność fragmentów na nośnikach',
+                                                cmd_verify:    'Sprawdź dostępność fragmentów na nośnikach; sygnalizuj brakujące/uszkodzone pliki nagłówków',
                                                 cmd_recovery:  'Odbuduj konfigurację kopii zapasowej z fragmentów',
+                                                cmd_repair:    'Napraw lokalizacje nośników bez ponownego wysyłania — wskaż przeniesiony nośnik, odbuduj utracony fragment lub odtwórz brakujące/uszkodzone pliki nagłówków',
                                                 cmd_prune:     'Usuń stare wersje backupu',
                                                 cmd_versions:  'Wylistuj wszystkie wersje ze stanem zdrowia',
                                                 feat5_title:   'Straciłeś wszystko? Wystarczy jeden fragment',

@@ -21,6 +21,9 @@
 #   --ssh    "<..>"  (collected but not yet wired — local + ftp are built in).
 #   --filter <pat>   Run only scenarios whose directory name contains <pat>
 #                    (e.g. --filter local, --filter 0, --filter ftp).
+#   --exclude <pat>  Skip scenarios whose directory name contains <pat>
+#                    (e.g. --exclude repair). Applied after --filter; the two
+#                    split the suite into parallel CI jobs.
 #   --list           List discovered scenarios and their requirements, then exit.
 #   --keep           Keep the temporary workspace for inspection (clean later
 #                    with: bash scripts/cli-e2e/clean.sh).
@@ -42,6 +45,7 @@ FTP_SPECS=()
 GDRIVE_SPECS=()
 SSH_SPECS=()
 RUN_FILTER=""
+RUN_EXCLUDE=""
 DO_LIST=0
 KEEP_WS=0
 DO_CLEAN=0
@@ -56,6 +60,7 @@ while [ $# -gt 0 ]; do
     --gdrive) GDRIVE_SPECS+=("${2:?--gdrive requires a value}"); shift 2 ;;
     --ssh)    SSH_SPECS+=("${2:?--ssh requires a value}"); shift 2 ;;
     --filter) RUN_FILTER="${2:?--filter requires a value}"; shift 2 ;;
+    --exclude) RUN_EXCLUDE="${2:?--exclude requires a value}"; shift 2 ;;
     --list)   DO_LIST=1; shift ;;
     --keep)   KEEP_WS=1; shift ;;
     --verbose|-v) VERBOSE=1; shift ;;
@@ -110,6 +115,7 @@ discover_scenarios() {
     key="$(basename "$(dirname "$sc")")"
     case "$key" in _*) continue ;; esac
     if [ -n "$RUN_FILTER" ] && [[ "$key" != *"$RUN_FILTER"* ]]; then continue; fi
+    if [ -n "$RUN_EXCLUDE" ] && [[ "$key" == *"$RUN_EXCLUDE"* ]]; then continue; fi
     printf '%s\n' "$sc"
   done | LC_ALL=C sort
 }
@@ -191,7 +197,7 @@ while IFS= read -r sc; do
 done < <(discover_scenarios)
 
 if [ "$had_any" = "0" ]; then
-  echo "No scenarios matched${RUN_FILTER:+ filter '$RUN_FILTER'}." >&2
+  echo "No scenarios matched${RUN_FILTER:+ filter '$RUN_FILTER'}${RUN_EXCLUDE:+ exclude '$RUN_EXCLUDE'}." >&2
   exit 1
 fi
 

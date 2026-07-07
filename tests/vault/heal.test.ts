@@ -12,12 +12,12 @@ import { BfsError } from '../../src/core/errors.js';
 import { hashBuffer, SHA256_BYTES } from '../../src/core/hash.js';
 import { createIgnoreFilter } from '../../src/core/ignore.js';
 import { rsEncode } from '../../src/core/reed-solomon.js';
-import { buildShard, buildShardHeaderFromBytes, buildShardV2, computeShardHeaderSize, parseShardHeaderFromStream, uuidToBuffer } from '../../src/core/shard-io.js';
+import { buildShard, buildShardHeaderFromBytes, buildShardV2, computeShardHeaderSize, parseShardHeaderFromStream, readShardHeader, uuidToBuffer } from '../../src/core/shard-io.js';
 import { createMockProviderIO, providerRegistry } from '../../src/providers/provider.js';
 import type { ProviderConfig, ProviderIO, ShardHeader, ShardLocation, VaultConfig, VersionManifest } from '../../src/types/index.js';
 import { PushMode, VersionHealth } from '../../src/types/index.js';
 import { readConfig, writeConfig } from '../../src/vault/config.js';
-import { rebuildVersion, relocateProvider } from '../../src/vault/heal.js';
+import { rebuildShardInPlace, rebuildVersion, relocateProvider } from '../../src/vault/heal.js';
 import { readManifest, writeManifest } from '../../src/vault/manifest.js';
 import { recover } from '../../src/vault/recovery.js';
 import { writeState } from '../../src/vault/state.js';
@@ -434,6 +434,51 @@ describe('recovery after relocate', () => {
   });
 });
 
+describe('relocateProvider version scoping', () => {
+  let dirs: string[];
+
+  beforeEach(() => {
+    dirs = [];
+  });
+
+  afterEach(async () => {
+    await cleanup(dirs);
+  });
+
+  it('should rewrite shard headers only for the versions in scope', async () => {
+    const setup = await setupVault({ encrypted: false });
+    const relocatedDir = await tmp();
+    dirs = [setup.root, ...setup.providerDirs, relocatedDir];
+
+    // Drop the spare provider so the count matches the 2+1 scheme.
+    const cfg0 = await readConfig(setup.root);
+    if (!cfg0) throw new Error('config missing after setup');
+    await writeConfig(setup.root, { ...cfg0, providers: cfg0.providers.filter((p) => p.id !== 'p3') });
+
+    // Push a second version so the relocate can be scoped to v1 alone.
+    await fs.writeFile(path.join(setup.root, 'a.txt'), 'aaa-v2', 'utf-8');
+    await push(setup.root, { io: setup.io });
+
+    // Move p0's storage, then rewrite ONLY v1's headers.
+    await fs.cp(path.join(setup.providerDirs[0], 'heal-test'), path.join(relocatedDir, 'heal-test'), { recursive: true });
+    await relocateProvider(setup.root, 'p0', { newConnectionConfig: { path: relocatedDir }, io: setup.io, versions: [1] });
+
+    // A sibling (p1) header carries p0's location entry; read it sidecar-aware
+    // (relocate writes the updated map to p1's hdr_ sidecar, not its shard body),
+    // exactly as the recovery read-path does.
+    const p0PathInHeader = async (version: number): Promise<unknown> => {
+      const provider = providerRegistry.create(localProvider('p1', setup.providerDirs[1]), setup.io);
+      await provider.authenticate();
+      provider.setVaultName('heal-test');
+      const header = await readShardHeader(provider, { provider_id: 'p1', path: `shard_1.bfs.${version}` });
+      return header.location_map.find((l) => l.provider_id === 'p0')?.connection_config.path;
+    };
+
+    expect(await p0PathInHeader(1)).toBe(relocatedDir); // in scope → rewritten
+    expect(await p0PathInHeader(2)).toBe(setup.providerDirs[0]); // out of scope → untouched
+  });
+});
+
 describe('relocateProvider secret stripping', () => {
   let allDirs: string[];
 
@@ -562,5 +607,61 @@ describe('extractShardMeta cross-validation (S4)', () => {
     });
 
     await expect(rebuildVersion(setup.root, 1, { removedProviderId: 'p2', targetProviderId: 'p3', io: setup.io })).rejects.toThrow(BfsError);
+  });
+});
+
+describe('rebuildShardInPlace (repair --rebuild)', () => {
+  let dirs: string[];
+
+  beforeEach(() => {
+    dirs = [];
+  });
+
+  afterEach(async () => {
+    await cleanup(dirs);
+  });
+
+  it('should reconstruct a lost shard onto the same provider (unencrypted)', async () => {
+    const setup = await setupVault({ encrypted: false });
+    dirs = [setup.root, ...setup.providerDirs];
+    const lost = path.join(setup.providerDirs[2], 'heal-test', 'shard_2.bfs.1');
+    await fs.rm(lost);
+
+    await rebuildShardInPlace(setup.root, 1, { providerId: 'p2', io: setup.io });
+
+    await expect(fs.access(lost)).resolves.toBeUndefined();
+    const manifest = await readManifest(setup.root, 1);
+    expect(manifest?.shards.find((s) => s.shard_index === 2)?.provider_id).toBe('p2');
+    const status = await verifyVersion(setup.root, 1, setup.io);
+    expect(status.health).toBe(VersionHealth.Healthy);
+  });
+
+  it('should reconstruct a lost encrypted shard using the password', async () => {
+    const password = 'correct horse battery staple';
+    const setup = await setupVault({ encrypted: true, password });
+    dirs = [setup.root, ...setup.providerDirs];
+    await fs.rm(path.join(setup.providerDirs[2], 'heal-test', 'shard_2.bfs.1'));
+
+    await rebuildShardInPlace(setup.root, 1, { providerId: 'p2', io: setup.io, password });
+
+    const status = await verifyVersion(setup.root, 1, setup.io);
+    expect(status.health).toBe(VersionHealth.Healthy);
+  });
+
+  it('should throw when fewer than N shards remain', async () => {
+    const setup = await setupVault({ encrypted: false });
+    dirs = [setup.root, ...setup.providerDirs];
+    await fs.rm(path.join(setup.providerDirs[2], 'heal-test', 'shard_2.bfs.1'));
+    await fs.rm(path.join(setup.providerDirs[1], 'heal-test', 'shard_1.bfs.1'));
+
+    await expect(rebuildShardInPlace(setup.root, 1, { providerId: 'p2', io: setup.io })).rejects.toThrow(BfsError);
+  });
+
+  it('should throw for an encrypted vault when no password is supplied', async () => {
+    const setup = await setupVault({ encrypted: true, password: 'pw' });
+    dirs = [setup.root, ...setup.providerDirs];
+    await fs.rm(path.join(setup.providerDirs[2], 'heal-test', 'shard_2.bfs.1'));
+
+    await expect(rebuildShardInPlace(setup.root, 1, { providerId: 'p2', io: setup.io })).rejects.toThrow(BfsError);
   });
 });

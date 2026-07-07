@@ -68,6 +68,24 @@ export interface ProviderConfig {
   config: Record<string, unknown>; // type-specific config
 }
 
+/**
+ * One `<name> "<params>"` pair from a `bfs repair` invocation, classified into
+ * an in-place edit (same provider id/type) or a migration to a new provider.
+ * Produced by `parseRepairSpec`, consumed by `repairVault`.
+ */
+export interface RepairPair {
+  /** Existing provider id in `.bfs/config.json` whose location is being repaired. */
+  readonly oldName: string;
+  /** Original params string, kept verbatim for `repair.lock` forensics. */
+  readonly params: string;
+  /** Shell-tokenized params: adapter flags for an edit, empty for a no-op. */
+  readonly rawParams: string[];
+  /** True when params begin with a `type:name` migration prefix. */
+  readonly isMigration: boolean;
+  /** Fully-built, validated target config for a migration; null for an edit. */
+  readonly newConfig: Nullable<ProviderConfig>;
+}
+
 // ─── Vault state (.bfs/state.json) ───────────────────────────
 
 export interface VaultState {
@@ -551,11 +569,12 @@ export interface StorageProvider {
   probeConnection(): Promise<void>;
 
   // ─── Header storage strategy + verification ───────────────────────────────
-  // Built-in providers (local, ftp) rewrite the header in place inside the
-  // shard file. Providers whose medium cannot do an atomic in-file rewrite
-  // (append-only object stores, APIs without partial writes) keep the updated
-  // header in a separate sidecar file next to the shard. usesSidecar() tells
-  // BFS which write-path and read-path to take.
+  // A relocated shard's header is updated without rewriting its payload: the new
+  // header is written to a separate sidecar file next to the shard, keeping the
+  // payload write-once. Built-in providers (local, ftp) use sidecars; a provider
+  // whose medium prefers an in-place rewrite may opt out (usesSidecar() === false),
+  // and BFS then rewrites the header inside the shard via updateShardHeader().
+  // usesSidecar() tells BFS which write-path and read-path to take.
 
   /**
    * Reports whether this provider stores an updated header in a sidecar file
@@ -704,4 +723,24 @@ export interface RelocateProviderOptions {
   io: ProviderIO;
   password?: string;
   newType?: string;
+  /**
+   * Restrict shard-existence checks and header (location-map) rewrites to these
+   * versions. The config change is always global; only the remote header
+   * propagation is scoped. Undefined = every version this provider holds a
+   * shard in. Used by `bfs repair --version <range>`.
+   */
+  versions?: number[];
+}
+
+export interface RebuildShardInPlaceOptions {
+  /** Provider whose lost shard is reconstructed and re-uploaded (id unchanged). */
+  providerId: string;
+  io: ProviderIO;
+  /** Vault password, required for an encrypted backup. */
+  password?: string;
+  /**
+   * Replacement connection config for the target provider (e.g. a new path when
+   * the rebuilt shard lands on a fresh medium). Undefined = keep the current config.
+   */
+  newConnectionConfig?: Record<string, unknown>;
 }

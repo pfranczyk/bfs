@@ -1,16 +1,17 @@
 import { Readable } from 'node:stream';
 import { decryptShardPayload, deriveKey, deriveShardNonce, encryptShardPayload } from '../core/crypto.js';
-import { BfsError, TamperDetectedError } from '../core/errors.js';
+import { BfsError, ShardCorruptedError, TamperDetectedError } from '../core/errors.js';
 import { assertSafeVaultName } from '../core/fs-utils.js';
 import { hashBuffer, streamToBuffer } from '../core/hash.js';
 import { rsRepair, rsRepairStriped } from '../core/reed-solomon.js';
-import { buildHeaderBytes, buildShard, buildShardHeaderFromBytes, buildShardV2 } from '../core/shard-io.js';
+import { buildHeaderBytes, buildShard, buildShardHeaderFromBytes, buildShardV2, buildSidecarBytes, SHARD_HEADER_READ_BYTES } from '../core/shard-io.js';
 import { providerRegistry } from '../providers/provider.js';
 import type {
   ManifestShard,
   ProviderConfig,
   ProviderIO,
   RebuildAllVersionsOptions,
+  RebuildShardInPlaceOptions,
   RebuildVersionOptions,
   RelocateProviderOptions,
   RemoteRef,
@@ -250,10 +251,11 @@ export async function updateLocationMaps(rootDir: string, version: number, optio
       const filename = `shard_${ms.shard_index}.bfs.${version}`;
       const ref: RemoteRef = { provider_id: ms.provider_id, path: filename };
 
-      // Download existing shard to read its header metadata
-      const shardStream = await provider.download(ref);
-      const shardData = await streamToBuffer(shardStream);
-      const meta = buildShardHeaderFromBytes(shardData);
+      // Read the shard's frozen header fields. A sidecar provider takes a bounded
+      // header read (KB) instead of pulling the whole shard just to restamp the
+      // location map; the in-shard header's non-map fields never change on relocate.
+      const usesSidecar = provider.usesSidecar();
+      const meta = usesSidecar ? buildShardHeaderFromBytes(await provider.downloadHeader(ref, SHARD_HEADER_READ_BYTES)) : buildShardHeaderFromBytes(await streamToBuffer(await provider.download(ref)));
 
       // Derive encryption key if needed
       let encKey: Buffer | undefined;
@@ -280,8 +282,13 @@ export async function updateLocationMaps(rootDir: string, version: number, optio
         location_map: newLocationMap,
       };
 
-      const newHeaderBytes = buildHeaderBytes(newHeader, encKey);
-      await provider.updateShardHeader(ref, newHeaderBytes);
+      // Sidecar: upload only the new header (KB) beside the untouched payload.
+      // In-place: rewrite the whole shard with the new header + recomputed checksum.
+      if (usesSidecar) {
+        await provider.uploadHeaderSidecar(ref, buildSidecarBytes(newHeader, encKey));
+      } else {
+        await provider.updateShardHeader(ref, buildHeaderBytes(newHeader, encKey));
+      }
     } catch {
       // skip unavailable providers — they will need separate heal later
     }
@@ -415,6 +422,137 @@ export async function rebuildVersion(rootDir: string, version: number, options: 
 }
 
 /**
+ * Reconstructs a provider's LOST shard for one version with Reed-Solomon and
+ * re-uploads it to the SAME provider (id unchanged) — the `bfs repair --rebuild`
+ * counterpart to {@link rebuildVersion}'s move-to-a-new-provider model. Unlike
+ * rebuildVersion there is no provider swap and no "target already holds a shard"
+ * invariant, because the provider keeps its own index. Optionally targets a new
+ * connection config (rebuild onto a fresh medium). Handles V1 flat and V2
+ * striped payloads via {@link _repairShardPayload}. As defense-in-depth the
+ * rebuilt payload's SHA-256 must match the recorded `shard_hash`.
+ *
+ * @param rootDir  - Vault root directory
+ * @param version  - Version whose shard to rebuild
+ * @param options  - providerId, io, optional password and newConnectionConfig
+ * @throws BfsError when config/manifest missing, too few shards, or password missing
+ * @throws ShardCorruptedError when the rebuilt payload's hash mismatches the manifest
+ */
+export async function rebuildShardInPlace(rootDir: string, version: number, options: RebuildShardInPlaceOptions): Promise<void> {
+  const { providerId, io, password, newConnectionConfig } = options;
+  const config = await readConfig(rootDir);
+  if (!config) throw new BfsError('No vault config found.');
+  const manifest = await readManifest(rootDir, version);
+  if (!manifest) throw new BfsError(`Manifest for version ${version} not found.`);
+  if (manifest.encrypted && !password) throw new BfsError('Password required for RS repair in an encrypted vault.');
+
+  const shard = manifest.shards.find((s) => s.provider_id === providerId);
+  if (!shard) return; // this version doesn't use this provider — nothing to rebuild
+  const existing = config.providers.find((p) => p.id === providerId);
+  if (!existing) throw new BfsError(`Provider "${providerId}" not found in config.`);
+  const targetProviderConfig: ProviderConfig = newConnectionConfig ? { ...existing, config: newConnectionConfig } : existing;
+
+  const { finalPayload, plaintextHash, meta } = await reconstructLostShard(config, manifest, shard, password, io);
+
+  const filename = `shard_${shard.shard_index}.bfs.${version}`;
+  const newRemotePath = buildRemotePath(targetProviderConfig, config.vault_name, filename);
+  const newLocationMap = buildRebuiltLocationMap(config, manifest, providerId, targetProviderConfig, plaintextHash, newRemotePath, io);
+  const header = buildRebuiltHeader(meta, shard, manifest, newLocationMap);
+  await uploadRepairedShard({ targetProviderConfig, header, payload: finalPayload, filename, vaultName: config.vault_name, encKey: meta.encKey, io });
+  await updateLocationMaps(rootDir, version, { newLocationMap, io, ...(password !== undefined ? { password } : {}) });
+
+  const updatedShards = manifest.shards.map((ms) => (ms.provider_id === providerId ? { ...ms, remote_path: newRemotePath, shard_hash: plaintextHash } : ms));
+  await writeManifest(rootDir, { ...manifest, shards: updatedShards, health: VersionHealth.Healthy });
+}
+
+/**
+ * Downloads the surviving shards, Reed-Solomon-reconstructs the lost shard's
+ * payload, and verifies it against the manifest hash.
+ *
+ * @throws BfsError when fewer than N shards remain
+ * @throws ShardCorruptedError when the rebuilt payload's hash mismatches the manifest
+ */
+async function reconstructLostShard(config: VaultConfig, manifest: VersionManifest, shard: ManifestShard, password: string | undefined, io: ProviderIO) {
+  const { data_shards: N, parity_shards: K } = manifest.scheme;
+  const { shardSlots, shardDataMap } = await downloadAvailableShards(config, manifest, shard.provider_id, io);
+  const available = shardSlots.filter((s) => s !== null).length;
+  if (available < N) {
+    throw new BfsError(`Not enough shards to rebuild version ${manifest.version}: need ${N}, got ${available}.`);
+  }
+  const meta = await extractShardMeta(shardDataMap, manifest, password);
+  const { finalPayload, plaintextHash } = _repairShardPayload({
+    shardSlots,
+    formatVersion: meta.formatVersion,
+    dataShards: N,
+    parityShards: K,
+    removedIndex: shard.shard_index,
+    encrypted: manifest.encrypted,
+    encKey: meta.encKey,
+    version: manifest.version,
+    rsStripeSize: meta.rsStripeSize,
+  });
+  if (shard.shard_hash && shard.shard_hash !== plaintextHash) {
+    throw new ShardCorruptedError(`RS rebuild produced a mismatched payload for version ${manifest.version} shard ${shard.shard_index}.`);
+  }
+  return { finalPayload, plaintextHash, meta };
+}
+
+/** Assembles the rebuilt shard's header from the reconstructed metadata and new location map. */
+function buildRebuiltHeader(meta: Awaited<ReturnType<typeof extractShardMeta>>, shard: ManifestShard, manifest: VersionManifest, newLocationMap: ShardLocation[]): ShardHeader {
+  return {
+    magic: 'BFSS',
+    format_version: meta.formatVersion,
+    vault_id: meta.vaultId,
+    vault_name: meta.vaultName,
+    blob_size: meta.blobSize,
+    blob_hash: meta.blobHash,
+    data_shards: manifest.scheme.data_shards,
+    parity_shards: manifest.scheme.parity_shards,
+    shard_index: shard.shard_index,
+    version: manifest.version,
+    encrypted: manifest.encrypted,
+    kdf_salt: meta.kdf_salt,
+    rs_stripe_size: meta.rsStripeSize,
+    map_length: 0,
+    location_map: newLocationMap,
+  };
+}
+
+/**
+ * Builds the location map for an in-place rebuild: the rebuilt provider keeps
+ * its id but gets the (possibly new) remote path and the freshly-computed
+ * payload hash; every other entry is preserved with its provider's config.
+ */
+function buildRebuiltLocationMap(config: VaultConfig, manifest: VersionManifest, providerId: string, targetProviderConfig: ProviderConfig, plaintextHash: string, newRemotePath: string, io: ProviderIO): ShardLocation[] {
+  return manifest.shards.map((ms) => {
+    if (ms.provider_id === providerId) {
+      const split = splitLocationSecrets(targetProviderConfig.type, targetProviderConfig.config, io);
+      return {
+        shard_index: ms.shard_index,
+        provider_id: providerId,
+        provider_type: targetProviderConfig.type,
+        adapterPackage: targetProviderConfig.adapterPackage,
+        connection_config: split.connection_config,
+        required_inputs: split.required_inputs,
+        remote_path: newRemotePath,
+        shard_hash: plaintextHash,
+      };
+    }
+    const src = config.providers.find((p) => p.id === ms.provider_id);
+    const split = splitLocationSecrets(ms.provider_type, src?.config ?? {}, io);
+    return {
+      shard_index: ms.shard_index,
+      provider_id: ms.provider_id,
+      provider_type: ms.provider_type,
+      adapterPackage: src?.adapterPackage ?? null,
+      connection_config: split.connection_config,
+      required_inputs: split.required_inputs,
+      remote_path: ms.remote_path,
+      shard_hash: ms.shard_hash,
+    };
+  });
+}
+
+/**
  * Rebuilds all specified versions after a provider was lost.
  * Uploads repaired shards to targetProvider and updates location maps.
  *
@@ -475,7 +613,7 @@ export async function rebuildAllVersions(rootDir: string, options: RebuildAllVer
  * @throws BfsError if provider is unreachable at new address or shards are missing
  */
 export async function relocateProvider(rootDir: string, providerId: string, options: RelocateProviderOptions): Promise<void> {
-  const { newConnectionConfig, io, password, newType } = options;
+  const { newConnectionConfig, io, password, newType, versions } = options;
   const config = await readConfig(rootDir);
   if (!config) throw new BfsError('No vault config found.');
 
@@ -504,7 +642,7 @@ export async function relocateProvider(rootDir: string, providerId: string, opti
 
   // Verify shards exist on the new address for all relevant versions
   const manifests = await listManifests(rootDir);
-  const affectedManifests = manifests.filter((m) => m.shards.some((s) => s.provider_id === providerId));
+  const affectedManifests = manifests.filter((m) => m.shards.some((s) => s.provider_id === providerId) && (versions === undefined || versions.includes(m.version)));
 
   for (const manifest of affectedManifests) {
     const ms = manifest.shards.find((s) => s.provider_id === providerId);
@@ -537,7 +675,7 @@ export async function relocateProvider(rootDir: string, providerId: string, opti
           adapterPackage: resolvedAdapterPackage,
           connection_config: split.connection_config,
           required_inputs: split.required_inputs,
-          remote_path: [String(newConnectionConfig.path ?? ''), config.vault_name, filename].join('/').replace(/\\/g, '/'),
+          remote_path: buildRemotePath({ id: providerId, type: resolvedType, adapterPackage: resolvedAdapterPackage, config: newConnectionConfig }, config.vault_name, filename),
           shard_hash: ms.shard_hash,
         };
       }

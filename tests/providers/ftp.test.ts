@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BfsError, ProviderError, UnsafePathError } from '../../src/core/errors.js';
+import { ProviderError, UnsafePathError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
 import { buildShard, parseShardHeaderFromStream } from '../../src/core/shard-io.js';
 import { FtpProvider } from '../../src/providers/ftp.js';
@@ -1003,15 +1003,6 @@ describe('FtpProvider', () => {
   describe('header storage strategy + verifyShard', () => {
     const IDENTITY = { vault_id: '550e8400-e29b-41d4-a716-446655440000', shard_index: 0, version: 1 };
 
-    it('should report usesSidecar() === false', () => {
-      expect(provider.usesSidecar()).toBe(false);
-    });
-
-    it('should throw BfsError from the sidecar methods (not supported)', async () => {
-      await expect(provider.uploadHeaderSidecar({ provider_id: 'test-ftp', path: 'shard_0.bfs.1' }, Buffer.alloc(0))).rejects.toThrow(BfsError);
-      await expect(provider.downloadHeaderSidecar({ provider_id: 'test-ftp', path: 'shard_0.bfs.1' }, 16)).rejects.toThrow(BfsError);
-    });
-
     it('should return ok for a matching shard identity', async () => {
       await uploadBuf(provider, 'shard_0.bfs.1', buildShard(makeHeader(), Buffer.from('payload')));
       const result = await provider.verifyShard({ provider_id: 'test-ftp', path: 'shard_0.bfs.1' }, IDENTITY);
@@ -1176,5 +1167,74 @@ describe('FtpProvider', () => {
       const declinedAt = order.findIndex((e) => e.startsWith('confirm:') && e.includes('203.0.113.7'));
       expect(declinedAt).toBeGreaterThanOrEqual(0);
     });
+  });
+});
+
+// Header sidecar (BFSH): FTP uploads a relocated shard's updated header as a
+// small remote `hdr_i.bfs.V` file instead of downloading + re-uploading the
+// whole shard (FTP has no partial write) — a `bfs repair` location change costs
+// KB over the wire, not the full multi-* payload. The `hdr_` prefix keeps it out
+// of every `list('shard_')` scan structurally.
+describe('FtpProvider — header sidecar (BFSH)', () => {
+  let provider: FtpProvider;
+  const shardRef = { provider_id: 'test-ftp', path: 'shard_0.bfs.1' };
+  const SIDECAR_KEY = '/backup/testvault/hdr_0.bfs.1';
+
+  beforeEach(() => {
+    mockState.files.clear();
+    mockState.dirs.clear();
+    mockState.accessShouldFail = false;
+    mockState.accessErrorCode = null;
+    mockState.sentCommands = [];
+    mockState.corruptOnUpload = null;
+    mockState.uploadByteLossPlan = [];
+    mockState.uploadAttempt = 0;
+    mockState.sizeOverride = null;
+    mockState.lastUploadChunkSizes = [];
+    mockState.downloadChunkSize = null;
+    mockState.lastDownloadBytesWritten = 0;
+
+    const { io } = createMockProviderIO();
+    provider = new FtpProvider(makeConfig(), io);
+    provider.setVaultName('testvault');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('should report usesSidecar() === true', () => {
+    expect(provider.usesSidecar()).toBe(true);
+  });
+
+  it('should round-trip header bytes through uploadHeaderSidecar/downloadHeaderSidecar', async () => {
+    const sidecar = Buffer.from('BFSH-header-bytes');
+
+    await provider.uploadHeaderSidecar(shardRef, sidecar);
+    const read = await provider.downloadHeaderSidecar(shardRef, 16384);
+
+    expect(read).not.toBeNull();
+    expect(Buffer.compare(read as Buffer, sidecar)).toBe(0);
+  });
+
+  it('should return null from downloadHeaderSidecar when no sidecar exists', async () => {
+    await expect(provider.downloadHeaderSidecar(shardRef, 16384)).resolves.toBeNull();
+  });
+
+  it('should remove a stale sidecar when the shard is re-uploaded (reconcile)', async () => {
+    mockState.files.set(SIDECAR_KEY, Buffer.from('stale-sidecar'));
+
+    await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('payload'));
+
+    expect(mockState.files.has(SIDECAR_KEY)).toBe(false);
+  });
+
+  it('should remove the sidecar when the shard is deleted', async () => {
+    await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('payload'));
+    mockState.files.set(SIDECAR_KEY, Buffer.from('sidecar'));
+
+    await provider.delete(shardRef);
+
+    expect(mockState.files.has(SIDECAR_KEY)).toBe(false);
   });
 });

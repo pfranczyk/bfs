@@ -4,11 +4,11 @@ import * as ftp from 'basic-ftp';
 import { ProviderError } from '../core/errors.js';
 import { assertSafeVaultName } from '../core/fs-utils.js';
 import { hashBuffer, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
-import { buildShardHeaderFromBytes, computeShardHeaderSize, SHARD_HEADER_READ_BYTES } from '../core/shard-io.js';
+import { buildShardHeaderFromBytes, computeShardHeaderSize, SHARD_HEADER_READ_BYTES, sidecarFilename } from '../core/shard-io.js';
 import { fmtFor, t, tFor } from '../i18n/index.js';
 import type { CliProviderInput, ProviderConfig, ProviderHelp, ProviderIO, RecoverySecret, RemoteRef, ShardHeader, ShardIdentity, StorageProvider, VerifyShardResult } from '../types/index.js';
 import { findStringFlag, readJsonObjectFile } from './flags.js';
-import { finishVerifyShard, throwSidecarUnsupported } from './header-verify.js';
+import { finishVerifyShard } from './header-verify.js';
 import { type ProviderFactory, providerRegistry } from './provider.js';
 
 const CHECKSUM_SIZE = SHA256_BYTES;
@@ -331,6 +331,10 @@ export class FtpProvider implements StorageProvider {
       // keep failing and surface as ProviderError after the last attempt.
       // Full byte-for-byte round-trip verification stays in probeConnection().
       await this.uploadWithRetry(client, remotePath, buffer, shardFilename);
+      // A fresh shard carries a fresh in-shard header, so a stale sidecar for
+      // this filename (from a prior relocate) must go — else it would shadow the
+      // new header on the sidecar-aware read-path.
+      await this.bestEffortRemove(client, `${this.vaultPath()}/${sidecarFilename(shardFilename)}`);
     });
 
     return { provider_id: this.id, path: shardFilename, hash };
@@ -363,6 +367,8 @@ export class FtpProvider implements StorageProvider {
     const remotePath = `${this.vaultPath()}/${ref.path}`;
     await this.withClient(async (client) => {
       await client.remove(remotePath);
+      // Remove the header sidecar too so pruning leaves no orphan behind.
+      await this.bestEffortRemove(client, `${this.vaultPath()}/${sidecarFilename(ref.path)}`);
     });
   }
 
@@ -577,25 +583,50 @@ export class FtpProvider implements StorageProvider {
 
   // ─── Header storage strategy + verification ───────────────────────────────
 
-  /** FTP rewrites the header in place inside the shard — no sidecar. */
+  /** FTP keeps a relocated shard's header in an `hdr_` sidecar next to it. */
   usesSidecar(): boolean {
-    return false;
+    return true;
   }
 
   /**
-   * Not supported — FTP rewrites the header in place via updateShardHeader().
-   * @throws BfsError always (usesSidecar() === false)
+   * Uploads the header sidecar (BFSH bytes) to `hdr_i.bfs.V` next to the shard,
+   * with the same STOR + post-upload SIZE verification as a shard upload. The
+   * payload is KB-sized, so this replaces a full shard re-upload on relocate.
+   *
+   * @param ref          - RemoteRef of the shard the sidecar belongs to
+   * @param sidecarBytes - Sidecar payload in BFSH format (see buildSidecarBytes)
+   * @throws ProviderError on upload failure
    */
-  async uploadHeaderSidecar(_ref: RemoteRef, _sidecarBytes: Buffer): Promise<void> {
-    throwSidecarUnsupported(this.io.lang, this.type);
+  async uploadHeaderSidecar(ref: RemoteRef, sidecarBytes: Buffer): Promise<void> {
+    const name = sidecarFilename(ref.path);
+    const remotePath = `${this.vaultPath()}/${name}`;
+    await this.withClient(async (client) => {
+      await client.ensureDir(this.vaultPath());
+      await this.uploadWithRetry(client, remotePath, sidecarBytes, name);
+    });
   }
 
   /**
-   * Not supported — FTP has no sidecar files.
-   * @throws BfsError always (usesSidecar() === false)
+   * Downloads the header sidecar `hdr_i.bfs.V` next to the shard, or null when
+   * none exists (SIZE replies 550). A sidecar is header-only, so it is pulled in
+   * full — bounded by its own size, not the payload.
+   *
+   * @param ref       - RemoteRef of the shard
+   * @param _maxBytes - Byte cap (a sidecar is inherently small; the whole file is read)
+   * @returns Sidecar bytes (BFSH format) or null when absent
+   * @throws ProviderError on a transport failure other than "not found"
    */
-  async downloadHeaderSidecar(_ref: RemoteRef, _maxBytes: number): Promise<Buffer | null> {
-    throwSidecarUnsupported(this.io.lang, this.type);
+  async downloadHeaderSidecar(ref: RemoteRef, _maxBytes: number): Promise<Buffer | null> {
+    const remotePath = `${this.vaultPath()}/${sidecarFilename(ref.path)}`;
+    return this.withClient(async (client) => {
+      try {
+        await client.size(remotePath);
+      } catch (err) {
+        if (ftpReplyCode(err) === 550) return null;
+        throw new ProviderError(fmtFor(this.io.lang, 'provider_header_read_failed', remotePath, err instanceof Error ? err.message : String(err)));
+      }
+      return this.downloadToBuffer(client, remotePath);
+    });
   }
 
   /**

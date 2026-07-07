@@ -18,10 +18,17 @@
 //                       points a provider at with `bfs provider edit`.
 //             'run'   → remove FC_BASE/bfs-e2e-<FC_RUN> only.
 //             'all'   → remove every FC_BASE/bfs-e2e-* directory.
+//             'sha'   → download FC_FILE, print its SHA-256 (hex) to stdout.
+//                       Exit 3 when the file is absent (550) so callers can
+//                       distinguish "not there" from a real transport error.
+//                       Read-only; used by e2e to prove a repair did NOT
+//                       re-upload a shard (hash unchanged) and that a header
+//                       sidecar landed remotely (hash obtainable).
 //
 // Destructive modes only ever touch directories named `bfs-e2e-*`.
 
-import { Readable } from 'node:stream';
+import { createHash } from 'node:crypto';
+import { Readable, Writable } from 'node:stream';
 import { Client, type FileInfo } from 'basic-ftp';
 
 function env(name: string, fallback = ''): string {
@@ -97,6 +104,26 @@ async function main(): Promise<void> {
           // nothing to remove for this run on this endpoint
         }
       }
+    } else if (mode === 'sha') {
+      const file = env('FC_FILE');
+      if (!file) {
+        console.error('ftp-ops: FC_FILE not set for sha');
+        process.exit(2);
+      }
+      const chunks: Buffer[] = [];
+      const sink = new Writable({
+        write(chunk: Buffer | Uint8Array, _enc, cb) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          cb();
+        },
+      });
+      try {
+        await client.downloadTo(sink, file);
+      } catch {
+        // 550 (missing) or any transport failure → signal "absent" distinctly.
+        process.exit(3);
+      }
+      process.stdout.write(`${createHash('sha256').update(Buffer.concat(chunks)).digest('hex')}\n`);
     }
   } finally {
     client.close();

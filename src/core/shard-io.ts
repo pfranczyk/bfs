@@ -332,6 +332,19 @@ export function buildSidecarBytes(header: ShardHeader, encryptionKey?: Buffer): 
 }
 
 /**
+ * Maps a shard filename to its header-sidecar filename by swapping the leading
+ * `shard_` for `hdr_` (e.g. "shard_0.bfs.1" → "hdr_0.bfs.1"). The distinct
+ * prefix keeps sidecars out of every `list('shard_')` scan structurally, so no
+ * shard version parser ever mistakes a sidecar for a shard.
+ *
+ * @param shardFilename - Bare shard filename (e.g. "shard_0.bfs.1")
+ * @returns The paired sidecar filename
+ */
+export function sidecarFilename(shardFilename: string): string {
+  return shardFilename.replace(/^shard_/, 'hdr_');
+}
+
+/**
  * Serializes a shard header into a binary Buffer with FORMAT_VERSION=2.
  * FORMAT_VERSION=2 shards have layout: [header][encrypted_payload][GCM tag 16B][SHA-256 32B]
  *
@@ -360,6 +373,13 @@ export function buildShardStream(serializedHeader: Buffer, payloadStream: Readab
   let headerEmitted = false;
   const output = new PassThrough();
 
+  // Tear down the payload source when the shard stream is destroyed (e.g. the
+  // consumer's upload rejected). A file-backed payload (parity temp) would
+  // otherwise keep a pending open and emit a late 'error' with no listener once
+  // the temp file is unlinked, surfacing as an unhandled exception.
+  output.on('close', () => {
+    if (!payloadStream.destroyed) payloadStream.destroy();
+  });
   payloadStream.on('error', (err) => output.destroy(err));
   payloadStream.on('data', (chunk: Buffer | Uint8Array) => {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -455,17 +475,35 @@ export async function parseShardHeaderFromStream(stream: Readable, encryptionKey
  * @throws DecryptionError if the map is encrypted but the key is wrong
  */
 export async function readShardHeader(provider: StorageProvider, ref: RemoteRef, vaultKey?: Buffer): Promise<ShardHeader> {
+  // The bytes come back sidecar-aware; parsing is synchronous — the header
+  // window has no payload stream to verify or discard.
+  return buildShardHeaderFromBytes(await readShardHeaderBytes(provider, ref), vaultKey);
+}
+
+/**
+ * Fetches the raw serialized header bytes for a shard, honoring the sidecar
+ * contract. When the provider keeps headers in a sidecar (usesSidecar() ===
+ * true) and one exists, the sidecar's embedded header is returned; otherwise
+ * the in-shard header window is read. Returns BYTES rather than a parsed header
+ * so a caller that must try several vault keys against the same buffer
+ * (recovery's MRU password pool) can re-parse without re-fetching.
+ *
+ * Every read path that needs the CURRENT location map — recovery, bootstrap,
+ * consensus — must go through this, not provider.downloadHeader directly, or it
+ * would read a relocated shard's stale in-shard map instead of its sidecar.
+ *
+ * @param provider - Provider holding the shard
+ * @param ref      - RemoteRef of the shard
+ * @param maxBytes - Byte budget for the read (in-shard window or sidecar cap)
+ * @returns Serialized header bytes (magic … end of location map)
+ * @throws ShardCorruptedError if a present sidecar has a bad magic/checksum
+ */
+export async function readShardHeaderBytes(provider: StorageProvider, ref: RemoteRef, maxBytes = SHARD_HEADER_READ_BYTES): Promise<Buffer> {
   if (provider.usesSidecar()) {
-    const sidecar = await provider.downloadHeaderSidecar(ref, SHARD_HEADER_READ_BYTES);
-    if (sidecar !== null) {
-      return parseSidecarBytes(sidecar, vaultKey);
-    }
+    const sidecar = await provider.downloadHeaderSidecar(ref, maxBytes);
+    if (sidecar !== null) return extractSidecarHeaderBytes(sidecar);
   }
-  // downloadHeader returns only the header window (no full payload, no trailing
-  // checksum), so parse it directly: the synchronous parser reads just the
-  // header and never builds a payload stream — nothing to verify or discard.
-  const headerBytes = await provider.downloadHeader(ref, SHARD_HEADER_READ_BYTES);
-  return buildShardHeaderFromBytes(headerBytes, vaultKey);
+  return provider.downloadHeader(ref, maxBytes);
 }
 
 /**
@@ -492,16 +530,18 @@ export function matchShardIdentity(header: ShardHeader, expected: ShardIdentity)
 }
 
 /**
- * Validates a sidecar (BFSH) buffer and returns the header it carries.
- * Checks the magic first, then the trailing SHA-256 checksum, then parses the
- * embedded serialized header.
+ * Validates a sidecar (BFSH) buffer and returns the serialized header bytes it
+ * carries. Checks the magic first, then the trailing SHA-256 checksum, then
+ * strips the 8-byte BFSH prefix and 32-byte checksum to yield exactly the
+ * embedded shard-header bytes (magic … end of location map). Returns bytes, not
+ * a parsed header, so callers can re-parse the same buffer with different vault
+ * keys (recovery's MRU password pool).
  *
- * @param sidecar  - Raw BFSH bytes from downloadHeaderSidecar()
- * @param vaultKey - 32-byte key to decrypt the location map (optional)
- * @returns The parsed shard header
- * @throws ShardCorruptedError on bad magic, checksum mismatch, or malformed header
+ * @param sidecar - Raw BFSH bytes from downloadHeaderSidecar()
+ * @returns The embedded serialized shard-header bytes
+ * @throws ShardCorruptedError on bad magic or checksum mismatch
  */
-function parseSidecarBytes(sidecar: Buffer, vaultKey?: Buffer): ShardHeader {
+export function extractSidecarHeaderBytes(sidecar: Buffer): Buffer {
   if (sidecar.length < BFSH_PREFIX_SIZE + CHECKSUM_SIZE) {
     throw new ShardCorruptedError('Sidecar too short to contain a valid BFSH header');
   }
@@ -515,7 +555,7 @@ function parseSidecarBytes(sidecar: Buffer, vaultKey?: Buffer): ShardHeader {
   if (!computed.equals(storedChecksum)) {
     throw new ShardCorruptedError('Sidecar checksum mismatch — file is corrupted or tampered');
   }
-  return buildShardHeaderFromBytes(sidecar.subarray(BFSH_PREFIX_SIZE, sidecar.length - CHECKSUM_SIZE), vaultKey);
+  return sidecar.subarray(BFSH_PREFIX_SIZE, sidecar.length - CHECKSUM_SIZE);
 }
 
 // ─── Private parsing helpers ──────────────────────────────────────────────

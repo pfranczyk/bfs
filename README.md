@@ -62,9 +62,10 @@ bfs pull
 | `bfs pull [--version N] [-y]` | Restore files from backup (default: latest version); `-y/--yes` auto-confirms overwrite |
 | `bfs status` | Show vault status |
 | `bfs versions` | List all backup versions with health status |
-| `bfs verify` | Check shard availability and health across providers |
+| `bfs verify` | Check part availability and health across providers; flag missing or damaged header files |
 | `bfs prune [range] [--keep-last N]` | Delete old backup versions — pass an explicit range (`5`, `1-10`, `1,3,5`) or `--keep-last N` to keep the newest N |
 | `bfs recovery` | Rebuild `.bfs/` from providers (disaster recovery) |
+| `bfs repair` | Fix a backup's storage locations without re-uploading — repoint a moved device, rebuild a lost part, or restore missing/damaged header files (`--restore-headers`) |
 | `bfs clear` | Delete pending cache and stale lock files from an interrupted push or pull |
 | `bfs scheme set <N> <K>` | Change the Reed-Solomon N/K scheme (minimum 2/1) |
 | `bfs config [--cache-dir <path>] [--temp-dir <path>] [--max-ram <MB>] [--on <feature>] [--off <feature>]` | View or change per-backup settings (cache dir, temp dir, RAM limit, toggle compression/encryption) |

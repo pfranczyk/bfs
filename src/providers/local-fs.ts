@@ -10,11 +10,11 @@ import { pipeline } from 'node:stream/promises';
 import { ProviderError, ShardCorruptedError } from '../core/errors.js';
 import { assertSafeVaultName, isEnoent } from '../core/fs-utils.js';
 import { hashBuffer, SHA256_BYTES } from '../core/hash.js';
-import { computeShardHeaderSize, readShardHeader } from '../core/shard-io.js';
+import { computeShardHeaderSize, readShardHeader, sidecarFilename } from '../core/shard-io.js';
 import { fmt, fmtFor, t, tFor } from '../i18n/index.js';
 import type { CliProviderInput, ProviderConfig, ProviderHelp, ProviderIO, RemoteRef, ShardHeader, ShardIdentity, StorageProvider, VerifyShardResult } from '../types/index.js';
 import { findStringFlag, readJsonObjectFile } from './flags.js';
-import { finishVerifyShard, throwSidecarUnsupported } from './header-verify.js';
+import { finishVerifyShard } from './header-verify.js';
 import { type ProviderFactory, providerRegistry } from './provider.js';
 
 const CHECKSUM_SIZE = SHA256_BYTES;
@@ -149,6 +149,11 @@ export class LocalFsProvider implements StorageProvider {
       throw new ProviderError(`Failed to write shard "${filePath}": ${String(err)}`);
     }
 
+    // A fresh shard carries a fresh in-shard header, so a stale sidecar for this
+    // filename (from a prior relocate) must go — else it would shadow the new
+    // header on the sidecar-aware read-path.
+    await fs.unlink(path.join(dir, sidecarFilename(shardFilename))).catch(() => {});
+
     return { provider_id: this.id, path: shardFilename, hash: hasher.digest('hex') };
   }
 
@@ -182,6 +187,8 @@ export class LocalFsProvider implements StorageProvider {
     } catch (err) {
       throw new ProviderError(`Failed to delete shard "${filePath}": ${String(err)}`);
     }
+    // Remove the header sidecar too so pruning leaves no orphan behind.
+    await fs.unlink(path.join(this.vaultDir(), sidecarFilename(ref.path))).catch(() => {});
   }
 
   /**
@@ -364,25 +371,55 @@ export class LocalFsProvider implements StorageProvider {
 
   // ─── Header storage strategy + verification ───────────────────────────────
 
-  /** LocalFS rewrites the header in place inside the shard — no sidecar. */
+  /** LocalFS keeps a relocated shard's header in an `hdr_` sidecar next to it. */
   usesSidecar(): boolean {
-    return false;
+    return true;
   }
 
   /**
-   * Not supported — LocalFS rewrites the header in place via updateShardHeader().
-   * @throws BfsError always (usesSidecar() === false)
+   * Writes the header sidecar (BFSH bytes) to `hdr_i.bfs.V` next to the shard,
+   * atomically (.tmp + rename), replacing any previous sidecar.
+   *
+   * @param ref          - RemoteRef of the shard the sidecar belongs to
+   * @param sidecarBytes - Sidecar payload in BFSH format (see buildSidecarBytes)
+   * @throws ProviderError on write failure
    */
-  async uploadHeaderSidecar(_ref: RemoteRef, _sidecarBytes: Buffer): Promise<void> {
-    throwSidecarUnsupported(this.io.lang, this.type);
+  async uploadHeaderSidecar(ref: RemoteRef, sidecarBytes: Buffer): Promise<void> {
+    const dir = this.vaultDir();
+    try {
+      await fs.mkdir(dir, { recursive: true });
+    } catch (err) {
+      throw new ProviderError(`Failed to create vault directory "${dir}": ${String(err)}`);
+    }
+    const sidecarPath = path.join(dir, sidecarFilename(ref.path));
+    const tmpPath = `${sidecarPath}.tmp`;
+    try {
+      await fs.writeFile(tmpPath, sidecarBytes);
+      await fs.rename(tmpPath, sidecarPath);
+    } catch (err) {
+      await fs.unlink(tmpPath).catch(() => {});
+      throw new ProviderError(`Failed to write header sidecar "${sidecarPath}": ${String(err)}`);
+    }
   }
 
   /**
-   * Not supported — LocalFS has no sidecar files.
-   * @throws BfsError always (usesSidecar() === false)
+   * Reads the header sidecar `hdr_i.bfs.V` next to the shard, or null when none
+   * exists yet. A sidecar is header-only, so it is read in full (bounded by its
+   * own size, not the payload).
+   *
+   * @param ref       - RemoteRef of the shard
+   * @param _maxBytes - Byte cap (a sidecar is inherently small; the whole file is read)
+   * @returns Sidecar bytes (BFSH format) or null when absent
+   * @throws ProviderError on a read failure other than "not found"
    */
-  async downloadHeaderSidecar(_ref: RemoteRef, _maxBytes: number): Promise<Buffer | null> {
-    throwSidecarUnsupported(this.io.lang, this.type);
+  async downloadHeaderSidecar(ref: RemoteRef, _maxBytes: number): Promise<Buffer | null> {
+    const sidecarPath = path.join(this.vaultDir(), sidecarFilename(ref.path));
+    try {
+      return await fs.readFile(sidecarPath);
+    } catch (err) {
+      if (isEnoent(err)) return null;
+      throw new ProviderError(`Failed to read header sidecar "${sidecarPath}": ${String(err)}`);
+    }
   }
 
   /**

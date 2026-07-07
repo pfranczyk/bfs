@@ -79,14 +79,6 @@ export async function decryptBlob(encrypted: Buffer, password: string, salt: Buf
 }
 
 /**
- * Decrypts a blob using a pre-derived key (skips Argon2).
- * Used in Pull Mode B when key was already derived from shard header kdf_salt.
- */
-export function decryptBlobWithKey(encrypted: Buffer, key: Buffer): Buffer {
-  return decryptWithKey(encrypted, key);
-}
-
-/**
  * Encrypts a location map as JSON with AES-256-GCM.
  * @returns nonce(12B) + ciphertext + tag(16B)
  */
@@ -161,6 +153,13 @@ export function encryptStream(input: Readable, key: Buffer, nonce: Buffer): Read
     },
   });
   input.on('error', (err) => transform.destroy(err));
+  // pipe() propagates source→dest but not teardown dest→source: when a consumer
+  // destroys the returned transform (e.g. a failed shard upload releases the
+  // stream), the underlying source would keep its fd open over a soon-unlinked
+  // file. Tear the source down too so nothing lingers on the failure path.
+  transform.on('close', () => {
+    if (!input.destroyed) input.destroy();
+  });
   input.pipe(transform);
   return transform;
 }

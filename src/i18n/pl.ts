@@ -14,6 +14,7 @@ export const pl: Strings = {
   repl_help_cmd_prune: 'Usuń stare wersje (np. 1-5, --keep-last 3)',
   repl_help_cmd_verify: 'Sprawdź dostępność i stan nośników',
   repl_help_cmd_recovery: 'Odbudowa po awarii',
+  repl_help_cmd_repair: 'Napraw lokalizację nośnika (zmiana ścieżki/poświadczeń)',
   repl_help_cmd_provider_add: 'Dodaj nośnik',
   repl_help_cmd_provider_list: 'Wylistuj nośniki',
   repl_help_cmd_provider_remove: 'Usuń nośnik',
@@ -253,6 +254,7 @@ export const pl: Strings = {
   verify_col_tolerance: 'Tolerancja',
   /** %s = filename, %s = provider id, %s = reason */
   verify_shard_check_failed: 'Plik "%s" na nośniku "%s" nie przeszedł weryfikacji integralności: %s',
+  verify_header_advisory: 'Wersja %s: brak lub uszkodzenie %s plik(ów) nagłówka. Uruchom „bfs repair --restore-headers", aby je odbudować — inaczej odtworzenie niezaszyfrowanej kopii zapasowej może być utrudnione.',
 
   // ─── recovery ─────────────────────────────────────────────────────────────
   recovery_provider_type_prompt: 'Typ bootstrapowego nośnika:',
@@ -515,7 +517,6 @@ export const pl: Strings = {
   provider_stat_failed: 'Nie udało się odczytać metadanych "%s": %s',
   provider_header_read_failed: 'Nie udało się odczytać nagłówka "%s": %s',
   provider_download_header_invalid_max_bytes: 'rozmiar odczytu nagłówka musi być większy niż 0 (otrzymano %s)',
-  sidecar_not_supported: 'nośnik typu "%s" nie obsługuje osobnych plików nagłówka',
   provider_adapter_incompatible: 'Adapter nośnika "%s" jest niezgodny z tą wersją BFS (brak wymaganej metody "%s" z API nośników v%s). Zainstaluj ponownie lub zaktualizuj adapter.',
   verify_shard_not_found: 'plik pod "%s" nie istnieje',
   verify_shard_mismatch: 'niezgodność pola nagłówka pliku "%s": oczekiwano "%s", otrzymano "%s"',
@@ -569,4 +570,35 @@ export const pl: Strings = {
   local_probe_step_read: 'Test nieudany w fazie read: %s',
   local_probe_step_compare_local: 'Test nieudany w fazie compare: odczytane bajty różnią się od zapisanych',
   local_probe_step_cleanup: 'Test nieudany w fazie cleanup: %s',
+
+  // ─── repair (spec parsing) ─────────────────────────────────────────────────
+  repair_spec_odd_args: 'Każda nazwa nośnika musi mieć po sobie ciąg parametrów.',
+  repair_unknown_provider: 'Nośnik "%s" nie istnieje w konfiguracji kopii zapasowej.',
+  repair_duplicate_provider_in_args: 'Nośnik "%s" powtórzony w argumentach naprawy.',
+  repair_spec_invalid_params: 'Nieprawidłowe parametry naprawy: "%s". Użyj flag nośnika (np. --path) lub migracji typ:nazwa.',
+
+  // ─── repair (command) ──────────────────────────────────────────────────────
+  cmd_repair_desc: 'Napraw lokalizację nośnika po zmianie ścieżki lub rotacji poświadczeń',
+  repair_opt_version: 'Wersje do naprawy: latest (domyślnie), all, 5, 1-10, 1-10,15',
+  repair_opt_password: 'Hasło kopii zaszyfrowanej (można podać wielokrotnie)',
+  repair_opt_password_file: 'Wczytaj hasło kopii z pliku (można podać wielokrotnie)',
+  repair_opt_ci: 'Tryb nieinteraktywny: bez promptów; błąd, gdy wymagane hasło nie pasuje',
+  repair_opt_rebuild: 'Odbuduj utracony fragment kopii kodem Reed-Solomon (pobiera pozostałe fragmenty)',
+  repair_opt_force_unverified: 'Kontynuuj migrację, gdy fragmentu kopii nie da się zweryfikować (nie gdy brakuje lub jest zmieniony)',
+  repair_no_versions: 'Brak pasujących wersji do naprawy.',
+  repair_foreign_shard_detected: 'Fragment kopii dla wersji %s należy do innej kopii — przerywam.',
+  repair_wrong_version_shard: 'Fragment kopii dla wersji %s nie odpowiada oczekiwanej wersji — przerywam.',
+  repair_force_unverified_warn: 'Kontynuuję mimo niezweryfikowanego fragmentu kopii dla wersji %s.',
+  repair_ask_vault_password: 'Hasło kopii dla wersji %s:',
+  repair_wrong_vault_password_retry: 'Błędne hasło dla wersji %s — spróbuj ponownie (puste = pomiń):',
+  repair_pool_password_failed: 'Żadne podane hasło nie odszyfrowuje wersji %s.',
+  repair_password_required_ci: 'Żadne hasło nie pasuje do wersji %s. Podaj więcej przez --password.',
+  repair_password_exhausted: 'Wyczerpano próby hasła dla wersji %s.',
+  repair_edit_invalid_config: 'Nieprawidłowa konfiguracja nośnika: %s',
+  repair_success: 'Naprawa zakończona dla %s.',
+  repair_opt_restore_headers: 'Odbuduj brakujące lub uszkodzone pliki nagłówków dla wybranych wersji',
+  repair_restore_headers_success: 'Odbudowano pliki nagłówków dla %s wersji.',
+  repair_restore_headers_no_pairs: 'Opcja --restore-headers nie przyjmuje argumentów nośnika.',
+  repair_restore_headers_rebuild_conflict: 'Opcji --restore-headers i --rebuild nie można łączyć.',
+  repair_partial: 'Naprawa częściowa — nieudane: %s. Zobacz .bfs/repair.lock; ponów po usunięciu przyczyny.',
 };

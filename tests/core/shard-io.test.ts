@@ -1,6 +1,10 @@
+import { createReadStream } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { generateSalt } from '../../src/core/crypto.js';
+import { encryptStream, generateSalt } from '../../src/core/crypto.js';
 import { BfsError, DecryptionError, ShardCorruptedError } from '../../src/core/errors.js';
 import { hashBuffer, streamToBuffer } from '../../src/core/hash.js';
 import { buildShard, buildShardHeaderFromBytes, buildShardStream, buildSidecarBytes, matchShardIdentity, parseShardHeaderFromStream, readShardHeader, serializeShardHeader } from '../../src/core/shard-io.js';
@@ -317,6 +321,63 @@ describe('shard-io', () => {
 
       const { payloadStream } = await parseShardHeaderFromStream(Readable.from(corrupted));
       await expect(streamToBuffer(payloadStream)).rejects.toThrow(ShardCorruptedError);
+    });
+
+    // Regression: on upload failure the push pipeline destroys the shard stream
+    // to release its file-backed payload source (a parity temp read via
+    // createReadStream). The push loop unlinks every parity temp right after the
+    // loop; a source left alive keeps a pending fd open over an unlinked file,
+    // whose lazy open can surface a late 'error' (ENOENT) that propagates to the
+    // abandoned, unlistened shard stream as an unhandled exception. Destroying
+    // the shard stream must propagate to the source so nothing lingers.
+    //
+    // Determinism lever: highWaterMark 1 makes the 1 MiB source drain one
+    // syscall per byte, far slower than the 50 ms window, so a live source
+    // cannot auto-destroy on 'end' in time — only the shard stream's own
+    // teardown can flip `destroyed` to true within the window. Without the
+    // teardown the assertion fails deterministically.
+    it('should tear down the file-backed payload source when the shard stream is destroyed', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bfs-shard-io-'));
+      try {
+        const parityTemp = join(dir, 'bfs-parity.tmp');
+        await writeFile(parityTemp, Buffer.alloc(1 << 20, 7)); // 1 MiB, mirrors a parity shard temp
+
+        const payloadSource = createReadStream(parityTemp, { highWaterMark: 1 });
+        const shardStream = buildShardStream(Buffer.from('BFSS-dummy-header'), payloadSource);
+
+        shardStream.destroy(); // the push catch releases the shard stream on upload failure
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        expect(payloadSource.destroyed).toBe(true); // teardown propagated to the file-backed source
+      } finally {
+        await rm(dir, { recursive: true, force: true }); // survives assertion failure (RED)
+      }
+    });
+
+    // Regression: on the encrypted push path the payload is
+    // encryptStream(createReadStream(parityTemp)), so buildShardStream's teardown
+    // sees only the cipher transform. Destroying the transform must also tear
+    // down the underlying read stream — otherwise its fd lingers open over the
+    // parity temp that the push loop unlinks right after, the same leak the
+    // teardown closes on the plaintext path. Same highWaterMark 1 determinism
+    // lever: the source cannot self-drain inside the 50 ms window.
+    it('should tear down the underlying source of an encrypted payload when the shard stream is destroyed', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bfs-shard-io-'));
+      try {
+        const parityTemp = join(dir, 'bfs-parity.tmp');
+        await writeFile(parityTemp, Buffer.alloc(1 << 20, 7)); // 1 MiB, mirrors a parity shard temp
+
+        const source = createReadStream(parityTemp, { highWaterMark: 1 });
+        const encrypted = encryptStream(source, Buffer.alloc(32, 1), Buffer.alloc(12, 2));
+        const shardStream = buildShardStream(Buffer.from('BFSS-dummy-header'), encrypted);
+
+        shardStream.destroy(); // the push catch releases the shard stream on upload failure
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        expect(source.destroyed).toBe(true); // teardown must reach the createReadStream, not just the cipher
+      } finally {
+        await rm(dir, { recursive: true, force: true }); // survives assertion failure (RED)
+      }
     });
   });
 

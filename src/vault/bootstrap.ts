@@ -1,11 +1,11 @@
 import { Readable } from 'node:stream';
 import { deriveKey } from '../core/crypto.js';
 import { BfsError, TamperDetectedError } from '../core/errors.js';
-import { parseShardHeaderFromStream, SHARD_HEADER_READ_BYTES } from '../core/shard-io.js';
+import { parseShardHeaderFromStream, readShardHeaderBytes, SHARD_HEADER_READ_BYTES } from '../core/shard-io.js';
 import { fmt, t } from '../i18n/index.js';
 import { providerRegistry } from '../providers/provider.js';
 import type { ProviderConfig, ProviderIO, RecoverySecret, RemoteRef, ShardHeader, ShardLocation, StorageProvider } from '../types/index.js';
-import { divergentShardIndices } from './location-map.js';
+import { shardHeaderConsensusMismatch } from './consensus.js';
 
 // ─── Result types ─────────────────────────────────────────────────────────────
 
@@ -271,7 +271,7 @@ async function runConsensusCheck(args: ConsensusCheckArgs): Promise<void> {
 
     let cm: ShardHeader;
     try {
-      const bytes = await sibling.downloadHeader({ provider_id: loc.provider_id, path: `shard_${loc.shard_index}.bfs.${version}` }, SHARD_HEADER_READ_BYTES);
+      const bytes = await readShardHeaderBytes(sibling, { provider_id: loc.provider_id, path: `shard_${loc.shard_index}.bfs.${version}` }, SHARD_HEADER_READ_BYTES);
       const parsed = await parseShardHeaderFromStream(Readable.from(bytes));
       parsed.payloadStream.on('error', () => {}).destroy();
       cm = parsed.header;
@@ -279,20 +279,7 @@ async function runConsensusCheck(args: ConsensusCheckArgs): Promise<void> {
       continue; // header unreadable — skip this sibling
     }
 
-    const mismatch: string[] = [];
-    if (cm.vault_id !== meta.vault_id) mismatch.push('vault_id');
-    if (cm.blob_hash !== meta.blob_hash) mismatch.push('blob_hash');
-    if (cm.version !== meta.version) mismatch.push('version');
-    if (cm.data_shards !== meta.data_shards) mismatch.push('data_shards');
-    if (cm.parity_shards !== meta.parity_shards) mismatch.push('parity_shards');
-    if (cm.encrypted !== meta.encrypted) mismatch.push('encrypted');
-    // Unencrypted maps are plaintext on every shard, so a divergence means a
-    // forged map redirecting a provider. Encrypted maps are MAC-protected —
-    // tampering is already caught at decrypt — so skip the comparison there.
-    if (!meta.encrypted && divergentShardIndices(locationMap, cm.location_map).length > 0) {
-      mismatch.push('location_map');
-    }
-
+    const mismatch = shardHeaderConsensusMismatch({ ...meta, location_map: locationMap }, cm);
     if (mismatch.length > 0) {
       throw new TamperDetectedError(`Consensus check failed: shard headers from providers "${bootstrapProvider.id}" and "${loc.provider_id}" differ in fields: ${mismatch.join(', ')}.`);
     }
@@ -352,7 +339,9 @@ export async function bootstrapFromProvider(bootstrapProvider: StorageProvider, 
   // Pull only the header window — providers MUST avoid streaming the full
   // payload over the wire (FTP issues SIZE + aborts after maxBytes).
   const bootstrapRef = findTargetShard(refs, version);
-  const headerBytes = await bootstrapProvider.downloadHeader(bootstrapRef, SHARD_HEADER_READ_BYTES);
+  // Sidecar-aware: prefer the sidecar's current location map over the frozen
+  // in-shard one so a relocated sibling is discovered at its new address.
+  const headerBytes = await readShardHeaderBytes(bootstrapProvider, bootstrapRef, SHARD_HEADER_READ_BYTES);
   const { header: meta, payloadStream: ps1 } = await parseShardHeaderFromStream(Readable.from(headerBytes));
   ps1.on('error', () => {}).destroy();
 

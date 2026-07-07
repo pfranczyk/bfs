@@ -1,0 +1,75 @@
+# shellcheck shell=bash
+# repair --restore-headers, MISSING sidecar (local, ENCRYPTED): the location map
+# inside each sidecar is encrypted, so rebuilding it needs the vault password to
+# re-encrypt the map. After a relocate writes an hdr_ sidecar next to EVERY
+# shard, one sibling's sidecar is DELETED. `bfs verify` surfaces the
+# --restore-headers advisory (the BFSH envelope is checked without decrypting);
+# `bfs repair --restore-headers --password <pw>` rebuilds the missing sidecar
+# from the CURRENT config map + the in-shard frozen fields, re-encrypting the
+# map, so verify's advisory disappears and a fresh recovery from the rebuilt
+# sibling decrypts and restores the files byte-for-byte.
+
+SCENARIO_NAME="repair --restore-headers rebuilds a missing sidecar (local, encrypted)"
+SCENARIO_DESC="3L 2/1 encrypted; relocate p0 writes sidecars, delete p1's hdr_, repair --restore-headers --password restores it, advisory gone, recover from p1 byte-for-byte"
+REQUIRES_LOCAL=3
+REQUIRES_FTP=0
+
+scenario_run() {
+  local vault="$SC_DIR/vault" base="$SC_DIR/baseline.txt" name="bfs78"
+  local pw="restore-headers-e2e-pw-78"
+  local newdir="$SC_DIR/relocated"
+  make_fixtures "$vault"
+  build_pool "$SC_DIR" 3 0 "$name"
+
+  run_bfs "$vault" init "$name" --ci --no-compress \
+    --data-shards 2 --parity-shards 1 "${PROVIDER_ARGS[@]}"
+  assert_ok
+  snapshot_hashes "$vault" "$base"
+  run_bfs "$vault" push --new --password "$pw"
+  assert_ok
+  assert_manifest_contains "$vault" 1 '"encrypted": true'
+
+  # Relocate p0 (with the vault password) so a repair writes an hdr_ sidecar next
+  # to EVERY shard, each carrying a re-encrypted location map.
+  mkdir -p "$newdir"
+  mv "${PV_LOCALDIR[0]}/$name" "$newdir/"
+  run_bfs "$vault" repair --version all p0 "--path $(winpath "$newdir")" --password "$pw"
+  assert_ok
+  assert_file "$newdir/$name/hdr_0.bfs.1"
+  assert_file "${PV_LOCALDIR[1]}/$name/hdr_1.bfs.1"
+  assert_file "${PV_LOCALDIR[2]}/$name/hdr_2.bfs.1"
+
+  # Delete a non-relocated provider's sidecar (p1, stable path).
+  local hdr="${PV_LOCALDIR[1]}/$name/hdr_1.bfs.1"
+  rm -f "$hdr"
+  assert_no_file "$hdr"
+
+  # Detection (already implemented): verify advises the fix. The BFSH envelope is
+  # validated without decrypting, so the advisory fires for encrypted backups too.
+  run_bfs "$vault" verify
+  assert_ok
+  assert_manifest_health "$vault" 1 healthy
+  assert_out_contains "--restore-headers"
+
+  # FIX (RED today): rebuild the missing sidecar, re-encrypting the map with pw.
+  run_bfs "$vault" repair --restore-headers --password "$pw"
+  assert_ok
+  assert_file "$hdr"
+
+  # The advisory is gone — every reachable shard has a valid sidecar again.
+  run_bfs "$vault" verify
+  assert_ok
+  if printf '%s' "$BFS_OUT" | grep -qF -- "--restore-headers"; then
+    _fail "verify still advises --restore-headers after repair rebuilt the encrypted sidecar"
+  fi
+
+  # Correctness: wipe .bfs and recover from p1, the sidecar we deleted+rebuilt.
+  # Its re-encrypted map must point p0 at the new path and decrypt with pw.
+  rm -rf "$vault/.bfs"
+  run_bfs "$vault" recovery --provider local --name "$name" \
+    --bootstrap "--path $(winpath "${PV_LOCALDIR[1]}")" --password "$pw" --trust-locations
+  assert_ok
+  run_bfs "$vault" pull --force --yes --password "$pw"
+  assert_ok
+  assert_restored "$vault" "$base"
+}

@@ -1,17 +1,17 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import { deriveKey } from '../core/crypto.js';
 import { BfsError } from '../core/errors.js';
-import { parseShardHeaderFromStream, SHARD_HEADER_READ_BYTES } from '../core/shard-io.js';
+import { parseShardHeaderFromStream, readShardHeaderBytes, SHARD_HEADER_READ_BYTES } from '../core/shard-io.js';
 import { fmt, t } from '../i18n/index.js';
 import type { ManifestShard, ProviderConfig, ProviderIO, ShardHeader, ShardLocation, StorageProvider, VaultConfig, VersionManifest } from '../types/index.js';
 import { PushMode, VersionHealth } from '../types/index.js';
 import { checkVersionMismatch, detectMissingAdapters, formatMissingAdaptersMessage } from './adapter-preflight.js';
 import { type BootstrapResult, bootstrapFromProvider, parseVersionFromFilename } from './bootstrap.js';
 import { writeConfig } from './config.js';
-import { divergentShardIndices } from './location-map.js';
+import { shardHeaderConsensusMismatch } from './consensus.js';
 import { readManifest, writeManifest } from './manifest.js';
+import { tryDecryptLocationMap } from './password-pool.js';
 import { writeState } from './state.js';
 import { verifyAll } from './verify.js';
 
@@ -67,57 +67,6 @@ interface ProcessVersionContext {
   readonly io: ProviderIO;
 }
 
-/** Attempts to decrypt a location map from a shard using the provided password pool (MRU order). */
-async function tryDecryptLocationMap(header: ShardHeader, headerBytes: Buffer, version: number, passwordPool: string[], io: ProviderIO): Promise<Nullable<{ location_map: ShardLocation[]; encKey: Buffer }>> {
-  if (!header.encrypted || !header.kdf_salt) return null;
-
-  // Try all known passwords from pool (MRU order)
-  for (let i = passwordPool.length - 1; i >= 0; i--) {
-    const pwd = passwordPool[i];
-    if (pwd === undefined) continue;
-    try {
-      const key = await deriveKey(pwd, header.kdf_salt);
-      const { header: h1, payloadStream: ps1 } = await parseShardHeaderFromStream(Readable.from(headerBytes), key);
-      ps1.on('error', () => {}).destroy();
-      return { location_map: h1.location_map, encKey: key };
-    } catch {
-      // wrong password — try next
-    }
-  }
-
-  // No password in pool worked — ask user with retry
-  const ver = String(version);
-  if (passwordPool.length > 0) {
-    io.warn(fmt('recovery_pool_password_failed', ver));
-  }
-
-  // Ask the operator, retrying until a password decrypts the map or they give
-  // up. Unbounded: at this critical recovery moment they keep trying; a blank
-  // entry (or no interactive TTY) skips this version.
-  let firstTry = true;
-  for (;;) {
-    let newPassword: Nullable<string> = null;
-    try {
-      const prompt = firstTry ? fmt('recovery_ask_version_password', ver) : fmt('recovery_wrong_password_retry', ver);
-      newPassword = await io.askSecret(prompt);
-    } catch {
-      return null;
-    }
-    firstTry = false;
-    if (!newPassword) return null;
-
-    try {
-      const key = await deriveKey(newPassword, header.kdf_salt);
-      const { header: h2, payloadStream: ps2 } = await parseShardHeaderFromStream(Readable.from(headerBytes), key);
-      ps2.on('error', () => {}).destroy();
-      passwordPool.push(newPassword);
-      return { location_map: h2.location_map, encKey: key };
-    } catch {
-      // wrong password — retry
-    }
-  }
-}
-
 /**
  * Lists all shard files across all providers and groups them by version number.
  * Unreachable providers are silently skipped.
@@ -165,7 +114,10 @@ async function processVersion(version: number, entries: Array<{ shardIndex: numb
     try {
       const filename = `shard_${entry.shardIndex}.bfs.${version}`;
       entry.provider.setVaultName(vaultName);
-      const headerBytes = await entry.provider.downloadHeader({ provider_id: entry.provider.id, path: filename }, SHARD_HEADER_READ_BYTES);
+      // Sidecar-aware: after a relocate, the CURRENT location map lives in the
+      // sidecar; reading the in-shard header directly would rebuild the manifest
+      // from a stale map and miss siblings at their new addresses.
+      const headerBytes = await readShardHeaderBytes(entry.provider, { provider_id: entry.provider.id, path: filename }, SHARD_HEADER_READ_BYTES);
 
       // Parse header from buffered bytes; payload stream errors are expected (truncated data)
       const { header: shardHeader, payloadStream } = await parseShardHeaderFromStream(Readable.from(headerBytes));
@@ -196,16 +148,10 @@ async function processVersion(version: number, entries: Array<{ shardIndex: numb
   let consensusOk = true;
   if (shardDataList.length >= 2) {
     const secondaryMeta = shardDataList[1]?.header ?? primaryMeta;
-    const mismatch: string[] = [];
-    if (secondaryMeta.vault_id !== primaryMeta.vault_id) mismatch.push('vault_id');
-    if (secondaryMeta.blob_hash !== primaryMeta.blob_hash) mismatch.push('blob_hash');
-    if (secondaryMeta.version !== primaryMeta.version) mismatch.push('version');
-    if (secondaryMeta.data_shards !== primaryMeta.data_shards) mismatch.push('data_shards');
-    if (secondaryMeta.parity_shards !== primaryMeta.parity_shards) mismatch.push('parity_shards');
-    // Unencrypted maps are plaintext on every shard; a divergence between two
-    // shards of the same version means a forged map redirecting a provider.
     // Soft-flag the version (not a hard throw — this loops over many versions).
-    if (!primaryMeta.encrypted && divergentShardIndices(primaryMeta.location_map, secondaryMeta.location_map).length > 0) mismatch.push('location_map');
+    // An unencrypted location_map divergence means a forged map redirecting a
+    // provider; encrypted maps are MAC-protected and skipped in the comparison.
+    const mismatch = shardHeaderConsensusMismatch(primaryMeta, secondaryMeta);
     if (mismatch.length > 0) {
       io.warn(fmt('recovery_consensus_failed', String(version), mismatch.join(', ')));
       consensusOk = false;
@@ -215,7 +161,11 @@ async function processVersion(version: number, entries: Array<{ shardIndex: numb
   // Resolve location map (decrypt if needed)
   let location_map: Nullable<ShardLocation[]> = null;
   if (primaryMeta.encrypted) {
-    const result = await tryDecryptLocationMap(primaryData.header, primaryData.headerBytes, version, passwordPool, io);
+    const result = await tryDecryptLocationMap(primaryData.header, primaryData.headerBytes, passwordPool, io, {
+      poolExhausted: fmt('recovery_pool_password_failed', String(version)),
+      ask: fmt('recovery_ask_version_password', String(version)),
+      retry: fmt('recovery_wrong_password_retry', String(version)),
+    });
     if (result) location_map = result.location_map;
   } else {
     location_map = primaryData.header.location_map;

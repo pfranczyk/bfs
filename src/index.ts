@@ -23,6 +23,7 @@ import { registerPrune } from './cli/commands/prune.js';
 import { registerPull } from './cli/commands/pull.js';
 import { registerPush } from './cli/commands/push.js';
 import { registerRecovery } from './cli/commands/recovery.js';
+import { registerRepair } from './cli/commands/repair.js';
 import { registerScheme } from './cli/commands/scheme.js';
 import { registerStatus } from './cli/commands/status.js';
 import { registerVerify } from './cli/commands/verify.js';
@@ -72,6 +73,7 @@ function buildProgram(): Command {
   registerPrune(program);
   registerVerify(program);
   registerRecovery(program);
+  registerRepair(program);
   registerScheme(program);
 
   // Provider sub-commands

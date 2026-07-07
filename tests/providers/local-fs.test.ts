@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BfsError, ProviderError, UnsafePathError } from '../../src/core/errors.js';
+import { ProviderError, UnsafePathError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
 import { buildShard, parseShardHeaderFromStream } from '../../src/core/shard-io.js';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
@@ -505,18 +505,6 @@ describe('LocalFsProvider', () => {
   describe('header storage strategy + verifyShard', () => {
     const IDENTITY = { vault_id: '550e8400-e29b-41d4-a716-446655440000', shard_index: 0, version: 1 };
 
-    it('should report usesSidecar() === false', () => {
-      expect(provider.usesSidecar()).toBe(false);
-    });
-
-    it('should throw BfsError from uploadHeaderSidecar (not supported)', async () => {
-      await expect(provider.uploadHeaderSidecar({ provider_id: 'test-local', path: 'shard_0.bfs.1' }, Buffer.alloc(0))).rejects.toThrow(BfsError);
-    });
-
-    it('should throw BfsError from downloadHeaderSidecar (not supported)', async () => {
-      await expect(provider.downloadHeaderSidecar({ provider_id: 'test-local', path: 'shard_0.bfs.1' }, 16)).rejects.toThrow(BfsError);
-    });
-
     it('should return ok for a matching shard identity', async () => {
       await uploadBuf(provider, 'shard_0.bfs.1', buildShard(makeHeader(), Buffer.from('payload')));
       const result = await provider.verifyShard({ provider_id: 'test-local', path: 'shard_0.bfs.1' }, IDENTITY);
@@ -635,5 +623,68 @@ describe('LocalFsProvider', () => {
         expect(ref.path).toBe('shard_0.bfs.1');
       });
     });
+  });
+});
+
+// Header sidecar (BFSH): LocalFS keeps a relocated shard's updated header in a
+// small `hdr_i.bfs.V` file next to the shard instead of rewriting the whole
+// shard, so a `bfs repair` location change transfers KB, not the full payload.
+// The sidecar name uses an `hdr_` prefix (not a `.hdr` suffix) so a version
+// parser scanning `shard_*` never mistakes it for a shard.
+describe('LocalFsProvider — header sidecar (BFSH)', () => {
+  let tmpDir: string;
+  let provider: LocalFsProvider;
+  const shardRef = { provider_id: 'test-local', path: 'shard_0.bfs.1' };
+  const sidecarPath = (): string => path.join(tmpDir, 'testvault', 'hdr_0.bfs.1');
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-sidecar-'));
+    const { io } = createMockProviderIO();
+    provider = new LocalFsProvider(makeConfig(tmpDir), io);
+    provider.setVaultName('testvault');
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should report usesSidecar() === true', () => {
+    expect(provider.usesSidecar()).toBe(true);
+  });
+
+  it('should round-trip header bytes through uploadHeaderSidecar/downloadHeaderSidecar', async () => {
+    await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('payload'));
+    const sidecar = Buffer.from('BFSH-header-bytes');
+
+    await provider.uploadHeaderSidecar(shardRef, sidecar);
+    const read = await provider.downloadHeaderSidecar(shardRef, 16384);
+
+    expect(read).not.toBeNull();
+    expect(Buffer.compare(read as Buffer, sidecar)).toBe(0);
+  });
+
+  it('should return null from downloadHeaderSidecar when no sidecar exists', async () => {
+    await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('payload'));
+
+    await expect(provider.downloadHeaderSidecar(shardRef, 16384)).resolves.toBeNull();
+  });
+
+  it('should remove a stale sidecar when the shard is re-uploaded (reconcile)', async () => {
+    await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('payload'));
+    await fs.writeFile(sidecarPath(), Buffer.from('stale-sidecar'));
+
+    // A fresh shard carries a fresh in-shard header, so its old sidecar must go.
+    await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('payload-v2'));
+
+    await expect(fs.access(sidecarPath())).rejects.toThrow();
+  });
+
+  it('should remove the sidecar when the shard is deleted', async () => {
+    await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('payload'));
+    await fs.writeFile(sidecarPath(), Buffer.from('sidecar'));
+
+    await provider.delete(shardRef);
+
+    await expect(fs.access(sidecarPath())).rejects.toThrow();
   });
 });

@@ -701,6 +701,10 @@ async function _uploadOneShard(options: UploadOneShardOptions): Promise<UploadOn
     await writeLockAtomic(pushLockPath(rootDir), lock);
     return { manifestShard, cacheDumpAttempted };
   } catch (e: unknown) {
+    // Release the shard stream so its file-backed payload source (parity temp)
+    // is torn down now, before the parity files are unlinked after the loop —
+    // otherwise an orphaned read stream races the unlink and throws ENOENT.
+    shardStream.destroy();
     const { reason, detail } = _classifyUploadError(e);
     lock.failed.push({ shard_index: i, provider_id: pc.id, reason, detail, attempted_at: new Date().toISOString() });
     if (Buffer.isBuffer(blobSource) && !cacheDumpAttempted) {

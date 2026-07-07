@@ -1,19 +1,6 @@
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import {
-  decryptBlob,
-  decryptBlobWithKey,
-  decryptLocationMap,
-  decryptStream,
-  deriveKey,
-  deriveShardNonce,
-  encryptBlob,
-  encryptLocationMap,
-  encryptStream,
-  exceedsGcmPlaintextLimit,
-  GCM_MAX_PLAINTEXT_BYTES,
-  generateSalt,
-} from '../../src/core/crypto.js';
+import { decryptBlob, decryptLocationMap, decryptStream, deriveKey, deriveShardNonce, encryptBlob, encryptLocationMap, encryptStream, exceedsGcmPlaintextLimit, GCM_MAX_PLAINTEXT_BYTES, generateSalt } from '../../src/core/crypto.js';
 import { DecryptionError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
 import type { ShardLocation } from '../../src/types/index.js';
@@ -150,32 +137,6 @@ describe('crypto', () => {
         expect(e1.equals(e2)).toBe(false);
         // Każda wersja ma swój salt
         expect(s1.equals(s2)).toBe(false);
-      },
-      TIMEOUT,
-    );
-  });
-
-  describe('decryptBlobWithKey', () => {
-    it(
-      'should decrypt using pre-derived key without Argon2',
-      async () => {
-        const data = Buffer.from('data for key-based decrypt');
-        const { encrypted, key } = await encryptBlob(data, 'password');
-
-        const decrypted = decryptBlobWithKey(encrypted, key);
-        expect(decrypted.equals(data)).toBe(true);
-      },
-      TIMEOUT,
-    );
-
-    it(
-      'should throw DecryptionError on wrong key',
-      async () => {
-        const data = Buffer.from('secret');
-        const { encrypted } = await encryptBlob(data, 'password');
-        const wrongKey = Buffer.alloc(32, 0xff);
-
-        expect(() => decryptBlobWithKey(encrypted, wrongKey)).toThrow(DecryptionError);
       },
       TIMEOUT,
     );

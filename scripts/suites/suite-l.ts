@@ -127,7 +127,11 @@ export async function suiteL(): Promise<SuiteResult> {
         const provider = new FtpProvider({ id: 'smoke-l4', type: 'ftp', adapterPackage: null, config: { host: FTP_HOST, port: FTP_PORT, user: FTP_USER, password: FTP_PASSWORD, path: FTP_PATH, secure: FTP_SECURE } }, io);
         provider.setVaultName('ftp-integrity-smoke');
 
-        const fileName = `probe_${Date.now()}.bin`;
+        // Must carry the production `shard_` prefix. After STOR, upload() removes
+        // the matching `hdr_` sidecar, and sidecarFilename() only rewrites a
+        // leading `shard_`; a name without it maps to itself, so upload() would
+        // delete the file it just stored and the download below would 550.
+        const fileName = `shard_0.bfs.${Date.now()}`;
         const ref = await provider.upload(fileName, Readable.from(payload), payload.length);
 
         try {

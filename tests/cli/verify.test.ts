@@ -18,7 +18,7 @@ const mockVerifyAll = vi.mocked(verifyAll);
 
 /** VerifyReport fixture matching VerifyReport type from vault/verify.ts. */
 function makeReport(versions: Array<{ version: number; health: VersionHealth; available_shards: number; total_shards: number; tolerance: number }>) {
-  return { versions };
+  return { versions: versions.map((v) => ({ ...v, header_advisory: null })) };
 }
 
 function makeManifest(version: number, dataN = 2, parityK = 1) {

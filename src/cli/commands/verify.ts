@@ -1,11 +1,11 @@
 import type { Command } from 'commander';
 import ora from 'ora';
-import { t } from '../../i18n/index.js';
+import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO } from '../../providers/provider.js';
 import { listVersions } from '../../vault/vault-manager.js';
 import { verifyAll } from '../../vault/verify.js';
 import { resolveCwd } from '../cwd.js';
-import { CommandAbort, error, formatHealth, table } from '../ui.js';
+import { CommandAbort, error, formatHealth, table, warn } from '../ui.js';
 
 /**
  * Registers the `bfs verify` command on the given Commander program.
@@ -46,6 +46,12 @@ export function registerVerify(program: Command): void {
         console.log();
         table([t('verify_col_version'), t('verify_col_status'), t('verify_col_available'), t('verify_col_scheme'), t('verify_col_tolerance')], rows);
         console.log();
+
+        for (const v of report.versions) {
+          if (v.header_advisory === null) continue;
+          const count = v.header_advisory.missing + v.header_advisory.broken;
+          warn(fmt('verify_header_advisory', `v${String(v.version).padStart(3, '0')}`, String(count)));
+        }
       } catch (err) {
         spinner.fail(t('verify_failed'));
         error(err instanceof Error ? err.message : String(err));

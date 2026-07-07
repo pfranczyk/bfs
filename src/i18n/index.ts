@@ -16,6 +16,7 @@ export interface Strings {
   repl_help_cmd_prune: string;
   repl_help_cmd_verify: string;
   repl_help_cmd_recovery: string;
+  repl_help_cmd_repair: string;
   repl_help_cmd_provider_add: string;
   repl_help_cmd_provider_list: string;
   repl_help_cmd_provider_remove: string;
@@ -300,6 +301,7 @@ export interface Strings {
   verify_col_scheme: string;
   verify_col_tolerance: string;
   verify_shard_check_failed: string;
+  verify_header_advisory: string;
 
   // ─── recovery ─────────────────────────────────────────────────────────────
   recovery_provider_type_prompt: string;
@@ -639,8 +641,6 @@ export interface Strings {
   provider_header_read_failed: string;
   /** %s = value */
   provider_download_header_invalid_max_bytes: string;
-  /** %s = provider type */
-  sidecar_not_supported: string;
   /** %s = provider type, %s = missing method, %s = provider API version */
   provider_adapter_incompatible: string;
   /** %s = path */
@@ -722,6 +722,51 @@ export interface Strings {
   local_probe_step_compare_local: string;
   /** %s = err */
   local_probe_step_cleanup: string;
+
+  // ─── repair (spec parsing) ─────────────────────────────────────────────────
+  repair_spec_odd_args: string;
+  /** %s = provider id */
+  repair_unknown_provider: string;
+  /** %s = provider id */
+  repair_duplicate_provider_in_args: string;
+  /** %s = params string */
+  repair_spec_invalid_params: string;
+
+  // ─── repair (command) ──────────────────────────────────────────────────────
+  cmd_repair_desc: string;
+  repair_opt_version: string;
+  repair_opt_password: string;
+  repair_opt_password_file: string;
+  repair_opt_ci: string;
+  repair_opt_rebuild: string;
+  repair_opt_force_unverified: string;
+  repair_no_versions: string;
+  /** %s = version */
+  repair_foreign_shard_detected: string;
+  /** %s = version */
+  repair_wrong_version_shard: string;
+  /** %s = version */
+  repair_force_unverified_warn: string;
+  /** %s = version */
+  repair_ask_vault_password: string;
+  /** %s = version */
+  repair_wrong_vault_password_retry: string;
+  /** %s = version */
+  repair_pool_password_failed: string;
+  /** %s = version */
+  repair_password_required_ci: string;
+  /** %s = version */
+  repair_password_exhausted: string;
+  /** %s = errors */
+  repair_edit_invalid_config: string;
+  /** %s = provider names */
+  repair_success: string;
+  repair_opt_restore_headers: string;
+  repair_restore_headers_success: string;
+  repair_restore_headers_no_pairs: string;
+  repair_restore_headers_rebuild_conflict: string;
+  /** %s = failed provider names */
+  repair_partial: string;
 }
 
 const translations: Record<string, Strings> = { en, pl };

@@ -2,39 +2,9 @@ import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
 import { listVersions, prune } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
+import { parseVersionRange } from '../parse-version-range.js';
 import { inquirer, isPromptCancellation, promptWithRawMode } from '../prompt.js';
 import { CommandAbort, error, success, warn } from '../ui.js';
-
-/**
- * Parses a prune range string into a list of version numbers.
- * Supports: single number ("5"), range ("1-10"), comma-separated ("1,3,5").
- *
- * @param rangeStr   - Range string from CLI argument
- * @param allVersions - All available version numbers (used for range validation)
- * @returns           Sorted list of unique version numbers to prune
- * @throws Error if the format is invalid
- */
-function parseVersionRange(rangeStr: string, allVersions: number[]): number[] {
-  const versions = new Set<number>();
-
-  for (const part of rangeStr.split(',')) {
-    const trimmed = part.trim();
-    const rangeMatch = trimmed.match(/^(\d+)-(\d+)$/);
-    if (rangeMatch) {
-      const from = parseInt(rangeMatch[1], 10);
-      const to = parseInt(rangeMatch[2], 10);
-      if (from > to) throw new Error(fmt('prune_range_invalid', trimmed));
-      for (let v = from; v <= to; v++) versions.add(v);
-    } else if (/^\d+$/.test(trimmed)) {
-      versions.add(parseInt(trimmed, 10));
-    } else {
-      throw new Error(fmt('prune_version_format_invalid', trimmed));
-    }
-  }
-
-  // Filter to only existing versions
-  return [...versions].filter((v) => allVersions.includes(v)).sort((a, b) => a - b);
-}
 
 /**
  * Registers the `bfs prune` command on the given Commander program.
