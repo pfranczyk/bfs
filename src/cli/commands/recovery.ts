@@ -53,11 +53,12 @@ export function registerRecovery(program: Command): void {
     .option('--trust-locations', t('recovery_opt_trust_locations'))
     .action(async (opts: RecoveryOpts, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
-      const io = createCliProviderIO(rootDir);
-
       // CI mode is gated by --bootstrap. Without it, recovery falls back to the
       // interactive flow (rawlist + configureInteractive) so the REPL is unchanged.
       const isCi = opts.bootstrap !== undefined;
+      // In CI a missing sibling path must not prompt — the provider auto-creates
+      // it (empty → its shard is treated as absent) so recovery keeps going.
+      const io = createCliProviderIO(rootDir, !isCi);
       if (isCi) {
         _validateCiRecoveryOpts(opts);
       }

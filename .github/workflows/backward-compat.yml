@@ -21,6 +21,7 @@ jobs:
           - '0.8.0'
           - '0.8.1'
           - '0.9.1'
+          - '0.10.0'
           # On release, add the latest patch of the previous release line.
           # Patches within a line share the on-disk format, and users are
           # expected to run the newest patch, so the latest patch represents

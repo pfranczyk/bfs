@@ -24,6 +24,17 @@
 #   --exclude <pat>  Skip scenarios whose directory name contains <pat>
 #                    (e.g. --exclude repair). Applied after --filter; the two
 #                    split the suite into parallel CI jobs.
+#   --local-only     Skip every scenario that requires FTP (REQUIRES_FTP > 0),
+#                    selecting by metadata rather than name. Use on runners with
+#                    no FTP container (e.g. windows-latest): all local scenarios
+#                    run — including new ones — and FTP scenarios are reported
+#                    SKIP instead of FAIL.
+#   --ftp-only       Inverse of --local-only: skip every scenario that needs no
+#                    FTP (REQUIRES_FTP == 0), running only FTP-requiring ones.
+#                    Use to cover the FTP suite on a runner whose local scenarios
+#                    are already exercised by a separate --local-only job (e.g. a
+#                    Windows FTP job alongside the Windows local-only job).
+#                    Mutually exclusive with --local-only.
 #   --list           List discovered scenarios and their requirements, then exit.
 #   --keep           Keep the temporary workspace for inspection (clean later
 #                    with: bash scripts/cli-e2e/clean.sh).
@@ -47,12 +58,14 @@ SSH_SPECS=()
 RUN_FILTER=""
 RUN_EXCLUDE=""
 DO_LIST=0
+LOCAL_ONLY=0
+FTP_ONLY=0
 KEEP_WS=0
 DO_CLEAN=0
 DRY_RUN=0
 VERBOSE=0
 
-usage() { sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^#\{0,1\} \{0,1\}//'; }
+usage() { sed -n '2,47p' "${BASH_SOURCE[0]}" | sed 's/^#\{0,1\} \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -61,6 +74,8 @@ while [ $# -gt 0 ]; do
     --ssh)    SSH_SPECS+=("${2:?--ssh requires a value}"); shift 2 ;;
     --filter) RUN_FILTER="${2:?--filter requires a value}"; shift 2 ;;
     --exclude) RUN_EXCLUDE="${2:?--exclude requires a value}"; shift 2 ;;
+    --local-only) LOCAL_ONLY=1; shift ;;
+    --ftp-only) FTP_ONLY=1; shift ;;
     --list)   DO_LIST=1; shift ;;
     --keep)   KEEP_WS=1; shift ;;
     --verbose|-v) VERBOSE=1; shift ;;
@@ -71,6 +86,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 export KEEP_WS VERBOSE
+
+# --local-only and --ftp-only partition the suite by FTP requirement; asking for
+# both would skip every scenario, so it is a usage error rather than a no-op run.
+if [ "$LOCAL_ONLY" = "1" ] && [ "$FTP_ONLY" = "1" ]; then
+  echo "Options --local-only and --ftp-only are mutually exclusive." >&2
+  exit 2
+fi
 
 # --clean dispatches to the standalone cleanup script and exits.
 if [ "$DO_CLEAN" = "1" ]; then
@@ -164,6 +186,24 @@ while IFS= read -r sc; do
   log="$RUN_WS/$key.log"
 
   start=$SECONDS
+
+  # --local-only: skip FTP scenarios by metadata (not name) so local-capable
+  # runners (e.g. windows-latest, no FTP container) run every local scenario and
+  # report the rest SKIP instead of FAIL. Selecting by REQUIRES_FTP means new
+  # FTP scenarios are excluded automatically, with no name pattern to maintain.
+  if [ "$LOCAL_ONLY" = "1" ] && [ "$REQUIRES_FTP" -gt 0 ]; then
+    report_result SKIP "$key" "requires FTP" ""
+    continue
+  fi
+
+  # --ftp-only: mirror of --local-only. Skip scenarios that need no FTP so a
+  # dedicated FTP job runs only the FTP suite, without re-running local scenarios
+  # already covered by a companion --local-only job. Selecting by REQUIRES_FTP
+  # means new FTP scenarios join automatically, with no name pattern to maintain.
+  if [ "$FTP_ONLY" = "1" ] && [ "$REQUIRES_FTP" -eq 0 ]; then
+    report_result SKIP "$key" "local-only scenario" ""
+    continue
+  fi
 
   # FTP is mandatory: a scenario that needs more FTP endpoints than were
   # supplied fails with an actionable message instead of silently skipping.

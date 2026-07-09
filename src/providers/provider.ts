@@ -220,12 +220,19 @@ export const providerRegistry = new ProviderRegistry();
  * @param workDir - BFS working directory (absolute) — exposed to providers
  *                  as `io.workDir` so they can resolve relative paths their
  *                  own flags or prompts accept.
+ * @param interactive - Whether prompts can reach a user. Defaults to whether
+ *                  stdin is a TTY, so a piped/`</dev/null` run is treated as
+ *                  non-interactive automatically. Commands with an explicit
+ *                  non-interactive mode (`repair --ci`, `recovery --bootstrap`)
+ *                  pass `false` so the decision holds even on a TTY.
  * @returns       A ProviderIO that reads from stdin and writes to stdout
  */
-export function createCliProviderIO(workDir: string): ProviderIO {
+export function createCliProviderIO(workDir: string, interactive?: boolean): ProviderIO {
+  const isInteractive = interactive ?? process.stdin.isTTY === true;
   return {
     lang: getLang(),
     workDir,
+    interactive: isInteractive,
 
     async ask(prompt: string): Promise<string> {
       const { default: inquirer } = await import('inquirer');
@@ -323,15 +330,19 @@ export function createCliProviderIO(workDir: string): ProviderIO {
  * @param workDir - Optional working directory exposed as `io.workDir`.
  *                  Defaults to `process.cwd()` so existing tests that don't
  *                  exercise path resolution keep working unchanged.
+ * @param interactive - Optional `io.interactive` value. Defaults to `true`
+ *                  (prompts answered from `answers`); pass `false` to exercise
+ *                  the non-interactive path where a provider must not prompt.
  * @returns       A ProviderIO and a `logs` array collecting info/debug/warn
  *                output
  */
-export function createMockProviderIO(answers: Record<string, string> = {}, workDir: string = process.cwd()): { io: ProviderIO; logs: Array<{ level: 'info' | 'debug' | 'warn'; message: string }> } {
+export function createMockProviderIO(answers: Record<string, string> = {}, workDir: string = process.cwd(), interactive = true): { io: ProviderIO; logs: Array<{ level: 'info' | 'debug' | 'warn'; message: string }> } {
   const logs: Array<{ level: 'info' | 'debug' | 'warn'; message: string }> = [];
 
   const io: ProviderIO = {
     lang: 'en',
     workDir,
+    interactive,
 
     async ask(prompt: string): Promise<string> {
       return answers[prompt] ?? '';

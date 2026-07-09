@@ -49,10 +49,6 @@ scenario_run() {
   : >"$trap_log"
   node "$(winpath "$trap_driver")" "$(winpath "$trap_log")" 0 >"$trap_out" 2>&1 &
   local trap_pid=$!
-  # shellcheck disable=SC2317  # invoked via trap below
-  _trap_cleanup() { kill "$trap_pid" 2>/dev/null || true; }
-  trap _trap_cleanup EXIT
-
   local trap_port="" waited=0
   while [ -z "$trap_port" ]; do
     if [ -s "$trap_out" ]; then
@@ -64,6 +60,10 @@ scenario_run() {
     [ "$waited" -lt 100 ] || _fail "trap server never reported LISTENING (10s). Output:
 $(cat "$trap_out" 2>/dev/null)"
   done
+  # Cleanup: shut the trap down over its port once we know it. Interpolate the
+  # values into the trap string so the EXIT handler still has them after
+  # scenario_run returns (a local read there comes back empty). See ftp_trap_stop.
+  trap "ftp_trap_stop '$trap_port' '$trap_pid'" EXIT
 
   # ── Forge shard_0 (bootstrap): redirect its entry for shard_1 to the trap ──
   local shard0

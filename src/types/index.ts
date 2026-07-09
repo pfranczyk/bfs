@@ -337,6 +337,20 @@ export interface ProviderIO {
    */
   readonly workDir: string;
 
+  /**
+   * Whether BFS can prompt the user. Absent or `true` means an interactive
+   * terminal is attached; `false` means a non-interactive invocation (`--ci`,
+   * `--bootstrap`, or no TTY) where a prompt has nobody to answer.
+   *
+   * A provider MUST NOT block on `confirm`/`ask`/`askSecret`/`choose` when this
+   * is `false` — it would hang or abort a scripted run. Instead choose a safe
+   * default: e.g. LocalFs auto-creates a missing base path (equivalent to the
+   * operator answering "yes") rather than asking. Absent is treated as
+   * interactive, so adapters and IO constructors that predate this field keep
+   * their previous behaviour.
+   */
+  readonly interactive?: boolean;
+
   ask(prompt: string): Promise<string>; // "Enter login:"
   askSecret(prompt: string): Promise<string>; // "Enter password:" (hidden)
   confirm(message: string): Promise<boolean>; // "Continue? [y/N]"

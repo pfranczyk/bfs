@@ -113,3 +113,29 @@ jobs:
         run: |
           docker logs bfs-ftp-repair 2>&1 | tail -50 || true
           docker rm -f bfs-ftp-repair || true
+
+  # Windows local-only e2e: the full create→restore→recovery→repair cycle on
+  # windows-latest with byte-for-byte SHA-256 checks. FTP/mixed scenarios need a
+  # Linux FTP container, so --local-only skips them (by REQUIRES_FTP metadata,
+  # not by name), while every local scenario — including repair-local (60-66) —
+  # runs. The harness already carries the Windows-specific code it needs: winpath
+  # (cygpath) for paths passed to bfs and spawn_live_pid_holder for native PIDs
+  # instead of MSYS-emulated $$/$!.
+  e2e-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - run: npm ci
+      # Output goes straight to the step log — no `| tee` / `> file` on the outer
+      # run.sh. Under Git Bash, redirecting the outer invocation corrupts script
+      # parsing for scenarios that spawn background processes (concurrent-push,
+      # lock tests), because those children inherit the fd bash reads the script
+      # from. The per-scenario redirect inside run.sh is unaffected; only the
+      # outer invocation must stay unredirected. The exit code gates the job.
+      - name: Run CLI e2e (local-only)
+        shell: bash
+        run: bash scripts/cli-e2e/run.sh --local-only

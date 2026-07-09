@@ -52,7 +52,10 @@ export function registerRepair(program: Command): void {
     .option('--restore-headers', t('repair_opt_restore_headers'))
     .action(async (opts: RepairOpts, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
-      const io = createCliProviderIO(rootDir);
+      // --ci disables prompts: a missing provider path is then auto-created
+      // instead of asking, so relocating to a machine where the source paths
+      // don't exist (cross-OS restore) doesn't abort on an unanswerable prompt.
+      const io = createCliProviderIO(rootDir, opts.ci !== true);
 
       const config = await readConfig(rootDir);
       if (!config) {

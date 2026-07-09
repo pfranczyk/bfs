@@ -57,6 +57,19 @@ const server = createServer((socket) => {
  */
 function handleLine(socket, line) {
   const upper = line.toUpperCase();
+  if (upper.startsWith('__SHUTDOWN__')) {
+    // Deterministic remote kill-switch the harness sends at cleanup, so the
+    // server exits itself over the channel it already has. Avoids OS-signal /
+    // PID kills that don't work under Git Bash on Windows: `kill $!` targets an
+    // MSYS-emulated PID (not node's native one) and node gets no real SIGTERM.
+    try {
+      socket.end('221 bye\r\n');
+    } catch {
+      // socket already gone
+    }
+    shutdown();
+    return;
+  }
   if (upper.startsWith('USER')) {
     appendFileSync(logFile, `${line}\n`);
     socket.write('331 need password\r\n');
@@ -86,3 +99,8 @@ const shutdown = () => {
 };
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+
+// Safety net: never outlive the scenario even if the harness fails to send the
+// __SHUTDOWN__ command (e.g. it crashed). The listening server keeps the event
+// loop alive, so this timer reliably fires and reaps the process.
+setTimeout(() => process.exit(0), 120_000);

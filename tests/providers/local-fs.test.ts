@@ -171,6 +171,23 @@ describe('LocalFsProvider', () => {
     await expect(p.authenticate()).rejects.toThrow(ProviderError);
   });
 
+  // Non-interactive (--ci / --bootstrap / no TTY): a missing base path must be
+  // created without prompting. A prompt has nobody to answer, so asking would
+  // abort a scripted repair/recovery that restores to a machine where the
+  // source paths don't exist. The mock has NO confirm answer, so if the create
+  // prompt were still reached it would resolve false and this would reject —
+  // resolving proves the prompt was bypassed.
+  it('should create the path without prompting when io is non-interactive', async () => {
+    const newPath = path.join(tmpDir, 'ci-created-dir');
+    const { io } = createMockProviderIO({}, process.cwd(), false);
+    const p = new LocalFsProvider(makeConfig(newPath), io);
+
+    await expect(p.authenticate()).resolves.toBeUndefined();
+
+    const stat = await fs.stat(newPath);
+    expect(stat.isDirectory()).toBe(true);
+  });
+
   // ─── rename ───────────────────────────────────────────────────────────────
 
   it('should rename a file and make it available under the new name', async () => {

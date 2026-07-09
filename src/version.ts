@@ -2,7 +2,7 @@
  * Current BFS release version. Must stay in sync with package.json — update
  * both together for a release. Used for diagnostic display ("BFS x.y.z").
  */
-export const BFS_VERSION = '0.10.0';
+export const BFS_VERSION = '0.11.0';
 
 /**
  * Provider contract API version.
@@ -91,5 +91,11 @@ export const BFS_VERSION = '0.10.0';
  *           location map cannot phish the secret before the operator sees the
  *           target. Adapters that omit it fall back to the legacy
  *           required_inputs prompt flow (and stay exposed).
+ *         • ProviderIO.interactive?: boolean — OPTIONAL, added without a bump:
+ *           informational flag (like lang/workDir) telling the adapter whether
+ *           BFS can prompt (absent/true = interactive, false = --ci/--bootstrap/
+ *           no TTY). An adapter MUST NOT block on a prompt when false; it picks
+ *           a safe default instead. Adapters that ignore the field keep their
+ *           previous behaviour, so the addition breaks nothing.
  */
 export const BFS_PROVIDER_API_VERSION = 2;

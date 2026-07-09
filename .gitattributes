@@ -3,6 +3,11 @@
 # required for Biome to be green on every dev environment.
 * text=auto eol=lf
 
+# Windows-only executable scripts need CRLF.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
 # Explicit binary markers (don't touch these at all).
 *.png binary
 *.jpg binary

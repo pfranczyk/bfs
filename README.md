@@ -203,6 +203,21 @@ bfs provider add --ci --name nas --type ftp \
   --config-file ./nas.json
 ```
 
+## Platform notes
+
+BFS runs on Linux, macOS, and Windows, and a backup created on one platform
+restores on any other — shards and the on-disk format are byte-identical across
+operating systems.
+
+**Windows — protection of local credentials.** On Linux and macOS, BFS creates
+`.bfs/` as `0700` and files holding provider secrets as `0600`, so other local
+users cannot read them. On Windows these POSIX mode bits are a **no-op** — NTFS
+uses ACLs, not Unix permissions — so BFS cannot restrict `.bfs/` that way. The
+practical protection on Windows is the access control of the directory that
+holds `.bfs/`: keep your vault under a per-user profile path (e.g. inside your
+own `C:\Users\<you>\…`) rather than a world-readable shared location. See
+[SECURITY.md](SECURITY.md) for the full threat model.
+
 ## Versioning
 
 BFS uses [Semantic Versioning](https://semver.org).

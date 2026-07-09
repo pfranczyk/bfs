@@ -1,0 +1,89 @@
+name: Cross-OS restore
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# Proves the headline claim: a backup created on one OS restores byte-for-byte on
+# another. Each direction has a create job that stages the shards + vault metadata
+# as an artifact, and a restore job on the other OS that repoints every device to
+# where the artifact was extracted (the source paths don't exist there) and pulls,
+# comparing SHA-256 against the source baseline. Both the repair-based and the
+# disaster-recovery flows are exercised in scripts/cross-os/restore.sh.
+#
+# bfs runs from source via tsx (no build step needed); the scripts convert paths
+# with cygpath on Windows. `include-hidden-files` is required so the dot-prefixed
+# .bfs directory ships in the artifact.
+
+jobs:
+  # ── Linux creates → Windows restores ────────────────────────────────────────
+  create-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - run: npm ci
+      - name: Create backup (Linux)
+        run: bash scripts/cross-os/create.sh "$PWD/xos-artifact"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backup-from-linux
+          path: xos-artifact
+          include-hidden-files: true
+
+  restore-windows:
+    needs: create-linux
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: backup-from-linux
+          path: xos-artifact
+      - name: Restore backup (Windows)
+        shell: bash
+        run: bash scripts/cross-os/restore.sh "$PWD/xos-artifact" "$PWD/xos-ws"
+
+  # ── Windows creates → Linux restores ────────────────────────────────────────
+  create-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - run: npm ci
+      - name: Create backup (Windows)
+        shell: bash
+        run: bash scripts/cross-os/create.sh "$PWD/xos-artifact"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backup-from-windows
+          path: xos-artifact
+          include-hidden-files: true
+
+  restore-linux:
+    needs: create-windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: backup-from-windows
+          path: xos-artifact
+      - name: Restore backup (Linux)
+        run: bash scripts/cross-os/restore.sh "$PWD/xos-artifact" "$PWD/xos-ws"

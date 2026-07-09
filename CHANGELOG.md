@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-09
+
+### Added
+- **Adapter contract (`bfs-vault/provider`): `ProviderIO` gains an optional
+  `interactive` flag.** It is `false` for non-interactive invocations (`--ci`,
+  `recovery --bootstrap`, or no TTY attached) and absent/`true` otherwise. An
+  adapter must not block on `confirm` / `ask` / `askSecret` / `choose` when it is
+  `false` — pick a safe default instead (the built-in local adapter now
+  auto-creates a missing base path rather than asking). The field is optional and
+  additive, so adapters that ignore it keep working unchanged and
+  `BFS_PROVIDER_API_VERSION` stays at 2.
+
+### Fixed
+- **Restoring a backup to a machine where a storage device's path differs no
+  longer stalls or fails silently in scripted (`--ci`) runs.** `bfs repair` and
+  `bfs recovery` point each device at its location; when a recorded path did not
+  exist, BFS asked whether to create it — a question nothing can answer in a
+  non-interactive run, so the operation aborted, or reported success while
+  leaving the backup unrecoverable. Non-interactive runs now create the missing
+  path automatically instead of prompting, so a cross-machine or cross-OS restore
+  completes. Interactive runs still ask first.
+
 ## [0.10.0] - 2026-07-07
 
 ### Added
@@ -667,7 +689,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/pfranczyk/bfs/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/pfranczyk/bfs/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/pfranczyk/bfs/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/pfranczyk/bfs/compare/v0.8.1...v0.9.0

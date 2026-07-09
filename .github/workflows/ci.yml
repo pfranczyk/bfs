@@ -5,7 +5,11 @@ on:
   pull_request:
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -17,3 +21,27 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run build
+
+  # Windows proof that the PUBLISHED artifact boots and passes the smoke suite.
+  # `bin` = dist/index.js — exactly what `npm install -g` ships — so smoke:dist
+  # is the only layer that exercises the shipped bundle instead of src/. The
+  # bundle-boundary `instanceof` bug (Inquirer cancellation leaking a raw
+  # "User force closed" instead of a clean abort) materializes only in dist/ and
+  # canonically on Windows, so this job is where it gets caught. See
+  # .claude/rules/bundling.md.
+  #
+  # smoke:dist is a private npm script (stripped from the public package.json by
+  # the sync), so invoke scripts/smoke.ts directly — that file IS synced to the
+  # public repo, so the same workflow runs green on both sides.
+  windows-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run smoke
+      - run: npm run build
+      - run: npx tsx scripts/smoke.ts --bin=dist/index.js

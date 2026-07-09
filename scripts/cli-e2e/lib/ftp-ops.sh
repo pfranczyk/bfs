@@ -90,3 +90,17 @@ ftp_clean_all() {
   n="$(ftp_count)"
   for ((e = 0; e < n; e++)); do _ftp_op "$e" all; done
 }
+
+# ftp_trap_stop <port> [pid] — stop an ftp-trap.mjs server (see lib/ftp-trap.mjs).
+# Sends "__SHUTDOWN__" to its 127.0.0.1:<port> so the process exits ITSELF. This
+# is reliable on Windows/Git Bash, where `kill $!` targets an MSYS-emulated PID
+# (not node's native one) and node receives no real SIGTERM. `kill` is only a
+# best-effort fallback for when the port never bound.
+ftp_trap_stop() {
+  local port="$1" pid="${2:-}"
+  if [ -n "$port" ]; then
+    node -e 'const s=require("net").connect(Number(process.argv[1]),"127.0.0.1");s.on("connect",()=>s.end("__SHUTDOWN__\r\n"));s.on("close",()=>process.exit(0));s.on("error",()=>process.exit(0));setTimeout(()=>process.exit(0),1500)' "$port" >/dev/null 2>&1 || true
+  fi
+  [ -n "$pid" ] && kill "$pid" 2>/dev/null
+  return 0
+}

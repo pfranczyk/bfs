@@ -73,7 +73,12 @@ export class LocalFsProvider implements StorageProvider {
 
   /**
    * Verifies that basePath exists and is writable.
-   * If it does not exist, asks the user via io.confirm() whether to create it.
+   * If it does not exist: interactively, asks via io.confirm() before creating
+   * it (guarding against a typo'd path); non-interactively (`io.interactive ===
+   * false`), creates it silently. A prompt has nobody to answer under `--ci`, so
+   * asking would abort a scripted restore to a machine where the source paths
+   * don't exist (repair/recovery). Auto-creating mirrors upload() and
+   * probeConnection(), which mkdir the vault directory unconditionally.
    *
    * @throws ProviderError if the path is not accessible or creation is refused/fails.
    */
@@ -86,9 +91,11 @@ export class LocalFsProvider implements StorageProvider {
     }
 
     if (!exists) {
-      const create = await this.io.confirm(fmt('provider_local_path_not_exist_confirm', this.basePath));
-      if (!create) {
-        throw new ProviderError(fmt('provider_local_path_not_exist_error', this.basePath));
+      if (this.io.interactive !== false) {
+        const create = await this.io.confirm(fmt('provider_local_path_not_exist_confirm', this.basePath));
+        if (!create) {
+          throw new ProviderError(fmt('provider_local_path_not_exist_error', this.basePath));
+        }
       }
       try {
         await fs.mkdir(this.basePath, { recursive: true });
