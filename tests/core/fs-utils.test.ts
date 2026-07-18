@@ -2,7 +2,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { UnsafePathError } from '../../src/core/errors.js';
-import { resolveSafeChildPath } from '../../src/core/fs-utils.js';
+import { assertSafeFilename, isSafeFilename, resolveSafeChildPath } from '../../src/core/fs-utils.js';
 
 describe('resolveSafeChildPath', () => {
   const root = path.join(os.tmpdir(), 'bfs-safe-root');
@@ -52,5 +52,20 @@ describe('resolveSafeChildPath', () => {
     const resolved = resolveSafeChildPath(root, 'a/b/c/d/e/f.txt');
 
     expect(resolved.startsWith(path.resolve(root) + path.sep)).toBe(true);
+  });
+});
+
+describe('assertSafeFilename / isSafeFilename', () => {
+  it('should accept a normal shard / sidecar filename', () => {
+    expect(() => assertSafeFilename('shard_0.bfs.1')).not.toThrow();
+    expect(() => assertSafeFilename('hdr_12.bfs.37')).not.toThrow();
+    expect(isSafeFilename('shard_0.bfs.1')).toBe(true);
+  });
+
+  it('should reject empties, separators, dot segments, and control characters', () => {
+    for (const bad of ['', '.', '..', '../evil', 'a/b', 'a\\b', 'a\r\nb', 'a\0b']) {
+      expect(() => assertSafeFilename(bad)).toThrow(UnsafePathError);
+      expect(isSafeFilename(bad)).toBe(false);
+    }
   });
 });

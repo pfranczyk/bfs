@@ -17,7 +17,7 @@ bfs pull
 - **Reed-Solomon erasure coding** — configurable N data + K parity shards
 - **Deflate compression** — on by default; the whole backup is packed into a single deflate-compressed ZIP. At `bfs init` a directory scan suggests whether to enable it, defaulting to off when the data is mostly already-compressed (images, video, archives). Override per push with `--compress` / `--no-compress`
 - **AES-256-GCM encryption** — on by default (opt out with `bfs init --no-enc`), Argon2id key derivation
-- **Provider-agnostic** — local disk, USB drives, network mounts, FTP/FTPS (SSH — coming soon)
+- **Provider-agnostic** — local disk, USB drives, network mounts, FTP/FTPS, SSH/SFTP (WebDAV and SMB coming soon; cloud storage via external adapters)
 - **Versioned backups** — by default every push creates a new numbered version; can be configured to overwrite the current version instead
 - **Self-describing shards** — each shard contains the full location map; one shard is enough to discover the rest
 - **Resilient pushes** — when a provider fails mid-push, BFS finishes with the rest and records which targets failed; retry just those without re-uploading the whole backup
@@ -36,6 +36,18 @@ bfs pull
 ```bash
 npm install -g bfs-vault
 ```
+
+### Prerelease (testers)
+
+Release candidates are published under a separate npm dist-tag, so the stable
+install above always stays on the latest stable release. To track the latest
+release candidate instead:
+
+```bash
+npm install -g bfs-vault@rc
+```
+
+Or pin an exact build, e.g. `npm install -g bfs-vault@0.12.0-rc.1`.
 
 ## Quick start
 
@@ -113,13 +125,20 @@ All modifying commands support non-interactive flags.
 { "host": "192.168.1.10", "user": "backup", "password": "secret", "path": "/bfs" }
 ```
 
+`ssh-vps1.json` (key auth — the private key stays a path, never inline):
+```json
+{ "host": "vps.example.com", "user": "backup", "private_key_path": "/home/me/.ssh/id_ed25519", "path": "/srv/bfs", "host_key_fingerprint": "SHA256:…" }
+```
+
+Mix local disks, FTP, and SSH/SFTP in one backup — each provider holds one part (3 data + 2 parity = 5 providers):
+
 ```bash
 bfs init --ci docs --data-shards 3 --parity-shards 2 \
   --provider "local:nas1 --path /mnt/nas1/backup" \
-  --provider "local:nas2 --path /mnt/nas2/backup" \
   --provider "local:usb --path /media/usb/backup" \
   --provider "ftp:remote1 --config-file ./ftp-remote1.json" \
-  --provider "ftp:remote2 --config-file ./ftp-remote2.json"
+  --provider "ssh:vps1 --config-file ./ssh-vps1.json" \
+  --provider "ssh:pi --host 192.168.1.20 --user backup --private-key ~/.ssh/id_ed25519 --path /srv/bfs --accept-new-host-key"
 ```
 
 **Scheduled backup and maintenance (crontab):**
@@ -140,8 +159,14 @@ Currently supported:
 |---|---|
 | `local` | Local directory, USB drive, network mount |
 | `ftp` | FTP/FTPS server (uses `basic-ftp`) |
+| `ssh` | SSH/SFTP server (uses `ssh2`) |
 
-Planned: SSH/SFTP.
+Coming soon (built into BFS core): `webdav` (WebDAV —
+Nextcloud, ownCloud, Apache/nginx), `smb` (SMB/CIFS network shares).
+
+Cloud storage (Google Drive, OneDrive, Dropbox, S3/Backblaze B2, …) ships as
+**external adapters**, not built-in — installed on demand and updated
+independently of BFS, so a provider's API change never forces a BFS upgrade.
 
 ### FTP provider
 
@@ -186,6 +211,57 @@ FTP flag reference:
 | `--password <password>` | — | FTP login password |
 | `--path </absolute/path>` | — | Absolute base path on server, must start with `/` (required) |
 | `--secure <bool>` | `false` | Enable FTPS/TLS — accepts `true`/`false`/`yes`/`no` |
+| `--config-file <path>` | — | JSON file with any of the above fields; inline flags override file values |
+
+### SSH/SFTP provider
+
+Store parts on any SSH server (NAS, VPS, Raspberry Pi) over SFTP. Authenticate with a password **or** an SSH key — the private key is always given as a **file path**, never pasted into the terminal. With no password and no `--private-key`, BFS falls back to your default key in `~/.ssh` (`id_ed25519`, then `id_rsa`).
+
+**Inline flags (password auth):**
+
+```bash
+bfs init --ci docs --data-shards 2 --parity-shards 1 \
+  --provider "ssh:nas1 --host nas.example.com --user backup --password secret --path /backup" \
+  --provider "ssh:nas2 --host nas2.example.com --user backup --password secret --path /backup" \
+  --provider "local:usb --path /media/usb"
+```
+
+**Key auth + config file** — recommended when credentials come from environment variables or a secrets manager:
+
+`nas.json` (secure with `chmod 600`):
+```json
+{
+  "host": "nas.example.com",
+  "port": 22,
+  "user": "backup",
+  "private_key_path": "/home/backup/.ssh/id_ed25519",
+  "path": "/backup",
+  "host_key_fingerprint": "SHA256:…"
+}
+```
+
+```bash
+bfs init --ci docs --data-shards 2 --parity-shards 1 \
+  --provider "ssh:nas1 --config-file ./nas.json" \
+  --provider "ssh:nas2 --config-file ./nas2.json" \
+  --provider "local:usb --path /media/usb"
+```
+
+The server's host key is verified on first connection: accepted interactively, pinned with `--known-host <fingerprint>` (or `host_key_fingerprint` in the config), or trusted for scripted runs with `--accept-new-host-key`. A later host-key change is then flagged.
+
+SSH flag reference:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--host <hostname>` | — | SSH server hostname or IP (required) |
+| `--port <number>` | `22` | SSH server port |
+| `--user <username>` | — | SSH login user |
+| `--password <password>` | — | Password auth (mutually exclusive with `--private-key`) |
+| `--private-key <path>` | — | Path to an SSH private key file for key auth |
+| `--passphrase <passphrase>` | — | Passphrase for the private key, if it is encrypted |
+| `--path </absolute/path>` | — | Absolute base path on server, must start with `/` (required) |
+| `--known-host <fingerprint>` | — | Pin the server's host key (`SHA256:…`) |
+| `--accept-new-host-key` | — | Trust a new host key without prompting (for `--ci`) |
 | `--config-file <path>` | — | JSON file with any of the above fields; inline flags override file values |
 
 **Adding a provider to an existing vault:**

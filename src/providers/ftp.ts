@@ -2,7 +2,7 @@ import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import * as ftp from 'basic-ftp';
 import { ProviderError } from '../core/errors.js';
-import { assertSafeVaultName } from '../core/fs-utils.js';
+import { assertSafeFilename, assertSafeVaultName, isSafeFilename } from '../core/fs-utils.js';
 import { hashBuffer, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
 import { buildShardHeaderFromBytes, computeShardHeaderSize, SHARD_HEADER_READ_BYTES, sidecarFilename } from '../core/shard-io.js';
 import { fmtFor, t, tFor } from '../i18n/index.js';
@@ -164,6 +164,16 @@ export class FtpProvider implements StorageProvider {
       throw new ProviderError(tFor(this.io.lang, 'ftp_control_chars'));
     }
     return full;
+  }
+
+  /**
+   * Builds {vaultPath}/{filename}, rejecting a filename that is not a safe path
+   * segment (traversal / separator / control char) before it is joined — a
+   * crafted ref.path or a hostile server's LIST entry cannot escape the vault.
+   */
+  private remoteFile(filename: string): string {
+    assertSafeFilename(filename);
+    return `${this.vaultPath()}/${filename}`;
   }
 
   /**
@@ -350,7 +360,7 @@ export class FtpProvider implements StorageProvider {
    * @throws ProviderError if the download fails
    */
   async download(ref: RemoteRef): Promise<Readable> {
-    const remotePath = `${this.vaultPath()}/${ref.path}`;
+    const remotePath = this.remoteFile(ref.path);
     const buffer = await this.withClient(async (client) => {
       return this.downloadToBuffer(client, remotePath);
     });
@@ -364,9 +374,9 @@ export class FtpProvider implements StorageProvider {
    * @throws ProviderError if the file cannot be deleted
    */
   async delete(ref: RemoteRef): Promise<void> {
-    const remotePath = `${this.vaultPath()}/${ref.path}`;
+    const remotePath = this.remoteFile(ref.path);
     await this.withClient(async (client) => {
-      await client.remove(remotePath);
+      await this.idempotentRemove(client, remotePath);
       // Remove the header sidecar too so pruning leaves no orphan behind.
       await this.bestEffortRemove(client, `${this.vaultPath()}/${sidecarFilename(ref.path)}`);
     });
@@ -381,8 +391,8 @@ export class FtpProvider implements StorageProvider {
    * @throws ProviderError on failure
    */
   async rename(ref: RemoteRef, newFilename: string): Promise<RemoteRef> {
-    const oldPath = `${this.vaultPath()}/${ref.path}`;
-    const newPath = `${this.vaultPath()}/${newFilename}`;
+    const oldPath = this.remoteFile(ref.path);
+    const newPath = this.remoteFile(newFilename);
     await this.withClient(async (client) => {
       await client.rename(oldPath, newPath);
     });
@@ -402,7 +412,7 @@ export class FtpProvider implements StorageProvider {
    * @throws ProviderError on failure or if the shard is too short
    */
   async updateShardHeader(ref: RemoteRef, headerData: Buffer): Promise<RemoteRef> {
-    const remotePath = `${this.vaultPath()}/${ref.path}`;
+    const remotePath = this.remoteFile(ref.path);
     return this.withClient(async (client) => {
       const existing = await this.downloadToBuffer(client, remotePath);
 
@@ -439,7 +449,9 @@ export class FtpProvider implements StorageProvider {
         return [];
       }
 
-      const files = entries.filter((e) => !e.isDirectory);
+      // Drop directories and any name that is not a safe segment — a hostile
+      // server could return a traversal filename from LIST (L2).
+      const files = entries.filter((e) => !e.isDirectory && isSafeFilename(e.name));
       const filtered = prefix ? files.filter((e) => e.name.startsWith(prefix)) : files;
       return filtered.map((e) => ({ provider_id: this.id, path: e.name }));
     });
@@ -454,7 +466,7 @@ export class FtpProvider implements StorageProvider {
    * @throws ProviderError if the file is missing or `SIZE` fails
    */
   async getSize(ref: RemoteRef): Promise<number> {
-    const remotePath = `${this.vaultPath()}/${ref.path}`;
+    const remotePath = this.remoteFile(ref.path);
     return this.withClient(async (client) => {
       try {
         return await client.size(remotePath);
@@ -484,7 +496,7 @@ export class FtpProvider implements StorageProvider {
     if (maxBytes <= 0) {
       throw new ProviderError(fmtFor(this.io.lang, 'provider_download_header_invalid_max_bytes', String(maxBytes)));
     }
-    const remotePath = `${this.vaultPath()}/${ref.path}`;
+    const remotePath = this.remoteFile(ref.path);
     return this.withClient(async (client) => {
       let totalSize: number;
       try {
@@ -617,6 +629,7 @@ export class FtpProvider implements StorageProvider {
    * @throws ProviderError on a transport failure other than "not found"
    */
   async downloadHeaderSidecar(ref: RemoteRef, _maxBytes: number): Promise<Buffer | null> {
+    assertSafeFilename(ref.path);
     const remotePath = `${this.vaultPath()}/${sidecarFilename(ref.path)}`;
     return this.withClient(async (client) => {
       try {
@@ -667,7 +680,7 @@ export class FtpProvider implements StorageProvider {
    */
   async verifyShard(ref: RemoteRef, expected: ShardIdentity): Promise<VerifyShardResult> {
     const lang = this.io.lang;
-    const remotePath = `${this.vaultPath()}/${ref.path}`;
+    const remotePath = this.remoteFile(ref.path);
 
     let headerBytes: Buffer;
     try {
@@ -920,6 +933,21 @@ export class FtpProvider implements StorageProvider {
       await client.remove(remotePath);
     } catch {
       // intentional — cleanup after a failure must not mask the original error
+    }
+  }
+
+  /**
+   * Remove that treats "file unavailable" (FTP reply 550) as success — an
+   * already-absent shard is a no-op, not a failure. Keeps `delete` idempotent so
+   * a re-run (or a shard removed out of band) does not raise a false prune orphan
+   * warning; a real failure (permissions, transport) still throws.
+   */
+  private async idempotentRemove(client: ftp.Client, remotePath: string): Promise<void> {
+    try {
+      await client.remove(remotePath);
+    } catch (err) {
+      if (ftpReplyCode(err) === 550) return;
+      throw err;
     }
   }
 }

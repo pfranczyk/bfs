@@ -207,6 +207,16 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
+  tests.push(
+    await runTest('B8b', 'bfs provider --help lists the built-in ssh type', () => {
+      const r = runBfs(['provider', '--help'], cliVaultDir);
+      assert(r.status === 0, `exit ${r.status ?? 'null'}\n${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('SSH/SFTP'), `expected SSH/SFTP provider in help: ${out.slice(0, 400)}`);
+      assert(/--type\s+ssh\b/.test(out), `expected '--type ssh' example in help: ${out.slice(0, 400)}`);
+    }),
+  );
+
   // ── provider remove --strategy remove --yes ────────────────────────────────
 
   tests.push(

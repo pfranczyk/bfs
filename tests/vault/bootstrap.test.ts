@@ -331,3 +331,82 @@ describe('runConsensusCheck location_map cross-check (S2)', () => {
     await expect(bootstrapFromProvider(bootstrap, { vaultName: VAULT_NAME, io, targetVersion: 1 })).rejects.toThrow(TamperDetectedError);
   });
 });
+
+// ─── consensus must not fire a doomed auth on a secret-less sibling ──────────
+//
+// runConsensusCheck (src/vault/bootstrap.ts) cross-checks siblings built from the
+// STRIPPED connection_config: the secret named in required_inputs is NOT in the
+// map, because consensus runs before any credential is collected. A sibling whose
+// required_inputs is non-empty is therefore unreachable at consensus time and
+// must be skipped BEFORE any authenticate() call. This matters for a transport
+// that authenticates WITH the secret (SSH password auth): a bare authenticate()
+// there is a full, doomed credential attempt, and on a real OpenSSH server ≥9.8 a
+// burst of such failures from one source trips PerSourcePenalties and poisons the
+// following recovery connection.
+//
+// This test asserts the observable TRIGGER — that no credentialed authenticate()
+// is fired at the secret-less sibling. The mock registry does not model
+// PerSourcePenalties, so the full storm is exercised end-to-end only against a
+// real penalizing server via scripts/cli-e2e/scenarios/80-ssh-all.
+describe('runConsensusCheck must not attempt a doomed auth on a secret-less sibling', () => {
+  const SSH_LIKE_TYPE = 'mock-ssh-like';
+  const PLAIN_TYPE = 'mock-plain-consensus';
+  /** Ids of SSH-like siblings whose authenticate() fired WITHOUT the stripped secret present. */
+  let secretlessAuths: string[];
+
+  beforeEach(() => {
+    secretlessAuths = [];
+    // A plain sibling/bootstrap type that connects with no secret (no stripped
+    // input) — models a guest/anon provider whose secret-less authenticate is
+    // legitimate, so it must not be counted as a doomed attempt.
+    providerRegistry.register(PLAIN_TYPE, {
+      lang: 'en',
+      displayName: 'Mock (plain, no secret)',
+      create: (config: ProviderConfig): StorageProvider => baseProvider(config.id, PLAIN_TYPE),
+      help: () => ({ usage: '', description: '', flags: [], examples: [] }),
+    });
+    // An SSH-like sibling: it authenticates ONLY with a password. Built from the
+    // stripped map (no password) it records the doomed attempt and fails, exactly
+    // as a real SSH password-auth with an empty password would.
+    providerRegistry.register(SSH_LIKE_TYPE, {
+      lang: 'en',
+      displayName: 'Mock (ssh-like, password auth)',
+      create: (config: ProviderConfig): StorageProvider => {
+        const p = baseProvider(config.id, SSH_LIKE_TYPE);
+        const hasSecret = 'password' in config.config && String(config.config.password ?? '').length > 0;
+        (p.authenticate as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+          if (!hasSecret) {
+            secretlessAuths.push(config.id);
+            throw new Error('SSH auth failed: password required');
+          }
+        });
+        return p;
+      },
+      help: () => ({ usage: '', description: '', flags: [], examples: [] }),
+    });
+  });
+
+  afterEach(() => {
+    const entries = (providerRegistry as unknown as { entries: Map<string, unknown> }).entries;
+    entries.delete(SSH_LIKE_TYPE);
+    entries.delete(PLAIN_TYPE);
+    vi.restoreAllMocks();
+  });
+
+  it('should skip a secret-less SSH sibling without firing a credentialed authenticate during consensus', async () => {
+    // p0 = bootstrap (plain, no secret). p1 = SSH-like sibling whose password
+    // was stripped from the map (required_inputs=['password']). Consensus must
+    // NOT call p1.authenticate() with the bare, secret-less config.
+    const map = [loc(0, PLAIN_TYPE, []), loc(1, SSH_LIKE_TYPE, ['password'])];
+    const bootstrap = makeBootstrapProvider(0, map);
+
+    const { io } = createMockProviderIO({});
+    // The credentialed connect phase (after consensus) supplies the secret — that
+    // authenticate carries a password and is legitimate, so it is not recorded.
+    io.askSecret = async (): Promise<string> => 'the-password';
+
+    await bootstrapFromProvider(bootstrap, { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(secretlessAuths).toEqual([]);
+  });
+});

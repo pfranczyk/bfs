@@ -182,7 +182,8 @@ vi.mock('basic-ftp', () => {
 
     async remove(remotePath: string): Promise<void> {
       if (!mockState.files.has(remotePath)) {
-        throw new Error(`File not found: ${remotePath}`);
+        // basic-ftp surfaces a missing file on DELE as an FTPError with code 550.
+        throw Object.assign(new Error(`550 File not found: ${remotePath}`), { code: 550 });
       }
       mockState.files.delete(remotePath);
     }
@@ -305,6 +306,35 @@ describe('FtpProvider', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  // ─── hardening (L2 path traversal, L6 idempotent delete) — parity with SSH ──
+  describe('hardening', () => {
+    it('should reject a download whose ref.path contains a traversal segment', async () => {
+      await expect(provider.download({ provider_id: 'test-ftp', path: '../../evil' })).rejects.toThrow(UnsafePathError);
+    });
+
+    it('should reject a delete whose ref.path contains a traversal segment', async () => {
+      await expect(provider.delete({ provider_id: 'test-ftp', path: '../evil' })).rejects.toThrow(UnsafePathError);
+    });
+
+    // delete is idempotent: an already-absent shard (FTP 550) is success, so prune
+    // does not emit a false orphan warning for data that is already gone.
+    it('should treat deleting an already-absent shard as success (idempotent)', async () => {
+      await expect(provider.delete({ provider_id: 'test-ftp', path: 'shard_9.bfs.1' })).resolves.toBeUndefined();
+    });
+
+    // F1 — delete removes the header sidecar together with the shard, so prune
+    // (which calls delete) leaves no orphaned hdr_ file behind on the medium.
+    it('should remove the header sidecar together with the shard on delete', async () => {
+      mockState.files.set('/backup/testvault/shard_0.bfs.1', Buffer.from('shard'));
+      mockState.files.set('/backup/testvault/hdr_0.bfs.1', Buffer.from('hdr'));
+
+      await provider.delete({ provider_id: 'test-ftp', path: 'shard_0.bfs.1' });
+
+      expect(mockState.files.has('/backup/testvault/shard_0.bfs.1')).toBe(false);
+      expect(mockState.files.has('/backup/testvault/hdr_0.bfs.1')).toBe(false);
+    });
   });
 
   // ─── constructor (lazy init — config validation via validateConfig) ─────
@@ -541,9 +571,8 @@ describe('FtpProvider', () => {
     expect(refs.map((r) => r.path)).not.toContain('shard_0.bfs.1');
   });
 
-  it('should throw ProviderError when deleting non-existent file', async () => {
-    await expect(provider.delete({ provider_id: 'test-ftp', path: 'nonexistent.bfs.1' })).rejects.toThrow(ProviderError);
-  });
+  // Deleting an already-absent shard is idempotent (success), not an error — see
+  // the "hardening" block (L6). It must not raise a false prune orphan warning.
 
   // ─── healthCheck ─────────────────────────────────────────────────────────
 

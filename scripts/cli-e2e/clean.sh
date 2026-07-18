@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 #
 # Remove leftover BFS CLI e2e test data — both the local temp workspaces
-# (bfs-cli-e2e.*) and, when --ftp endpoints are given, every remote bfs-e2e-*
-# directory on those servers. Leftovers accumulate only from runs invoked with
-# --keep, or from a run interrupted before its cleanup trap fired; a normal run
-# cleans up after itself.
+# (bfs-cli-e2e.*) and, when --ftp/--ssh endpoints are given, every remote
+# bfs-e2e-* directory on those servers. Leftovers accumulate only from runs
+# invoked with --keep, or from a run interrupted before its cleanup trap fired;
+# a normal run cleans up after itself.
 #
 # Usage:
 #   bash scripts/cli-e2e/clean.sh                       # local temp only
 #   bash scripts/cli-e2e/clean.sh --ftp "<spec>" ...    # local + remote FTP
+#   bash scripts/cli-e2e/clean.sh --ssh "<spec>" ...    # local + remote SSH
 #   bash scripts/cli-e2e/clean.sh --dry-run [--ftp ...] # list, delete nothing
 #
 # Safe by construction: locally only touches directories named bfs-cli-e2e.*;
@@ -22,11 +23,13 @@ export REPO_ROOT
 
 dry=0
 FTP_SPECS=()
+SSH_SPECS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run | -n) dry=1; shift ;;
     --ftp) FTP_SPECS+=("${2:?--ftp requires a value}"); shift 2 ;;
-    *) echo "usage: clean.sh [--dry-run] [--ftp \"<spec>\"]..." >&2; exit 2 ;;
+    --ssh) SSH_SPECS+=("${2:?--ssh requires a value}"); shift 2 ;;
+    *) echo "usage: clean.sh [--dry-run] [--ftp \"<spec>\"]... [--ssh \"<spec>\"]..." >&2; exit 2 ;;
   esac
 done
 
@@ -65,20 +68,54 @@ else
   printf 'local: %d workspace(s), %s ~%d MB.\n' "$found" "$verb" "$((total_kb / 1024))"
 fi
 
-# ── Remote FTP test directories ──────────────────────────────────────────────
-if [ "${#FTP_SPECS[@]}" -gt 0 ]; then
+# ── Remote FTP/SSH test directories ──────────────────────────────────────────
+if [ "${#FTP_SPECS[@]}" -gt 0 ] || [ "${#SSH_SPECS[@]}" -gt 0 ]; then
   TSX="$REPO_ROOT/node_modules/.bin/tsx"
   export TSX
   # shellcheck source=lib/providers.sh
   . "$SCRIPT_DIR/lib/providers.sh"
   # shellcheck source=lib/ftp-ops.sh
   . "$SCRIPT_DIR/lib/ftp-ops.sh"
+  # shellcheck source=lib/ssh-ops.sh
+  . "$SCRIPT_DIR/lib/ssh-ops.sh"
   parse_ftp_specs
-  if [ "$dry" = "1" ]; then
-    echo "remote: would remove all bfs-e2e-* under $(ftp_count) FTP endpoint(s) (dry-run: skipped)."
-  else
-    echo "remote: removing all bfs-e2e-* from $(ftp_count) FTP endpoint(s)…"
-    ftp_clean_all
+  parse_ssh_specs
+  if [ "${#FTP_SPECS[@]}" -gt 0 ]; then
+    if [ "$dry" = "1" ]; then
+      echo "remote: would remove all bfs-e2e-* under $(ftp_count) FTP endpoint(s) (dry-run: skipped)."
+    else
+      echo "remote: removing all bfs-e2e-* from $(ftp_count) FTP endpoint(s)…"
+      ftp_clean_all
+    fi
+  fi
+  if [ "${#SSH_SPECS[@]}" -gt 0 ]; then
+    if [ "$dry" = "1" ]; then
+      echo "remote: would remove all bfs-e2e-* under $(ssh_count) SSH endpoint(s) (dry-run: skipped)."
+    else
+      echo "remote: removing all bfs-e2e-* from $(ssh_count) SSH endpoint(s)…"
+      ssh_clean_all
+    fi
+  fi
+fi
+
+# ── Docker-managed scenario leftovers (containers + volumes named bfs-e2e-*) ──
+# A --keep run of a docker-managed scenario (85–87, 89…) leaves its container and
+# volume behind (env_cleanup keeps them alongside the workspace). Sweep them here.
+# shellcheck source=lib/docker-endpoint.sh
+. "$SCRIPT_DIR/lib/docker-endpoint.sh"
+if docker_available; then
+  dctr="$(docker ps -aq --filter 'name=bfs-e2e-' 2>/dev/null)"
+  dvol="$(docker volume ls -q --filter 'name=bfs-e2e-' 2>/dev/null)"
+  if [ -n "$dctr" ] || [ -n "$dvol" ]; then
+    if [ "$dry" = "1" ]; then
+      echo "docker: would remove bfs-e2e-* containers/volumes (dry-run: skipped)."
+    else
+      echo "docker: removing bfs-e2e-* containers/volumes…"
+      # shellcheck disable=SC2086
+      [ -n "$dctr" ] && docker rm -f $dctr >/dev/null 2>&1
+      # shellcheck disable=SC2086
+      [ -n "$dvol" ] && docker volume rm $dvol >/dev/null 2>&1
+    fi
   fi
 fi
 

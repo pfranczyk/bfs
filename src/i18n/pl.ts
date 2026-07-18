@@ -242,6 +242,7 @@ export const pl: Strings = {
   prune_versions_to_delete: 'Wersje do usunięcia: %s',
   prune_confirm: 'Usunąć %s wersję/wersji?',
   prune_deleted: 'Usunięto wersje: %s',
+  prune_orphan_warn: 'Nie udało się usunąć danych wersji %s z nośnika „%s" — mogą nadal zajmować tam miejsce.',
 
   // ─── verify ───────────────────────────────────────────────────────────────
   verify_spinner: 'Weryfikacja wersji…',
@@ -553,6 +554,89 @@ export const pl: Strings = {
   ftp_probe_step_compare_remote: 'Test nieudany w fazie compare: pobrane bajty różnią się od wysłanych',
   ftp_probe_step_cleanup: 'Test nieudany w fazie cleanup: %s',
 
+  // ─── provider: ssh ──────────────────────────────────────────────────────
+  ssh_host_prompt: 'Host SSH:',
+  ssh_port_prompt: 'Port (domyślnie 22):',
+  ssh_user_prompt: 'Nazwa użytkownika:',
+  ssh_auth_method_prompt: 'Metoda uwierzytelniania:',
+  ssh_auth_password: 'Hasło',
+  ssh_auth_key: 'Plik klucza prywatnego',
+  ssh_password_prompt: 'Hasło:',
+  ssh_private_key_prompt: 'Ścieżka do pliku klucza prywatnego SSH:',
+  ssh_passphrase_prompt: 'Hasło do klucza prywatnego (puste, jeśli brak):',
+  ssh_path_prompt: 'Ścieżka bazowa na serwerze (bezwzględna, ukośniki w przód):',
+
+  // ─── SSH — host key ────────────────────────────────────────────────────────
+  ssh_host_key_confirm: 'Zaufać kluczowi hosta dla %s?\n  odcisk %s',
+  ssh_host_key_declined: 'Klucz hosta dla %s nie został zaufany — połączenie odrzucone.',
+  ssh_host_key_revoked: 'Klucz hosta dla %s jest unieważniony (@revoked) w ~/.ssh/known_hosts — odmawiam połączenia (klucz oznaczony jako skompromitowany).',
+
+  // ─── SSH — edycja (online-first klucz hosta, fallback offline) ──────────────
+  ssh_edit_connecting: 'Łączę się z %s, aby potwierdzić klucz hosta…',
+  ssh_edit_offline_menu: 'Nie udało się połączyć z %s. Wybierz sposób ustawienia przypięcia klucza hosta:',
+  ssh_edit_offline_paste: 'Wklej odcisk klucza hosta (SHA256:…)',
+  ssh_edit_paste_prompt: 'Odcisk klucza hosta (SHA256:…):',
+  ssh_edit_fingerprint_invalid: 'Niepoprawny odcisk SHA256 (oczekiwano „SHA256:" i base64). Spróbuj ponownie.',
+  ssh_edit_offline_known_hosts_entry: 'Użyj %s z ~/.ssh/known_hosts — %s',
+  ssh_edit_offline_known_hosts_entry_recommended: 'Użyj %s z ~/.ssh/known_hosts — %s (zalecany — BFS użyje tego typu)',
+  ssh_edit_offline_no_pin: 'Zapisz bez przypięcia klucza hosta',
+  ssh_edit_no_pin_warn: 'Zapisano offline bez odcisku klucza hosta. BFS zaufa hostowi przez ~/.ssh/known_hosts albo zapyta przy pierwszym pushu; odzyskiwanie na innej maszynie będzie wymagać potwierdzenia klucza hosta.',
+  ssh_edit_offline_exit: 'Anuluj edycję',
+  ssh_edit_cancelled: 'Edycja anulowana — przypięcie klucza hosta nie zostało ustawione.',
+
+  // ─── SSH — help ────────────────────────────────────────────────────────────
+  ssh_help_description: 'Łączy się z serwerem SSH/SFTP i zapisuje dane kopii jako pliki na ' + 'zdalnym nośniku. Konfiguracja z flag inline, pliku JSON lub obu — ' + 'flagi inline nadpisują wartości z JSON.',
+  ssh_help_flag_host_desc: 'Nazwa hosta lub IP serwera SSH',
+  ssh_help_flag_port_desc: 'Port serwera SSH (domyślnie 22)',
+  ssh_help_flag_user_desc: 'Użytkownik logowania SSH',
+  ssh_help_flag_password_desc: 'Hasło logowania SSH (preferuj --private-key, gdy to możliwe)',
+  ssh_help_flag_private_key_desc: 'Ścieżka do pliku klucza prywatnego (nigdy treść klucza). Gdy brak ' + '--password i --private-key, próbowane są ~/.ssh/id_ed25519, potem id_rsa.',
+  ssh_help_flag_passphrase_desc: 'Hasło do klucza prywatnego (jeśli zaszyfrowany)',
+  ssh_help_flag_path_desc: 'Bezwzględna ścieżka bazowa na serwerze (musi zaczynać się od "/")',
+  ssh_help_flag_known_host_desc: 'Przypnij oczekiwany odcisk klucza hosta (SHA256:…) dla trybu nieinteraktywnego',
+  ssh_help_flag_accept_new_host_key_desc: 'W trybie nieinteraktywnym zaufaj nowemu kluczowi hosta przy pierwszym połączeniu',
+  ssh_help_flag_config_file_desc: 'JSON z dowolnymi z { host, port, user, password, private_key_path, ' + 'passphrase, path, host_key_fingerprint }. Flagi inline nadpisują JSON.',
+
+  // ─── SSH — runtime errors ──────────────────────────────────────────────────
+  ssh_operation_failed: 'Operacja SSH nieudana na %s:%s: %s',
+  ssh_size_mismatch: 'Niezgodność rozmiaru uploadu SSH dla "%s": wysłano %s B, serwer zapisał %s B.',
+  ssh_control_chars: 'Ścieżka SSH i nazwa kopii nie mogą zawierać znaków końca linii ani znaków sterujących.',
+  ssh_key_unreadable: 'Nie udało się odczytać pliku klucza prywatnego SSH "%s": %s',
+  ssh_recovery_confirm_host: 'Odzyskiwanie chce wysłać sekret SSH do %s (ścieżka %s, klucz hosta %s). Wysłać do tego hosta?',
+  ssh_recovery_target: 'Odzyskiwanie: łączenie z SSH %s (ścieżka %s, klucz hosta %s).',
+  ssh_recovery_password: 'Hasło SSH dla %s:',
+  ssh_recovery_passphrase: 'Hasło do klucza prywatnego SSH dla %s:',
+  ssh_recovery_declined: 'Odzyskiwanie odrzucone: nie wysłano sekretu SSH do %s.',
+  ssh_recovery_no_secret_noninteractive: 'Odzyskiwanie nie może pobrać sekretu SSH dla %s w trybie nieinteraktywnym: żaden podany sekret nie uwierzytelnił. Podaj go przez dane wejściowe odzyskiwania.',
+  ssh_recovery_unpinned: '(nieprzypięty)',
+
+  // ─── SSH — configureFromFlags + validateConfig ─────────────────────────────
+  ssh_config_port_invalid: 'Adapter SSH: config "port" musi być liczbą całkowitą z zakresu 1–65535',
+  ssh_inline_port_invalid: 'Adapter SSH: --port musi być liczbą całkowitą z zakresu 1–65535',
+  ssh_host_required: 'Adapter SSH: "host" jest wymagany. Podaj --host <hostname> lub ' + '--config-file <path> w specyfikacji --provider.',
+  ssh_path_required: 'Adapter SSH: "path" jest wymagany. Podaj --path </ścieżka/bezwzględna> lub --config-file <path>.',
+  ssh_path_must_be_absolute: 'Adapter SSH: "path" musi być bezwzględny (zaczynać się od "/").',
+  ssh_auth_conflict: 'Adapter SSH: podaj albo --password, albo --private-key, nie oba.',
+  ssh_auth_missing: 'Adapter SSH: brak poświadczeń — podaj --password, --private-key <path>, ' + 'albo umieść klucz w ~/.ssh/id_ed25519 lub ~/.ssh/id_rsa.',
+  ssh_accept_new_offline:
+    '--accept-new-host-key wymaga kontaktu z serwerem, aby pobrać i przypiąć klucz hosta — czego offline „provider edit" nie robi. ' +
+    'Przypnij nowy host jawnie przez --known-host <SHA256:…> albo dodaj go online przez „bfs provider add" / „bfs init".',
+  ssh_validate_host_required: 'SSH: host jest wymagany i musi być niepustym stringiem',
+  ssh_validate_port_invalid: 'SSH: port musi być liczbą całkowitą z zakresu 1–65535',
+  ssh_validate_path_required: 'SSH: ścieżka jest wymagana i musi być niepustym stringiem',
+  ssh_validate_path_absolute: 'SSH: ścieżka musi zaczynać się od "/"',
+  ssh_validate_auth_required: 'SSH: wymagane hasło lub ścieżka do klucza prywatnego',
+  ssh_validate_auth_conflict: 'SSH: użyj hasła ALBO klucza prywatnego, nie obu naraz',
+  ssh_describe_config: 'host: %s, port: %s, user: %s, path: %s, %s',
+
+  // ─── SSH — probeConnection ─────────────────────────────────────────────────
+  ssh_probe_incomplete: 'Test nieudany: konfiguracja SSH niekompletna (host i path muszą być ustawione)',
+  ssh_probe_step_ensure_dir: 'Test nieudany w fazie ensureDir: %s',
+  ssh_probe_step_upload: 'Test nieudany w fazie upload: %s',
+  ssh_probe_step_download: 'Test nieudany w fazie download: %s',
+  ssh_probe_step_compare_remote: 'Test nieudany w fazie compare: pobrane bajty różnią się od wysłanych',
+  ssh_probe_step_cleanup: 'Test nieudany w fazie cleanup: %s',
+
   // ─── LocalFS — runtime errors ──────────────────────────────────────────────
   local_list_failed: 'Nie udało się wylistować katalogu kopii "%s": %s',
   local_list_vaults_failed: 'Nie udało się wylistować kopii w "%s": %s',
@@ -576,6 +660,8 @@ export const pl: Strings = {
   repair_unknown_provider: 'Nośnik "%s" nie istnieje w konfiguracji kopii zapasowej.',
   repair_duplicate_provider_in_args: 'Nośnik "%s" powtórzony w argumentach naprawy.',
   repair_spec_invalid_params: 'Nieprawidłowe parametry naprawy: "%s". Użyj flag nośnika (np. --path) lub migracji typ:nazwa.',
+  heal_locationmap_update_failed: 'Nie udało się zaktualizować nośnika „%s" nowymi informacjami o lokalizacji — napraw go osobno.',
+  heal_relocate_unreachable: 'Nośnik „%s" nie nadaje się do użycia pod nowym adresem: %s',
 
   // ─── repair (command) ──────────────────────────────────────────────────────
   cmd_repair_desc: 'Napraw lokalizację nośnika po zmianie ścieżki lub rotacji poświadczeń',

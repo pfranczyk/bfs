@@ -1,6 +1,6 @@
 {
   "name": "bfs-vault",
-  "version": "0.11.0",
+  "version": "0.12.0-rc.1",
   "description": "Backup File System — distributed backup with Reed-Solomon erasure coding",
   "type": "module",
   "preferGlobal": true,
@@ -30,7 +30,8 @@
     "build": "tsup",
     "prepare": "npm run build",
     "smoke": "tsx scripts/smoke.ts",
-    "smoke:ftp": "tsx scripts/ftp-test-server.ts"
+    "smoke:ftp": "tsx scripts/ftp-test-server.ts",
+    "smoke:ssh": "tsx scripts/ssh-test-server.ts"
   },
   "keywords": [
     "backup",
@@ -60,12 +61,14 @@
     "commander": "^15.0.0",
     "ignore": "^7.0.5",
     "inquirer": "^14.0.2",
-    "ora": "^9.4.1"
+    "ora": "^9.4.1",
+    "ssh2": "^1.17.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.1",
     "@lydell/node-pty": "^1.2.0-beta.12",
     "@types/node": "^26.0.1",
+    "@types/ssh2": "^1.15.5",
     "tsup": "^8.5.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",

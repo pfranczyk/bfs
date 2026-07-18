@@ -14,9 +14,17 @@ _ftp_op() {
     FC_HOST="${FTP_HOST[$e]}" FC_PORT="${FTP_PORT[$e]}" FC_USER="${FTP_USER[$e]}" \
     FC_PASS="${FTP_PASS[$e]}" FC_SECURE="${FTP_SECURE[$e]}" FC_BASE="${FTP_BASE[$e]}" \
     FC_MODE="$mode" FC_RUN="${FC_RUN:-}" FC_PATHS="${FC_PATHS:-}" FC_FILE="${FC_FILE:-}" \
-    FC_FROM="${FC_FROM:-}" FC_TO="${FC_TO:-}" \
+    FC_FROM="${FC_FROM:-}" FC_TO="${FC_TO:-}" FC_LOCAL="${FC_LOCAL:-}" \
     "$TSX" "$SCRIPT_DIR/lib/ftp-ops.ts" </dev/null 2>&1 |
     sed 's/^/  [ftp-ops] /'
+}
+
+# ftp_put <endpoint-index> <local-file> <remote-file> — upload a local file to a
+# remote path (parents created). Used to pre-place identical shard bytes on a
+# new-type provider before a no-rebuild `bfs repair` repoints to it.
+ftp_put() {
+  local e="$1" local_file="$2" remote="$3"
+  FC_LOCAL="$local_file" FC_FILE="$remote" _ftp_op "$e" put
 }
 
 # ftp_rename <endpoint-index> <from-remote> <to-remote> — move a remote directory

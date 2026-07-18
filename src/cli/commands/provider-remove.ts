@@ -50,7 +50,12 @@ export function registerProviderRemove(providerCmd: Command): void {
     .option('--yes', t('provider_remove_opt_yes'))
     .action(async (providerId: string | undefined, opts: ProviderRemoveOpts, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
-      const io = createCliProviderIO(rootDir);
+      // A --strategy makes this a flag-driven (batch) run: build a non-interactive
+      // IO so providers apply their non-interactive trust policy (e.g. SSH host-key
+      // via accept_new_host_key / pinned fingerprint) instead of prompting —
+      // matching repair (--ci) and recovery.
+      const isCi = opts.strategy !== undefined;
+      const io = createCliProviderIO(rootDir, !isCi);
 
       const config = await readConfig(rootDir);
       if (!config) {
@@ -101,7 +106,6 @@ export function registerProviderRemove(providerCmd: Command): void {
       }
 
       // ── Strategy: from flag (CI) or from prompt (interactive) ────────────
-      const isCi = opts.strategy !== undefined;
       let strategy: 'relocate' | 'rebuild' | 'remove' | 'cancel';
 
       if (isCi) {

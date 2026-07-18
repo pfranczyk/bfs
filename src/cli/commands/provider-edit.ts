@@ -1,4 +1,5 @@
 import type { Command } from 'commander';
+import { HostKeyDeclinedError } from '../../core/errors.js';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO, providerRegistry } from '../../providers/provider.js';
 import type { CliProviderInput, ProviderConfig } from '../../types/index.js';
@@ -51,15 +52,18 @@ function extractAdapterArgs(cmd: Command): string[] {
 /**
  * Registers the `bfs provider edit [id]` command.
  *
- * Offline, local-only edit of an existing provider's connection-config in
- * `.bfs/config.json`. The provider type and id are kept; only the connection
- * settings are replaced (full replacement, not a per-field merge). No medium is
- * contacted — there is no healthCheck / probeConnection — so it works when the
- * storage is unreachable (an unplugged USB drive, a path that differs between
- * machines). Structural validation via the adapter's `validateConfig` still
- * runs. The scheme and version manifests are left untouched; a credential
- * change is fully local (secrets never reach shards), while a non-secret
- * coordinate change is synced into shard headers by the next `bfs push`.
+ * Edits an existing provider's connection-config in `.bfs/config.json`. The
+ * provider type and id are kept; only the connection settings are replaced (full
+ * replacement, not a per-field merge). There is no healthCheck / probeConnection
+ * and no write to the medium, and the edit is guaranteed to complete even when
+ * the storage is unreachable (an unplugged USB drive, a path that differs between
+ * machines, a downed server). A provider may still make a best-effort contact it
+ * can degrade offline — SSH does an online-first host-key confirmation via
+ * `configureInteractiveForEdit`, falling back to an offline menu when the server
+ * is down. Structural validation via the adapter's `validateConfig` still runs.
+ * The scheme and version manifests are left untouched; a credential change is
+ * fully local (secrets never reach shards), while a non-secret coordinate change
+ * is synced into shard headers by the next `bfs push`.
  *
  * @param providerCmd - The `bfs provider` sub-command to attach to
  */
@@ -126,14 +130,28 @@ export function registerProviderEdit(providerCmd: Command): void {
       let newConfig: Record<string, unknown>;
       if (isCi) {
         try {
-          const input: CliProviderInput = { name: existing.id, rawArgs: extractAdapterArgs(cmd) };
+          // Offline by contract — no medium contact. An adapter flag that needs a
+          // live connection (SSH --accept-new-host-key) must refuse here.
+          const input: CliProviderInput = { name: existing.id, rawArgs: extractAdapterArgs(cmd), offline: true };
           newConfig = await instance.configureFromFlags(input);
         } catch (err) {
           error(fmt('provider_edit_configure_failed', err instanceof Error ? err.message : String(err)));
           throw new CommandAbort();
         }
       } else {
-        newConfig = await instance.configureInteractive(io);
+        // Edit routes through the provider's edit-aware flow when present (SSH:
+        // online-first host-key with offline fallback); a deliberate host-key
+        // refusal aborts without persisting. Providers without it (local, ftp)
+        // fall back to the add-time flow.
+        try {
+          newConfig = instance.configureInteractiveForEdit ? await instance.configureInteractiveForEdit(io, { existingConfig: existing.config }) : await instance.configureInteractive(io);
+        } catch (err) {
+          if (err instanceof HostKeyDeclinedError) {
+            error(err.message);
+            throw new CommandAbort();
+          }
+          throw err;
+        }
       }
 
       const errors = instance.validateConfig(newConfig);

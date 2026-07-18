@@ -1,6 +1,6 @@
 import { fmt, t } from '../i18n/index.js';
-import { createCliProviderIO, providerRegistry, validateProviderId } from '../providers/provider.js';
-import type { ProviderConfig, RepairPair } from '../types/index.js';
+import { providerRegistry, validateProviderId } from '../providers/provider.js';
+import type { ProviderConfig, ProviderIO, RepairPair } from '../types/index.js';
 import { shellParse } from './shell-parse.js';
 
 /**
@@ -24,12 +24,13 @@ export interface RecoveryBootstrapSpec {
  * each adapter defines its own flag grammar.
  *
  * @param spec - raw value of a single `--provider` flag (e.g. `bfs init --ci`)
- * @param cwd  - BFS working directory, exposed to adapters via `io.workDir`
+ * @param io   - ProviderIO from the calling command; carries `workDir` and the
+ *               resolved interactive mode, so `--ci` reaches `configureFromFlags`
  * @returns     a `ProviderConfig` ready to drop into `VaultConfig.providers`
  * @throws      Error when the format is invalid, the id charset rule is
  *              violated, or the adapter rejects the resulting configuration
  */
-export async function parseInitProviderSpec(spec: string, cwd: string): Promise<ProviderConfig> {
+export async function parseInitProviderSpec(spec: string, io: ProviderIO): Promise<ProviderConfig> {
   const tokens = shellParse(spec);
   if (tokens.length === 0) {
     throw new Error(fmt('init_provider_format_invalid', spec));
@@ -49,7 +50,7 @@ export async function parseInitProviderSpec(spec: string, cwd: string): Promise<
   // like `local:id:/path` fail validation with init_provider_format_invalid.
   const id = head.slice(firstColon + 1);
   validateProviderId(id);
-  return buildProviderConfigFromFlags(type, id, tokens.slice(1), cwd);
+  return buildProviderConfigFromFlags(type, id, tokens.slice(1), io);
 }
 
 /**
@@ -89,11 +90,12 @@ export function validateProviderIdsUnique(newIds: string[], existingConfigIds: s
  *
  * @param bootstrapSpec - raw value of `--bootstrap`
  * @param providerType  - value of `--provider`
- * @param cwd           - BFS working directory, exposed via `io.workDir`
+ * @param io            - ProviderIO from `bfs recovery`; carries `workDir` and
+ *                        the resolved interactive mode
  * @throws Error when the spec is empty, the type is unknown, or the adapter
  *         rejects the resulting configuration
  */
-export async function parseRecoveryBootstrapSpec(bootstrapSpec: string, providerType: string, cwd: string): Promise<RecoveryBootstrapSpec> {
+export async function parseRecoveryBootstrapSpec(bootstrapSpec: string, providerType: string, io: ProviderIO): Promise<RecoveryBootstrapSpec> {
   const tokens = shellParse(bootstrapSpec);
   if (tokens.length === 0) {
     throw new Error(fmt('recovery_bootstrap_empty', bootstrapSpec));
@@ -104,7 +106,6 @@ export async function parseRecoveryBootstrapSpec(bootstrapSpec: string, provider
   }
   const meta = providerRegistry.getMeta(providerType);
   const adapterPackage = meta ? `${meta.packageName}@${meta.packageVersion}` : null;
-  const io = createCliProviderIO(cwd);
   const placeholder = factory.create({ id: 'recovery-bootstrap', type: providerType, adapterPackage, config: {} }, io);
   const config = await placeholder.configureFromFlags({ name: 'recovery-bootstrap', rawArgs: tokens });
   const errors = placeholder.validateConfig(config);
@@ -134,11 +135,12 @@ interface RepairPairDraft {
  *
  * @param positional        flat `[name1, params1, name2, params2, ...]` tail
  * @param existingConfigIds provider ids already present in `.bfs/config.json`
- * @param cwd               BFS working directory, exposed to adapters via `io.workDir`
+ * @param io                ProviderIO from `bfs repair`; carries `workDir` and
+ *                          the resolved interactive mode (`--ci` honored)
  * @returns one {@link RepairPair} per `<name> "<params>"` pair, in input order
  * @throws Error on odd count, unknown/duplicate name, invalid params, or id conflict
  */
-export async function parseRepairSpec(positional: string[], existingConfigIds: string[], cwd: string): Promise<RepairPair[]> {
+export async function parseRepairSpec(positional: string[], existingConfigIds: string[], io: ProviderIO): Promise<RepairPair[]> {
   if (positional.length === 0 || positional.length % 2 !== 0) throw new Error(t('repair_spec_odd_args'));
 
   const draft = classifyRepairPairs(positional, existingConfigIds);
@@ -148,7 +150,7 @@ export async function parseRepairSpec(positional: string[], existingConfigIds: s
     draft.flatMap((d) => (d.migration ? [d.migration.name] : [])),
     existingConfigIds,
   );
-  return Promise.all(draft.map((d) => buildRepairPair(d, cwd)));
+  return Promise.all(draft.map((d) => buildRepairPair(d, io)));
 }
 
 /** Pass 1: chunk the flat array into pairs, validate names, classify edit vs migration. */
@@ -171,10 +173,10 @@ function classifyRepairPairs(positional: string[], existingConfigIds: string[]):
 }
 
 /** Pass 2: build (and validate) a migration's target config; an edit carries a null config. */
-async function buildRepairPair(d: RepairPairDraft, cwd: string): Promise<RepairPair> {
+async function buildRepairPair(d: RepairPairDraft, io: ProviderIO): Promise<RepairPair> {
   const shared = { oldName: d.oldName, params: d.params, rawParams: d.rawParams };
   if (!d.migration) return { ...shared, isMigration: false, newConfig: null };
-  const newConfig = await buildProviderConfigFromFlags(d.migration.type, d.migration.name, d.migration.args, cwd);
+  const newConfig = await buildProviderConfigFromFlags(d.migration.type, d.migration.name, d.migration.args, io);
   return { ...shared, isMigration: true, newConfig };
 }
 
@@ -203,12 +205,11 @@ function classifyMigration(rawParams: string[]): Nullable<{ type: string; name: 
  *
  * @throws Error when the type is unregistered or the adapter rejects the config
  */
-async function buildProviderConfigFromFlags(type: string, id: string, rawArgs: string[], cwd: string): Promise<ProviderConfig> {
+async function buildProviderConfigFromFlags(type: string, id: string, rawArgs: string[], io: ProviderIO): Promise<ProviderConfig> {
   const factory = providerRegistry.getFactory(type);
   if (!factory) throw new Error(fmt('init_provider_format_invalid', `${type}:${id}`));
   const meta = providerRegistry.getMeta(type);
   const adapterPackage = meta ? `${meta.packageName}@${meta.packageVersion}` : null;
-  const io = createCliProviderIO(cwd);
   const placeholder = factory.create({ id, type, adapterPackage, config: {} }, io);
   const config = await placeholder.configureFromFlags({ name: id, rawArgs });
   const errors = placeholder.validateConfig(config);

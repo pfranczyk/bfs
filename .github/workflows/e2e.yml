@@ -37,7 +37,10 @@ jobs:
       - name: Run CLI e2e
         run: |
           set -o pipefail
-          bash scripts/cli-e2e/run.sh --exclude repair --ftp "ftp://bfsuser:bfspass@127.0.0.1/ftp/bfsuser" 2>&1 | tee /tmp/e2e.log
+          # --exclude ssh: SSH scenarios (80-82, 90) run in the dedicated e2e-ssh
+          # job with real sshd endpoints; without --ssh they would hit the loud
+          # "SSH mandatory" gate here. --exclude repair splits off 60-89 to e2e-repair.
+          bash scripts/cli-e2e/run.sh --exclude repair --exclude ssh --ftp "ftp://bfsuser:bfspass@127.0.0.1/ftp/bfsuser" 2>&1 | tee /tmp/e2e.log
 
       - name: Job summary
         if: always()
@@ -90,10 +93,30 @@ jobs:
           docker logs bfs-ftp-repair || true
           exit 1
 
+      - name: Start SSH server
+        run: |
+          docker run -d --name bfs-sshd-repair -p 2222:2222 \
+            -e PUID=1000 -e PGID=1000 -e PASSWORD_ACCESS=true \
+            -e USER_NAME=bfsuser -e USER_PASSWORD=bfspass -e SUDO_ACCESS=false \
+            linuxserver/openssh-server
+          node -e '
+            const {Client}=require("ssh2");
+            const deadline=Date.now()+60000;
+            (function t(){const c=new Client();let done=false;
+              c.on("ready",()=>{done=true;c.end();console.log("SSH server ready");process.exit(0)});
+              c.on("error",()=>{c.end();if(done)return;if(Date.now()>deadline){console.error("sshd not ready");process.exit(1)}setTimeout(t,1000)});
+              c.connect({host:"127.0.0.1",port:2222,username:"bfsuser",password:"bfspass",readyTimeout:4000,hostVerifier:()=>true});})();'
+
+      # External-endpoint repair only (60-79 local+ftp, 83/84/88 ssh). --exclude-docker
+      # keeps the docker-managed scenarios (85-87, 89) out: they self-provision and
+      # must run WITHOUT external endpoints (see the e2e-repair-docker job) — with
+      # --ssh/--ftp present the round-robin pool picks the wrong endpoint.
       - name: Run repair CLI e2e
         run: |
           set -o pipefail
-          bash scripts/cli-e2e/run.sh --filter repair --ftp "ftp://bfsuser:bfspass@127.0.0.1/ftp/bfsuser" 2>&1 | tee /tmp/e2e-repair.log
+          bash scripts/cli-e2e/run.sh --filter repair --exclude-docker \
+            --ftp "ftp://bfsuser:bfspass@127.0.0.1/ftp/bfsuser" \
+            --ssh "ssh://bfsuser:bfspass@127.0.0.1:2222/config" 2>&1 | tee /tmp/e2e-repair.log
 
       - name: Job summary
         if: always()
@@ -113,6 +136,106 @@ jobs:
         run: |
           docker logs bfs-ftp-repair 2>&1 | tail -50 || true
           docker rm -f bfs-ftp-repair || true
+
+      - name: Stop SSH server
+        if: always()
+        run: |
+          docker logs bfs-sshd-repair 2>&1 | tail -50 || true
+          docker rm -f bfs-sshd-repair || true
+
+  # SSH-only e2e: the external-endpoint SSH scenarios (80-82, 90, 93).
+  # 82-ssh-multi-endpoint needs THREE distinct sshd, so this job starts three
+  # (ports 2222/2223/2224) and the single-endpoint scenarios round-robin across
+  # them. --exclude-docker keeps the docker-managed SSH scenarios (94-96) out:
+  # they self-provision their own sshd and must NOT see these external endpoints,
+  # or the round-robin pool pins the provider to endpoint 0 instead of the
+  # scenario's own — they run in e2e-repair-docker (--docker-only) instead. Repair
+  # SSH scenarios (83-88) run in e2e-repair (they reuse that job's FTP + Docker).
+  e2e-ssh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - run: npm ci
+
+      - name: Start SSH servers
+        run: |
+          for p in 2222 2223 2224; do
+            docker run -d --name "bfs-sshd-$p" -p "$p:2222" \
+              -e PUID=1000 -e PGID=1000 -e PASSWORD_ACCESS=true \
+              -e USER_NAME=bfsuser -e USER_PASSWORD=bfspass -e SUDO_ACCESS=false \
+              linuxserver/openssh-server
+          done
+          node -e '
+            const {Client}=require("ssh2");
+            const ports=[2222,2223,2224];const deadline=Date.now()+90000;
+            const wait=(port)=>new Promise((res,rej)=>{(function t(){const c=new Client();let done=false;
+              c.on("ready",()=>{done=true;c.end();res()});
+              c.on("error",()=>{c.end();if(done)return;if(Date.now()>deadline)rej(new Error("sshd "+port+" not ready"));else setTimeout(t,1000)});
+              c.connect({host:"127.0.0.1",port,username:"bfsuser",password:"bfspass",readyTimeout:4000,hostVerifier:()=>true});})();});
+            (async()=>{for(const p of ports)await wait(p);console.log("all SSH servers ready")})().catch(e=>{console.error(e.message);process.exit(1)});'
+
+      - name: Run SSH CLI e2e
+        run: |
+          set -o pipefail
+          bash scripts/cli-e2e/run.sh --filter ssh --exclude repair --exclude-docker \
+            --ssh "ssh://bfsuser:bfspass@127.0.0.1:2222/config" \
+            --ssh "ssh://bfsuser:bfspass@127.0.0.1:2223/config" \
+            --ssh "ssh://bfsuser:bfspass@127.0.0.1:2224/config" 2>&1 | tee /tmp/e2e-ssh.log
+
+      - name: Job summary
+        if: always()
+        run: |
+          result=$(grep -oE '[0-9]+ passed, [0-9]+ failed' /tmp/e2e-ssh.log 2>/dev/null | tail -1 || true)
+          passed=$(echo "$result" | grep -oE '^[0-9]+' || echo '?')
+          failed=$(echo "$result" | grep -oE '[0-9]+$' || echo '?')
+          {
+            echo "## SSH CLI e2e Report"
+            echo "| ✅ Passed | ❌ Failed |"
+            echo "|-----------|-----------|"
+            echo "| $passed | $failed |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stop SSH servers
+        if: always()
+        run: |
+          for p in 2222 2223 2224; do docker rm -f "bfs-sshd-$p" || true; done
+
+  # Docker-managed scenarios (repair: 85-87 SSH, 89 FTP; host-key/edit: 94-96 SSH):
+  # each self-provisions a real server via lib/docker-endpoint.sh (start →
+  # wipe/restart/kill → repair or edit) and takes NO external endpoints, so
+  # --docker-only runs them alone — passing --ssh/--ftp would make the round-robin
+  # pool pick the wrong endpoint. ubuntu-latest always has Docker.
+  e2e-repair-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - run: npm ci
+
+      - name: Run docker-managed CLI e2e
+        run: |
+          set -o pipefail
+          bash scripts/cli-e2e/run.sh --docker-only 2>&1 | tee /tmp/e2e-docker.log
+
+      - name: Job summary
+        if: always()
+        run: |
+          result=$(grep -oE '[0-9]+ passed, [0-9]+ failed' /tmp/e2e-docker.log 2>/dev/null | tail -1 || true)
+          passed=$(echo "$result" | grep -oE '^[0-9]+' || echo '?')
+          failed=$(echo "$result" | grep -oE '[0-9]+$' || echo '?')
+          {
+            echo "## Docker-managed CLI e2e Report"
+            echo "| ✅ Passed | ❌ Failed |"
+            echo "|-----------|-----------|"
+            echo "| $passed | $failed |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Windows local-only e2e: the full create→restore→recovery→repair cycle on
   # windows-latest with byte-for-byte SHA-256 checks. FTP/mixed scenarios need a

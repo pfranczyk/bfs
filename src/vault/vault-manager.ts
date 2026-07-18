@@ -86,6 +86,12 @@ export interface PullOptions {
 export interface PruneOptions {
   /** Version numbers to remove from providers and disk. */
   versions: number[];
+  /**
+   * Optional IO for surfacing best-effort delete failures. Deleting a pruned
+   * version's data is best-effort, but a genuine failure would otherwise orphan
+   * it on the medium silently; when provided, such failures are warned through here.
+   */
+  io?: ProviderIO;
 }
 
 export interface RemoveProviderOptions {
@@ -633,13 +639,18 @@ export async function init(rootDir: string, options: InitOptions): Promise<void>
     await fs.writeFile(bfsignorePath, DEFAULT_BFSIGNORE_CONTENT, 'utf-8');
   }
 
-  // Validate and authenticate all providers BEFORE writing config.
-  // This ensures we never leave a corrupted config on disk if a provider
-  // type is unknown or authentication fails.
+  // Set up and verify every provider BEFORE writing config: probeConnection()
+  // creates the target directory and round-trips a probe file, so a provider
+  // whose base path is missing/unwritable — or whose type is unknown — fails
+  // here instead of leaving a corrupted config on disk, and instead of only
+  // surfacing at the first push. Runs for --ci too, where the interactive
+  // pre-probe (probeProviderWithRecovery in init.ts) never ran. setVaultName()
+  // must precede probeConnection(): it resolves the probe path under the vault
+  // sub-directory.
   for (const pc of options.providers) {
     const p = providerRegistry.create(pc, options.io);
-    await p.authenticate();
     p.setVaultName(options.vault_name);
+    await p.probeConnection();
   }
 
   const config: VaultConfig = {
@@ -931,6 +942,12 @@ export async function prune(rootDir: string, options: PruneOptions): Promise<voi
   const silentIO: ProviderIO = {
     lang: 'en',
     workDir: rootDir,
+    // Prune runs unattended, so providers must apply their non-interactive
+    // trust policy (pinned fingerprint / accept_new_host_key for SSH) instead of
+    // prompting. Without this signal an SSH host-key decision takes the
+    // interactive path, is declined by the confirm() below, and the delete fails
+    // — silently orphaning the shard on the medium.
+    interactive: false,
     ask: async () => '',
     askSecret: async () => '',
     confirm: async () => false,
@@ -954,7 +971,10 @@ export async function prune(rootDir: string, options: PruneOptions): Promise<voi
         provider.setVaultName(config.vault_name);
         await provider.delete({ provider_id: ms.provider_id, path: `shard_${ms.shard_index}.bfs.${version}` });
       } catch {
-        // best-effort; shard may already be gone
+        // Delete is best-effort — the shard may already be gone. But a genuine
+        // failure (permissions, unreachable medium) would otherwise orphan the
+        // data on the medium silently; surface it so the operator can reclaim it.
+        options.io?.warn(fmt('prune_orphan_warn', String(version), ms.provider_id));
       }
     }
     await deleteManifest(rootDir, version).catch(() => {});

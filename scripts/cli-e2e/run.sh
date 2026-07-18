@@ -17,24 +17,40 @@
 #                      [ftp[s]://]user:pass@host[:port]/basepath
 #                    FTP scenarios are mandatory: without enough --ftp endpoints
 #                    they FAIL (loudly) rather than silently skip.
-#   --gdrive "<..>"  Reserved extension point for future built-in providers
-#   --ssh    "<..>"  (collected but not yet wired — local + ftp are built in).
+#   --ssh "<spec>"   SSH/SFTP credentials, repeatable. Spec grammar:
+#                      [ssh://]user:pass@host[:port]/basepath
+#                    SSH scenarios are mandatory: without enough --ssh endpoints
+#                    they FAIL (loudly) rather than silently skip.
+#   --gdrive "<..>"  Reserved extension point for future built-in providers.
 #   --filter <pat>   Run only scenarios whose directory name contains <pat>
 #                    (e.g. --filter local, --filter 0, --filter ftp).
-#   --exclude <pat>  Skip scenarios whose directory name contains <pat>
-#                    (e.g. --exclude repair). Applied after --filter; the two
-#                    split the suite into parallel CI jobs.
-#   --local-only     Skip every scenario that requires FTP (REQUIRES_FTP > 0),
-#                    selecting by metadata rather than name. Use on runners with
-#                    no FTP container (e.g. windows-latest): all local scenarios
-#                    run — including new ones — and FTP scenarios are reported
-#                    SKIP instead of FAIL.
+#   --exclude <pat>  Skip scenarios whose directory name contains <pat>,
+#                    repeatable (e.g. --exclude repair --exclude ssh). Applied
+#                    after --filter; together they split the suite into parallel
+#                    CI jobs.
+#   --local-only     Skip every scenario that requires FTP or SSH (REQUIRES_FTP
+#                    > 0 or REQUIRES_SSH > 0), selecting by metadata rather than
+#                    name. Use on runners with no FTP/SSH container (e.g.
+#                    windows-latest): all pure-local scenarios run — including
+#                    new ones — and remote scenarios are reported SKIP instead
+#                    of FAIL.
 #   --ftp-only       Inverse of --local-only: skip every scenario that needs no
 #                    FTP (REQUIRES_FTP == 0), running only FTP-requiring ones.
 #                    Use to cover the FTP suite on a runner whose local scenarios
 #                    are already exercised by a separate --local-only job (e.g. a
 #                    Windows FTP job alongside the Windows local-only job).
-#                    Mutually exclusive with --local-only.
+#                    Mutually exclusive with --local-only / --ssh-only.
+#   --ssh-only       Like --ftp-only for SSH: skip every scenario that needs no
+#                    SSH (REQUIRES_SSH == 0), running only SSH-requiring ones.
+#                    Mutually exclusive with --local-only / --ftp-only.
+#   --docker-only    Run ONLY docker-managed scenarios (REQUIRES_DOCKER > 0), which
+#                    self-provision their own server and take NO external --ftp/--ssh
+#                    endpoints. Mutually exclusive with the other --*-only flags.
+#   --exclude-docker Skip docker-managed scenarios (REQUIRES_DOCKER > 0). A job that
+#                    supplies external --ftp/--ssh endpoints MUST use this: the pool
+#                    round-robins onto an external endpoint while the scenario asserts
+#                    against its self-registered one, so it would falsely fail. Run
+#                    the docker-managed scenarios in a companion --docker-only job.
 #   --list           List discovered scenarios and their requirements, then exit.
 #   --keep           Keep the temporary workspace for inspection (clean later
 #                    with: bash scripts/cli-e2e/clean.sh).
@@ -56,16 +72,19 @@ FTP_SPECS=()
 GDRIVE_SPECS=()
 SSH_SPECS=()
 RUN_FILTER=""
-RUN_EXCLUDE=""
+RUN_EXCLUDE=()
 DO_LIST=0
 LOCAL_ONLY=0
 FTP_ONLY=0
+SSH_ONLY=0
+DOCKER_ONLY=0
+EXCLUDE_DOCKER=0
 KEEP_WS=0
 DO_CLEAN=0
 DRY_RUN=0
 VERBOSE=0
 
-usage() { sed -n '2,47p' "${BASH_SOURCE[0]}" | sed 's/^#\{0,1\} \{0,1\}//'; }
+usage() { sed -n '2,62p' "${BASH_SOURCE[0]}" | sed 's/^#\{0,1\} \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -73,9 +92,12 @@ while [ $# -gt 0 ]; do
     --gdrive) GDRIVE_SPECS+=("${2:?--gdrive requires a value}"); shift 2 ;;
     --ssh)    SSH_SPECS+=("${2:?--ssh requires a value}"); shift 2 ;;
     --filter) RUN_FILTER="${2:?--filter requires a value}"; shift 2 ;;
-    --exclude) RUN_EXCLUDE="${2:?--exclude requires a value}"; shift 2 ;;
+    --exclude) RUN_EXCLUDE+=("${2:?--exclude requires a value}"); shift 2 ;;
     --local-only) LOCAL_ONLY=1; shift ;;
     --ftp-only) FTP_ONLY=1; shift ;;
+    --ssh-only) SSH_ONLY=1; shift ;;
+    --docker-only) DOCKER_ONLY=1; shift ;;
+    --exclude-docker) EXCLUDE_DOCKER=1; shift ;;
     --list)   DO_LIST=1; shift ;;
     --keep)   KEEP_WS=1; shift ;;
     --verbose|-v) VERBOSE=1; shift ;;
@@ -87,10 +109,11 @@ while [ $# -gt 0 ]; do
 done
 export KEEP_WS VERBOSE
 
-# --local-only and --ftp-only partition the suite by FTP requirement; asking for
-# both would skip every scenario, so it is a usage error rather than a no-op run.
-if [ "$LOCAL_ONLY" = "1" ] && [ "$FTP_ONLY" = "1" ]; then
-  echo "Options --local-only and --ftp-only are mutually exclusive." >&2
+# --local-only / --ftp-only / --ssh-only partition the suite by remote
+# requirement; asking for more than one would skip every scenario, so it is a
+# usage error rather than a no-op run.
+if [ $((LOCAL_ONLY + FTP_ONLY + SSH_ONLY + DOCKER_ONLY)) -gt 1 ]; then
+  echo "Options --local-only, --ftp-only, --ssh-only and --docker-only are mutually exclusive." >&2
   exit 2
 fi
 
@@ -119,45 +142,56 @@ fi
 . "$SCRIPT_DIR/lib/providers.sh"
 # shellcheck source=lib/ftp-ops.sh
 . "$SCRIPT_DIR/lib/ftp-ops.sh"
+# shellcheck source=lib/ssh-ops.sh
+. "$SCRIPT_DIR/lib/ssh-ops.sh"
+# shellcheck source=lib/docker-endpoint.sh
+. "$SCRIPT_DIR/lib/docker-endpoint.sh"
 # shellcheck source=lib/report.sh
 . "$SCRIPT_DIR/lib/report.sh"
 
 parse_ftp_specs
+parse_ssh_specs
 
-if [ ${#GDRIVE_SPECS[@]} -gt 0 ] || [ ${#SSH_SPECS[@]} -gt 0 ]; then
-  echo "[cli-e2e] note: --gdrive/--ssh are reserved; only local + ftp providers" \
-       "are built in, so those specs are currently ignored." >&2
+if [ ${#GDRIVE_SPECS[@]} -gt 0 ]; then
+  echo "[cli-e2e] note: --gdrive is reserved; no Google Drive provider is built" \
+       "in yet, so those specs are currently ignored." >&2
 fi
 
 # ── Scenario discovery ───────────────────────────────────────────────────────
 discover_scenarios() {
-  local sc key
+  local sc key pat
   for sc in "$SCRIPT_DIR"/scenarios/*/scenario.sh; do
     [ -f "$sc" ] || continue
     key="$(basename "$(dirname "$sc")")"
     case "$key" in _*) continue ;; esac
     if [ -n "$RUN_FILTER" ] && [[ "$key" != *"$RUN_FILTER"* ]]; then continue; fi
-    if [ -n "$RUN_EXCLUDE" ] && [[ "$key" == *"$RUN_EXCLUDE"* ]]; then continue; fi
+    local excluded=0
+    for pat in "${RUN_EXCLUDE[@]:-}"; do
+      [ -n "$pat" ] || continue
+      if [[ "$key" == *"$pat"* ]]; then excluded=1; break; fi
+    done
+    [ "$excluded" = "1" ] && continue
     printf '%s\n' "$sc"
   done | LC_ALL=C sort
 }
 
 # load_meta <scenario.sh> — source it and read its declared metadata into the
-# globals SCENARIO_NAME/DESC/REQUIRES_LOCAL/REQUIRES_FTP and scenario_run().
+# globals SCENARIO_NAME/DESC/REQUIRES_LOCAL/REQUIRES_FTP/REQUIRES_SSH and
+# scenario_run().
 load_meta() {
-  SCENARIO_NAME=""; SCENARIO_DESC=""; REQUIRES_LOCAL=0; REQUIRES_FTP=0
+  SCENARIO_NAME=""; SCENARIO_DESC=""; REQUIRES_LOCAL=0; REQUIRES_FTP=0; REQUIRES_SSH=0; REQUIRES_DOCKER=0
   unset -f scenario_run 2>/dev/null || true
   # shellcheck disable=SC1090
   . "$1"
 }
 
 if [ "$DO_LIST" = "1" ]; then
-  echo "Discovered scenarios (FTP endpoints available: $(ftp_count)):"
+  echo "Discovered scenarios (FTP endpoints: $(ftp_count), SSH endpoints: $(ssh_count)):"
   while IFS= read -r sc; do
     [ -n "$sc" ] || continue
     load_meta "$sc"
-    printf '  %-22s local=%s ftp=%s  %s\n' \
-      "$(basename "$(dirname "$sc")")" "$REQUIRES_LOCAL" "$REQUIRES_FTP" "$SCENARIO_NAME"
+    printf '  %-22s local=%s ftp=%s ssh=%s docker=%s  %s\n' \
+      "$(basename "$(dirname "$sc")")" "$REQUIRES_LOCAL" "$REQUIRES_FTP" "$REQUIRES_SSH" "$REQUIRES_DOCKER" "$SCENARIO_NAME"
   done < <(discover_scenarios)
   exit 0
 fi
@@ -169,7 +203,7 @@ trap env_cleanup EXIT
 trap 'exit 130' INT TERM
 
 echo "[cli-e2e] workspace: $RUN_WS"
-echo "[cli-e2e] bfs: tsx $BFS_ENTRY   |   FTP endpoints: $(ftp_count)"
+echo "[cli-e2e] bfs: tsx $BFS_ENTRY   |   FTP endpoints: $(ftp_count)   |   SSH endpoints: $(ssh_count)"
 echo
 
 had_any=0
@@ -187,12 +221,21 @@ while IFS= read -r sc; do
 
   start=$SECONDS
 
-  # --local-only: skip FTP scenarios by metadata (not name) so local-capable
-  # runners (e.g. windows-latest, no FTP container) run every local scenario and
-  # report the rest SKIP instead of FAIL. Selecting by REQUIRES_FTP means new
-  # FTP scenarios are excluded automatically, with no name pattern to maintain.
-  if [ "$LOCAL_ONLY" = "1" ] && [ "$REQUIRES_FTP" -gt 0 ]; then
-    report_result SKIP "$key" "requires FTP" ""
+  # --local-only: skip remote scenarios by metadata (not name) so local-capable
+  # runners (e.g. windows-latest, no FTP/SSH container) run every pure-local
+  # scenario and report the rest SKIP instead of FAIL. Selecting by
+  # REQUIRES_FTP/REQUIRES_SSH means new remote scenarios are excluded
+  # automatically, with no name pattern to maintain.
+  if [ "$LOCAL_ONLY" = "1" ] && { [ "$REQUIRES_FTP" -gt 0 ] || [ "$REQUIRES_SSH" -gt 0 ] || [ "$REQUIRES_DOCKER" -gt 0 ]; }; then
+    report_result SKIP "$key" "requires remote provider" ""
+    continue
+  fi
+
+  # Docker-managed scenarios self-provision their servers (real container
+  # lifecycle). Without a usable Docker daemon they cannot run — SKIP (not FAIL:
+  # there is no user-supplied endpoint to demand, and CI always has Docker).
+  if [ "$REQUIRES_DOCKER" -gt 0 ] && ! docker_available; then
+    report_result SKIP "$key" "requires Docker daemon" ""
     continue
   fi
 
@@ -201,7 +244,45 @@ while IFS= read -r sc; do
   # already covered by a companion --local-only job. Selecting by REQUIRES_FTP
   # means new FTP scenarios join automatically, with no name pattern to maintain.
   if [ "$FTP_ONLY" = "1" ] && [ "$REQUIRES_FTP" -eq 0 ]; then
-    report_result SKIP "$key" "local-only scenario" ""
+    report_result SKIP "$key" "not an FTP scenario" ""
+    continue
+  fi
+
+  # A --ftp-only partition provides no SSH. A mixed scenario that ALSO needs SSH
+  # (e.g. cross-type migration) is out of this job's scope — SKIP it (a companion
+  # SSH job covers it) instead of tripping the "SSH mandatory" FAIL below.
+  if [ "$FTP_ONLY" = "1" ] && [ "$REQUIRES_SSH" -gt 0 ] && [ "$(ssh_count)" -eq 0 ]; then
+    report_result SKIP "$key" "also needs SSH — out of FTP-only scope" ""
+    continue
+  fi
+
+  # --ssh-only: like --ftp-only for SSH. Run only SSH-requiring scenarios so a
+  # dedicated SSH job (e.g. a Windows SSH job) covers just the SSH suite.
+  if [ "$SSH_ONLY" = "1" ] && [ "$REQUIRES_SSH" -eq 0 ]; then
+    report_result SKIP "$key" "not an SSH scenario" ""
+    continue
+  fi
+
+  # Mirror of the FTP-only guard: a --ssh-only partition provides no FTP, so a
+  # mixed scenario that ALSO needs FTP is out of scope — SKIP, not FAIL.
+  if [ "$SSH_ONLY" = "1" ] && [ "$REQUIRES_FTP" -gt 0 ] && [ "$(ftp_count)" -eq 0 ]; then
+    report_result SKIP "$key" "also needs FTP — out of SSH-only scope" ""
+    continue
+  fi
+
+  # --docker-only: run ONLY docker-managed scenarios (they self-provision their
+  # server and take no external endpoints). Mirror of --ssh-only.
+  if [ "$DOCKER_ONLY" = "1" ] && [ "$REQUIRES_DOCKER" -eq 0 ]; then
+    report_result SKIP "$key" "not a Docker-managed scenario" ""
+    continue
+  fi
+
+  # --exclude-docker: a job supplying external --ftp/--ssh endpoints skips
+  # docker-managed scenarios. Their self-registered endpoint is appended after the
+  # external ones, but the round-robin pool picks endpoint 0 (external) while the
+  # scenario asserts against its own — a false failure. Run them via --docker-only.
+  if [ "$EXCLUDE_DOCKER" = "1" ] && [ "$REQUIRES_DOCKER" -gt 0 ]; then
+    report_result SKIP "$key" "docker-managed (run via --docker-only)" ""
     continue
   fi
 
@@ -211,6 +292,17 @@ while IFS= read -r sc; do
     {
       echo "scenario requires $REQUIRES_FTP FTP endpoint(s) but $(ftp_count) were provided."
       echo "supply them via repeated --ftp \"user:pass@host/path\" arguments."
+    } >"$log"
+    report_result FAIL "$key" "$((SECONDS - start))" "$log"
+    continue
+  fi
+
+  # SSH is mandatory in the same way: too few --ssh endpoints is a loud FAIL,
+  # never a silent skip.
+  if [ "$REQUIRES_SSH" -gt "$(ssh_count)" ]; then
+    {
+      echo "scenario requires $REQUIRES_SSH SSH endpoint(s) but $(ssh_count) were provided."
+      echo "supply them via repeated --ssh \"user:pass@host/path\" arguments."
     } >"$log"
     report_result FAIL "$key" "$((SECONDS - start))" "$log"
     continue
@@ -237,7 +329,8 @@ while IFS= read -r sc; do
 done < <(discover_scenarios)
 
 if [ "$had_any" = "0" ]; then
-  echo "No scenarios matched${RUN_FILTER:+ filter '$RUN_FILTER'}${RUN_EXCLUDE:+ exclude '$RUN_EXCLUDE'}." >&2
+  exclude_joined="${RUN_EXCLUDE[*]:-}"
+  echo "No scenarios matched${RUN_FILTER:+ filter '$RUN_FILTER'}${exclude_joined:+ exclude '$exclude_joined'}." >&2
   exit 1
 fi
 

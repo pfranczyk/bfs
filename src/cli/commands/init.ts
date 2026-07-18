@@ -6,7 +6,7 @@ import type { Command } from 'commander';
 import { estimateCompressibility } from '../../core/compression.js';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO, providerRegistry, validateProviderId, validateVaultName } from '../../providers/provider.js';
-import type { ProviderConfig } from '../../types/index.js';
+import type { ProviderConfig, ProviderIO } from '../../types/index.js';
 import { PushMode } from '../../types/index.js';
 import { init } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
@@ -154,7 +154,7 @@ export function registerInit(program: Command): void {
         ciParityShards = ci.parityShards;
         ciProviders = ci.providers;
       } else {
-        ciProviders = await _parseProviderSpecs(ciOpts.provider ?? [], rootDir);
+        ciProviders = await _parseProviderSpecs(ciOpts.provider ?? [], createCliProviderIO(rootDir, !isCi));
       }
 
       const vaultName = await _resolveVaultName(argName);
@@ -216,9 +216,9 @@ export function registerInit(program: Command): void {
  * Parses --provider specs into provider configs, aborting the command with a
  * clean message (not a stack) on the first malformed spec.
  */
-async function _parseProviderSpecs(specs: string[], rootDir: string): Promise<ProviderConfig[]> {
+async function _parseProviderSpecs(specs: string[], io: ProviderIO): Promise<ProviderConfig[]> {
   try {
-    return await Promise.all(specs.map((spec) => parseInitProviderSpec(spec, rootDir)));
+    return await Promise.all(specs.map((spec) => parseInitProviderSpec(spec, io)));
   } catch (err) {
     error(err instanceof Error ? err.message : String(err));
     throw new CommandAbort();
@@ -249,7 +249,8 @@ async function _resolveCiInputs(argName: string | undefined, ciOpts: InitCiOpts,
     error(fmt('init_ci_parity_shards_invalid', ciOpts.parityShards));
     throw new CommandAbort();
   }
-  const providers = await _parseProviderSpecs(ciOpts.provider ?? [], rootDir);
+  const io = createCliProviderIO(rootDir, false);
+  const providers = await _parseProviderSpecs(ciOpts.provider ?? [], io);
   const required = dataShards + parityShards;
   if (providers.length !== required) {
     error(fmt('init_ci_providers_required', String(required), String(dataShards), String(parityShards)));

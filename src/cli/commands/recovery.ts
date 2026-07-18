@@ -69,7 +69,7 @@ export function registerRecovery(program: Command): void {
         return;
       }
 
-      const { connectionConfig, bootstrapAdapterPackage } = await _resolveConnectionConfig({ providerType, bootstrapSpec: opts.bootstrap, rootDir, io });
+      const { connectionConfig, bootstrapAdapterPackage } = await _resolveConnectionConfig({ providerType, bootstrapSpec: opts.bootstrap, io });
       const vaultName = await _resolveRecoveryVaultName(opts.name);
 
       const spinner = ora(t('recovery_connecting')).start();
@@ -137,11 +137,11 @@ async function _resolveProviderType(provider: string | undefined): Promise<Nulla
  * parsing is delegated to the adapter via the shared parse-provider-spec helper;
  * interactively it delegates to the adapter's own configureInteractive prompts.
  */
-async function _resolveConnectionConfig(args: { providerType: string; bootstrapSpec: string | undefined; rootDir: string; io: ProviderIO }): Promise<{ connectionConfig: Record<string, unknown>; bootstrapAdapterPackage: Nullable<string> }> {
-  const { providerType, bootstrapSpec, rootDir, io } = args;
+async function _resolveConnectionConfig(args: { providerType: string; bootstrapSpec: string | undefined; io: ProviderIO }): Promise<{ connectionConfig: Record<string, unknown>; bootstrapAdapterPackage: Nullable<string> }> {
+  const { providerType, bootstrapSpec, io } = args;
   if (bootstrapSpec !== undefined) {
     try {
-      const parsed = await parseRecoveryBootstrapSpec(bootstrapSpec, providerType, rootDir);
+      const parsed = await parseRecoveryBootstrapSpec(bootstrapSpec, providerType, io);
       return { connectionConfig: parsed.config, bootstrapAdapterPackage: parsed.adapterPackage };
     } catch (err) {
       error(err instanceof Error ? err.message : String(err));

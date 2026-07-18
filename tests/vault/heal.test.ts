@@ -4,15 +4,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-// Importing LocalFsProvider registers its factory in the global ProviderRegistry,
-// which init/push/heal resolve by string "local".
-import '../../src/providers/local-fs.js';
 import { packBlob } from '../../src/core/blob-pack.js';
-import { BfsError } from '../../src/core/errors.js';
+import { BfsError, ProviderError } from '../../src/core/errors.js';
 import { hashBuffer, SHA256_BYTES } from '../../src/core/hash.js';
 import { createIgnoreFilter } from '../../src/core/ignore.js';
 import { rsEncode } from '../../src/core/reed-solomon.js';
 import { buildShard, buildShardHeaderFromBytes, buildShardV2, computeShardHeaderSize, parseShardHeaderFromStream, readShardHeader, uuidToBuffer } from '../../src/core/shard-io.js';
+// Importing LocalFsProvider registers its factory in the global ProviderRegistry,
+// which init/push/heal resolve by string "local".
+import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { createMockProviderIO, providerRegistry } from '../../src/providers/provider.js';
 import type { ProviderConfig, ProviderIO, ShardHeader, ShardLocation, VaultConfig, VersionManifest } from '../../src/types/index.js';
 import { PushMode, VersionHealth } from '../../src/types/index.js';
@@ -164,6 +164,40 @@ async function synthesizeV1Vault(opts: { N: number; K: number; vaultName: string
 // modern BFS that itself only writes V2. The heal/recovery code dispatches on the
 // format read from existing shards, so these guard that a V1 version stays V1 and
 // still decodes — neither silently upgraded to V2 nor mis-read as the wrong format.
+// L7 — relocate must surface WHY the new address is unusable (e.g. a rejected
+// host key) instead of masking every failure behind a generic "not accessible"
+// that sends the operator debugging connectivity when they need --known-host /
+// --accept-new-host-key.
+describe('relocate surfaces the underlying connection failure (L7)', () => {
+  const REJECT_TYPE = 'hostkey-reject-test';
+  const MARKER = 'HOSTKEY_REJECTED: untrusted host key';
+
+  class HostKeyRejectProvider extends LocalFsProvider {
+    async healthCheck(): Promise<boolean> {
+      return false;
+    }
+    async authenticate(): Promise<void> {
+      throw new ProviderError(MARKER);
+    }
+  }
+
+  beforeEach(() => {
+    providerRegistry.register(REJECT_TYPE, { lang: 'en', displayName: 'Host-key-reject (tests)', create: (config, io) => new HostKeyRejectProvider(config, io), help: () => ({ usage: '', description: '', flags: [], examples: [] }) });
+  });
+  afterEach(() => {
+    (providerRegistry as unknown as { entries: Map<string, unknown> }).entries.delete(REJECT_TYPE);
+  });
+
+  it('should include the underlying reason, not just "not accessible", when the new address refuses', async () => {
+    const { root, providerDirs } = await setupVault({ encrypted: false });
+    try {
+      await expect(relocateProvider(root, 'p0', { newConnectionConfig: { path: providerDirs[0] ?? '' }, newType: REJECT_TYPE, io: createMockProviderIO().io })).rejects.toThrow(MARKER);
+    } finally {
+      await cleanup([root, ...providerDirs]);
+    }
+  });
+});
+
 describe('legacy V1 vault heal + recovery', () => {
   let dirs: string[];
 

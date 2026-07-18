@@ -5,6 +5,7 @@ import { assertSafeVaultName } from '../core/fs-utils.js';
 import { hashBuffer, streamToBuffer } from '../core/hash.js';
 import { rsRepair, rsRepairStriped } from '../core/reed-solomon.js';
 import { buildHeaderBytes, buildShard, buildShardHeaderFromBytes, buildShardV2, buildSidecarBytes, SHARD_HEADER_READ_BYTES } from '../core/shard-io.js';
+import { fmt } from '../i18n/index.js';
 import { providerRegistry } from '../providers/provider.js';
 import type {
   ManifestShard,
@@ -151,19 +152,24 @@ interface UploadRepairedShardOptions {
   vaultName: string;
   /** Encryption key for the header location map (undefined when unencrypted). */
   encKey: Buffer | undefined;
-  /** ProviderIO for authenticating the target provider. */
+  /** ProviderIO for probing the target provider. */
   io: ProviderIO;
 }
 
 /**
  * Builds the repaired shard binary and uploads it to the target provider.
- * @throws BfsError if the target provider cannot be authenticated
+ * @throws BfsError if the target provider cannot be reached or provisioned
  */
 async function uploadRepairedShard(options: UploadRepairedShardOptions): Promise<void> {
   const { targetProviderConfig, header, payload, filename, vaultName, encKey, io } = options;
   const targetProvider = providerRegistry.create(targetProviderConfig, io);
-  await targetProvider.authenticate();
   targetProvider.setVaultName(vaultName);
+  // A rebuild target is a possibly-fresh or wiped medium (lost disk / replaced
+  // server), so its base directory may not exist yet. probeConnection provisions
+  // it — exactly as init does — and validates connectivity; a bare authenticate()
+  // would instead list the base path and hard-fail on a provider (SSH) that lists
+  // strictly, leaving the reconstructed shard unwritten.
+  await targetProvider.probeConnection();
   // V2 shards carry a striped header (with rs_stripe_size) and a payload already
   // in stored form (encrypted ciphertext+tag, or raw); V1 legacy uses buildShard.
   const shardBuffer = header.format_version >= 2 ? buildShardV2(header, payload, encKey) : buildShard(header, payload, encKey);
@@ -243,9 +249,15 @@ export async function updateLocationMaps(rootDir: string, version: number, optio
     const pc = config.providers.find((p) => p.id === ms.provider_id);
     if (!pc) continue; // provider removed from config — skip
 
+    const provider = providerRegistry.create(pc, io);
     try {
-      const provider = providerRegistry.create(pc, io);
       await provider.authenticate();
+    } catch {
+      // Provider unreachable — skip; it will need a separate heal later.
+      continue;
+    }
+
+    try {
       provider.setVaultName(config.vault_name);
 
       const filename = `shard_${ms.shard_index}.bfs.${version}`;
@@ -290,7 +302,10 @@ export async function updateLocationMaps(rootDir: string, version: number, optio
         await provider.updateShardHeader(ref, buildHeaderBytes(newHeader, encKey));
       }
     } catch {
-      // skip unavailable providers — they will need separate heal later
+      // The provider is reachable but the header rewrite failed — this shard's
+      // location map is now stale. Surface it instead of hiding it behind the
+      // "unavailable" skip; the operator can heal or repair that provider.
+      io.warn(fmt('heal_locationmap_update_failed', ms.provider_id));
     }
   }
 }
@@ -631,13 +646,16 @@ export async function relocateProvider(rootDir: string, providerId: string, opti
   const updatedProviderConfig = { ...existingProvider, type: resolvedType, adapterPackage: updatedAdapterPackage, config: newConnectionConfig };
   const tempProvider = providerRegistry.create(updatedProviderConfig, io);
 
-  // Verify accessibility
-  const healthy = await tempProvider.healthCheck();
-  if (!healthy) {
-    throw new BfsError(`Provider "${providerId}" is not accessible at the new address.`);
+  // Verify accessibility. healthCheck() only yields a boolean, which would mask
+  // WHY the address is unusable behind a generic "not accessible" — sending the
+  // operator to debug connectivity when the real cause is often a rejected host
+  // key. Drive authenticate() and forward its classified error so the message
+  // tells them whether they need --known-host / --accept-new-host-key.
+  try {
+    await tempProvider.authenticate();
+  } catch (err) {
+    throw new BfsError(fmt('heal_relocate_unreachable', providerId, err instanceof Error ? err.message : String(err)));
   }
-
-  await tempProvider.authenticate();
   tempProvider.setVaultName(config.vault_name);
 
   // Verify shards exist on the new address for all relevant versions

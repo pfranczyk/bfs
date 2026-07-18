@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`ssh` — store a device's part on an SSH/SFTP server.** Configure it with
+  `--provider "ssh:<name> --host <host> --user <user> --path /backup …"`.
+  Authentication is password or SSH key (`--private-key <path>`, with an optional
+  `--passphrase`); with neither, BFS uses the default key under `~/.ssh`
+  (`id_ed25519`, then `id_rsa`). The host key is verified on first connection and
+  pinned, so a later change is flagged — trusted interactively, via
+  `--known-host <fingerprint>`, or with `--accept-new-host-key` for
+  non-interactive runs. Settings accept inline flags, a `--config-file <path>` JSON
+  file, or both; passwords and passphrases are stripped from the stored parts
+  (kept only in the local config, `0600`) and requested again at recovery.
+
+### Changed
+- **Adding a storage device now checks it is actually writable, up front.** When
+  you set a device up (`bfs init`, `bfs provider add`), BFS creates its target
+  directory and round-trips a small test file — so a wrong path, a missing folder,
+  or a read-only account fails immediately with a clear message instead of looking
+  fine and only breaking at the first `push`. This applies to every device type
+  (local, FTP, SSH) and to scripted (`--ci`) runs too.
+
 ## [0.11.0] - 2026-07-09
 
 ### Added

@@ -1,9 +1,19 @@
 # BFS provider adapter guide
 
 This guide is for developers publishing external storage-provider adapters
-for BFS (e.g. `bfs-adapter-ssh`, `bfs-adapter-s3`). BFS core is blind to
-concrete provider types — everything a new storage backend needs is
-declared via the `StorageProvider` / `ProviderFactory` contract.
+for BFS — cloud backends such as `bfs-adapter-s3` or `@acme/bfs-adapter-gdrive`,
+or any community storage backend. BFS core is blind to concrete provider
+types — everything a new storage backend needs is declared via the
+`StorageProvider` / `ProviderFactory` contract.
+
+**Built-in transports vs adapters.** Non-cloud transports — local disk,
+FTP/FTPS, SSH/SFTP, WebDAV, SMB — ship *inside* BFS core, not as adapters.
+They are stable, protocol-level backends every user gets without installing
+anything, and a backup must stay recoverable without depending on a plugin
+registry. External adapters are the delivery mechanism for **cloud** storage
+(Google Drive, OneDrive, Dropbox, S3/Backblaze B2, …), whose provider-controlled
+APIs change on the vendor's schedule. Keeping cloud backends as adapters lets
+that API churn update independently, without forcing a new BFS release.
 
 ## Install
 
@@ -141,9 +151,8 @@ export class MyProvider implements StorageProvider {
 
 ### Upload integrity — verify writes you can't trust
 
-Whenever the transport behind `upload()` is not byte-exact — FTP with its
-historical ASCII-mode quirks, cloud APIs that retry on flaky connections,
-SFTP over unreliable links, anything that sits on the network — **re-read
+Whenever the transport behind `upload()` is not byte-exact — cloud APIs that retry on flaky connections,
+object-storage PUTs over HTTPS, anything that sits on the network — **re-read
 the file immediately after writing and compare it hash-for-hash before
 returning a `RemoteRef`**. BFS's shard format carries its own trailing
 SHA-256, so silent mid-stream corruption will eventually surface as
@@ -276,15 +285,16 @@ recognize exactly three BFS-level flags:
 
 **Every other CLI token is forwarded verbatim** to your adapter through
 `CliProviderInput.rawArgs`. BFS never interprets them — `--config-file`,
-`--bucket`, `--private-key`, anything you define is your adapter's
+`--bucket`, `--endpoint`, anything you define is your adapter's
 grammar, not BFS's. BFS calls your adapter like this:
 
 ```ts
 await myProvider.configureFromFlags({
   name: 'cloud',
   rawArgs: [                     // everything BFS didn't bind, in order
-    '--private-key', '/home/alice/.ssh/id_rsa',
-    '--passphrase-env', 'SECRET',
+    '--bucket', 'my-backups',
+    '--region', 'eu-central-1',
+    '--secret-key-env', 'S3_SECRET',
   ],
 });
 ```
@@ -297,8 +307,8 @@ flags, derive from `name` alone. Typical patterns:
    against `io.workDir`, read the file, validate. The built-in FTP and
    LocalFS adapters use this pattern.
 2. **Raw-args only** — parse `rawArgs` with your own mini-parser or a
-   library like `minimist`. Example for SSH: `--host`, `--user`,
-   `--private-key`.
+   library like `minimist`. Example for S3: `--bucket`, `--region`,
+   `--access-key-id`.
 3. **Either / both** — e.g. a baseline config file whose entries can be
    overridden by individual flags. Up to the adapter to document.
 
@@ -314,9 +324,9 @@ BFS ships `src/providers/flags.ts` with two helpers adapters can opt into
 
 ### Secrets recommendation
 
-Reference secrets, don't embed them. Take a path to a private-key file
-or an env-var name (`--passphrase-env`) rather than shipping the secret
-itself as a flag value — `ps`, `.bash_history` and
+Reference secrets, don't embed them. Take a path to a credentials file
+or an env-var name (`--secret-key-env`, `--token-env`) rather than
+shipping the secret itself as a flag value — `ps`, `.bash_history` and
 `ConsoleHost_history.txt` retain command lines.
 
 ## Provider help (`ProviderHelp`)
@@ -334,8 +344,8 @@ called the field already holds the active language tag (`'en'`, `'pl'`,
 …). Adapters that don't support i18n simply ignore `this.lang` and
 return English-only strings.
 
-`displayName` is the provider's own name (proper noun / brand /
-protocol — `OneDrive`, `FTP/FTPS`, `My Storage Backend`) and is **NOT
+`displayName` is the provider's own name (proper noun / brand —
+`OneDrive`, `Backblaze B2`, `My Storage Backend`) and is **NOT
 translated** — proper nouns stay identical across UI languages.
 `examples` are CLI commands (typically copy-pasteable verbatim) and
 also stay in their canonical English form.
@@ -343,7 +353,7 @@ also stay in their canonical English form.
 ```ts
 const factory: ProviderFactory = {
   lang: 'en',
-  displayName: 'SSH/SFTP',
+  displayName: 'S3-compatible storage',
   // …
 
   help(): ProviderHelp {
@@ -353,24 +363,24 @@ const factory: ProviderFactory = {
     const dict = this.lang === 'pl' ? plStrings : enStrings;
 
     return {
-      usage: '--host <h> --user <u> --private-key <path> [--port 22]',
+      usage: '--bucket <name> --region <r> [--endpoint <url>]',
       description: dict.description,
       flags: [
-        { flag: '--host <host>',          description: dict.flag_host },
-        { flag: '--port <port>',          description: dict.flag_port },
-        { flag: '--user <user>',          description: dict.flag_user },
-        { flag: '--private-key <path>',   description: dict.flag_pk },
-        { flag: '--passphrase-env <var>', description: dict.flag_env },
+        { flag: '--bucket <name>',        description: dict.flag_bucket },
+        { flag: '--region <region>',      description: dict.flag_region },
+        { flag: '--endpoint <url>',       description: dict.flag_endpoint },
+        { flag: '--access-key-id <id>',   description: dict.flag_key_id },
+        { flag: '--secret-key-env <var>', description: dict.flag_secret_env },
       ],
       examples: [
-        'bfs provider add --ci --name cloud --type ssh \\',
-        '  --host backup.example.com --user bfs --private-key ~/.ssh/bfs_ed25519',
+        'bfs provider add --ci --name cloud --type s3 \\',
+        '  --bucket my-backups --region eu-central-1 --access-key-id AKIA… --secret-key-env S3_SECRET',
       ],
       // Optional. When omitted, BFS falls back to
       // `npm install -g ${packageName}` derived from registration meta.
       // Use this field only when you need a custom hint (extra setup steps,
       // alternative install channel, etc.).
-      installation: 'npm i -g bfs-adapter-ssh',
+      installation: 'npm i -g bfs-adapter-s3',
     };
   },
 };
@@ -383,9 +393,9 @@ not require the adapter to act on it:
 ```ts
 help(): ProviderHelp {
   return {
-    usage: '--bucket <name>',
-    description: 'Stores shards as objects in S3.',
-    flags: [{ flag: '--bucket <name>', description: 'S3 bucket name' }],
+    usage: '--token-env <var>',
+    description: 'Stores shards in Dropbox.',
+    flags: [{ flag: '--token-env <var>', description: 'Env var holding the Dropbox access token' }],
     examples: [],
   };
 }
@@ -436,14 +446,14 @@ when the type is missing from the registry.
 ## Disaster recovery and adapter versioning
 
 When BFS pushes a backup, it stores the adapter npm spec (e.g.
-`bfs-adapter-ssh@1.0.1`) inside each shard's location map. A fresh BFS
+`bfs-adapter-gdrive@1.0.1`) inside each shard's location map. A fresh BFS
 install running `bfs recovery` on that backup reads the shard header,
 discovers which adapters are needed, and produces a report:
 
 ```
 The following adapters are required but not installed:
 
-  ssh          — install: npm install -g bfs-adapter-ssh@1.0.1
+  gdrive       — install: npm install -g bfs-adapter-gdrive@1.0.1
   acme-cloud   — install: npm install -g @acme/bfs-adapter-cloud@2.3.0
 
 Install them and retry. Alternatively, if enough shards are available
@@ -462,6 +472,35 @@ Reed-Solomon recovery from what is present.
 bump. Breaking the config format is fine for a `2.0.0 → 3.0.0` release
 but avoid it in patch/minor — legacy shards otherwise fail when decoded
 by the newer adapter.
+
+### Storage format and migration portability
+
+BFS hands your adapter opaque shard bytes (`upload(filename, data, size)`) and
+trusts `download(ref)` to return them byte-for-byte. That round-trip fidelity —
+through the SAME adapter — is the only guarantee. HOW you store the bytes is your
+choice: a raw file, a wrapped container, an at-rest-encrypted blob, a metadata
+field, or one object holding both the shard and its header sidecar.
+
+This freedom has one consequence to weigh — two migration paths exist:
+
+- **BFS-mediated** (format-agnostic): `bfs repair` / provider relocation reads
+  from the old provider (`download`) and writes to the new one (`upload`), so each
+  adapter handles its own format. Works across ANY adapters, but the source must
+  still be reachable.
+- **Manual byte-move + repoint** (lifting raw storage off your medium and handing
+  it to a different provider): works ONLY if both providers share the same
+  on-medium layout. The built-in `local`/`ftp`/`ssh` providers store raw canonical
+  bytes named `shard_{i}.bfs.{V}` with the sidecar `hdr_{i}.bfs.{V}`, so manual
+  moves between them work — but a custom format is unreadable to them.
+
+If you want users to be able to lift raw storage onto another provider, store
+shards as raw bytes in that canonical layout. If a custom format suits your medium
+better (legitimate), only BFS-mediated migration applies — consider documenting an
+export path.
+
+Related: your `verifyShard` may return `unverifiable` — you are a blind courier of
+BFS's bytes and are NOT expected to parse the shard format. BFS-core verifies shard
+content itself when it reads; `verifyShard` is only a cheap identity probe.
 
 ## Version compatibility
 
@@ -509,7 +548,7 @@ console.log(`Running on BFS ${BFS_VERSION}, contract v${BFS_PROVIDER_API_VERSION
 
 ## Package conventions
 
-- **Name**: publish as `bfs-adapter-<type>` (e.g. `bfs-adapter-ssh`).
+- **Name**: publish as `bfs-adapter-<type>` (e.g. `bfs-adapter-s3`).
   Scoped packages are allowed: `@corp/bfs-adapter-<type>`. A future BFS
   release will auto-load packages with this prefix from the global
   `node_modules`; today, users activate adapters by importing them.

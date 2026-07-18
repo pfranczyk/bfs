@@ -125,7 +125,7 @@ export function registerProviderAdd(providerCmd: Command): void {
         throw new CommandAbort();
       }
 
-      const io = createCliProviderIO(rootDir);
+      const io = createCliProviderIO(rootDir, !isCi);
 
       // adapterPackage: null for built-in, "pkg@ver" for external adapters
       // that registered with AdapterRegistrationMeta. Persisted in the new

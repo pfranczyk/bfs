@@ -133,8 +133,11 @@ describe('LocalFsProvider', () => {
     expect(refs.map((r) => r.path)).not.toContain('shard_0.bfs.1');
   });
 
-  it('should throw ProviderError when deleting non-existent file', async () => {
-    await expect(provider.delete({ provider_id: 'test-local', path: 'nonexistent.bfs.1' })).rejects.toThrow(ProviderError);
+  // delete is idempotent: an already-absent shard is success (parity with
+  // FTP/SSH), so a resumed prune or an out-of-band removal does not raise a
+  // false "possible orphan" warning for data that is already gone.
+  it('should treat deleting an already-absent shard as success (idempotent)', async () => {
+    await expect(provider.delete({ provider_id: 'test-local', path: 'nonexistent.bfs.1' })).resolves.toBeUndefined();
   });
 
   // ─── healthCheck ──────────────────────────────────────────────────────────
@@ -699,6 +702,18 @@ describe('LocalFsProvider — header sidecar (BFSH)', () => {
   it('should remove the sidecar when the shard is deleted', async () => {
     await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('payload'));
     await fs.writeFile(sidecarPath(), Buffer.from('sidecar'));
+
+    await provider.delete(shardRef);
+
+    await expect(fs.access(sidecarPath())).rejects.toThrow();
+  });
+
+  // A resumed prune (the shard is already gone) must still clear an orphan
+  // `hdr_` sidecar. Because delete() no longer throws on an absent shard,
+  // sidecar removal is reached and the stale header does not survive.
+  it('should remove an orphan sidecar even when the shard is already absent', async () => {
+    await fs.mkdir(path.join(tmpDir, 'testvault'), { recursive: true });
+    await fs.writeFile(sidecarPath(), Buffer.from('orphan-sidecar'));
 
     await provider.delete(shardRef);
 

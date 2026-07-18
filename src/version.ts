@@ -2,7 +2,7 @@
  * Current BFS release version. Must stay in sync with package.json — update
  * both together for a release. Used for diagnostic display ("BFS x.y.z").
  */
-export const BFS_VERSION = '0.11.0';
+export const BFS_VERSION = '0.12.0-rc.1';
 
 /**
  * Provider contract API version.
@@ -97,5 +97,16 @@ export const BFS_VERSION = '0.11.0';
  *           no TTY). An adapter MUST NOT block on a prompt when false; it picks
  *           a safe default instead. Adapters that ignore the field keep their
  *           previous behaviour, so the addition breaks nothing.
+ *         • CliProviderInput.offline?: boolean — OPTIONAL, added without a bump:
+ *           informational flag telling configureFromFlags that the command edits
+ *           config WITHOUT contacting the medium (`bfs provider edit`). An
+ *           adapter whose flag needs a live connection (SSH --accept-new-host-key,
+ *           which must dial the server to capture and pin the key) MUST reject it
+ *           when true. Adapters that ignore the field are unaffected.
+ *         • StorageProvider.configureInteractiveForEdit?(io, ctx) — OPTIONAL,
+ *           added without a bump: edit-aware interactive configure that receives
+ *           the existing connection-config (ConfigureEditContext). SSH uses it for
+ *           online-first host-key pinning with an offline fallback; adapters that
+ *           omit it fall back to configureInteractive for `bfs provider edit`.
  */
 export const BFS_PROVIDER_API_VERSION = 2;

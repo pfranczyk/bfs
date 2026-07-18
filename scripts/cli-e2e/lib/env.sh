@@ -37,14 +37,14 @@ env_init() {
   export TSX BFS_ENTRY
 }
 
-# env_cleanup — removes the local workspace AND this run's remote FTP namespace
-# unless KEEP_WS=1. Registered as an EXIT trap by run.sh, so it also fires on
-# Ctrl+C and on failure. Never touches anything outside RUN_WS locally, or
-# anything but `bfs-e2e-<RUN_ID>` remotely.
+# env_cleanup — removes the local workspace AND this run's remote FTP/SSH
+# namespace unless KEEP_WS=1. Registered as an EXIT trap by run.sh, so it also
+# fires on Ctrl+C and on failure. Never touches anything outside RUN_WS locally,
+# or anything but `bfs-e2e-<RUN_ID>` remotely.
 env_cleanup() {
   if [ "${KEEP_WS:-0}" = "1" ]; then
     echo "[cli-e2e] workspace kept: $RUN_WS" >&2
-    echo "[cli-e2e] remove later with: bash scripts/cli-e2e/clean.sh [--ftp \"<spec>\"]" >&2
+    echo "[cli-e2e] remove later with: bash scripts/cli-e2e/clean.sh [--ftp \"<spec>\"] [--ssh \"<spec>\"]" >&2
     return 0
   fi
   [ -n "${RUN_WS:-}" ] && rm -rf "$RUN_WS"
@@ -52,5 +52,14 @@ env_cleanup() {
   if declare -F ftp_clean_run >/dev/null 2>&1 &&
     [ "$(ftp_count 2>/dev/null || echo 0)" -gt 0 ]; then
     ftp_clean_run "$RUN_ID"
+  fi
+  # Remote: same for every SSH endpoint that was used.
+  if declare -F ssh_clean_run >/dev/null 2>&1 &&
+    [ "$(ssh_count 2>/dev/null || echo 0)" -gt 0 ]; then
+    ssh_clean_run "$RUN_ID"
+  fi
+  # Drop every container/volume this run's docker-managed scenarios created.
+  if declare -F docker_cleanup_run >/dev/null 2>&1; then
+    docker_cleanup_run "$RUN_ID"
   fi
 }

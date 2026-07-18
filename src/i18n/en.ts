@@ -242,6 +242,7 @@ export const en: Strings = {
   prune_versions_to_delete: 'Versions to delete: %s',
   prune_confirm: 'Delete %s version(s)?',
   prune_deleted: 'Deleted versions: %s',
+  prune_orphan_warn: 'Could not remove version %s data from storage "%s" — it may still occupy space there.',
 
   // ─── verify ───────────────────────────────────────────────────────────────
   verify_spinner: 'Verifying versions…',
@@ -552,6 +553,89 @@ export const en: Strings = {
   ftp_probe_step_compare_remote: 'Probe failed at compare: downloaded bytes differ from uploaded',
   ftp_probe_step_cleanup: 'Probe failed at cleanup: %s',
 
+  // ─── provider: ssh ──────────────────────────────────────────────────────
+  ssh_host_prompt: 'SSH host:',
+  ssh_port_prompt: 'Port (default 22):',
+  ssh_user_prompt: 'Username:',
+  ssh_auth_method_prompt: 'Authentication method:',
+  ssh_auth_password: 'Password',
+  ssh_auth_key: 'Private key file',
+  ssh_password_prompt: 'Password:',
+  ssh_private_key_prompt: 'Path to the SSH private key file:',
+  ssh_passphrase_prompt: 'Private key passphrase (blank if none):',
+  ssh_path_prompt: 'Base path on server (absolute, forward slashes):',
+
+  // ─── SSH — host key ────────────────────────────────────────────────────────
+  ssh_host_key_confirm: 'Trust the host key for %s?\n  fingerprint %s',
+  ssh_host_key_declined: 'Host key for %s was not trusted — connection refused.',
+  ssh_host_key_revoked: 'Host key for %s is revoked in ~/.ssh/known_hosts — refusing to connect (the key is marked compromised).',
+
+  // ─── SSH — edit (online-first host key, offline fallback) ───────────────────
+  ssh_edit_connecting: 'Connecting to %s to confirm the host key…',
+  ssh_edit_offline_menu: 'Could not reach %s. Choose how to set the host-key pin:',
+  ssh_edit_offline_paste: 'Paste a host-key fingerprint (SHA256:…)',
+  ssh_edit_paste_prompt: 'Host-key fingerprint (SHA256:…):',
+  ssh_edit_fingerprint_invalid: 'Not a valid SHA256 fingerprint (expected "SHA256:" followed by base64). Try again.',
+  ssh_edit_offline_known_hosts_entry: 'Use %s from ~/.ssh/known_hosts — %s',
+  ssh_edit_offline_known_hosts_entry_recommended: 'Use %s from ~/.ssh/known_hosts — %s (recommended — BFS will use this type)',
+  ssh_edit_offline_no_pin: 'Save without a host-key pin',
+  ssh_edit_no_pin_warn: 'Saved offline with no host-key fingerprint. BFS will trust the host via ~/.ssh/known_hosts or ask on the first push; recovery on another machine will require confirming the host key.',
+  ssh_edit_offline_exit: 'Cancel the edit',
+  ssh_edit_cancelled: 'Edit cancelled — host-key pin not set.',
+
+  // ─── SSH — help ────────────────────────────────────────────────────────────
+  ssh_help_description: 'Connects to an SSH/SFTP server and stores backup data as files on the ' + 'remote. Configuration may come from inline flags, a JSON config file, ' + 'or both — inline flags override values loaded from JSON.',
+  ssh_help_flag_host_desc: 'SSH server hostname or IP',
+  ssh_help_flag_port_desc: 'SSH server port (default 22)',
+  ssh_help_flag_user_desc: 'SSH login user',
+  ssh_help_flag_password_desc: 'SSH login password (prefer --private-key where possible)',
+  ssh_help_flag_private_key_desc: 'Path to the private key file (never the key contents). When neither ' + '--password nor --private-key is given, ~/.ssh/id_ed25519 then id_rsa are tried.',
+  ssh_help_flag_passphrase_desc: 'Passphrase for the private key (if encrypted)',
+  ssh_help_flag_path_desc: 'Absolute base path on the server (must start with "/")',
+  ssh_help_flag_known_host_desc: 'Pin the expected host-key fingerprint (SHA256:…) for non-interactive trust',
+  ssh_help_flag_accept_new_host_key_desc: 'In non-interactive mode, trust a new host key on first connect',
+  ssh_help_flag_config_file_desc: 'JSON with any of { host, port, user, password, private_key_path, ' + 'passphrase, path, host_key_fingerprint }. Inline flags override JSON.',
+
+  // ─── SSH — runtime errors ──────────────────────────────────────────────────
+  ssh_operation_failed: 'SSH operation failed on %s:%s: %s',
+  ssh_size_mismatch: 'SSH upload size mismatch for "%s": sent %s B, server stored %s B.',
+  ssh_control_chars: 'SSH path and backup name must not contain line breaks or control characters.',
+  ssh_key_unreadable: 'SSH private key file "%s" could not be read: %s',
+  ssh_recovery_confirm_host: 'Recovery wants to send the SSH secret to %s (path %s, host-key %s). Send it to this host?',
+  ssh_recovery_target: 'Recovery: connecting to SSH %s (path %s, host-key %s).',
+  ssh_recovery_password: 'SSH password for %s:',
+  ssh_recovery_passphrase: 'SSH private key passphrase for %s:',
+  ssh_recovery_declined: 'Recovery declined: no SSH secret sent to %s.',
+  ssh_recovery_no_secret_noninteractive: 'Recovery cannot obtain the SSH secret for %s in non-interactive mode: no supplied secret authenticated. Provide it via the recovery inputs.',
+  ssh_recovery_unpinned: '(unpinned)',
+
+  // ─── SSH — configureFromFlags + validateConfig ─────────────────────────────
+  ssh_config_port_invalid: 'SSH adapter: config "port" must be an integer between 1 and 65535',
+  ssh_inline_port_invalid: 'SSH adapter: --port must be an integer between 1 and 65535',
+  ssh_host_required: 'SSH adapter: "host" is required. Pass --host <hostname> or ' + '--config-file <path> inside the --provider spec.',
+  ssh_path_required: 'SSH adapter: "path" is required. Pass --path </absolute/path> or --config-file <path>.',
+  ssh_path_must_be_absolute: 'SSH adapter: "path" must be absolute (start with "/").',
+  ssh_auth_conflict: 'SSH adapter: pass either --password or --private-key, not both.',
+  ssh_auth_missing: 'SSH adapter: no credentials — pass --password, --private-key <path>, ' + 'or place a key at ~/.ssh/id_ed25519 or ~/.ssh/id_rsa.',
+  ssh_accept_new_offline:
+    '--accept-new-host-key needs to contact the server to capture and pin its host key, which an offline "provider edit" does not do. ' +
+    'Pin the new host explicitly with --known-host <SHA256:…>, or add it online via "bfs provider add" / "bfs init".',
+  ssh_validate_host_required: 'SSH: host is required and must be a non-empty string',
+  ssh_validate_port_invalid: 'SSH: port must be an integer between 1 and 65535',
+  ssh_validate_path_required: 'SSH: path is required and must be a non-empty string',
+  ssh_validate_path_absolute: 'SSH: path must start with "/"',
+  ssh_validate_auth_required: 'SSH: a password or a private key path is required',
+  ssh_validate_auth_conflict: 'SSH: use a password OR a private key, not both',
+  ssh_describe_config: 'host: %s, port: %s, user: %s, path: %s, %s',
+
+  // ─── SSH — probeConnection ─────────────────────────────────────────────────
+  ssh_probe_incomplete: 'Probe failed: SSH config incomplete (host and path must be set)',
+  ssh_probe_step_ensure_dir: 'Probe failed at ensureDir: %s',
+  ssh_probe_step_upload: 'Probe failed at upload: %s',
+  ssh_probe_step_download: 'Probe failed at download: %s',
+  ssh_probe_step_compare_remote: 'Probe failed at compare: downloaded bytes differ from uploaded',
+  ssh_probe_step_cleanup: 'Probe failed at cleanup: %s',
+
   // ─── LocalFS — runtime errors ──────────────────────────────────────────────
   local_list_failed: 'Failed to list backup directory "%s": %s',
   local_list_vaults_failed: 'Failed to list backups in "%s": %s',
@@ -575,6 +659,8 @@ export const en: Strings = {
   repair_unknown_provider: 'Provider "%s" not found in backup config.',
   repair_duplicate_provider_in_args: 'Provider "%s" repeated in repair arguments.',
   repair_spec_invalid_params: 'Invalid repair params: "%s". Use adapter flags (e.g. --path) or a type:name migration.',
+  heal_locationmap_update_failed: 'Could not update storage "%s" with the new location info — heal or repair it separately.',
+  heal_relocate_unreachable: 'Storage "%s" is not usable at the new address: %s',
 
   // ─── repair (command) ──────────────────────────────────────────────────────
   cmd_repair_desc: 'Repair a provider location after a path change or credential rotation',

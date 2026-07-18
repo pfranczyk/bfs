@@ -1,5 +1,6 @@
 import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
+import { createCliProviderIO } from '../../providers/provider.js';
 import { listVersions, prune } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { parseVersionRange } from '../parse-version-range.js';
@@ -108,7 +109,7 @@ export function registerPrune(program: Command): void {
           }
         }
 
-        await prune(rootDir, { versions: toRemove });
+        await prune(rootDir, { versions: toRemove, io: createCliProviderIO(rootDir) });
         success(fmt('prune_deleted', toRemove.join(', ')));
       } catch (err) {
         if (err instanceof CommandAbort) throw err;

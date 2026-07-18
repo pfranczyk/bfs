@@ -16,6 +16,10 @@
 //             'rename'→ move FC_FROM → FC_TO (the parent of FC_TO is ensured
 //                       first). Simulates a storage relocation an operator then
 //                       points a provider at with `bfs provider edit`.
+//             'put'   → upload the local file FC_LOCAL to the remote path FC_FILE
+//                       (parent ensured first). Pre-places identical shard bytes
+//                       on a new-type provider before a no-rebuild repair
+//                       repoints to it (cross-type canonical-layout migration).
 //             'run'   → remove FC_BASE/bfs-e2e-<FC_RUN> only.
 //             'all'   → remove every FC_BASE/bfs-e2e-* directory.
 //             'sha'   → download FC_FILE, print its SHA-256 (hex) to stdout.
@@ -81,6 +85,16 @@ async function main(): Promise<void> {
         await client.ensureDir(parent);
         // ensureDir leaves CWD in `parent`; rename uses absolute paths.
         await client.rename(from, to);
+      }
+    } else if (mode === 'put') {
+      const local = env('FC_LOCAL');
+      const remote = env('FC_FILE');
+      if (local && remote) {
+        const dir = remote.replace(/\/[^/]*$/, '') || '/';
+        await client.ensureDir(dir);
+        // uploadFrom(localPath) streams via Node's 64 KB createReadStream — the
+        // chunked path (see .claude/rules/streaming.md).
+        await client.uploadFrom(local, remote);
       }
     } else if (mode === 'all') {
       let entries: FileInfo[];

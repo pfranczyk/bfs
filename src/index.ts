@@ -12,6 +12,7 @@ const { version: PKG_VERSION } = _require('../package.json') as { version: strin
 // Side-effect imports: register providers in the global registry
 import './providers/local-fs.js';
 import './providers/ftp.js';
+import './providers/ssh.js';
 import { registerClear } from './cli/commands/clear.js';
 import { registerConfig } from './cli/commands/config.js';
 import { registerInit } from './cli/commands/init.js';

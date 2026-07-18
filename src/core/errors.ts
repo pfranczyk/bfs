@@ -32,6 +32,21 @@ export class ProviderError extends BfsError {
   }
 }
 
+/**
+ * Thrown when the operator deliberately refuses a presented host key (declines
+ * the interactive confirm, or the key is `@revoked` in known_hosts). Distinct
+ * from a connection failure: a decline is a conscious "do not trust this server"
+ * and must abort the flow, whereas an unreachable server may fall back to an
+ * offline path. Extends ProviderError so existing `instanceof ProviderError`
+ * catches still match.
+ */
+export class HostKeyDeclinedError extends ProviderError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HostKeyDeclinedError';
+  }
+}
+
 /** Thrown when AES-GCM decryption fails (wrong key or corrupted ciphertext). */
 export class DecryptionError extends BfsError {
   constructor(message: string) {

@@ -260,13 +260,31 @@ async function runConsensusCheck(args: ConsensusCheckArgs): Promise<void> {
   for (const loc of locationMap) {
     if (loc.provider_id === bootstrapProvider.id) continue;
 
+    // A sibling whose secret was stripped (required_inputs non-empty) is
+    // unreachable at consensus time — consensus runs before any per-provider
+    // credential is collected. Skip it BEFORE building/authenticating, so a
+    // credentialed transport (e.g. SSH password auth) never mounts a doomed
+    // auth attempt. A burst of such failed attempts from one source trips
+    // server penalties (OpenSSH PerSourcePenalties) that poison the following
+    // recovery connection. Consensus already skipped these after a failed
+    // auth; doing it beforehand drops the harmful attempt without changing
+    // which siblings are actually cross-checked. required_inputs === null is
+    // legacy (secret still inline in connection_config) — those stay reachable.
+    // For an unencrypted vault the map (hence required_inputs) is attacker-
+    // controlled, so an attacker can shrink consensus scope by marking siblings
+    // required_inputs — accepted BY DESIGN: consensus is best-effort, not the
+    // primary defense. The real guards against a forged --no-enc map are the
+    // per-provider connectForRecovery host gate and the locations_confirmed=false
+    // confirmation required before the first push/heal.
+    if (loc.required_inputs !== null && loc.required_inputs.length > 0) continue;
+
     let sibling: StorageProvider;
     try {
       sibling = providerRegistry.create({ id: loc.provider_id, type: loc.provider_type, adapterPackage: loc.adapterPackage, config: { ...loc.connection_config } }, io);
       await sibling.authenticate();
       sibling.setVaultName(vaultName);
     } catch {
-      continue; // unreachable without a secret — skip for consensus
+      continue; // unreachable (inline secret wrong / transport down) — skip for consensus
     }
 
     let cm: ShardHeader;

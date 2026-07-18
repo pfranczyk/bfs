@@ -61,6 +61,41 @@ export function assertSafeVaultName(vaultName: string): void {
 }
 
 /**
+ * Asserts a single remote filename is a safe path segment before it is joined
+ * into a storage path ({base}/{vault}/{filename}). Rejects empty names, path
+ * separators, the relative segments `.` / `..`, and control characters
+ * (CR / LF / NUL). Guards against a crafted `ref.path` or a hostile server's
+ * readdir entry escaping the vault directory on the same medium.
+ *
+ * @param name Filename used as the final path segment on the medium.
+ * @throws UnsafePathError if it is empty, contains "/" / "\\", is "." / "..", or holds a control char.
+ */
+export function assertSafeFilename(name: string): void {
+  if (name.length === 0) {
+    throw new UnsafePathError(name, 'is empty');
+  }
+  if (name.includes('/') || name.includes('\\')) {
+    throw new UnsafePathError(name, 'contains a path separator');
+  }
+  if (name === '.' || name === '..') {
+    throw new UnsafePathError(name, 'is a relative path segment');
+  }
+  if (/[\r\n\0]/.test(name)) {
+    throw new UnsafePathError(name, 'contains a control character');
+  }
+}
+
+/** Boolean form of {@link assertSafeFilename} — for filtering a server's readdir output. */
+export function isSafeFilename(name: string): boolean {
+  try {
+    assertSafeFilename(name);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Atomically writes JSON to a file via .tmp + rename.
  * On POSIX and Windows, rename is atomic when source and destination are on
  * the same filesystem (parent directory of filePath). A crash mid-write leaves

@@ -290,6 +290,8 @@ export interface Strings {
   prune_confirm: string;
   /** %s = versions list */
   prune_deleted: string;
+  /** %s = version number, %s = provider/storage name */
+  prune_orphan_warn: string;
 
   // ─── verify ───────────────────────────────────────────────────────────────
   verify_spinner: string;
@@ -696,6 +698,80 @@ export interface Strings {
   /** %s = err */
   ftp_probe_step_cleanup: string;
 
+  // ─── provider: ssh ──────────────────────────────────────────────────────
+  ssh_host_prompt: string;
+  ssh_port_prompt: string;
+  ssh_user_prompt: string;
+  ssh_auth_method_prompt: string;
+  ssh_auth_password: string;
+  ssh_auth_key: string;
+  ssh_password_prompt: string;
+  ssh_private_key_prompt: string;
+  ssh_passphrase_prompt: string;
+  ssh_path_prompt: string;
+  ssh_host_key_confirm: string;
+  ssh_host_key_declined: string;
+  /** %s = user@host:port */
+  ssh_host_key_revoked: string;
+  /** %s = user@host:port */
+  ssh_edit_connecting: string;
+  /** %s = host:port */
+  ssh_edit_offline_menu: string;
+  ssh_edit_offline_paste: string;
+  ssh_edit_paste_prompt: string;
+  ssh_edit_fingerprint_invalid: string;
+  /** %s = key type, %s = fingerprint */
+  ssh_edit_offline_known_hosts_entry: string;
+  /** %s = key type, %s = fingerprint */
+  ssh_edit_offline_known_hosts_entry_recommended: string;
+  ssh_edit_offline_no_pin: string;
+  ssh_edit_no_pin_warn: string;
+  ssh_edit_offline_exit: string;
+  ssh_edit_cancelled: string;
+  ssh_help_description: string;
+  ssh_help_flag_host_desc: string;
+  ssh_help_flag_port_desc: string;
+  ssh_help_flag_user_desc: string;
+  ssh_help_flag_password_desc: string;
+  ssh_help_flag_private_key_desc: string;
+  ssh_help_flag_passphrase_desc: string;
+  ssh_help_flag_path_desc: string;
+  ssh_help_flag_known_host_desc: string;
+  ssh_help_flag_accept_new_host_key_desc: string;
+  ssh_help_flag_config_file_desc: string;
+  ssh_operation_failed: string;
+  ssh_size_mismatch: string;
+  ssh_control_chars: string;
+  ssh_key_unreadable: string;
+  ssh_recovery_confirm_host: string;
+  ssh_recovery_target: string;
+  ssh_recovery_password: string;
+  ssh_recovery_passphrase: string;
+  ssh_recovery_declined: string;
+  ssh_recovery_no_secret_noninteractive: string;
+  ssh_recovery_unpinned: string;
+  ssh_config_port_invalid: string;
+  ssh_inline_port_invalid: string;
+  ssh_host_required: string;
+  ssh_path_required: string;
+  ssh_path_must_be_absolute: string;
+  ssh_auth_conflict: string;
+  ssh_auth_missing: string;
+  ssh_accept_new_offline: string;
+  ssh_validate_host_required: string;
+  ssh_validate_port_invalid: string;
+  ssh_validate_path_required: string;
+  ssh_validate_path_absolute: string;
+  ssh_validate_auth_required: string;
+  ssh_validate_auth_conflict: string;
+  ssh_describe_config: string;
+  ssh_probe_incomplete: string;
+  ssh_probe_step_ensure_dir: string;
+  ssh_probe_step_upload: string;
+  ssh_probe_step_download: string;
+  ssh_probe_step_compare_remote: string;
+  ssh_probe_step_cleanup: string;
+
   // ─── LocalFS — runtime errors ────────────────────────────────────────────
   /** %s = path, %s = err */
   local_list_failed: string;
@@ -731,6 +807,9 @@ export interface Strings {
   repair_duplicate_provider_in_args: string;
   /** %s = params string */
   repair_spec_invalid_params: string;
+  /** %s = provider/storage name */
+  heal_locationmap_update_failed: string;
+  heal_relocate_unreachable: string;
 
   // ─── repair (command) ──────────────────────────────────────────────────────
   cmd_repair_desc: string;

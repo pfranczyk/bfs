@@ -18,8 +18,10 @@ vi.mock('inquirer', () => ({
 }));
 
 import inquirer from 'inquirer';
+import { HostKeyDeclinedError } from '../../src/core/errors.js';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { providerRegistry } from '../../src/providers/provider.js';
+import type { ConfigureEditContext, ProviderConfig, ProviderIO } from '../../src/types/index.js';
 import { readConfig, writeConfig } from '../../src/vault/config.js';
 import { registerSecretProvider, SECRET_TYPE, secretProviderConfig, unregisterSecretProvider } from '../helpers/secret-local-provider.js';
 
@@ -280,6 +282,77 @@ describe('provider edit', () => {
     } finally {
       unregisterSecretProvider();
       await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+// A provider type whose edit-time host-key handling aborts by throwing
+// HostKeyDeclinedError (the SSH offline-edit contract: an operator who refuses
+// the presented host key must abort the edit, not persist a config). Its plain
+// `configureInteractive` returns a benign DIFFERENT config — so when the command
+// wrongly takes the add-time path it would persist that, which the test forbids.
+const HOSTKEY_EDIT_TYPE = 'hostkey-decline-edit-test';
+
+class HostKeyDeclineEditProvider extends LocalFsProvider {
+  async configureInteractive(): Promise<Record<string, unknown>> {
+    return { path: '/mnt/should-not-be-persisted' };
+  }
+  async configureInteractiveForEdit(_io: ProviderIO, _ctx: ConfigureEditContext): Promise<Record<string, unknown>> {
+    throw new HostKeyDeclinedError('operator declined the presented host key');
+  }
+  validateConfig(): string[] {
+    return [];
+  }
+  getSecretFields(): readonly string[] {
+    return [];
+  }
+}
+
+function registerHostKeyEditProvider(): void {
+  providerRegistry.register(HOSTKEY_EDIT_TYPE, {
+    lang: 'en',
+    displayName: 'Host-key decline (tests)',
+    create: (config: ProviderConfig, io: ProviderIO) => new HostKeyDeclineEditProvider(config, io),
+    help: () => ({ usage: '', description: '', flags: [], examples: [] }),
+  });
+}
+
+function unregisterHostKeyEditProvider(): void {
+  (providerRegistry as unknown as { entries: Map<string, unknown> }).entries.delete(HOSTKEY_EDIT_TYPE);
+}
+
+// `bfs provider edit <ssh>` routes the interactive edit through the provider's
+// edit-aware host-key flow (configureInteractiveForEdit); when it throws
+// HostKeyDeclinedError (operator refused the key), the command aborts WITHOUT
+// writing config. The mock provider's plain configureInteractive returns a
+// DIFFERENT benign config, so a wrong route would persist it — which this forbids.
+describe('provider edit — SSH-style host-key decline aborts without writing', () => {
+  let capture: ReturnType<typeof captureConsole>;
+
+  beforeEach(() => {
+    capture = captureConsole();
+    mockWriteConfig.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    capture.restore();
+    mockPrompt.mockReset();
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  it('interactive: should abort and not write config when the edit declines the host key', async () => {
+    registerHostKeyEditProvider();
+    try {
+      const nas: ProviderConfig = { id: 'nas', type: HOSTKEY_EDIT_TYPE, adapterPackage: null, config: { path: '/old' } };
+      mockReadConfig.mockResolvedValue(makeConfig({ providers: [nas] }) as never);
+
+      const result = await runCmd(['provider', 'edit', 'nas']);
+
+      expect(result).toBe('abort');
+      expect(mockWriteConfig).not.toHaveBeenCalled();
+    } finally {
+      unregisterHostKeyEditProvider();
     }
   });
 });

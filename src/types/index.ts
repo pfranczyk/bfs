@@ -399,6 +399,17 @@ export interface CliProviderInput {
    * into rawArgs, unchanged.
    */
   readonly rawArgs: readonly string[];
+
+  /**
+   * True when the invoking command edits config WITHOUT contacting the medium
+   * (`bfs provider edit` is offline by contract). An adapter whose flag requires
+   * a live connection — e.g. SSH `--accept-new-host-key`, which must dial the
+   * server to capture and pin the host key — MUST reject that flag when this is
+   * set, pointing the operator at an offline-capable alternative (`--known-host`).
+   * Absent/false: the command may contact the medium (add / init / repair /
+   * recovery bootstrap).
+   */
+  readonly offline?: boolean;
 }
 
 // ─── Provider Help (structured) ──────────────────────────────
@@ -536,6 +547,27 @@ export interface StorageProvider {
   configureInteractive(io: ProviderIO): Promise<Record<string, unknown>>;
 
   /**
+   * Interactive configuration for `bfs provider edit <id>` (not `add`). Unlike
+   * `configureInteractive`, the provider is handed the existing connection-config
+   * so it can decide whether an identity-defining field changed (for SSH: host or
+   * port → a different server) and adjust host-key handling accordingly. The edit
+   * flow tries the medium first (interactive TOFU when the server is reachable)
+   * but MUST still complete when it is not — falling back to an offline path so a
+   * credential/coordinate edit succeeds against an unreachable server.
+   *
+   * Optional: when a provider does not implement it, `bfs provider edit` falls
+   * back to `configureInteractive`. Providers whose configure flow never contacts
+   * the medium (local, ftp) need not implement it.
+   *
+   * @param io  - ProviderIO for prompts and diagnostics
+   * @param ctx - carries the existing connection-config being edited
+   * @returns config object to persist in VaultConfig.providers[].config
+   * @throws HostKeyDeclinedError when the operator refuses the host key (aborts
+   *   the edit); BfsError on invalid input or cancellation
+   */
+  configureInteractiveForEdit?(io: ProviderIO, ctx: ConfigureEditContext): Promise<Record<string, unknown>>;
+
+  /**
    * Non-interactive configuration from the minimal BFS pass-through input.
    * Receives:
    *   - `name`    — value of --name (already validated non-empty)
@@ -666,6 +698,17 @@ export interface StorageProvider {
    *         BFS treats it as a degraded skip of this provider
    */
   connectForRecovery?(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<string | null>;
+}
+
+/**
+ * Context passed to StorageProvider.configureInteractiveForEdit — the existing
+ * connection-config being edited. The provider reads whatever fields it needs to
+ * detect an identity-defining change (e.g. SSH host/port) and to preserve values
+ * that a full-replacement edit would otherwise drop (e.g. an already-pinned
+ * host_key_fingerprint when the server identity is unchanged).
+ */
+export interface ConfigureEditContext {
+  readonly existingConfig: Record<string, unknown>;
 }
 
 export interface RemoteRef {

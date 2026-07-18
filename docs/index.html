@@ -4,9 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BFS — Distributed Backup CLI</title>
-  <meta name="description" content="Split your backups across multiple drives and FTP servers with Reed-Solomon erasure coding. Lose drives, not data. AES-256-GCM encryption, ZIP compression, versioned snapshots. Free, open-source CLI." />
+  <meta name="description" content="Split your backups across multiple drives, FTP and SSH/SFTP servers with Reed-Solomon erasure coding. Lose drives, not data. AES-256-GCM encryption, ZIP compression, versioned snapshots. Free, open-source CLI." />
   <meta property="og:title" content="BFS — Your drives will fail. Your data won't." />
-  <meta property="og:description" content="Distributed backup with erasure coding. Split across drives and FTP servers, lose some, recover everything. No cloud lock-in. Free CLI tool." />
+  <meta property="og:description" content="Distributed backup with erasure coding. Split across drives, FTP and SSH/SFTP servers, lose some, recover everything. No cloud lock-in. Free CLI tool." />
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     .code-comment { color: #6b7280; }
@@ -32,7 +32,7 @@
   <section class="min-h-screen flex flex-col items-center justify-center px-6 text-center">
     <div class="max-w-3xl">
       <div class="inline-block mb-6 px-3 py-1 rounded-full border border-slate-700 text-xs text-slate-400 tracking-widest uppercase">
-        v0.11.0 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 24
+        v0.12.0-rc.1 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 24
       </div>
 
       <h1 class="text-7xl font-black tracking-tight mb-4 bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
@@ -113,8 +113,8 @@
           <div class="text-3xl mb-3">🌐</div>
           <h3 class="text-lg font-semibold mb-2" data-i18n="feat3_title">Use Whatever Storage You Have</h3>
           <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat3_desc">
-            USB drives, external HDDs, NAS, FTP/FTPS servers, network folders —
-            anything that can hold a file. Mix and match across providers.
+            USB drives, external HDDs, NAS, FTP/FTPS and SSH/SFTP servers,
+            network folders — anything that can hold a file. Mix and match across providers.
             No cloud subscription required. No vendor lock-in.
           </p>
         </div>
@@ -169,11 +169,13 @@
             <span class="w-7 h-7 rounded-full bg-slate-700 text-sm font-bold flex items-center justify-center text-white">1</span>
             <span class="text-slate-300 font-medium" data-i18n="step1_label">Initialize (one command, mix any storage)</span>
           </div>
-          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step1_comment"># 2 data + 1 parity = 3 providers (mix local disks and FTP/FTPS)</span>
-<span class="code-cmd">bfs</span> init <span class="code-string">mybackup</span> <span class="code-flag">--ci</span> <span class="code-flag">--data-shards</span> 2 <span class="code-flag">--parity-shards</span> 1 \
+          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step1_comment"># 3 data + 2 parity = 5 providers (local, FTP, SSH)</span>
+<span class="code-cmd">bfs</span> init <span class="code-string">mybackup</span> <span class="code-flag">--ci</span> <span class="code-flag">--data-shards</span> 3 <span class="code-flag">--parity-shards</span> 2 \
   <span class="code-flag">--provider</span> <span class="code-string">"local:disk1 --path /mnt/disk1"</span> \
   <span class="code-flag">--provider</span> <span class="code-string">"local:usb   --path /mnt/usb"</span> \
-  <span class="code-flag">--provider</span> <span class="code-string">"ftp:nas     --config-file ./nas.json"</span></code></pre>
+  <span class="code-flag">--provider</span> <span class="code-string">"ftp:nas     --config-file ./nas.json"</span> \
+  <span class="code-flag">--provider</span> <span class="code-string">"ssh:vps     --config-file ./vps.json"</span> \
+  <span class="code-flag">--provider</span> <span class="code-string">"ssh:pi      --config-file ./pi.json"</span></code></pre>
         </div>
 
         <!-- Step 2 -->
@@ -191,12 +193,12 @@
         <div>
           <div class="flex items-center gap-3 mb-3">
             <span class="w-7 h-7 rounded-full bg-slate-700 text-sm font-bold flex items-center justify-center text-white">3</span>
-            <span class="text-slate-300 font-medium" data-i18n="step3_label">New machine? Recover from any one drive</span>
+            <span class="text-slate-300 font-medium" data-i18n="step3_label">Machine failure or disk swap? Recover from any one provider</span>
           </div>
-          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step3_comment"># Plug in ANY ONE drive — BFS reads the recovery map and finds the rest.
+          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step3_comment"># ANY ONE provider is enough — BFS reads the recovery map and finds the rest.
 # --name = backup name (same as `bfs init mybackup`); --bootstrap = same adapter flags.</span>
-<span class="code-cmd">bfs</span> recovery <span class="code-flag">--provider</span> local <span class="code-flag">--name</span> <span class="code-string">mybackup</span> \
-  <span class="code-flag">--bootstrap</span> <span class="code-string">"--path /mnt/disk1"</span>
+<span class="code-cmd">bfs</span> recovery <span class="code-flag">--provider</span> ssh <span class="code-flag">--name</span> <span class="code-string">mybackup</span> \
+  <span class="code-flag">--bootstrap</span> <span class="code-string">"--config-file ./vps.json"</span>
 <span class="code-cmd">bfs</span> pull  <span class="code-comment" data-i18n="step3_c1"># restore files as usual</span></code></pre>
         </div>
 
@@ -263,7 +265,7 @@
   <footer class="border-t border-slate-800 py-10 px-6 text-center text-slate-500 text-sm">
     <p class="mb-2">
       <span class="text-white font-semibold">BFS</span>
-      &nbsp;v0.11.0
+      &nbsp;v0.12.0-rc.1
       &nbsp;·&nbsp;
       <a href="https://github.com/pfranczyk/BFS/blob/main/LICENSE" class="hover:text-white transition-colors">AGPL-3.0</a>
       &nbsp;·&nbsp;
@@ -291,18 +293,18 @@
                                                 feat0_title:   'Smaller Backups, Automatically',
                                                 feat0_desc:    'ZIP/Deflate compression is on by default. BFS detects already-compressed files (photos, videos, archives) and skips them — no wasted CPU, smaller pieces.',
                                                 feat3_title:   'Use Whatever Storage You Have',
-                                                feat3_desc:    'USB drives, external HDDs, NAS, FTP/FTPS servers, network folders — anything that can hold a file. Mix and match across providers. No cloud subscription required. No vendor lock-in.',
+                                                feat3_desc:    'USB drives, external HDDs, NAS, FTP/FTPS and SSH/SFTP servers, network folders — anything that can hold a file. Mix and match across providers. No cloud subscription required. No vendor lock-in.',
                                                 feat4_title:   'Every Push Is a Snapshot',
                                                 feat4_desc:    'Each backup creates a new numbered version. Keep the last 7, or 30, or all of them. Verify health, prune old ones, restore from any point.',
                                                 qs_title:      'Quick Start',
                                                 step1_label:   'Initialize (one command, mix any storage)',
-                                                step1_comment: '# 2 data + 1 parity = 3 providers (mix local disks and FTP/FTPS)',
+                                                step1_comment: '# 3 data + 2 parity = 5 providers (local, FTP, SSH)',
                                                 step2_label:   'Backup &amp; restore',
                                                 step2_comment: '# Each push creates a new versioned snapshot',
                                                 step2_c1:      '# backup → new version',
                                                 step2_c2:      '# restore latest version',
-                                                step3_label:   'New machine? Recover from any one drive',
-                                                step3_comment: '# Plug in ANY ONE drive — BFS reads the recovery map and finds the rest.\n# --name = backup name (same as `bfs init mybackup`); --bootstrap = same adapter flags.',
+                                                step3_label:   'Machine failure or disk swap? Recover from any one provider',
+                                                step3_comment: '# ANY ONE provider is enough — BFS reads the recovery map and finds the rest.\n# --name = backup name (same as `bfs init mybackup`); --bootstrap = same adapter flags.',
                                                 step3_c1:      '# restore files as usual',
                                                 cmd_title:     'Commands',
                                                 cmd_th_cmd:    'Command',
@@ -333,18 +335,18 @@
                                                 feat0_title:   'Mniejsze backupy, automatycznie',
                                                 feat0_desc:    'Kompresja ZIP (deflate) domyślnie włączona. BFS wykrywa już skompresowane pliki (zdjęcia, filmy, archiwa) i je pomija — bez marnowania CPU, mniejsze fragmenty.',
                                                 feat3_title:   'Użyj czegokolwiek, co masz',
-                                                feat3_desc:    'Pendrive, dysk zewnętrzny, NAS, serwer FTP/FTPS, folder sieciowy — wszystko, co trzyma pliki. Mieszaj nośniki dowolnie. Bez subskrypcji chmury. Bez uzależnienia od dostawcy.',
+                                                feat3_desc:    'Pendrive, dysk zewnętrzny, NAS, serwer FTP/FTPS i SSH/SFTP, folder sieciowy — wszystko, co trzyma pliki. Mieszaj nośniki dowolnie. Bez subskrypcji chmury. Bez uzależnienia od dostawcy.',
                                                 feat4_title:   'Każdy push to snapshot',
                                                 feat4_desc:    'Każdy backup tworzy nową numerowaną wersję. Zachowaj ostatnie 7, 30 lub wszystkie. Sprawdzaj stan, usuwaj stare, odtwarzaj z dowolnego momentu.',
                                                 qs_title:      'Szybki start',
                                                 step1_label:   'Inicjalizacja (jedna komenda, dowolny mix nośników)',
-                                                step1_comment: '# 2 fragmenty danych + 1 parzystości = 3 nośniki (dyski lokalne + FTP/FTPS)',
+                                                step1_comment: '# 3 fragmenty danych + 2 parzystości = 5 nośników (lokalne, FTP, SSH)',
                                                 step2_label:   'Backup i odtworzenie',
                                                 step2_comment: '# Każdy push tworzy nowy snapshot z numerem wersji',
                                                 step2_c1:      '# backup → nowa wersja',
                                                 step2_c2:      '# odtworzenie najnowszej wersji',
-                                                step3_label:   'Nowa maszyna? Odtworzysz z jednego nośnika',
-                                                step3_comment: '# Podłącz JEDEN dowolny nośnik — BFS przeczyta mapę z jego fragmentu i znajdzie resztę.\n# --name = nazwa backupu (jak `bfs init mybackup`); --bootstrap = te same flagi adaptera.',
+                                                step3_label:   'Awaria maszyny lub wymiana dysku? Odtworzysz z jednego nośnika',
+                                                step3_comment: '# Wystarczy JEDEN dowolny nośnik — BFS przeczyta mapę z jego fragmentu i znajdzie resztę.\n# --name = nazwa backupu (jak `bfs init mybackup`); --bootstrap = te same flagi adaptera.',
                                                 step3_c1:      '# odtworzenie plików jak zwykle',
                                                 cmd_title:     'Komendy',
                                                 cmd_th_cmd:    'Komenda',

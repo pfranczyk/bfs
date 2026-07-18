@@ -182,17 +182,23 @@ export class LocalFsProvider implements StorageProvider {
   }
 
   /**
-   * Deletes a shard file identified by ref.
+   * Deletes a shard file (and its header sidecar) identified by ref.
+   *
+   * An already-absent shard is a no-op, not a failure — delete is idempotent
+   * (parity with FTP/SSH), so a resumed prune or an out-of-band removal does not
+   * raise a false prune orphan warning.
    *
    * @param ref - RemoteRef of the shard to delete
-   * @throws ProviderError if the file cannot be deleted
+   * @throws ProviderError if the shard is present but cannot be deleted (permissions, I/O)
    */
   async delete(ref: RemoteRef): Promise<void> {
     const filePath = this.refToPath(ref);
     try {
       await fs.unlink(filePath);
     } catch (err) {
-      throw new ProviderError(`Failed to delete shard "${filePath}": ${String(err)}`);
+      if (!isEnoent(err)) {
+        throw new ProviderError(`Failed to delete shard "${filePath}": ${String(err)}`);
+      }
     }
     // Remove the header sidecar too so pruning leaves no orphan behind.
     await fs.unlink(path.join(this.vaultDir(), sidecarFilename(ref.path))).catch(() => {});

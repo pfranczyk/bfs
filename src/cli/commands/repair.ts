@@ -78,7 +78,7 @@ export function registerRepair(program: Command): void {
           : await parseRepairSpec(
               cmd.args,
               config.providers.map((p) => p.id),
-              rootDir,
+              io,
             );
         const allVersions = (await listManifests(rootDir)).map((m) => m.version);
         const versions = parseVersionRange(opts.version ?? (restoreHeaders ? 'all' : 'latest'), allVersions, { allowKeywords: true });
