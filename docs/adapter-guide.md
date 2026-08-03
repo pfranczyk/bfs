@@ -171,7 +171,7 @@ const UPLOAD_CHUNK_SIZE = 64 * 1024;
 
 // Emits `buffer` as fixed-size chunks so backpressure cooperates and the
 // transport never receives one giant write(). Reuse this for any adapter
-// that pushes a Buffer to a socket. (rule: .claude/rules/streaming.md)
+// that pushes a Buffer to a socket.
 function bufferToChunkedStream(buffer: Buffer, chunkSize = UPLOAD_CHUNK_SIZE): Readable {
   let offset = 0;
   return new Readable({

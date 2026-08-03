@@ -48,6 +48,9 @@ describe('provider add', () => {
     // tests/providers/local-fs.test.ts.
     vi.spyOn(LocalFsProvider.prototype, 'probeConnection').mockResolvedValue(undefined);
     vi.spyOn(LocalFsProvider.prototype, 'configureInteractive').mockResolvedValue({ path: '/mnt/d4' });
+    // The add-time collision guard lists the target sub-directory; a new provider
+    // location holds no foreign backup, so return empty.
+    vi.spyOn(LocalFsProvider.prototype, 'list').mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -56,7 +59,7 @@ describe('provider add', () => {
     vi.restoreAllMocks();
   });
 
-  // ─── Brak konfiguracji ────────────────────────────────────────────────────
+  // ─── No configuration ────────────────────────────────────────────────────
 
   it('should abort when vault config is missing', async () => {
     mockReadConfig.mockResolvedValue(null);
@@ -68,7 +71,7 @@ describe('provider add', () => {
     expect(capture.errors.some((e) => e.includes('bfs init'))).toBe(true);
   });
 
-  // ─── Tryb CI ──────────────────────────────────────────────────────────────
+  // ─── CI mode ──────────────────────────────────────────────────────────────
 
   it('CI: should add provider and write updated config', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -166,7 +169,7 @@ describe('provider add', () => {
     expect(mockWriteConfig).not.toHaveBeenCalled();
   });
 
-  // ─── --config-file: rozwiązywanie ścieżki (provider używa io.workDir) ─────
+  // ─── --config-file: path resolution (provider uses io.workDir) ────────────
 
   it('CI: should let the provider resolve relative --config-file against io.workDir', async () => {
     // BFS exposes its working directory on `io.workDir`; the LocalFS
@@ -213,7 +216,7 @@ describe('provider add', () => {
     expect(added?.config.path).toBe(path.join(os.homedir(), '.bfs-local', 'empty-flag'));
   });
 
-  // ─── --config-file: propagacja danych do writeConfig ──────────────────────
+  // ─── --config-file: data propagation to writeConfig ──────────────────────
 
   it('CI: should persist path parsed from --config-file into saved provider config', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -270,6 +273,8 @@ describe('provider add', () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     // FTP probeConnection would try a real TCP connection — mock it out.
     vi.spyOn(FtpProvider.prototype, 'probeConnection').mockResolvedValue(undefined);
+    // The add-time collision guard lists the target sub-directory over FTP; stub it.
+    vi.spyOn(FtpProvider.prototype, 'list').mockResolvedValue([]);
 
     const cfg = await writeConfigFile({ host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true });
 
@@ -294,7 +299,7 @@ describe('provider add', () => {
     expect(capture.errors.some((e) => e.includes('Configuration failed'))).toBe(true);
   });
 
-  // ─── Walidacja CI ────────────────────────────────────────────────────────
+  // ─── CI validation ────────────────────────────────────────────────────────
 
   it('CI: should abort when --name is missing', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -324,7 +329,7 @@ describe('provider add', () => {
     expect(mockWriteConfig).not.toHaveBeenCalled();
   });
 
-  // ─── Tryb interaktywny ────────────────────────────────────────────────────
+  // ─── Interactive mode ────────────────────────────────────────────────────
 
   it('interactive: should prompt for name and type (path goes through configureInteractive)', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -348,7 +353,7 @@ describe('provider add', () => {
     expect([...capture.logs, ...capture.errors].some((l) => l.includes('push'))).toBe(true);
   });
 
-  // ─── Walidacja charset nazwy providera ────────────────────────────────────
+  // ─── Provider name charset validation ────────────────────────────────────
 
   it('CI: should abort when --name contains whitespace', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -431,6 +436,11 @@ function registerAddProbeProvider(state: AddProbeState): void {
           return { marker: state.configCalls };
         },
         validateConfig(): string[] {
+          return [];
+        },
+        // The add-time collision guard lists the target sub-directory — empty for
+        // a new provider location, so no foreign vault is detected.
+        async list(): Promise<never[]> {
           return [];
         },
         usesSidecar: () => false,

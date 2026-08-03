@@ -1,8 +1,8 @@
 # shellcheck shell=bash
 # Stale push.lock from a crashed prior run: the next push must refuse with
 # LockPartialStatePushError, `bfs clear` must drop the lock, and a fresh push
-# must then succeed. Covers src/vault/lockfile.ts assertNoActiveLock('push')
-# stale branch (lockfile.ts:208).
+# must then succeed. Covers acquirePushLock's dead/stale-leftover branch in
+# src/vault/lockfile.ts.
 
 SCENARIO_NAME="stale push.lock blocks push, clear unblocks"
 SCENARIO_DESC="dead-PID lock → PartialState error → bfs clear → fresh push ok"
@@ -10,10 +10,10 @@ REQUIRES_LOCAL=4
 REQUIRES_FTP=0
 
 # write_fake_push_lock <vault> <pid> <version>
-# Writes a syntactically valid PushLock JSON (see src/vault/lockfile.ts:44-59)
-# with the given pid + started_at=now. Using a PID that is almost certainly
-# not alive (999999) makes assertNoActiveLock treat it as stale across both
-# POSIX and Windows.
+# Writes a syntactically valid PushLock JSON (see the PushLock interface in
+# src/vault/lockfile.ts) with the given pid + started_at=now. Using a PID that
+# is almost certainly not alive (999999) makes acquirePushLock treat it as stale
+# across both POSIX and Windows.
 write_fake_push_lock() {
   local vault="$1" pid="$2" version="$3"
   mkdir -p "$vault/.bfs"

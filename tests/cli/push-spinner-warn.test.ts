@@ -61,7 +61,7 @@ import { push } from '../../src/vault/vault-manager.js';
 const mockPush = vi.mocked(push);
 
 function okResult(overrides: Partial<PushResult> = {}): PushResult {
-  return { version: 1, file_count: 2, total_size: 100, skipped: [], uploaded_count: 3, failed: [], health: VersionHealth.Healthy, ...overrides };
+  return { version: 1, file_count: 2, total_size: 100, skipped: [], excluded: [], uploaded_count: 3, failed: [], health: VersionHealth.Healthy, ...overrides };
 }
 
 // Guards against a regression where push.ts drops the wrappedIo `warn`

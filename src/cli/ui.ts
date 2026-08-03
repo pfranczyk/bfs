@@ -16,13 +16,17 @@ export function error(msg: string): void {
 
 /**
  * Thrown when a command fails after already displaying an error message.
- * Signals the REPL to suppress further output and return to the prompt,
- * and signals standalone mode to exit with code 1.
+ * Signals the REPL to suppress further output and return to the prompt, and
+ * signals standalone mode to exit with `exitCode` (default 1). A distinct code
+ * (e.g. 3 for a push aborted on entries that cannot be backed up) lets
+ * automation tell "completed with an exclusion" apart from a generic failure.
  */
 export class CommandAbort extends Error {
-  constructor() {
+  readonly exitCode: number;
+  constructor(exitCode = 1) {
     super('');
     this.name = 'CommandAbort';
+    this.exitCode = exitCode;
   }
 }
 

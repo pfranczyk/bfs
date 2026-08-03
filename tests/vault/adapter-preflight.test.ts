@@ -14,7 +14,7 @@ function localProvider(id: string): ProviderConfig {
   return { id, type: 'local', adapterPackage: null, config: { path: `/tmp/${id}` } };
 }
 
-function fakeProvider(id: string, pkgSpec: string | null, type: string = FAKE_TYPE): ProviderConfig {
+function fakeProvider(id: string, pkgSpec: Nullable<string>, type: string = FAKE_TYPE): ProviderConfig {
   return { id, type, adapterPackage: pkgSpec, config: {} };
 }
 

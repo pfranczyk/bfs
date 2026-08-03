@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { PassThrough, type Readable } from 'node:stream';
+import { PassThrough, type Readable, Writable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import type { RemoteRef, ShardHeader, ShardIdentity, ShardLocation, StorageProvider } from '../types/index.js';
 import { decryptLocationMap, encryptLocationMap } from './crypto.js';
 import { BfsError, DecryptionError, ShardCorruptedError } from './errors.js';
@@ -92,6 +93,27 @@ export function computeShardHeaderSize(data: Buffer): number {
     throw new ShardCorruptedError('Shard header is truncated (location map exceeds buffer)');
   }
   return pos;
+}
+
+/**
+ * Checks a whole shard buffer against the SHA-256 stored in its trailing 32
+ * bytes, which cover the header and the payload together.
+ *
+ * This is what separates accidental damage from deliberate substitution: bit-rot
+ * anywhere in the shard — including header fields that carry no cryptographic
+ * protection of their own, such as kdf_salt — breaks this checksum, while an
+ * attacker rewriting a shard recomputes it and passes. A caller that compares
+ * sibling shards against each other must run this first, or it cannot tell the
+ * two cases apart.
+ *
+ * @param data - Full shard binary buffer as stored on the medium
+ * @returns true when the trailing checksum matches the rest of the shard
+ */
+export function shardChecksumMatches(data: Buffer): boolean {
+  if (data.length <= CHECKSUM_SIZE) return false;
+  const body = data.subarray(0, data.length - CHECKSUM_SIZE);
+  const stored = data.subarray(data.length - CHECKSUM_SIZE).toString('hex');
+  return hashBuffer(body) === stored;
 }
 
 // ─── UUID helpers ──────────────────────────────────────────────────────────
@@ -507,6 +529,50 @@ export async function readShardHeaderBytes(provider: StorageProvider, ref: Remot
 }
 
 /**
+ * Streams a whole shard and verifies its trailing SHA-256 over the raw stored
+ * bytes. Password-free: the checksum covers the stored bytes (ciphertext + tag
+ * when encrypted), so a shard is verified without the vault key.
+ *
+ * This is the gate that separates bit-rot from every other cause. The checksum
+ * covers the header too, so fields carrying no protection of their own
+ * (`kdf_salt`, `blob_hash`, `rs_stripe_size`) rot detectably; a reader that
+ * consumes a header without this gate cannot tell a rotted field from a wrong
+ * credential, and blames the wrong thing.
+ *
+ * The payload is drained rather than buffered, so this function adds O(chunk),
+ * not O(shard) — but the true peak is whatever the provider's `download` yields:
+ * built-in FTP and SSH materialize a shard into a Buffer before handing back a
+ * stream, so on those media the peak is the shard (blob_size/N), as it already is
+ * for pull and heal.
+ *
+ * Only a failed checksum condemns the shard. A read that broke for any other
+ * reason — a dropped connection, a file briefly locked — says nothing about the
+ * bytes and is rethrown; the caller decides whether that is fatal.
+ *
+ * @param provider - Provider holding the shard
+ * @param ref      - RemoteRef of the shard
+ * @returns null when the shard verifies, or the corruption reason when it does not
+ * @throws ProviderError if the shard cannot be read at all (the caller decides what that means)
+ */
+export async function shardIntegrityFailure(provider: StorageProvider, ref: RemoteRef): Promise<Nullable<string>> {
+  const stream = await provider.download(ref);
+  try {
+    const { payloadStream } = await parseShardHeaderFromStream(stream);
+    // Drain to a discarding sink with backpressure — the trailing-checksum
+    // verification runs as a side effect of consuming the whole stream.
+    await pipeline(payloadStream, new Writable({ write: (_chunk, _enc, cb) => cb() }));
+    return null;
+  } catch (err) {
+    if (err instanceof ShardCorruptedError) return err.message;
+    throw err;
+  } finally {
+    // Release the source connection even on early abort (corrupt / truncated),
+    // so an FTP/SSH data connection is not leaked.
+    stream.destroy();
+  }
+}
+
+/**
  * Compares a parsed header against an expected identity (vault_id, shard_index,
  * version). Returns the first mismatching field (with stringified values) or
  * null when all three match. Shared by StorageProvider.verifyShard()
@@ -695,7 +761,7 @@ function readLocationMap(data: Buffer, pos: number, mapLength: number, encrypted
     // undefined → null marks a legacy shard whose secret is still inline in
     // connection_config, so recovery uses it directly instead of prompting.
     // Keep this the ONLY normalization point for plain (unencrypted) location
-    // maps; see architecture/binary-format.md.
+    // maps.
     const locationMap = parsed.map((loc) => ({ ...loc, adapterPackage: loc.adapterPackage ?? null, required_inputs: loc.required_inputs ?? null }));
     return { locationMap, endPos };
   } catch {

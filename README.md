@@ -62,7 +62,7 @@ bfs pull
 | `bfs pull [--version N] [-y]` | Restore files from backup (default: latest version); `-y/--yes` auto-confirms overwrite |
 | `bfs status` | Show vault status |
 | `bfs versions` | List all backup versions with health status |
-| `bfs verify` | Check part availability and health across providers; flag missing or damaged header files |
+| `bfs verify [--deep]` | Check part availability and health across providers; flag missing or damaged header files. Exits **0** healthy, **4** degraded, **5** damaged (**1** = the check itself could not run). `--deep` additionally downloads every part and re-checks its checksum, catching silent on-device decay the header check cannot see |
 | `bfs prune [range] [--keep-last N]` | Delete old backup versions — pass an explicit range (`5`, `1-10`, `1,3,5`) or `--keep-last N` to keep the newest N |
 | `bfs recovery` | Rebuild `.bfs/` from providers (disaster recovery) |
 | `bfs repair` | Fix a backup's storage locations without re-uploading — repoint a moved device, rebuild a lost part, or restore missing/damaged header files (`--restore-headers`) |
@@ -90,6 +90,14 @@ enough data to reconstruct the backup. The location map of all shards is
 embedded in each shard header — one surviving shard is sufficient to locate
 and download the rest.
 
+Symbolic links and special files (sockets, FIFOs, devices) are never stored in a
+backup — a link may point outside the directory or form a loop, and a device is
+not a file. `bfs push` does not drop them silently: it lists them and stops, so
+you can add them to `.bfsignore` (interactively it offers to do this and retry)
+or re-run with `--allow-excluded` to back up everything else. A scripted push
+exits with code **3** when it finds such entries and `--allow-excluded` was not
+given.
+
 ## Reed-Solomon scheme
 
 Configure N (data shards) and K (parity shards) during `bfs init`:
@@ -110,8 +118,15 @@ All modifying commands support non-interactive flags.
 
 `ftp-remote1.json` (secure with `chmod 600`):
 ```json
-{ "host": "192.168.1.10", "user": "backup", "password": "secret", "path": "/bfs" }
+{ "host": "192.168.1.10", "user": "backup", "password": "secret", "path": "/bfs", "accept_new_cert": true }
 ```
+
+FTPS is on by default, and a scripted run has nobody to ask about an unknown
+certificate — so it must say up front which certificate to trust: pin it with
+`"cert_fingerprint": "AA:BB:…"` (or `--cert-fingerprint`), or accept the one the
+server presents on first connection with `"accept_new_cert": true` (or
+`--accept-new-cert`). Without either, BFS refuses instead of trusting silently.
+A server that offers only plain FTP needs `"secure": false`.
 
 `ssh-vps1.json` (key auth — the private key stays a path, never inline):
 ```json
@@ -138,6 +153,11 @@ bfs push --new --password "$VAULT_PASS"
 # Prune — keep last 14 versions
 bfs prune --keep-last 14 --yes
 ```
+
+A scheduled `bfs push` exits with code **3** if the directory contains symbolic
+links or special files (they cannot be backed up) — so a cron job fails loudly
+instead of quietly saving an incomplete backup. Add `--allow-excluded` to back up
+everything else without failing, or list the entries in `.bfsignore`.
 
 ## Providers
 
@@ -198,7 +218,9 @@ FTP flag reference:
 | `--user <username>` | — | FTP login user |
 | `--password <password>` | — | FTP login password |
 | `--path </absolute/path>` | — | Absolute base path on server, must start with `/` (required) |
-| `--secure <bool>` | `false` | Enable FTPS/TLS — accepts `true`/`false`/`yes`/`no` |
+| `--secure <bool>` | `true` | FTPS/TLS — on by default; pass `false` for a server that offers only plain FTP (accepts `true`/`false`/`yes`/`no`) |
+| `--cert-fingerprint <sha256>` | — | Pin the server's certificate up front (`AA:BB:…` form). Without it, the fingerprint is shown and pinned on first connection |
+| `--accept-new-cert` | — | Pin the certificate presented on first connection without asking — for scripted runs |
 | `--config-file <path>` | — | JSON file with any of the above fields; inline flags override file values |
 
 ### SSH/SFTP provider

@@ -10,19 +10,19 @@ import { estimateBlobSize, packBlob, packBlobToFile, packBlobToFileZipped } from
 import { parseBlobFileTable, parseBlobFileTableFromFile, unpackBlob, unpackBlobFromFile } from '../../src/core/blob-unpack.js';
 import { BfsError, UnsafePathError } from '../../src/core/errors.js';
 import { createIgnoreFilter } from '../../src/core/ignore.js';
-import { BLOB_FLAGS } from '../../src/types/index.js';
+import { BLOB_ENTRY_KIND, BLOB_FLAGS } from '../../src/types/index.js';
 
 // Shared, hoisted TOCTOU target: when armed, the mocked fs.open below performs a
 // real on-disk rewrite of a source file the moment the output handle is opened
 // for writing — reproducing an external process mutating a file between
 // packBlobToFile's hash pass and its write pass. Null = pure call-through.
-const toctou = vi.hoisted(() => ({ target: null as { outputPath: string; sourceFile: string; replacement: Buffer } | null }));
+const toctou = vi.hoisted(() => ({ target: null as Nullable<{ outputPath: string; sourceFile: string; replacement: Buffer }> }));
 
 // Shared, hoisted mid-stream read failure: when armed, the mocked fs.open wraps
 // the source file's read stream so it emits one chunk and then errors —
 // simulating an I/O fault (bad sector, unplugged medium) partway through reading
 // a file during the write pass, after some of its bytes were already written.
-const streamFail = vi.hoisted(() => ({ target: null as { path: string } | null }));
+const streamFail = vi.hoisted(() => ({ target: null as Nullable<{ path: string }> }));
 
 // Mock at the module boundary so blob-pack (writer) and blob-unpack (reader)
 // share one mocked module — an ESM namespace export cannot be spied in place.
@@ -482,7 +482,7 @@ describe('packBlob (compressed=true)', () => {
     expect(flags & BLOB_FLAGS.COMPRESSED).toBe(BLOB_FLAGS.COMPRESSED);
   });
 
-  it('should set file_count=1 with entry name "bfs.pack.zip"', async () => {
+  it('should list one file-table entry per user file for a compressed blob', async () => {
     await fs.writeFile(path.join(srcDir, 'a.txt'), 'hello');
     await fs.writeFile(path.join(srcDir, 'b.txt'), 'world');
     const ignoreFilter = createIgnoreFilter(srcDir);
@@ -490,8 +490,8 @@ describe('packBlob (compressed=true)', () => {
     const { blob } = await packBlob(srcDir, ignoreFilter, undefined, true);
 
     const entries = parseBlobFileTable(blob);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.path).toBe('bfs.pack.zip');
+    expect(entries.map((e) => e.path).sort()).toEqual(['a.txt', 'b.txt']);
+    expect(entries.every((e) => e.kind === BLOB_ENTRY_KIND.NEW_FILE)).toBe(true);
   });
 
   it('should roundtrip via unpackBlob (byte-for-byte)', async () => {
@@ -557,8 +557,8 @@ describe('packBlobToFileZipped', () => {
     const flags = blob.readUInt32LE(22);
     expect(flags & BLOB_FLAGS.COMPRESSED).toBe(BLOB_FLAGS.COMPRESSED);
     const entries = parseBlobFileTable(blob);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.path).toBe('bfs.pack.zip');
+    expect(entries.map((e) => e.path)).toEqual(['a.txt']);
+    expect(entries[0]?.kind).toBe(BLOB_ENTRY_KIND.NEW_FILE);
   });
 
   it('should roundtrip via unpackBlobFromFile (byte-for-byte)', async () => {
@@ -775,5 +775,240 @@ describe('blob-unpack bound allocation', () => {
     await fs.writeFile(blobPath, blob);
 
     await expect(unpackBlobFromFile(blobPath, outDir)).rejects.toThrow(BfsError);
+  });
+});
+
+// ─── File metadata restore (mode + mtime) ─────────────────────────────────────
+
+// A pack → unpack round-trip must return each file's POSIX permission bits
+// (mode) and modification time (mtime), not just its bytes. These tests guard
+// against a restore path writing files with the umask-default mode and the
+// current time instead of the originals:
+//   - mtime is checked on every OS (a dropped mtime surfaces as "restored now").
+//   - mode is checked on POSIX only — Windows has no POSIX mode and chmod is a
+//     no-op there, so the mode assertion is guarded out.
+// Do not delete without a replacement: metadata fidelity is a restore promise,
+// and the compressed path (the default) is the one that currently drops both.
+describe('file metadata restore (mode + mtime)', () => {
+  const KNOWN_MTIME = new Date('2021-06-15T12:00:00.000Z');
+  // Distinct POSIX modes spanning owner/group/other, exec and read-only bits.
+  // Every value differs from the umask default (0o644) so a dropped mode is
+  // always observable — a restore that ignores mode lands on 0o644, which would
+  // falsely match if any case used it. 0o660 (group-write) additionally guards
+  // against a umask-masking restore (writeFile({mode}) instead of chmod), which
+  // would silently downgrade it to 0o640.
+  const MODE_CASES = [
+    { file: 'exec.sh', mode: 0o700 },
+    { file: 'private.key', mode: 0o600 },
+    { file: 'group-read.csv', mode: 0o640 },
+    { file: 'group-write.txt', mode: 0o660 },
+    { file: 'world-exec.sh', mode: 0o755 },
+    { file: 'readonly.dat', mode: 0o444 },
+  ] as const;
+  const PROBE_FILE = 'exec.sh';
+
+  let srcDir: string;
+  let outDir: string;
+  let blobDir: string;
+
+  beforeEach(async () => {
+    srcDir = await makeTempDir();
+    outDir = await makeTempDir();
+    blobDir = await makeTempDir();
+  });
+
+  afterEach(async () => {
+    await fs.rm(srcDir, { recursive: true, force: true });
+    await fs.rm(outDir, { recursive: true, force: true });
+    await fs.rm(blobDir, { recursive: true, force: true });
+  });
+
+  // Writes every MODE_CASES file, stamps each with its mode (POSIX only) and a
+  // fixed non-current mtime, then returns the expected whole-second mtime read
+  // back from disk (via PROBE_FILE) so the assertion compares at the same precision.
+  async function stampSources(): Promise<number> {
+    for (const { file, mode } of MODE_CASES) {
+      await writeFile(srcDir, file, `metadata payload ${file}`);
+      const full = path.join(srcDir, file);
+      if (process.platform !== 'win32') {
+        await fs.chmod(full, mode);
+      }
+      await fs.utimes(full, KNOWN_MTIME, KNOWN_MTIME);
+    }
+    const stat = await fs.stat(path.join(srcDir, PROBE_FILE));
+    return Math.round(stat.mtimeMs / 1000);
+  }
+
+  // Asserts every restored file kept its mtime (every OS) and its mode (POSIX
+  // only). Reads the restored files straight from outDir.
+  async function assertRestoredMetadata(wantMtimeSec: number): Promise<void> {
+    for (const { file, mode } of MODE_CASES) {
+      const stat = await fs.stat(path.join(outDir, file));
+      expect(Math.round(stat.mtimeMs / 1000)).toBe(wantMtimeSec);
+      if (process.platform !== 'win32') {
+        expect(stat.mode & 0o777).toBe(mode);
+      }
+    }
+  }
+
+  it('should restore mode and mtime via packBlob + unpackBlob (RAM, raw)', async () => {
+    const wantMtime = await stampSources();
+    const filter = createIgnoreFilter(srcDir);
+
+    const { blob } = await packBlob(srcDir, filter, undefined, false);
+    await unpackBlob(blob, outDir);
+
+    await assertRestoredMetadata(wantMtime);
+  });
+
+  it('should restore mode and mtime via packBlob + unpackBlob (RAM, compressed)', async () => {
+    const wantMtime = await stampSources();
+    const filter = createIgnoreFilter(srcDir);
+
+    const { blob } = await packBlob(srcDir, filter, undefined, true);
+    await unpackBlob(blob, outDir);
+
+    await assertRestoredMetadata(wantMtime);
+  });
+
+  it('should restore mode and mtime via packBlobToFile + unpackBlobFromFile (disk, raw)', async () => {
+    const wantMtime = await stampSources();
+    const filter = createIgnoreFilter(srcDir);
+    const blobPath = path.join(blobDir, 'raw.blob');
+
+    await packBlobToFile(srcDir, blobPath, filter);
+    await unpackBlobFromFile(blobPath, outDir);
+
+    await assertRestoredMetadata(wantMtime);
+  });
+
+  it('should restore mode and mtime via packBlobToFileZipped + unpackBlobFromFile (disk, compressed)', async () => {
+    const wantMtime = await stampSources();
+    const filter = createIgnoreFilter(srcDir);
+    const blobPath = path.join(blobDir, 'zip.blob');
+
+    await packBlobToFileZipped(srcDir, blobPath, filter);
+    await unpackBlobFromFile(blobPath, outDir);
+
+    await assertRestoredMetadata(wantMtime);
+  });
+});
+
+// ─── File-table entry format (v2 kind/created_at + v1 backward-compat) ────────
+
+// Direct coverage of the binary file-table entry: that pack emits parseable v2
+// entries (kind=NEW_FILE + created_at) for both the raw and compressed paths,
+// that a reserved kind is rejected (the increment door, closed until implemented),
+// and that a legacy v1 blob (no kind/created_at) still restores. Do not delete —
+// this is the format's regression net independent of the round-trip tests above.
+describe('file-table entry format', () => {
+  // Builds a legacy v1 raw blob by hand (v1 entry: no kind, no created_at) so the
+  // v1 read path can be exercised even though pack only ever writes v2.
+  function buildV1RawBlob(relPath: string, content: Buffer, mode: number, mtimeMs: number): Buffer {
+    const V1_HEADER = 70;
+    const pathBuf = Buffer.from(relPath, 'utf8');
+    const fileTable = Buffer.alloc(2 + pathBuf.length + 8 + 8 + 32 + 4 + 8);
+    let p = 0;
+    fileTable.writeUInt16LE(pathBuf.length, p);
+    p += 2;
+    pathBuf.copy(fileTable, p);
+    p += pathBuf.length;
+    fileTable.writeBigUInt64LE(BigInt(content.length), p);
+    p += 8;
+    fileTable.writeBigUInt64LE(0n, p);
+    p += 8;
+    createHash('sha256').update(content).digest().copy(fileTable, p);
+    p += 32;
+    fileTable.writeUInt32LE(mode, p);
+    p += 4;
+    fileTable.writeBigUInt64LE(BigInt(Math.round(mtimeMs)), p);
+
+    const header = Buffer.alloc(V1_HEADER);
+    header.write('BFS', 0, 'ascii');
+    header.writeUInt16LE(1, 4); // format_version = 1 (v1 entry: no kind / created_at)
+    header.writeUInt32LE(0, 0x16); // flags: raw
+    header.writeBigUInt64LE(BigInt(Date.now()), 0x1a);
+    header.writeUInt32LE(1, 0x22); // file_count
+    header.writeBigUInt64LE(BigInt(V1_HEADER), 0x26); // file_table_offset
+    header.writeBigUInt64LE(BigInt(fileTable.length), 0x2e);
+    header.writeBigUInt64LE(BigInt(V1_HEADER + fileTable.length), 0x36); // data offset
+    header.writeBigUInt64LE(BigInt(content.length), 0x3e); // data length
+
+    const body = Buffer.concat([header, fileTable, content]);
+    const checksum = createHash('sha256').update(body).digest();
+    return Buffer.concat([body, checksum]);
+  }
+
+  it('should emit v2 entries with kind=NEW_FILE, created_at and mode/mtime (raw)', async () => {
+    const srcDir = await makeTempDir();
+    try {
+      await writeFile(srcDir, 'a.txt', 'alpha');
+      await writeFile(srcDir, 'nested/b.bin', 'beta');
+      const knownMtime = new Date('2022-02-02T02:02:02.000Z');
+      await fs.utimes(path.join(srcDir, 'a.txt'), knownMtime, knownMtime);
+
+      const { blob } = await packBlob(srcDir, createIgnoreFilter(srcDir), undefined, false);
+      expect(blob.readUInt16LE(0x04)).toBe(2); // format_version
+      const entries = parseBlobFileTable(blob);
+
+      expect(entries.map((e) => e.path).sort()).toEqual(['a.txt', 'nested/b.bin']);
+      for (const e of entries) expect(e.kind).toBe(BLOB_ENTRY_KIND.NEW_FILE);
+      const a = entries.find((e) => e.path === 'a.txt');
+      assert(a !== undefined, 'a.txt entry present');
+      expect(Number(a.modified_at)).toBe(Math.round(knownMtime.getTime()));
+    } finally {
+      await fs.rm(srcDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should list one v2 entry per user file for a compressed blob (uncompressed size)', async () => {
+    const srcDir = await makeTempDir();
+    try {
+      await writeFile(srcDir, 'a.txt', 'alpha');
+      await writeFile(srcDir, 'b.txt', 'beta-content');
+
+      const { blob } = await packBlob(srcDir, createIgnoreFilter(srcDir), undefined, true);
+      expect(blob.readUInt32LE(0x16) & BLOB_FLAGS.COMPRESSED).not.toBe(0); // COMPRESSED flag set
+      const entries = parseBlobFileTable(blob);
+
+      expect(entries.map((e) => e.path).sort()).toEqual(['a.txt', 'b.txt']);
+      const a = entries.find((e) => e.path === 'a.txt');
+      assert(a !== undefined, 'a.txt entry present');
+      expect(a.kind).toBe(BLOB_ENTRY_KIND.NEW_FILE);
+      expect(Number(a.size)).toBe(Buffer.byteLength('alpha')); // uncompressed size, not the ZIP size
+    } finally {
+      await fs.rm(srcDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject a reserved entry kind (increment door, closed until implemented)', async () => {
+    const srcDir = await makeTempDir();
+    try {
+      await writeFile(srcDir, 'x.txt', 'data');
+      const { blob } = await packBlob(srcDir, createIgnoreFilter(srcDir), undefined, false);
+      // Single entry starts at HEADER_SIZE (70): pathLen(2) + 'x.txt'(5) → kind byte at 77.
+      const kindPos = 70 + 2 + Buffer.byteLength('x.txt');
+      blob.writeUInt8(BLOB_ENTRY_KIND.DELETED, kindPos);
+      expect(() => parseBlobFileTable(blob)).toThrow(BfsError);
+    } finally {
+      await fs.rm(srcDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should restore a legacy v1 blob (no kind/created_at) — content and mtime intact', async () => {
+    const mtimeMs = Date.parse('2020-03-03T03:03:03.000Z');
+    const blob = buildV1RawBlob('legacy.txt', Buffer.from('old format payload'), 0o644, mtimeMs);
+    const outDir = await makeTempDir();
+    try {
+      const { extracted } = await unpackBlob(blob, outDir);
+
+      expect(extracted.map((e) => e.path)).toContain('legacy.txt');
+      const restored = await fs.readFile(path.join(outDir, 'legacy.txt'));
+      expect(restored.toString()).toBe('old format payload');
+      const stat = await fs.stat(path.join(outDir, 'legacy.txt'));
+      expect(Math.round(stat.mtimeMs / 1000)).toBe(Math.round(mtimeMs / 1000));
+    } finally {
+      await fs.rm(outDir, { recursive: true, force: true });
+    }
   });
 });

@@ -175,6 +175,15 @@ export const en: Strings = {
   push_drift_accepted: 'Accepted %s drifted file(s); the backup is restorable but may not reflect the latest on-disk state:\n%s',
   push_drift_header: '%s file(s) changed on disk during packing (backup is restorable but not current):',
   push_drift_hint: 'Re-run `bfs push` without touching files to retry, or `bfs push --allow-drift` to accept.',
+  push_opt_allow_excluded: 'Back up everything except symbolic links and special files (do not fail on them)',
+  push_excluded_label_symlink: 'symlink',
+  push_excluded_label_special: 'special file',
+  push_excluded_header: '%s entr(y/ies) cannot be backed up (symbolic links and special files are never included):',
+  push_excluded_hint: 'Add them to .bfsignore, or re-run with `bfs push --allow-excluded` to back up everything else.',
+  push_excluded_confirm: '%s entr(y/ies) cannot be backed up:\n%s\nAdd them to .bfsignore and retry?',
+  push_excluded_allowed: 'Skipping %s entr(y/ies) that cannot be backed up:\n%s',
+  push_excluded_added: 'Added %s entr(y/ies) to .bfsignore; retrying…',
+  push_excluded_unignorable: 'These entries cannot be added to .bfsignore automatically (their names contain a trailing space, a newline, or similar). Remove or rename them, then retry:\n%s',
   vault_compressing: 'Compressing…',
   vault_decompressing: 'Decompressing…',
   opt_temp_dir_desc: 'Directory for temporary files during push/pull',
@@ -229,6 +238,9 @@ export const en: Strings = {
 
   // ─── prune ────────────────────────────────────────────────────────────────
   prune_opt_keep_last: 'Keep the N most recent versions, delete the rest',
+  prune_opt_force: 'Delete even the last version that can still be restored',
+  prune_last_restorable:
+    'Refusing to delete version %s — it would leave no version that can still be restored (anything kept is damaged). Pass --force to delete it anyway, or repair the damaged versions first (`bfs repair --rebuild`). This uses what the last check recorded — run `bfs verify --deep` to re-check the data itself.',
   prune_opt_yes: 'Skip confirmation prompt',
   prune_range_invalid: 'Invalid range: %s',
   prune_version_format_invalid: 'Invalid version format: "%s"',
@@ -255,7 +267,14 @@ export const en: Strings = {
   verify_col_tolerance: 'Tolerance',
   /** %s = filename, %s = provider id, %s = reason */
   verify_shard_check_failed: 'File "%s" on provider "%s" failed integrity check: %s',
+  verify_shard_medium_unreachable: 'File "%s" could not be checked — provider "%s" is unreachable: %s',
+  verify_shard_unreadable: 'File "%s" could not be read on provider "%s" — missing or unreadable: %s',
+  verify_shard_adapter_missing: 'File "%s" cannot be checked — provider "%s" needs an adapter that is not installed: %s',
+  verify_shard_provider_unknown: 'File "%s" cannot be checked — provider "%s" is no longer in the configuration.',
+  verify_reason_health_check: 'no answer to the reachability check',
+  verify_verdict_retained: 'Version %s keeps the verdict of an earlier deep check — this run read only the headers, which cannot see damage inside the data. Run `bfs verify --deep` to re-check the data itself.',
   verify_header_advisory: 'Version %s: %s header file(s) missing or damaged. Run "bfs repair --restore-headers" to rebuild them — otherwise recovery of an unencrypted backup may be affected.',
+  verify_opt_deep: 'Deep integrity check: download and verify the full data of every file (transfers all backup data)',
 
   // ─── recovery ─────────────────────────────────────────────────────────────
   recovery_provider_type_prompt: 'Bootstrap provider type:',
@@ -293,9 +312,9 @@ export const en: Strings = {
   scheme_changed: 'Scheme changed: %s → %s/%s.',
   scheme_apply_push: 'Run `bfs push` to apply the new scheme.',
   scheme_missing: 'Backup scheme is missing or corrupted in .bfs/config.json. Run `bfs scheme set` to fix.',
-  scheme_invalid_data_shards: 'Invalid scheme: data_shards must be an integer >= 2, got "%s". Use `bfs provider add` or `bfs scheme set` to fix.',
+  scheme_invalid_data_shards: 'Invalid scheme: data_shards must be an integer >= 2, got "%s". Use `bfs scheme set <N> <K>` to fix.',
   scheme_invalid_parity_shards: 'Invalid scheme: parity_shards must be an integer >= 1, got "%s". Use `bfs provider add` or `bfs scheme set` to fix.',
-  scheme_providers_mismatch: 'Scheme requires %s providers, configured: %s. Use `bfs provider add` or `bfs scheme set`.',
+  scheme_providers_mismatch: 'Scheme requires %s providers, configured: %s. Match the scheme to the storages you have with `bfs scheme set <N> <K>`.',
 
   // ─── provider: local-fs ──────────────────────────────────────────────────
   provider_local_path_not_exist_confirm: 'Path "%s" does not exist. Create it?',
@@ -344,7 +363,7 @@ export const en: Strings = {
   provider_remove_strategy_prompt: 'Choose a strategy:',
   provider_remove_strategy_relocate: '[R]elocate — data exists, provider changed address (new IP/host/path)',
   provider_remove_strategy_rebuild: '[R]ebuild — data lost, rebuild from redundancy and upload to another provider',
-  provider_remove_strategy_remove: '[R]emove — remove provider without replacement, update N/K scheme',
+  provider_remove_strategy_remove: '[R]emove — remove provider without replacement (match the N/K scheme afterwards with `bfs scheme set`)',
   provider_remove_strategy_cancel: '[C]ancel',
   provider_remove_new_type_required: '--new-type is required (or include "type:" prefix in --new-path)',
   provider_remove_change_type_confirm: 'Change provider type? (current: %s)',
@@ -365,9 +384,10 @@ export const en: Strings = {
   provider_remove_target_invalid: 'Provider "%s" does not exist or is the same as the one being removed',
   provider_remove_success: 'Provider "%s" removed.',
   provider_remove_next_steps: 'Recommended next steps:',
-  provider_remove_next_step_1: '  1. `bfs pull` — fetch the current version',
-  provider_remove_next_step_2: '  2. `bfs push` — create a new healthy backup',
-  provider_remove_next_step_3: '  3. `bfs prune` — optionally delete old degraded versions',
+  provider_remove_next_step_1: '  1. `bfs scheme set <N> <K>` — match the scheme to the remaining storages',
+  provider_remove_next_step_2: '  2. `bfs pull` — fetch the current version (redundancy repair covers the degradation)',
+  provider_remove_next_step_3: '  3. `bfs push` — create a new healthy backup on the remaining storages',
+  provider_remove_next_step_4: '  4. `bfs prune` — optionally delete old degraded versions',
   provider_relocate_success: 'Provider "%s" relocated.',
   provider_rebuild_success: 'Provider "%s" replaced. Run `bfs push` to update the scheme.',
 
@@ -385,7 +405,7 @@ export const en: Strings = {
 
   // ─── vault operations ────────────────────────────────────────────────────
   vault_download_shards: 'Downloading version %s…',
-  vault_provider_not_found: 'Provider "%s" not found in config — skipping %s',
+  vault_shard_damaged_on_provider: 'Backup data on "%s" is damaged — skipping it.',
   vault_download_shard_progress: 'Downloading %s/%s',
   vault_provider_unreachable: 'Storage "%s" is not accessible — skipping.',
   vault_file_missing_on_provider: 'Backup data missing on storage "%s" — skipping.',
@@ -414,12 +434,17 @@ export const en: Strings = {
   push_recovered_location: '  • %s → %s',
   push_confirm_recovered_locations: 'Send backup data to these locations?',
   push_recovered_locations_declined: 'Push aborted: recovered provider locations not confirmed. Verify them in `.bfs/config.json` (e.g. with `bfs config`) and retry.',
-  pull_not_enough_shards: 'Not enough storage pieces: need %s, got %s. Some storage may be offline.',
+  pull_not_enough_shards: 'Not enough storage pieces: need %s, got %s — this version cannot be restored from the storage available now. Run `bfs verify --deep` to see which versions still can.',
+  pull_failed_on_damaged: 'Damaged backup data on: %s.',
+  pull_failed_on_missing: 'Backup data missing on: %s.',
+  pull_failed_on_unreachable: 'Storage not reachable: %s.',
+  pull_failed_on_adapter_missing: 'Storage needing an adapter that is not installed: %s.',
+  pull_failed_on_not_configured: 'Storage recorded in this backup but absent from the configuration: %s.',
   pull_blob_size_unreadable: 'Could not read the backup size from any storage piece.',
   pull_salt_missing: 'This encrypted backup is missing its key material — its storage pieces may be corrupted or incomplete.',
-  pull_provider_not_found_skip: 'Storage "%s" is not in the configuration — skipping piece %s.',
-  pull_shard_header_invalid_skip: 'Piece %s failed header validation — skipping.',
-  pull_shard_hash_mismatch_skip: 'Piece %s failed its integrity check on download — skipping.',
+  pull_provider_not_found_skip: 'Storage "%s" is not in the configuration — skipping its part of the backup.',
+  pull_shard_header_invalid_skip: 'Backup data on "%s" failed header validation — skipping it.',
+  pull_shard_hash_mismatch_skip: 'Backup data on "%s" failed its integrity check on download — skipping it.',
   pull_degraded_repair: 'Some pieces are missing — reconstructing from redundancy…',
   scheme_provider_count_mismatch: 'The scheme requires %s storage providers, but %s were given.',
   pull_cancelled: 'Pull cancelled.',
@@ -441,6 +466,8 @@ export const en: Strings = {
   vault_degraded_file_missing: 'Pool degraded: backup data was deleted from a healthy provider. Run `bfs push` to re-create the backup.',
   vault_degraded_adapter_missing: 'Pool degraded: one or more providers need an adapter that is not installed. Install the missing adapter (see the warning above), then run `bfs pull` again to include those pieces.',
   vault_degraded_corrupt: 'Pool degraded: part of the backup failed its integrity check (corruption or tampering) and was rebuilt from redundancy. Run `bfs push` to re-create a clean backup.',
+  vault_degraded_provider_not_configured:
+    'Pool degraded: storage recorded in this backup but absent from the configuration: %s. If the name went missing by accident, bring it back with `bfs repair --version all <configured-storage> "<type>:<recorded-storage> <storage settings>"` (one such pair per name) and run `bfs pull` again. If you removed that storage on purpose, run `bfs push` to create a sound backup on the storage you have left.',
 
   // ─── recovery operations (vault layer) ──────────────────────────────────
   recovery_ask_version_password: 'Enter password for version %s (or leave blank to skip):',
@@ -452,6 +479,9 @@ export const en: Strings = {
   // ─── bootstrap operations ────────────────────────────────────────────────
   bootstrap_ask_password: 'Backup is encrypted. Enter password for version %s:',
   bootstrap_wrong_password_retry: 'Wrong password. Try again for version %s:',
+  bootstrap_copy_integrity_failed:
+    'The backup data on this provider failed its integrity check — the data is damaged, or the password is wrong. Recover from a different provider: bfs recovery --provider <type> --name <backup> --bootstrap "<settings of that provider>".',
+  bootstrap_copy_integrity_failed_no_password: 'The backup data on this provider failed its integrity check. Recover from a different provider: bfs recovery --provider <type> --name <backup> --bootstrap "<settings of that provider>".',
   bootstrap_single_provider_warn: 'Only 1 provider available — cannot verify consensus. Data may be compromised. Proceeding anyway.',
 
   // ─── provider: ftp ──────────────────────────────────────────────────────
@@ -480,8 +510,10 @@ export const en: Strings = {
   ftp_help_flag_user_desc: 'FTP login user',
   ftp_help_flag_password_desc: 'FTP login password',
   ftp_help_flag_path_desc: 'Absolute base path on the FTP server (must start with "/")',
-  ftp_help_flag_secure_desc: 'Use FTPS (TLS). Accepts true|false|1|0|yes|no (default false)',
-  ftp_help_flag_config_file_desc: 'JSON with any of { host, port, user, password, path, secure }. ' + 'Inline flags override fields loaded from JSON.',
+  ftp_help_flag_secure_desc: 'Use FTPS (TLS). Accepts true|false|1|0|yes|no (default true)',
+  ftp_help_flag_cert_fingerprint_desc: 'Pin the FTPS certificate to this SHA-256 fingerprint (colon-hex, e.g. AB:CD:…); a mismatch aborts as tampering',
+  ftp_help_flag_accept_new_cert_desc: 'Trust the certificate the server presents on first connect when no pin is set (non-interactive TOFU opt-in)',
+  ftp_help_flag_config_file_desc: 'JSON with any of { host, port, user, password, path, secure, cert_fingerprint, accept_new_cert }. ' + 'Inline flags override fields loaded from JSON.',
 
   ftp_host_required: 'FTP adapter: "host" is required. Pass --host <hostname> or ' + '--config-file <path> inside the --provider spec, e.g. ' + '--provider "ftp:nas --host 192.168.1.1 --path /backup".',
   ftp_path_required: 'FTP adapter: "path" is required. Pass --path </absolute/path> or ' + '--config-file <path> inside the --provider spec, e.g. ' + '--provider "ftp:nas --path /backup".',
@@ -509,6 +541,7 @@ export const en: Strings = {
   recovery_consensus_vault_id_mismatch: 'Version %s: backup identity mismatch — skipping',
   recovery_consensus_filename_mismatch: 'Version %s: filename/header mismatch — skipping',
   recovery_consensus_failed: 'Version %s: consensus failed (fields: %s) — marking as untrusted',
+  recovery_map_from_sibling: 'Version %s: location map recovered from a sibling — medium(s) %s could not supply it; verify/repair them',
   recovery_no_manifests: 'Could not reconstruct any valid backup version from the available providers.',
   recovery_manifest_unreadable: 'The latest backup version %s could not be read after recovery.',
 
@@ -544,6 +577,17 @@ export const en: Strings = {
   ftp_validate_path_required: 'FTP: path is required and must be a non-empty string',
   ftp_validate_path_absolute: 'FTP: path must start with "/"',
   ftp_describe_config: 'host: %s, port: %s, user: %s, password: ****, path: %s, secure: %s',
+  ftp_describe_cert: '%s, cert: %s (%s)',
+  ftp_describe_cert_nokind: '%s, cert: %s',
+  ftp_cert_kind_self_signed: 'self-signed',
+  ftp_cert_kind_ca: 'CA-signed',
+  ftp_cert_pin_mismatch: 'FTPS certificate for %s does not match the pinned fingerprint — possible man-in-the-middle attack (tampering). Expected %s, but the server presented %s. Refusing to connect.',
+  ftp_cert_untrusted: 'FTPS certificate for %s is not trusted (no pinned fingerprint). The server presented %s. Pin it with --cert-fingerprint, or pass --accept-new-cert to trust it on first connect.',
+  ftp_cert_confirm: 'FTPS server %s presented a %s certificate with fingerprint %s. Trust it?',
+  ftp_cert_declined: 'FTPS certificate for %s was not trusted — refusing to connect.',
+  ftp_cert_fingerprint_invalid: 'FTP adapter: --cert-fingerprint must be a colon-hex SHA-256 fingerprint (32 hex byte-pairs joined by ":")',
+  ftp_cert_pin_requires_secure: 'FTP: cert_fingerprint requires secure:true (a certificate pin is meaningless over plaintext FTP)',
+  ftp_tls_not_established: 'FTPS handshake to %s did not present a certificate — cannot verify the server identity.',
 
   // ─── FTP — probeConnection ─────────────────────────────────────────────────
   ftp_probe_incomplete: 'Probe failed: FTP config incomplete (host and path must be set)',
@@ -569,6 +613,7 @@ export const en: Strings = {
   ssh_host_key_confirm: 'Trust the host key for %s?\n  fingerprint %s',
   ssh_host_key_declined: 'Host key for %s was not trusted — connection refused.',
   ssh_host_key_revoked: 'Host key for %s is revoked in ~/.ssh/known_hosts — refusing to connect (the key is marked compromised).',
+  ssh_host_key_mismatch: 'Host key for %s has CHANGED — this is a possible man-in-the-middle attack (tampering). Expected %s, but the server presented %s. Refusing to connect.',
 
   // ─── SSH — edit (online-first host key, offline fallback) ───────────────────
   ssh_edit_connecting: 'Connecting to %s to confirm the host key…',
@@ -659,6 +704,7 @@ export const en: Strings = {
   repair_unknown_provider: 'Provider "%s" not found in backup config.',
   repair_duplicate_provider_in_args: 'Provider "%s" repeated in repair arguments.',
   repair_spec_invalid_params: 'Invalid repair params: "%s". Use adapter flags (e.g. --path) or a type:name migration.',
+  heal_shard_corrupt_skip: 'Backup data on storage "%s" failed its integrity check — skipping it for this repair.',
   heal_locationmap_update_failed: 'Could not update storage "%s" with the new location info — heal or repair it separately.',
   heal_relocate_unreachable: 'Storage "%s" is not usable at the new address: %s',
 
@@ -668,10 +714,25 @@ export const en: Strings = {
   repair_opt_password: 'Encryption password for the backup (repeatable)',
   repair_opt_password_file: 'Read an encryption password from a file (repeatable)',
   repair_opt_ci: 'Non-interactive: never prompt; fail if a password is required and none matches',
-  repair_opt_rebuild: 'Reconstruct a lost backup part with Reed-Solomon (downloads the other parts)',
+  repair_opt_rebuild: 'Reconstruct a backup part that is lost or damaged, using Reed-Solomon (downloads the other parts)',
+  repair_help_syntax: `Syntax:
+  bfs repair [--version <range>] <storage-name> "<new settings>"
+      point a storage device at its new location (settings replace the old ones)
+  bfs repair [--version <range>] <storage-name> "" --rebuild
+      rebuild that device's data from the others, in place
+
+Examples:
+  bfs repair --version all usb1 "--path /mnt/new-usb"
+      the drive is mounted somewhere else now
+  bfs repair --version all nas "--host 10.0.0.5 --user backup --path /backup"
+      the server moved — give the complete settings, they replace the old ones
+  bfs repair --version 3 usb1 "" --rebuild
+      the data on usb1 is damaged or gone; the other devices rebuild it`,
   repair_opt_force_unverified: 'Continue a migration when a backup part cannot be verified (not when it is missing or altered)',
   repair_no_versions: 'No matching versions to repair.',
   repair_foreign_shard_detected: 'A backup part for version %s belongs to a different backup — aborting.',
+  vault_collision_detected:
+    'This location on storage "%s" already holds a different backup of the same name. BFS will not overwrite or delete data from another backup. To continue, manually remove the files at that location, use a different backup name, or run `bfs recovery` if this backup is yours. Aborting.',
   repair_wrong_version_shard: 'A backup part for version %s does not match its expected version — aborting.',
   repair_force_unverified_warn: 'Continuing despite an unverifiable backup part for version %s.',
   repair_ask_vault_password: 'Encryption password for version %s:',

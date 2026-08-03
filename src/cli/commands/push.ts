@@ -1,11 +1,11 @@
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import ora from 'ora';
-import { LockConcurrentActiveError, LockPartialStatePushError, PushCacheNoLockError, PushCacheUnavailableError, PushDriftError, PushSkippedError } from '../../core/errors.js';
+import { LockConcurrentActiveError, LockPartialStatePushError, PushCacheNoLockError, PushCacheUnavailableError, PushDriftError, PushExcludedError, PushSkippedError } from '../../core/errors.js';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO } from '../../providers/provider.js';
 import { PushMode, VersionHealth } from '../../types/index.js';
-import { _formatDriftList } from '../../vault/push-pipeline.js';
+import { _formatDriftList, _formatExcludedList } from '../../vault/push-pipeline.js';
 import { push } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { isReplMode } from '../repl-context.js';
@@ -37,6 +37,7 @@ export function registerPush(program: Command): void {
     .option('--no-compress', t('push_opt_no_compress'))
     .option('--compress', t('push_opt_compress'))
     .option('--allow-drift', t('push_opt_allow_drift'))
+    .option('--allow-excluded', t('push_opt_allow_excluded'))
     .action(
       async (
         opts: {
@@ -50,6 +51,7 @@ export function registerPush(program: Command): void {
           /** Commander: false when --no-compress, true when --compress, true by default. */
           compress?: boolean;
           allowDrift?: boolean;
+          allowExcluded?: boolean;
         },
         cmd: Command,
       ) => {
@@ -60,7 +62,7 @@ export function registerPush(program: Command): void {
 
         // Detect conflict: both flags explicitly given by the user
         // rawArgs is a JS runtime property not declared in Commander typings
-        const parent = cmd.parent as unknown as { rawArgs?: string[] } | null;
+        const parent = cmd.parent as unknown as Nullable<{ rawArgs?: string[] }>;
         const rawArgs = parent?.rawArgs ?? [];
         const hasCompressFlag = rawArgs.includes('--compress');
         const hasNoCompressFlag = rawArgs.includes('--no-compress');
@@ -88,6 +90,7 @@ export function registerPush(program: Command): void {
             ...(opts.maxRam !== undefined ? { maxRamMb: parseInt(opts.maxRam, 10) } : {}),
             ...(compressOverride !== undefined ? { compressOverride } : {}),
             ...(opts.allowDrift !== undefined ? { allowDrift: opts.allowDrift } : {}),
+            ...(opts.allowExcluded !== undefined ? { allowExcluded: opts.allowExcluded } : {}),
             fromCache: opts.cache ?? false,
             interactive: isReplMode(),
             io: wrappedIo,
@@ -143,6 +146,13 @@ export function registerPush(program: Command): void {
             console.log(chalk.yellow(_formatDriftList(err.drift)));
             info(t('push_drift_hint'));
             throw new CommandAbort();
+          }
+          if (err instanceof PushExcludedError) {
+            spinner.fail(t('push_failed'));
+            warn(fmt('push_excluded_header', String(err.excluded.length)));
+            console.log(chalk.yellow(_formatExcludedList(err.excluded)));
+            info(t('push_excluded_hint'));
+            throw new CommandAbort(3);
           }
           if (err instanceof PushSkippedError) {
             spinner.fail(t('push_failed'));

@@ -7,6 +7,211 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-08-03
+
+### Added
+- **`bfs verify --deep` checks the full backup data, not just its headers.** The
+  regular `bfs verify` reads only a small header from each storage device — it
+  confirms the data is present and consistent, but cannot see silent bit-rot in the
+  stored bytes, which would otherwise surface only at restore time. `bfs verify
+  --deep` streams every device's data end-to-end and re-checks its checksum, so
+  on-device corruption is caught up front and a failing part is treated as damaged
+  (like a missing one). It needs no backup password — even for encrypted backups —
+  but downloads all backup data, so it is opt-in; the plain `bfs verify` stays fast.
+- **FTPS storage now verifies the server's certificate, with pinning and
+  trust-on-first-use.** When you add or set up an FTPS storage device
+  (`bfs init`, `bfs provider add`), BFS shows the server certificate's fingerprint
+  — and whether it is self-signed or CA-signed — and pins it after you confirm, so
+  a self-signed certificate (common on a home server) is usable by trusting its
+  fingerprint directly, without a certificate authority. Pin one up front with
+  `--cert-fingerprint <fp>`, or accept a new certificate without a prompt using
+  `--accept-new-cert` for scripted runs. The certificate is checked before your
+  password is ever sent, so the password never reaches an untrusted or impersonated
+  server; a certificate that later does not match the pinned one is refused as
+  detected tampering.
+
+### Changed
+- **BREAKING: `bfs verify` now reports its verdict through the exit code.** A
+  scheduled check could not tell a healthy backup from an unrecoverable one:
+  `verify` always exited 0 and the verdict lived only in the printed table. It now
+  exits **4** when a backup is degraded (still restorable, redundancy lost) and
+  **5** when it is damaged (no longer restorable), keeping **0** for a healthy one.
+  Both differ from the generic failure code 1, so automation can tell "the backup
+  is damaged" from "the check could not run". A script that treated any non-zero
+  exit as a crash needs updating; one that ignores the exit code is unaffected.
+- **A damage verdict is no longer erased by the next routine `bfs verify`.** The
+  regular check reads only a small header from each device and cannot see damage
+  inside the data, yet it used to overwrite what `bfs verify --deep` had found —
+  so a backup that had been proven unrecoverable started reporting healthy again.
+  A verdict based on damage actually read off the devices now survives later
+  header-only checks, which say where the verdict came from and how to refresh it.
+  Only a new deep check can clear it, so a repaired backup returns to healthy;
+  a verdict caused by a device that was merely unreachable is not kept, so an
+  outage does not force a full re-download to clear it.
+- **`bfs prune` refuses to delete the last version that can still be restored.**
+  Housekeeping picks versions by number, so `bfs prune --keep-last 1` on a backup
+  whose newest version had rotted deleted the only good copy and kept the
+  unrecoverable one. Such a request is now refused with an explanation; deleting
+  damaged versions, or any version while a restorable one remains, works as
+  before. Pass `--force` to delete anyway — for instance to wipe a backup on
+  purpose.
+- **`init`, `push`, and `provider add` no longer silently overwrite a different
+  backup that already occupies a storage location.** If you point a backup at a
+  location (same backup name, same path on a storage device) that already holds a
+  *different* backup — for example two machines both running `bfs init documents`
+  against one shared network drive — BFS now stops with a clear message instead of
+  letting the second machine's push quietly overwrite the first machine's data. To
+  reuse such a location, remove the existing files there yourself, choose a
+  different backup name, or run `bfs recovery` if the backup is yours. Pushing a new
+  version of your own backup is unaffected.
+- **`push` no longer silently drops symbolic links and special files.** A symbolic
+  link, or a special file (socket, FIFO, device), can never be stored in a backup,
+  so `bfs push` now stops with a clear message listing them and pointing at
+  `.bfsignore`, instead of quietly leaving them out as it did before. An
+  interactive session offers to add them to `.bfsignore` and retry; a scripted run
+  exits with a dedicated code (3) so automation notices. Pass `--allow-excluded` to
+  back up everything else and skip them without failing.
+- **BREAKING: FTP storage now uses FTPS (TLS) by default.** A newly configured FTP
+  device connects over TLS unless you explicitly opt out with `--secure false`;
+  previously the connection was plain (unencrypted) FTP unless you turned TLS on.
+  This protects the storage password and your backup data on the network by
+  default. If a server offers only plain FTP, pass `--secure false` to keep using
+  it (and heed the cleartext-transport warning). Existing devices are read from
+  their own saved configuration and are unaffected until you reconfigure them.
+  One consequence to plan for in automation: a TLS connection has to establish
+  trust in the server's certificate, and a scripted run has nobody to ask — so
+  configuring an FTPS device non-interactively now requires either a pinned
+  fingerprint (`--cert-fingerprint`, or `cert_fingerprint` in a config file) or
+  `--accept-new-cert` to trust the one presented on first connection. Without
+  either, BFS refuses rather than trusting silently.
+- **A storage server whose identity changed is now reported as possible tampering.**
+  When an FTPS certificate, or an SSH host key, no longer matches the one BFS pinned
+  when the device was set up, the operation stops with a clear message that the
+  server's identity changed and this may be a machine-in-the-middle — instead of a
+  generic connection or verification error. A deliberately new certificate or key is
+  still accepted the usual way (an interactive confirmation, `--cert-fingerprint` /
+  `--known-host`, or `--accept-new-cert` / `--accept-new-host-key`).
+- **Messages about a skipped part of a backup now name the storage device instead
+  of an internal part number.** "skipping piece 2" told you nothing you could act
+  on — the numbering is internal and starts at zero. Every such message now names
+  the device the part belongs to, which is what you need to fix the problem.
+
+### Fixed
+- **`bfs verify` now says why a part of a backup is missing, instead of only
+  counting it.** A report of "2/3 available" read exactly the same whether a
+  storage device was switched off, was no longer in the configuration, needed an
+  adapter that is not installed, or its file had been deleted — yet those call for
+  opposite moves: bring the device back versus rebuild the part with
+  `bfs repair --rebuild`. Verify named the cause only
+  for damage it could see in a file it had actually read; every other reason was
+  dropped silently. Each of them is now reported under the device's name, and a
+  device that never answered is reported as unreachable — not as a missing file and
+  not as damaged data, because nothing was read from it.
+- **A recovery started from a storage device holding damaged data no longer asks
+  for the backup password over and over.** When the copy on the device you point
+  `bfs recovery --bootstrap` at had rotted, BFS could not tell that from a
+  mistyped password: it kept asking for a password that was already correct and
+  that no password could have fixed — in the middle of a disaster recovery, with
+  nothing to act on. It now checks that device's data once a first attempt has
+  failed, and when the copy does not check out it says so and names the way out:
+  recover from any other device of the same backup, which holds the same
+  information. For an unencrypted backup, where no password is involved, the same
+  situation used to end with an internal technical message and no next step; it
+  now gets the same clear refusal. A genuinely wrong password is still reported as
+  a wrong password. Telling the two apart needs the data itself, so the first
+  attempt that fails costs one read of that device's data — once per recovery
+  rather than once per try, unless that read is itself interrupted, in which case
+  a later attempt tries again. A password that works costs nothing extra.
+- **A restore that cannot go ahead now says which storage failed, and why.** It
+  used to end with a fixed "some storage may be offline", even when every device
+  answered and the real problem was damaged data — sending you to check cables
+  instead of repairing the backup. The failure now names the devices holding
+  damaged data, lists separately the ones whose data is missing or that could not
+  be reached, and leaves healthy devices out of it; it also says plainly that the
+  version cannot be restored from what is available and points at `bfs verify`,
+  which shows the versions that still can be. Data that arrives but does not read
+  back is reported as damaged rather than missing. A wrong password is still
+  reported as a password problem.
+- **The steps suggested after removing a storage device now actually work.**
+  `bfs provider remove --strategy remove` leaves one device fewer than the backup
+  scheme requires, and the first step it recommended — `bfs pull` — stopped on that
+  very mismatch, as did `bfs push` and `bfs prune`. The suggested steps now start
+  with `bfs scheme set <N> <K>`, which matches the scheme to the devices you have
+  left and unblocks the rest. The mismatch message itself no longer offers
+  `bfs provider add` either: adding a device raises the required total by one as
+  well, so it never closed the gap.
+- **A degraded restore now tells you how to bring back a storage device the
+  configuration lost.** When a backup records a device that is no longer in the
+  configuration, the restore rebuilds the missing part from redundancy and
+  succeeds — but said nothing about the cause, so every later restore silently
+  skipped the same part. It now names the device under the name the backup records
+  and gives the command that restores it. This is the one kind of degradation that
+  can be undone without touching any stored data.
+- **Moving a backup's storage to a new device no longer accepts someone else's
+  data as the move.** Before committing such a move, `bfs repair` checks that the
+  part already sitting at the destination really belongs to this backup. That check
+  was skipped in one case — restoring a device the backup remembers but the
+  configuration has lost — and there a *different* backup's part that merely
+  happened to have the same file name was accepted, silently pointing your backup
+  at data that is not yours. The check now runs whichever of the two names the
+  device is known under, so a mistyped or reused destination is refused before
+  anything is written.
+- **`bfs repair --help` now shows how to call it.** The command takes a storage
+  name and a settings string, but neither appeared in its help, so the syntax was
+  effectively undiscoverable; the help now spells it out with worked examples.
+  `--rebuild` is also described correctly: it reconstructs a part that is lost
+  **or damaged** — previously it mentioned only loss, so nobody whose data had
+  rotted had reason to try the one command that repairs it.
+- **Restored files now keep their permissions and modification time.** After
+  `bfs pull`, files are recreated with their original POSIX permissions (the
+  executable bit, a private key's `0600`, and so on) and their original
+  modification time. Previously the permission bits were dropped — restored files
+  landed on the default umask — and, for the default compressed backups, the
+  modification time was lost as well. Permissions apply on Linux/macOS; on Windows
+  the modification time is restored (POSIX permissions are not enforced there).
+  Backups created before this release still restore exactly as they did before;
+  only backups created from this release onward carry the full metadata.
+- **Two overlapping runs on the same backup can no longer corrupt it.** Starting a
+  second `bfs push` — or a `bfs repair` — while one is already working on the same
+  backup now fails fast with a clear "another operation in progress" message,
+  instead of both slipping through and clobbering each other's version data.
+  Whichever run starts first owns the backup until it finishes; this closes a race
+  that scripted and scheduled (cron) runs could hit, and now also guards
+  `bfs push --cache`.
+- **`bfs-vault/provider` type definitions now compile in adapter projects.** The
+  published `.d.ts` referenced an internal `Nullable<T>` helper without shipping its
+  definition, so `tsc` in an external adapter package failed with "Cannot find name
+  'Nullable'". The alias is now exported from `bfs-vault/provider` alongside the
+  contract types.
+- **A damaged part on one storage device no longer costs a whole backup version
+  during recovery.** Every device's part records where all the other parts of that
+  version live, so any one of them is enough to rebuild the version's record. When
+  the part BFS happened to read first was damaged — its record unreadable, or, for
+  an encrypted backup, no longer opening with the backup password — `bfs recovery`
+  dropped that entire version, even though the untouched parts on the other devices
+  carried the very same record. Recovery now falls back to a healthy device for
+  that version, so one damaged part costs nothing as long as the rest are intact.
+- **Replacing a storage device now works when the data on another device has
+  silently decayed.** When BFS rebuilds a device's part from the others
+  (`bfs provider remove --strategy rebuild`, `bfs repair --rebuild`), it now
+  checks every part it reads against its own checksum and leaves out the ones
+  that fail. Previously a decayed part was used as if it were sound, and —
+  depending on where the damage sat — the operation either stopped and reported
+  the backup as possibly tampered with, although the redundancy to absorb the
+  damage was present, or reported success while folding the damaged bytes into
+  the newly built part, so the loss surfaced only at the next restore. A part
+  that disagrees with the others while its own checksum verifies is still
+  reported as tampering.
+- **A damaged part no longer blocks restoring an encrypted backup version.** To
+  decrypt a version, `bfs pull` reads the encryption parameters recorded alongside
+  the backup data. If silent corruption (bit rot, a partial write) damaged those
+  bytes on the part BFS happened to read first, the wrong decryption key was
+  derived and the whole version failed to decrypt — looking like a wrong password —
+  even though the remaining devices held the same, intact parameters and the
+  version was fully recoverable. BFS now takes them from a part that passes its own
+  integrity check, so a version survives a damaged part exactly as it already did
+  for a missing one.
+
 ## [0.12.0] - 2026-07-20
 
 ### Added
@@ -711,7 +916,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/pfranczyk/bfs/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/pfranczyk/bfs/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/pfranczyk/bfs/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/pfranczyk/bfs/compare/v0.9.1...v0.10.0

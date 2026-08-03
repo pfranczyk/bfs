@@ -8,7 +8,7 @@ import { parseVersionFromFilename } from './bootstrap.js';
 import { readConfig, writeConfig } from './config.js';
 import { rebuildShardInPlace, rebuildVersion, relocateProvider, updateLocationMaps } from './heal.js';
 import { secretFieldsForType, splitLocationSecrets } from './location-map.js';
-import { assertNoActiveLock, LOCK_FORMAT_VERSION, type RepairLock, type RepairLockFailedPair, type RepairLockFailedShard, type RepairLockSucceededPair, removeLock, repairLockPath, writeLockAtomic } from './lockfile.js';
+import { acquireRepairLock, LOCK_FORMAT_VERSION, type RepairLock, type RepairLockFailedPair, type RepairLockFailedShard, type RepairLockSucceededPair, removeLock, repairLockPath, writeLockAtomic } from './lockfile.js';
 import { listManifests, writeManifest } from './manifest.js';
 import { tryDecryptLocationMap } from './password-pool.js';
 import { buildRemotePath } from './push-pipeline.js';
@@ -70,11 +70,12 @@ export async function repairVault(rootDir: string, options: RepairOptions): Prom
   const vaultPassword = await precheckAndResolvePassword(config, scoped, passwordPool, io, isCi);
 
   // ── Lock ── (secrets in each "<params>" are redacted for the forensic file) ──
-  await assertNoActiveLock(rootDir, 'repair');
+  // acquireRepairLock is the atomic acquisition point: it writes repair.lock
+  // via an exclusive create, so two overlapping repairs cannot both proceed.
   const redacted = new Map(pairs.map((p) => [p.oldName, redactPairParams(p, config, io)]));
   const command = restoreHeaders ? 'repair --restore-headers' : `repair ${pairs.map((p) => `${p.oldName} "${redacted.get(p.oldName) ?? ''}"`).join(' ')}`;
   const lock = buildRepairLock(command, versions.join(','));
-  await writeLockAtomic(repairLockPath(rootDir), lock);
+  await acquireRepairLock(rootDir, lock);
 
   const ctx: CommitContext = { rootDir, config, pairs, versions, scoped, vaultPassword, io, lock, redacted, forceUnverified };
   if (restoreHeaders) {
@@ -257,7 +258,11 @@ async function verifyPairAtDestination(ctx: CommitContext, pair: RepairPair, new
     return { ok: false, reason: 'auth_failed', detail: err instanceof Error ? err.message : String(err) };
   }
   for (const manifest of ctx.scoped) {
-    const ms = manifest.shards.find((s) => s.provider_id === pair.oldName);
+    // The part is looked up under either name this pair can carry. Restoring a
+    // name the backup records but the configuration lost means no manifest ever
+    // mentions `oldName` — matching on it alone would leave the identity gate
+    // with nothing to check and wave a foreign part of the same filename through.
+    const ms = manifest.shards.find((s) => s.provider_id === pair.oldName) ?? manifest.shards.find((s) => s.provider_id === newConfig.id);
     if (!ms) continue; // this version does not use the migrated provider
     const filename = `shard_${ms.shard_index}.bfs.${manifest.version}`;
     const result = await provider.verifyShard({ provider_id: newConfig.id, path: filename }, { vault_id: ctx.config.vault_id, shard_index: ms.shard_index, version: manifest.version });

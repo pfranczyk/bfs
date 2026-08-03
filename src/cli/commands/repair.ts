@@ -43,6 +43,11 @@ export function registerRepair(program: Command): void {
     // them as positional operands in cmd.args instead of erroring.
     .allowUnknownOption(true)
     .allowExcessArguments(true)
+    // The device name and settings string are read straight out of cmd.args, so
+    // Commander generates a usage line that mentions neither. Spell the syntax
+    // out here rather than declaring arguments: a declared operand would change
+    // the action signature and break `--restore-headers`, which takes none.
+    .addHelpText('after', `\n${t('repair_help_syntax')}`)
     .option('--version <range>', t('repair_opt_version'))
     .option('--password <password>', t('repair_opt_password'), (val: string, prev: string[]) => [...prev, val], [] as string[])
     .option('--password-file <path>', t('repair_opt_password_file'), (val: string, prev: string[]) => [...prev, val], [] as string[])

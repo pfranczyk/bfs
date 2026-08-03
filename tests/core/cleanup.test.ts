@@ -20,7 +20,7 @@ describe('cleanup', () => {
     // Reset module state before each test so pendingFiles and registered start fresh
     vi.resetModules();
     vi.spyOn(process, 'on').mockImplementation(() => process);
-    vi.spyOn(process, 'exit').mockImplementation((_code?: string | number | null) => {
+    vi.spyOn(process, 'exit').mockImplementation((_code?: Nullable<string | number>) => {
       throw new Error('process.exit called');
     });
     vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});

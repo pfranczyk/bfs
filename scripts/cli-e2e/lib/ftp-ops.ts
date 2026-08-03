@@ -93,7 +93,7 @@ async function main(): Promise<void> {
         const dir = remote.replace(/\/[^/]*$/, '') || '/';
         await client.ensureDir(dir);
         // uploadFrom(localPath) streams via Node's 64 KB createReadStream — the
-        // chunked path (see .claude/rules/streaming.md).
+        // chunked path.
         await client.uploadFrom(local, remote);
       }
     } else if (mode === 'all') {

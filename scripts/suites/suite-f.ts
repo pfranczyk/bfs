@@ -86,5 +86,28 @@ export async function suiteF(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
+  // F8/F9 — the FTP provider help (rendered under `bfs provider --help`) lists
+  // the FTPS certificate-pinning flags. The flag literals are stable across
+  // languages (not translated), so both EN and PL output must contain them.
+  tests.push(
+    await runTest('F8', 'bfs --lang en provider --help → FTPS cert flags (English)', () => {
+      const r = runBfs(['--lang', 'en', 'provider', '--help'], ctx.vaultDir, undefined, langEnv);
+      assert(r.status === 0, `exit ${r.status ?? 'null'}\nstderr: ${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('--cert-fingerprint'), `expected --cert-fingerprint flag in FTP help: ${out.slice(0, 800)}`);
+      assert(out.includes('--accept-new-cert'), `expected --accept-new-cert flag in FTP help: ${out.slice(0, 800)}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('F9', 'bfs --lang pl provider --help → FTPS cert flags (Polish)', () => {
+      const r = runBfs(['--lang', 'pl', 'provider', '--help'], ctx.vaultDir, undefined, langEnv);
+      assert(r.status === 0, `exit ${r.status ?? 'null'}\nstderr: ${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('--cert-fingerprint'), `expected --cert-fingerprint flag in FTP help: ${out.slice(0, 800)}`);
+      assert(out.includes('--accept-new-cert'), `expected --accept-new-cert flag in FTP help: ${out.slice(0, 800)}`);
+    }),
+  );
+
   return { name: 'Suite F — Language switching', tests };
 }

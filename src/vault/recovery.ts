@@ -11,7 +11,7 @@ import { type BootstrapResult, bootstrapFromProvider, parseVersionFromFilename }
 import { writeConfig } from './config.js';
 import { shardHeaderConsensusMismatch } from './consensus.js';
 import { readManifest, writeManifest } from './manifest.js';
-import { tryDecryptLocationMap } from './password-pool.js';
+import { promptForVaultPassword, tryPooledPasswords } from './password-pool.js';
 import { writeState } from './state.js';
 import { verifyAll } from './verify.js';
 
@@ -96,107 +96,154 @@ async function discoverAllVersions(allProviders: StorageProvider[], vaultName: s
 }
 
 /**
- * Processes one version during recovery: downloads up to 2 shards, runs consensus,
- * decrypts the location map, and writes the manifest file.
+ * Processes one version during recovery: collects the headers of its distinct
+ * shards, resolves the location map from the first shard that yields it (falling
+ * back past a damaged primary to a healthy sibling), runs consensus, and builds
+ * the manifest from the shard the map actually came from.
  *
  * @returns { manifest, consensusOk } on success, or null if the version should be skipped
  */
 async function processVersion(version: number, entries: Array<{ shardIndex: number; provider: StorageProvider }>, ctx: ProcessVersionContext): Promise<Nullable<{ manifest: VersionManifest; consensusOk: boolean }>> {
   const { vaultName, bootstrapVaultId, passwordPool, io } = ctx;
 
-  // Pull up to 2 shard headers from different providers for consensus.
-  // Providers MUST honor `downloadHeader` and avoid pulling the full payload
-  // over the wire (FTP issues SIZE + aborts after maxBytes; LocalFS uses a
-  // bounded createReadStream).
-  const shardDataList: Array<{ header: ShardHeader; headerBytes: Buffer; providerId: string }> = [];
+  // Collect the headers of DISTINCT shards, deduping by shard index. The bootstrap
+  // provider and a config provider can be the SAME physical medium under two ids;
+  // keying on provider id would spend the budget on one shard and never reach a
+  // real sibling. Collecting every distinct shard (not just two) lets map
+  // resolution fall through a damaged primary to a healthy sibling. Providers MUST
+  // honor `downloadHeader` and avoid pulling the full payload over the wire.
+  const collected: Array<{ header: ShardHeader; headerBytes: Buffer; providerId: string; shardIndex: number }> = [];
+  const seenShardIndices = new Set<number>();
   for (const entry of entries) {
-    if (shardDataList.length >= 2) break;
+    if (seenShardIndices.has(entry.shardIndex)) continue;
     try {
       const filename = `shard_${entry.shardIndex}.bfs.${version}`;
       entry.provider.setVaultName(vaultName);
-      // Sidecar-aware: after a relocate, the CURRENT location map lives in the
-      // sidecar; reading the in-shard header directly would rebuild the manifest
-      // from a stale map and miss siblings at their new addresses.
+      // Sidecar-aware: after a relocate the CURRENT map lives in the sidecar;
+      // reading the in-shard header would rebuild the manifest from a stale map.
       const headerBytes = await readShardHeaderBytes(entry.provider, { provider_id: entry.provider.id, path: filename }, SHARD_HEADER_READ_BYTES);
-
-      // Parse header from buffered bytes; payload stream errors are expected (truncated data)
       const { header: shardHeader, payloadStream } = await parseShardHeaderFromStream(Readable.from(headerBytes));
       payloadStream.on('error', () => {}).destroy();
-      shardDataList.push({ header: shardHeader, headerBytes, providerId: entry.provider.id });
+      collected.push({ header: shardHeader, headerBytes, providerId: entry.provider.id, shardIndex: entry.shardIndex });
+      seenShardIndices.add(entry.shardIndex);
     } catch {
-      /* skip */
+      // Unreadable header (truncated/corrupt) — treat this medium as absent.
     }
   }
-  if (shardDataList.length === 0) return null;
+  if (collected.length === 0) return null;
 
-  const primaryData = shardDataList[0];
-  if (!primaryData) return null;
-  const primaryMeta = primaryData.header;
+  // Resolve which shard supplies the location map. Walk candidates in order: skip
+  // any whose vault_id is foreign (the guard follows the map's source shard, not
+  // the first listed entry), then open the map — pooled passwords for encrypted
+  // shards (no prompt yet), the parsed plaintext map for --no-enc. The first
+  // candidate that clears both becomes the source. Per-version salt is shared, so
+  // memoize derived keys across candidates to keep Argon2id to one pass per pool
+  // password.
+  const keyCache = new Map<string, Buffer>();
+  let source: Nullable<{ header: ShardHeader; shardIndex: number; location_map: ShardLocation[] }> = null;
+  const failedProviderIds: string[] = [];
+  let sawEncryptedCandidate = false;
 
-  if (primaryMeta.vault_id !== bootstrapVaultId) {
+  for (const c of collected) {
+    if (c.header.vault_id !== bootstrapVaultId) continue; // foreign shard — keep looking
+    if (c.header.encrypted) {
+      sawEncryptedCandidate = true;
+      const resolved = await tryPooledPasswords(c.header, c.headerBytes, passwordPool, keyCache);
+      if (resolved) {
+        source = { header: c.header, shardIndex: c.shardIndex, location_map: resolved.location_map };
+        break;
+      }
+      failedProviderIds.push(c.providerId);
+    } else {
+      source = { header: c.header, shardIndex: c.shardIndex, location_map: c.header.location_map };
+      break;
+    }
+  }
+
+  // Encrypted, and no pooled password opened any candidate: the pool is genuinely
+  // exhausted (a version predating a password change, or every candidate damaged).
+  // Warn and prompt ONCE per version — on the first encrypted candidate with a
+  // matching vault_id — never once per candidate shard.
+  if (!source && sawEncryptedCandidate) {
+    const promptTarget = collected.find((c) => c.header.vault_id === bootstrapVaultId && c.header.encrypted);
+    if (promptTarget) {
+      if (passwordPool.length > 0) io.warn(fmt('recovery_pool_password_failed', String(version)));
+      const resolved = await promptForVaultPassword(
+        promptTarget.header,
+        promptTarget.headerBytes,
+        passwordPool,
+        io,
+        { poolExhausted: fmt('recovery_pool_password_failed', String(version)), ask: fmt('recovery_ask_version_password', String(version)), retry: fmt('recovery_wrong_password_retry', String(version)) },
+        keyCache,
+      );
+      if (resolved) source = { header: promptTarget.header, shardIndex: promptTarget.shardIndex, location_map: resolved.location_map };
+    }
+  }
+
+  if (!source) {
+    io.warn(fmt('recovery_decrypt_skip', String(version)));
+    return null;
+  }
+  const src = source;
+  const sourceMeta = src.header;
+
+  if (sourceMeta.vault_id !== bootstrapVaultId) {
     io.warn(fmt('recovery_consensus_vault_id_mismatch', String(version)));
     return null;
   }
 
-  const parsedFilename = parseVersionFromFilename(`shard_${entries[0]?.shardIndex}.bfs.${version}`);
-  if (!parsedFilename || parsedFilename.shardIndex !== primaryMeta.shard_index || parsedFilename.version !== primaryMeta.version) {
+  // Filename cross-check keyed on the shard the header actually came from — not
+  // the first listed entry, which may have dropped out of the candidates.
+  const parsedFilename = parseVersionFromFilename(`shard_${src.shardIndex}.bfs.${version}`);
+  if (!parsedFilename || parsedFilename.shardIndex !== sourceMeta.shard_index || parsedFilename.version !== sourceMeta.version) {
     io.warn(fmt('recovery_consensus_filename_mismatch', String(version)));
     return null;
   }
 
-  // Consensus check (if we have 2 shards from different providers)
+  // Consensus + fallback disclosure. If the map came from a sibling past a
+  // candidate that could not supply it, the primary medium is damaged: name it and
+  // withhold consensus so verify/repair still surface it. Otherwise cross-check the
+  // source against another distinct medium. An unencrypted location_map divergence
+  // means a forged map redirecting a provider; encrypted maps are MAC-protected and
+  // skipped in the comparison.
   let consensusOk = true;
-  if (shardDataList.length >= 2) {
-    const secondaryMeta = shardDataList[1]?.header ?? primaryMeta;
-    // Soft-flag the version (not a hard throw — this loops over many versions).
-    // An unencrypted location_map divergence means a forged map redirecting a
-    // provider; encrypted maps are MAC-protected and skipped in the comparison.
-    const mismatch = shardHeaderConsensusMismatch(primaryMeta, secondaryMeta);
-    if (mismatch.length > 0) {
-      io.warn(fmt('recovery_consensus_failed', String(version), mismatch.join(', ')));
-      consensusOk = false;
+  if (failedProviderIds.length > 0) {
+    io.warn(fmt('recovery_map_from_sibling', String(version), failedProviderIds.join(', ')));
+    consensusOk = false;
+  } else {
+    const other = collected.find((c) => c.shardIndex !== src.shardIndex);
+    if (other) {
+      const mismatch = shardHeaderConsensusMismatch(sourceMeta, other.header);
+      if (mismatch.length > 0) {
+        io.warn(fmt('recovery_consensus_failed', String(version), mismatch.join(', ')));
+        consensusOk = false;
+      }
     }
   }
 
-  // Resolve location map (decrypt if needed)
-  let location_map: Nullable<ShardLocation[]> = null;
-  if (primaryMeta.encrypted) {
-    const result = await tryDecryptLocationMap(primaryData.header, primaryData.headerBytes, passwordPool, io, {
-      poolExhausted: fmt('recovery_pool_password_failed', String(version)),
-      ask: fmt('recovery_ask_version_password', String(version)),
-      retry: fmt('recovery_wrong_password_retry', String(version)),
-    });
-    if (result) location_map = result.location_map;
-  } else {
-    location_map = primaryData.header.location_map;
-  }
-  if (!location_map) {
-    io.warn(fmt('recovery_decrypt_skip', String(version)));
-    return null;
-  }
-
-  // Build manifest from the location map and header metadata
-  const manifestShards: ManifestShard[] = location_map.map((loc) => ({ shard_index: loc.shard_index, provider_id: loc.provider_id, provider_type: loc.provider_type, remote_path: loc.remote_path, shard_hash: loc.shard_hash }));
+  // Build the manifest from the MAP SOURCE's header metadata (provenance): a
+  // manifest mixing one shard's map with another's blob_hash/scheme/stripe would
+  // describe a version that does not exist.
+  const manifestShards: ManifestShard[] = src.location_map.map((loc) => ({ shard_index: loc.shard_index, provider_id: loc.provider_id, provider_type: loc.provider_type, remote_path: loc.remote_path, shard_hash: loc.shard_hash }));
   const manifest: VersionManifest = {
     version,
     pushed_at: null,
     file_count: null,
     total_size: null,
-    blob_hash: primaryMeta.blob_hash,
-    scheme: { data_shards: primaryMeta.data_shards, parity_shards: primaryMeta.parity_shards },
-    encrypted: primaryMeta.encrypted,
+    blob_hash: sourceMeta.blob_hash,
+    scheme: { data_shards: sourceMeta.data_shards, parity_shards: sourceMeta.parity_shards },
+    encrypted: sourceMeta.encrypted,
     shards: manifestShards,
     health: VersionHealth.Degraded,
   };
-  // Detect FORMAT_VERSION >= 2 (always rs_striped + per-shard encryption).
-  // These flags are NOT stored in ShardHeader — they live only in VersionManifest.
-  // format_version >= 2 unambiguously identifies the streaming push pipeline.
-  if (primaryMeta.format_version >= 2) {
+  // FORMAT_VERSION >= 2 (streaming pipeline): always rs_striped + per-shard
+  // encryption. These flags live only in the manifest, never the header.
+  if (sourceMeta.format_version >= 2) {
     manifest.rs_striped = true;
-    if (primaryMeta.rs_stripe_size !== null) {
-      manifest.rs_stripe_size = primaryMeta.rs_stripe_size;
+    if (sourceMeta.rs_stripe_size !== null) {
+      manifest.rs_stripe_size = sourceMeta.rs_stripe_size;
     }
-    if (primaryMeta.encrypted) manifest.encrypted_per_shard = true;
+    if (sourceMeta.encrypted) manifest.encrypted_per_shard = true;
   }
   return { manifest, consensusOk };
 }

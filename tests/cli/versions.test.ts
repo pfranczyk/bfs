@@ -24,7 +24,7 @@ describe('versions', () => {
     vi.clearAllMocks();
   });
 
-  // ─── Brak wersji ──────────────────────────────────────────────────────────
+  // ─── No versions ──────────────────────────────────────────────────────────
 
   it('should show "no versions" message when list is empty', async () => {
     mockListVersions.mockResolvedValue([]);
@@ -36,7 +36,7 @@ describe('versions', () => {
     expect(output).toContain('push');
   });
 
-  // ─── Tabela wersji ────────────────────────────────────────────────────────
+  // ─── Versions table ────────────────────────────────────────────────────────
 
   it('should display version numbers in output', async () => {
     mockListVersions.mockResolvedValue([makeManifest(1), makeManifest(5)] as never);
@@ -68,7 +68,7 @@ describe('versions', () => {
 
   it('should display "?" for file_count when null (pipeline: manifest from recovery)', async () => {
     // Per pipeline: po recovery pushed_at=null, file_count=null, total_size=null
-    // uzupełniane automatycznie po pierwszym pull
+    // filled in automatically after the first pull
     mockListVersions.mockResolvedValue([makeManifest(1, { file_count: null, total_size: null })] as never);
 
     await runCmd(['versions']);
@@ -98,7 +98,7 @@ describe('versions', () => {
     expect(output).toContain('Size');
   });
 
-  // ─── Błąd ─────────────────────────────────────────────────────────────────
+  // ─── Errors ───────────────────────────────────────────────────────────────
 
   it('should abort when listVersions throws', async () => {
     mockListVersions.mockRejectedValue(new Error('No vault config found'));

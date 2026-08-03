@@ -1,4 +1,4 @@
-import type { CatalogDrift } from '../types/index.js';
+import type { CatalogDrift, ExcludedEntry } from '../types/index.js';
 
 /** A file that was skipped during pack (unreadable) or unpack (unwritable). */
 export interface SkippedFile {
@@ -55,6 +55,25 @@ export class DecryptionError extends BfsError {
   }
 }
 
+/**
+ * Thrown by the write-path guards (init / provider add / push) when the target
+ * location on a provider already holds a DIFFERENT backup of the same name — a
+ * shard whose header carries a foreign vault_id, or (for a fresh `init`, which
+ * has no vault_id yet) any shard at all in the freshly-named vault sub-directory.
+ * Aborts before any upload so a second machine's backup never silently
+ * overwrites the first machine's shards. Distinct from TamperDetectedError: this
+ * is a configuration collision (two independent backups aimed at one location),
+ * not an attack on shards we already claim to own.
+ */
+export class VaultCollisionError extends BfsError {
+  readonly providerId: string;
+  constructor(message: string, providerId: string) {
+    super(message);
+    this.name = 'VaultCollisionError';
+    this.providerId = providerId;
+  }
+}
+
 /** Thrown when consensus check detects mismatching shard headers across providers. */
 export class TamperDetectedError extends BfsError {
   constructor(message: string) {
@@ -91,6 +110,24 @@ export class PushSkippedError extends BfsError {
     this.name = 'PushSkippedError';
     this.skipped = skipped;
     this.cachePath = cachePath;
+  }
+}
+
+/**
+ * Thrown by push() (non-interactive, without --allow-excluded) when the source
+ * directory contains entries that cannot be backed up — symbolic links or
+ * special files (socket/FIFO/block/char device). Unlike unreadable files, this
+ * is a permanent, by-design exclusion: the entry can never be represented in a
+ * blob, so retrying is pointless. The user should add them to .bfsignore or pass
+ * --allow-excluded to back up everything else. Carries the excluded entries for
+ * reporting; the CLI maps it to exit code 3.
+ */
+export class PushExcludedError extends BfsError {
+  readonly excluded: ExcludedEntry[];
+  constructor(excluded: ExcludedEntry[]) {
+    super(`${excluded.length} entr(y/ies) cannot be backed up (symbolic links or special files).`);
+    this.name = 'PushExcludedError';
+    this.excluded = excluded;
   }
 }
 

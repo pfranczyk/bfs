@@ -40,7 +40,7 @@ jobs:
           # --exclude ssh: SSH scenarios (80-82, 90) run in the dedicated e2e-ssh
           # job with real sshd endpoints; without --ssh they would hit the loud
           # "SSH mandatory" gate here. --exclude repair splits off 60-89 to e2e-repair.
-          bash scripts/cli-e2e/run.sh --exclude repair --exclude ssh --ftp "ftp://bfsuser:bfspass@127.0.0.1/ftp/bfsuser" 2>&1 | tee /tmp/e2e.log
+          bash scripts/cli-e2e/run.sh --exclude repair --exclude ssh --exclude-docker --ftp "ftp://bfsuser:bfspass@127.0.0.1/ftp/bfsuser" 2>&1 | tee /tmp/e2e.log
 
       - name: Job summary
         if: always()

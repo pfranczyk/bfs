@@ -105,7 +105,9 @@ class FakeMissingDirProvider implements StorageProvider {
     return this.unreachable();
   }
   async list(): Promise<RemoteRef[]> {
-    return this.unreachable();
+    // The init collision guard lists the vault sub-directory; a freshly-created
+    // base path holds no shards, so no foreign vault is present.
+    return [];
   }
   async getSize(): Promise<number> {
     return this.unreachable();
@@ -140,7 +142,7 @@ class FakeMissingDirProvider implements StorageProvider {
   async uploadHeaderSidecar(): Promise<void> {
     return this.unreachable();
   }
-  async downloadHeaderSidecar(): Promise<Buffer | null> {
+  async downloadHeaderSidecar(): Promise<Nullable<Buffer>> {
     return this.unreachable();
   }
   async verifyShard(): Promise<VerifyShardResult> {

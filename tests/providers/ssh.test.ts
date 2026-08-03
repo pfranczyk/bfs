@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HostKeyDeclinedError, ProviderError, UnsafePathError } from '../../src/core/errors.js';
+import { HostKeyDeclinedError, ProviderError, TamperDetectedError, UnsafePathError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
 import { buildShard, parseShardHeaderFromStream } from '../../src/core/shard-io.js';
 import { fmtFor } from '../../src/i18n/index.js';
@@ -203,7 +203,7 @@ class MockWriteStream extends Writable {
 }
 
 const mockSftp = {
-  readdir(dir: string, cb: (err: Error | null, list?: MockDirEntry[]) => void): void {
+  readdir(dir: string, cb: (err: Nullable<Error>, list?: MockDirEntry[]) => void): void {
     if (mockState.sftpHang) return; // never respond — models a stalled server after ready
     const entries: MockDirEntry[] = [];
     for (const [key, buf] of mockState.files.entries()) {
@@ -219,7 +219,7 @@ const mockSftp = {
     cb(null, entries);
   },
 
-  stat(p: string, cb: (err: Error | null, stats?: MockAttrs) => void): void {
+  stat(p: string, cb: (err: Nullable<Error>, stats?: MockAttrs) => void): void {
     if (mockState.sftpHang) return; // never respond — stalled server after ready
     const buf = mockState.files.get(p);
     if (buf) {
@@ -267,7 +267,7 @@ const mockSftp = {
     return new MockWriteStream(p);
   },
 
-  rename(from: string, to: string, cb: (err: Error | null) => void): void {
+  rename(from: string, to: string, cb: (err: Nullable<Error>) => void): void {
     const data = mockState.files.get(from);
     if (!data) {
       cb(sftpError(`No such file: ${from}`, 2));
@@ -278,7 +278,7 @@ const mockSftp = {
     cb(null);
   },
 
-  unlink(p: string, cb: (err: Error | null) => void): void {
+  unlink(p: string, cb: (err: Nullable<Error>) => void): void {
     if (!mockState.files.has(p)) {
       cb(sftpError(`No such file: ${p}`, 2));
       return;
@@ -287,7 +287,7 @@ const mockSftp = {
     cb(null);
   },
 
-  mkdir(p: string, cb: (err: Error | null) => void): void {
+  mkdir(p: string, cb: (err: Nullable<Error>) => void): void {
     mockState.dirs.add(p);
     cb(null);
   },
@@ -335,7 +335,7 @@ vi.mock('ssh2', () => {
       return this;
     }
 
-    sftp(cb: (err: Error | null, sftp?: typeof mockSftp) => void): void {
+    sftp(cb: (err: Nullable<Error>, sftp?: typeof mockSftp) => void): void {
       cb(null, mockSftp);
     }
 
@@ -1199,7 +1199,10 @@ describe('SshProvider', () => {
   //
   // GUESSED API surfaced in the report:
   //  - The provider builds `cfg.hostVerifier(key, cb)`; cb(true) trusts, cb(false)
-  //    rejects. A rejection makes connect emit an error → ProviderError.
+  //    rejects. A rejection makes connect emit an error; withClient surfaces a
+  //    host-key mismatch (pin set, presented fp !== pin) as TamperDetectedError —
+  //    a precise MITM signal uniform with FTP — and every other host-key refusal
+  //    (@revoked, TOFU decline) as ProviderError/HostKeyDeclinedError.
   //  - Precedence: a pinned `host_key_fingerprint` in config wins; otherwise
   //    `~/.ssh/known_hosts` is consulted; otherwise TOFU (io.confirm) interactively,
   //    or the `--accept-new-host-key` / `--known-host` flags in non-interactive mode.
@@ -1214,12 +1217,33 @@ describe('SshProvider', () => {
       expect(calls.some((c) => c.kind === 'confirm')).toBe(false);
     });
 
-    it('should refuse when the pinned fingerprint does not match the server key', async () => {
+    // NEW CONTRACT (RED until GREEN): a pin that does not match the presented key
+    // is a host-key mismatch, not a generic transport failure. It must surface as
+    // TamperDetectedError (a precise MITM signal uniform with FTP) instead of being
+    // wrapped in a generic ProviderError by withClient. TamperDetectedError extends
+    // BfsError (NOT ProviderError), so asserting it also proves the error is no
+    // longer swallowed as a plain ProviderError.
+    it('should surface TamperDetectedError when the pinned fingerprint does not match the server key', async () => {
       const { io } = scriptIo({ confirm: () => true });
       const p = new SshProvider(makeConfig({ host_key_fingerprint: 'SHA256:deadbeefdeadbeefdeadbeefdeadbeef' }), io);
       p.setVaultName('testvault');
 
-      await expect(p.authenticate()).rejects.toThrow(ProviderError);
+      await expect(p.authenticate()).rejects.toThrow(TamperDetectedError);
+    });
+
+    // NEW CONTRACT (RED until GREEN): the classic MITM — a valid pin is configured,
+    // but an impostor at the same address answers the handshake with a DIFFERENT
+    // host key (fp !== pin). This is exactly what the pin exists to catch, so the
+    // rejection must be TamperDetectedError, not a generic ProviderError.
+    it('should surface TamperDetectedError when the presented host key differs from the pin', async () => {
+      const { io } = scriptIo({ confirm: () => true });
+      const p = new SshProvider(makeConfig({ host_key_fingerprint: SERVER_FP }), io);
+      p.setVaultName('testvault');
+
+      // A valid pin is configured, but the server presents an impostor key.
+      mockState.hostKey = Buffer.from('impostor-ssh-host-key');
+
+      await expect(p.authenticate()).rejects.toThrow(TamperDetectedError);
     });
 
     it('should prompt on a new host (TOFU) and connect after the operator accepts', async () => {
@@ -1268,7 +1292,9 @@ describe('SshProvider', () => {
       const p = new SshProvider(makeConfig({ host_key_fingerprint: 'SHA256:deadbeefdeadbeefdeadbeefdeadbeef' }), io);
       p.setVaultName('testvault');
 
-      await expect(p.authenticate()).rejects.toThrow(ProviderError);
+      // Pin is authoritative but does not match the presented key → host-key
+      // mismatch, which surfaces as TamperDetectedError under the new contract.
+      await expect(p.authenticate()).rejects.toThrow(TamperDetectedError);
     });
 
     it('should refuse a new host in non-interactive mode without --accept-new-host-key', async () => {
@@ -1334,15 +1360,17 @@ describe('SshProvider', () => {
       // An impostor now answers at the same address with a DIFFERENT host key.
       mockState.hostKey = Buffer.from('impostor-ssh-host-key');
 
-      await expect(p.authenticate()).rejects.toThrow(ProviderError);
+      // Presented impostor key differs from the pinned fp → host-key mismatch →
+      // TamperDetectedError under the new contract.
+      await expect(p.authenticate()).rejects.toThrow(TamperDetectedError);
     });
 
     // Guard: once a pin exists, --accept-new-host-key is a no-op — it must NOT
     // recapture and overwrite the authoritative pin with whatever key the server
     // now presents. (The counterpart — a mismatched key being refused against an
-    // existing pin — is already covered by "should refuse when the pinned
-    // fingerprint does not match the server key" in the host-key verification
-    // block; not duplicated here.)
+    // existing pin — is already covered by "should surface TamperDetectedError
+    // when the pinned fingerprint does not match the server key" in the host-key
+    // verification block; not duplicated here.)
     it('should NOT overwrite an existing --known-host pin when --accept-new-host-key is also given', async () => {
       const EXISTING_PIN = 'SHA256:existingpinexistingpinexistingpinexistingpin';
       const { io } = scriptIo({ interactive: false });
@@ -1614,7 +1642,7 @@ describe('SshProvider', () => {
   // ─── connectForRecovery (anti-phishing: show host BEFORE the secret) ───────
 
   describe('connectForRecovery', () => {
-    type WithRecovery = SshProvider & { connectForRecovery(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<string | null> };
+    type WithRecovery = SshProvider & { connectForRecovery(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<Nullable<string>> };
 
     it('should show user@host:port before collecting the password, then return the typed secret', async () => {
       const { io, calls } = scriptIo({ confirm: () => true, askSecret: () => 'victim-pw' });

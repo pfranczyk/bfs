@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { encryptStream, generateSalt } from '../../src/core/crypto.js';
 import { BfsError, DecryptionError, ShardCorruptedError } from '../../src/core/errors.js';
 import { hashBuffer, streamToBuffer } from '../../src/core/hash.js';
-import { buildShard, buildShardHeaderFromBytes, buildShardStream, buildSidecarBytes, matchShardIdentity, parseShardHeaderFromStream, readShardHeader, serializeShardHeader } from '../../src/core/shard-io.js';
+import { buildShard, buildShardHeaderFromBytes, buildShardStream, buildSidecarBytes, matchShardIdentity, parseShardHeaderFromStream, readShardHeader, serializeShardHeader, shardChecksumMatches } from '../../src/core/shard-io.js';
 import type { RemoteRef, ShardHeader, ShardLocation, StorageProvider } from '../../src/types/index.js';
 
 // ─── Test fixtures ─────────────────────────────────────────────────────────
@@ -471,7 +471,7 @@ describe('shard-io', () => {
   function stubProvider(opts: { usesSidecar: boolean; sidecar?: Nullable<Buffer>; inShard: Buffer }): StorageProvider {
     return {
       usesSidecar: () => opts.usesSidecar,
-      async downloadHeaderSidecar(): Promise<Buffer | null> {
+      async downloadHeaderSidecar(): Promise<Nullable<Buffer>> {
         return opts.sidecar ?? null;
       },
       async downloadHeader(): Promise<Buffer> {
@@ -672,6 +672,40 @@ describe('shard-io', () => {
       expect(64 * 1024 * 1024).toBeLessThanOrEqual(V2_MAX_STRIPE_SIZE);
       expect(buildShardHeaderFromBytes(bigBytes).rs_stripe_size).toBe(64 * 1024 * 1024);
       expect(buildShardHeaderFromBytes(smallBytes).rs_stripe_size).toBe(1 * 1024 * 1024);
+    });
+  });
+
+  // Callers gate on this before touching a shard's header or payload, so a
+  // truncated or empty buffer must read as "damaged" rather than throw — the
+  // check runs ahead of any parsing that could raise on such input.
+  describe('shardChecksumMatches', () => {
+    const SHA256_BYTES = 32;
+
+    it('should accept a shard whose trailing checksum covers its bytes', () => {
+      const shard = buildShard(makeHeader({ encrypted: false }), Buffer.alloc(64, 7));
+
+      expect(shardChecksumMatches(shard)).toBe(true);
+    });
+
+    it('should reject a shard with one flipped payload bit', () => {
+      const shard = buildShard(makeHeader({ encrypted: false }), Buffer.alloc(64, 7));
+      const pos = shard.length - SHA256_BYTES - 1;
+      shard.writeUInt8(shard.readUInt8(pos) ^ 0x01, pos);
+
+      expect(shardChecksumMatches(shard)).toBe(false);
+    });
+
+    it('should reject a shard with one flipped header bit', () => {
+      const shard = buildShard(makeHeader({ encrypted: false }), Buffer.alloc(64, 7));
+      shard.writeUInt8(shard.readUInt8(6) ^ 0x01, 6);
+
+      expect(shardChecksumMatches(shard)).toBe(false);
+    });
+
+    it('should reject a buffer that is empty or shorter than the checksum itself', () => {
+      expect(shardChecksumMatches(Buffer.alloc(0))).toBe(false);
+      expect(shardChecksumMatches(Buffer.alloc(SHA256_BYTES))).toBe(false);
+      expect(shardChecksumMatches(Buffer.alloc(SHA256_BYTES - 1))).toBe(false);
     });
   });
 });

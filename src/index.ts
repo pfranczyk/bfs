@@ -162,7 +162,7 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   if (err instanceof CommandAbort) {
-    process.exit(1);
+    process.exit(err.exitCode);
   }
   if (isPromptCancellation(err)) {
     process.exit(130);

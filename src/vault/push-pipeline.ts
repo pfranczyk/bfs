@@ -12,28 +12,29 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import { estimateBlobSize, packBlob, packBlobToFile, packBlobToFileZipped } from '../core/blob-pack.js';
+import { estimateBlobSize, packBlob, packBlobToFile, packBlobToFileZipped, scanDirClassified } from '../core/blob-pack.js';
 import { parseBlobFileTable } from '../core/blob-unpack.js';
 import { trackFile, untrackFile } from '../core/cleanup.js';
 import { deriveKey, deriveShardNonce, encryptStream, exceedsGcmPlaintextLimit, GCM_MAX_PLAINTEXT_BYTES, generateSalt } from '../core/crypto.js';
 import type { SkippedFile } from '../core/errors.js';
-import { BfsError, ProviderError, PushCacheNoLockError, PushCacheUnavailableError, PushDriftError, PushSkippedError } from '../core/errors.js';
+import { BfsError, ProviderError, PushCacheNoLockError, PushCacheUnavailableError, PushDriftError, PushExcludedError, PushSkippedError } from '../core/errors.js';
 import { hashBuffer, hashStream, SHA256_BYTES } from '../core/hash.js';
-import { createIgnoreFilter } from '../core/ignore.js';
+import { appendToBfsignore, createIgnoreFilter } from '../core/ignore.js';
 import { calcShardPayloadSize, rsEncodeStriped } from '../core/reed-solomon.js';
 import { buildShardStream, serializeShardHeader, uuidToBuffer, V2_MAX_STRIPE_SIZE } from '../core/shard-io.js';
 import { fmt, t } from '../i18n/index.js';
 import { providerRegistry } from '../providers/provider.js';
-import type { CatalogDrift, ManifestShard, ProviderConfig, ProviderIO, PushOptions, PushResult, ShardHeader, ShardLocation, StorageProvider, VaultConfig, VaultState, VersionManifest } from '../types/index.js';
+import type { CatalogDrift, ExcludedEntry, ManifestShard, ProviderConfig, ProviderIO, PushOptions, PushResult, ShardHeader, ShardLocation, StorageProvider, VaultConfig, VaultState, VersionManifest } from '../types/index.js';
 import { BLOB_FLAGS, PushMode, VersionHealth } from '../types/index.js';
 import { catalogHasDrift, diffCatalog, snapshotCatalog } from './catalog-verify.js';
 import { assertSchemeValid, readConfig } from './config.js';
 import { splitLocationSecrets } from './location-map.js';
 import type { PushLock, PushLockFailedReason } from './lockfile.js';
-import { assertNoActiveLock, pushLockPath, readLock, removeLock, writeLockAtomic } from './lockfile.js';
+import { acquireCachePushLock, acquirePushLock, pushLockPath, readLock, removeLock, writeLockAtomic } from './lockfile.js';
 import { writeManifest } from './manifest.js';
 import { confirmRecoveredLocations } from './recovered-locations.js';
 import { readState, writeState } from './state.js';
+import { assertNoForeignVault } from './vault-collision.js';
 
 // ─── Push-only V2 constants ──────────────────────────────────────────────────
 // V2_STRIPE_SIZE is intentionally kept in vault-manager.ts because pull needs it too.
@@ -201,13 +202,30 @@ async function openProviders(config: VaultConfig, io: ProviderIO): Promise<Stora
   return providers;
 }
 
+/**
+ * Pre-upload collision guard: refuse to push when any provider's location
+ * already holds a DIFFERENT backup (a shard whose header carries a foreign
+ * vault_id). Runs before packing so a colliding push wastes no pack/encode work,
+ * and covers the --cache path too. list()/downloadHeader() self-connect on the
+ * built-in providers, so no prior authenticate() is needed here.
+ */
+async function _assertNoForeignVaults(config: VaultConfig, io: ProviderIO): Promise<void> {
+  for (const pc of config.providers) {
+    const p = providerRegistry.create(pc, io);
+    await assertNoForeignVault(p, config.vault_name, config.vault_id, io);
+  }
+}
+
 // ─── Push lock ───────────────────────────────────────────────────────────────
 
 /**
- * Creates or refreshes .bfs/push.lock for the current push attempt.
- * For fromCache=true: validates that both the lock and cached blob exist
- * (throws PushCacheNoLockError otherwise), then resets uploaded/failed
- * arrays for a fresh retry. For fromCache=false: writes a brand-new lock.
+ * Acquires .bfs/push.lock for the current push attempt. The lock is the
+ * concurrency mutex: a fresh push takes it atomically (acquirePushLock,
+ * O_EXCL), so two overlapping pushes cannot both proceed. For fromCache=true
+ * it validates that both the lock and cached blob exist (throws
+ * PushCacheNoLockError otherwise), refuses only under a live concurrent
+ * operation (acquireCachePushLock), then resets uploaded/failed for a fresh
+ * retry.
  */
 async function _initPushLock(rootDir: string, fromCache: boolean, cachePath: string, targetVersion: number, config: VaultConfig): Promise<PushLock> {
   const lockPath = pushLockPath(rootDir);
@@ -241,7 +259,11 @@ async function _initPushLock(rootDir: string, fromCache: boolean, cachePath: str
     failed: [],
     blob_pending_path: cachePath,
   };
-  await writeLockAtomic(lockPath, lock);
+  if (fromCache) {
+    await acquireCachePushLock(rootDir, lock);
+  } else {
+    await acquirePushLock(rootDir, lock);
+  }
   return lock;
 }
 
@@ -256,7 +278,7 @@ export function _classifyUploadError(e: unknown): { reason: PushLockFailedReason
   if (e instanceof ProviderError && /auth|530|login|password/i.test(detail)) {
     return { reason: 'auth_failed', detail };
   }
-  const code = (e as NodeJS.ErrnoException | null)?.code;
+  const code = (e as Nullable<NodeJS.ErrnoException>)?.code;
   switch (code) {
     case 'ENOENT':
       return { reason: 'not_found', detail };
@@ -677,7 +699,7 @@ interface UploadOneShardOptions {
 }
 
 interface UploadOneShardResult {
-  manifestShard: ManifestShard | null;
+  manifestShard: Nullable<ManifestShard>;
   cacheDumpAttempted: boolean;
 }
 
@@ -887,6 +909,76 @@ export async function _handleCatalogDrift(options: HandleCatalogDriftOptions): P
   throw new PushDriftError(drift);
 }
 
+/** Max excluded entries shown in a list before collapsing the rest into a counter. */
+const EXCLUDED_LIST_LIMIT = 10;
+
+/**
+ * Renders excluded entries as an indented, labelled file list for prompts and
+ * warnings. Truncates to EXCLUDED_LIST_LIMIT lines with a "… and N more" tail.
+ *
+ * @param excluded - Entries excluded by type (symlinks/special files)
+ * @returns Multi-line string; each line is `  - <label>: <path>`
+ */
+export function _formatExcludedList(excluded: readonly ExcludedEntry[]): string {
+  const label = (reason: ExcludedEntry['reason']): string => (reason === 'symlink' ? t('push_excluded_label_symlink') : t('push_excluded_label_special'));
+  const shown = excluded.slice(0, EXCLUDED_LIST_LIMIT);
+  const lines = shown.map((e) => `  - ${label(e.reason)}: ${e.path}`);
+  if (excluded.length > shown.length) lines.push(`  ... and ${excluded.length - shown.length} more`);
+  return lines.join('\n');
+}
+
+interface HandleExcludedEntriesOptions {
+  rootDir: string;
+  allowExcluded?: boolean | undefined;
+  interactive?: boolean | undefined;
+  io: ProviderIO;
+}
+
+/**
+ * Gate for entries that cannot be backed up (symlinks / special files), detected
+ * before packing. No-op when there are none. With allowExcluded it warns and
+ * returns them (packing then drops them). Interactive mode lists them and offers
+ * to append them to .bfsignore and retry, looping until the scan is clean or the
+ * user declines. Non-interactive without allowExcluded throws PushExcludedError
+ * (CLI exit code 3). Symlinks/special files are a permanent, by-design exclusion,
+ * distinct from unreadable files (which keep the cache/`--cache` flow).
+ *
+ * @param options - rootDir, allowExcluded, interactive, io
+ * @returns Entries excluded from the backup (allowExcluded path); [] when added to
+ *          .bfsignore or none existed
+ * @throws PushExcludedError in non-interactive mode when entries cannot be backed up
+ * @throws BfsError when the user declines the interactive prompt
+ */
+export async function _handleExcludedEntries(options: HandleExcludedEntriesOptions): Promise<ExcludedEntry[]> {
+  const { rootDir, io } = options;
+  let excluded = (await scanDirClassified(rootDir, createIgnoreFilter(rootDir))).excluded;
+  while (excluded.length > 0) {
+    if (options.allowExcluded) {
+      io.warn(fmt('push_excluded_allowed', String(excluded.length), _formatExcludedList(excluded)));
+      return excluded;
+    }
+    if (!options.interactive) {
+      throw new PushExcludedError(excluded);
+    }
+    const cont = await io.confirm(fmt('push_excluded_confirm', String(excluded.length), _formatExcludedList(excluded)));
+    if (!cont) throw new BfsError(t('push_cancelled'));
+    const beforePaths = new Set(excluded.map((e) => e.path));
+    await appendToBfsignore(
+      rootDir,
+      excluded.map((e) => e.path),
+    );
+    io.info(fmt('push_excluded_added', String(excluded.length)));
+    excluded = (await scanDirClassified(rootDir, createIgnoreFilter(rootDir))).excluded;
+    // Progress guard: an entry still present after being appended to .bfsignore
+    // has a name that cannot be encoded as a matching ignore pattern (trailing
+    // whitespace, an embedded newline, …). Stop with a clear error instead of
+    // re-appending it forever.
+    const stuck = excluded.filter((e) => beforePaths.has(e.path));
+    if (stuck.length > 0) throw new BfsError(fmt('push_excluded_unignorable', _formatExcludedList(stuck)));
+  }
+  return [];
+}
+
 interface BuildLocationMapOptions {
   config: VaultConfig;
   targetVersion: number;
@@ -942,7 +1034,6 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
   const config = await readConfig(rootDir);
   if (!config) throw new BfsError(t('push_no_config'));
   assertSchemeValid(config);
-  if (options.fromCache !== true) await assertNoActiveLock(rootDir, 'push');
   const state = await readState(rootDir);
   // First write after recovery: the config came from an untrusted location map,
   // so show the operator where shards will go and require confirmation before
@@ -951,6 +1042,14 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
   if (state.locations_confirmed === false) {
     await confirmRecoveredLocations(config, options.io);
   }
+  // Refuse to overwrite a DIFFERENT backup occupying our target location (foreign
+  // vault_id) — before packing, so a colliding push wastes no pack/encode work.
+  await _assertNoForeignVaults(config, options.io);
+  // Entries that cannot be backed up (symlinks / special files) are handled
+  // before packing: abort with exit code 3 non-interactively, or offer to add
+  // them to .bfsignore and retry interactively. Skipped for --cache (the blob
+  // was packed by an earlier run, so there is no fresh scan to gate).
+  const excluded = options.fromCache === true ? [] : await _handleExcludedEntries({ rootDir, allowExcluded: options.allowExcluded, interactive: options.interactive, io: options.io });
   const { data_shards: N, parity_shards: K } = config.scheme;
   const { cacheDir, tempDir, cachePath } = await _resolvePushPaths({ rootDir, cacheDir: options.cacheDir, tempDir: options.tempDir, config });
   const targetVersion = await _resolveTargetVersion({ mode: options.mode, config, state, io: options.io });
@@ -1016,5 +1115,5 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
   for (const pPath of parityPaths) await fs.unlink(pPath).catch(() => {});
   const health = _computeHealth(manifestShards.length, N, K);
   await _writePushResults({ rootDir, config, state, targetVersion, file_count, total_size, blob_hash, stripeSize, shouldEncrypt, shouldCompress, manifestShards, health, lock, cachePath, N, K });
-  return { version: targetVersion, file_count, total_size, skipped, uploaded_count: manifestShards.length, failed: lock.failed, health };
+  return { version: targetVersion, file_count, total_size, skipped, excluded, uploaded_count: manifestShards.length, failed: lock.failed, health };
 }

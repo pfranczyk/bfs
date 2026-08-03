@@ -175,6 +175,15 @@ export const pl: Strings = {
   push_drift_accepted: 'Zaakceptowano %s rozjechany(ch) plik(ów); kopia jest odtwarzalna, ale może nie odzwierciedlać najnowszego stanu na dysku:\n%s',
   push_drift_header: '%s plik(ów) zmieniło się na dysku w trakcie pakowania (kopia jest odtwarzalna, ale nieaktualna):',
   push_drift_hint: 'Uruchom ponownie `bfs push` bez ruszania plików, aby ponowić, albo `bfs push --allow-drift`, aby zaakceptować.',
+  push_opt_allow_excluded: 'Zrób kopię wszystkiego poza dowiązaniami symbolicznymi i plikami specjalnymi (nie przerywaj z ich powodu)',
+  push_excluded_label_symlink: 'dowiązanie symboliczne',
+  push_excluded_label_special: 'plik specjalny',
+  push_excluded_header: '%s wpis(ów) nie może trafić do kopii (dowiązania symboliczne i pliki specjalne nigdy nie są uwzględniane):',
+  push_excluded_hint: 'Dodaj je do .bfsignore albo uruchom ponownie `bfs push --allow-excluded`, aby zrobić kopię reszty.',
+  push_excluded_confirm: '%s wpis(ów) nie może trafić do kopii:\n%s\nDodać je do .bfsignore i ponowić?',
+  push_excluded_allowed: 'Pomijanie %s wpis(ów), których nie można zbackupować:\n%s',
+  push_excluded_added: 'Dodano %s wpis(ów) do .bfsignore; ponawianie…',
+  push_excluded_unignorable: 'Tych wpisów nie można automatycznie dodać do .bfsignore (nazwy zawierają np. spację na końcu, znak nowej linii lub podobny). Usuń je lub zmień nazwy, potem ponów:\n%s',
   vault_compressing: 'Kompresowanie…',
   vault_decompressing: 'Dekompresowanie…',
   opt_temp_dir_desc: 'Katalog dla plików tymczasowych podczas push/pull',
@@ -229,6 +238,9 @@ export const pl: Strings = {
 
   // ─── prune ────────────────────────────────────────────────────────────────
   prune_opt_keep_last: 'Zachowaj N najnowszych wersji, usuń pozostałe',
+  prune_opt_force: 'Usuń nawet ostatnią wersję, którą da się jeszcze odtworzyć',
+  prune_last_restorable:
+    'Odmawiam usunięcia wersji %s — nie zostałaby żadna wersja, którą da się jeszcze odtworzyć (to, co zostaje, jest uszkodzone). Dodaj --force, żeby usunąć mimo to, albo najpierw napraw uszkodzone wersje (`bfs repair --rebuild`). Podstawą jest ostatnie sprawdzenie — uruchom `bfs verify --deep`, żeby sprawdzić same dane.',
   prune_opt_yes: 'Pomiń prompt potwierdzenia',
   prune_range_invalid: 'Nieprawidłowy zakres: %s',
   prune_version_format_invalid: 'Nieprawidłowy format wersji: "%s"',
@@ -255,7 +267,14 @@ export const pl: Strings = {
   verify_col_tolerance: 'Tolerancja',
   /** %s = filename, %s = provider id, %s = reason */
   verify_shard_check_failed: 'Plik "%s" na nośniku "%s" nie przeszedł weryfikacji integralności: %s',
+  verify_shard_medium_unreachable: 'Nie udało się sprawdzić pliku "%s" — nośnik "%s" jest nieosiągalny: %s',
+  verify_shard_unreadable: 'Nie udało się odczytać pliku "%s" na nośniku "%s" — brak pliku lub błąd odczytu: %s',
+  verify_shard_adapter_missing: 'Nie można sprawdzić pliku "%s" — nośnik "%s" wymaga niezainstalowanego adaptera: %s',
+  verify_shard_provider_unknown: 'Nie można sprawdzić pliku "%s" — nośnika "%s" nie ma już w konfiguracji.',
+  verify_reason_health_check: 'brak odpowiedzi na kontrolę dostępności',
+  verify_verdict_retained: 'Wersja %s zachowuje werdykt wcześniejszego sprawdzenia głębokiego — ten przebieg czytał tylko nagłówki, które nie widzą uszkodzeń wewnątrz danych. Uruchom `bfs verify --deep`, żeby sprawdzić same dane.',
   verify_header_advisory: 'Wersja %s: brak lub uszkodzenie %s plik(ów) nagłówka. Uruchom „bfs repair --restore-headers", aby je odbudować — inaczej odtworzenie niezaszyfrowanej kopii zapasowej może być utrudnione.',
+  verify_opt_deep: 'Głęboka weryfikacja integralności: pobierz i sprawdź pełne dane każdego pliku (przesyła wszystkie dane kopii)',
 
   // ─── recovery ─────────────────────────────────────────────────────────────
   recovery_provider_type_prompt: 'Typ bootstrapowego nośnika:',
@@ -293,9 +312,9 @@ export const pl: Strings = {
   scheme_changed: 'Schemat zmieniony: %s → %s/%s.',
   scheme_apply_push: 'Uruchom `bfs push`, aby zastosować nowy schemat.',
   scheme_missing: 'Schemat kopii zapasowej brakuje lub jest uszkodzony w .bfs/config.json. Uruchom `bfs scheme set`, aby naprawić.',
-  scheme_invalid_data_shards: 'Nieprawidłowy schemat: data_shards musi być liczbą całkowitą >= 2, podano "%s". Użyj `bfs provider add` lub `bfs scheme set`, aby naprawić.',
+  scheme_invalid_data_shards: 'Nieprawidłowy schemat: data_shards musi być liczbą całkowitą >= 2, podano "%s". Użyj `bfs scheme set <N> <K>`, aby naprawić.',
   scheme_invalid_parity_shards: 'Nieprawidłowy schemat: parity_shards musi być liczbą całkowitą >= 1, podano "%s". Użyj `bfs provider add` lub `bfs scheme set`, aby naprawić.',
-  scheme_providers_mismatch: 'Schemat wymaga %s nośników, skonfigurowano: %s. Użyj `bfs provider add` lub `bfs scheme set`.',
+  scheme_providers_mismatch: 'Schemat wymaga %s nośników, skonfigurowano: %s. Dopasuj schemat do posiadanych nośników przez `bfs scheme set <N> <K>`.',
 
   // ─── provider: local-fs ──────────────────────────────────────────────────
   provider_local_path_not_exist_confirm: 'Ścieżka "%s" nie istnieje. Utworzyć ją?',
@@ -344,7 +363,7 @@ export const pl: Strings = {
   provider_remove_strategy_prompt: 'Wybierz strategię:',
   provider_remove_strategy_relocate: '[R]elocate — dane istnieją, nośnik zmienił adres (nowe IP/host/ścieżka)',
   provider_remove_strategy_rebuild: '[R]ebuild — dane utracone, odbuduj z nadmiarowości i prześlij na inny nośnik',
-  provider_remove_strategy_remove: '[R]emove — usuń nośnik bez zastępstwa, zaktualizuj schemat N/K',
+  provider_remove_strategy_remove: '[R]emove — usuń nośnik bez zastępstwa (schemat N/K dopasuj potem przez `bfs scheme set`)',
   provider_remove_strategy_cancel: '[A]nuluj',
   provider_remove_new_type_required: '--new-type jest wymagane (lub dodaj prefix "type:" do --new-path)',
   provider_remove_change_type_confirm: 'Zmienić typ nośnika? (aktualny: %s)',
@@ -365,9 +384,10 @@ export const pl: Strings = {
   provider_remove_target_invalid: 'Nośnik "%s" nie istnieje lub jest tym samym co usuwany',
   provider_remove_success: 'Nośnik "%s" usunięty.',
   provider_remove_next_steps: 'Zalecane kolejne kroki:',
-  provider_remove_next_step_1: '  1. `bfs pull` — pobierz bieżącą wersję',
-  provider_remove_next_step_2: '  2. `bfs push` — utwórz nową zdrową kopię',
-  provider_remove_next_step_3: '  3. `bfs prune` — opcjonalnie usuń stare zdegradowane wersje',
+  provider_remove_next_step_1: '  1. `bfs scheme set <N> <K>` — dopasuj schemat do pozostałych nośników',
+  provider_remove_next_step_2: '  2. `bfs pull` — pobierz bieżącą wersję (nadmiarowość pokryje degradację)',
+  provider_remove_next_step_3: '  3. `bfs push` — utwórz nową zdrową kopię na pozostałych nośnikach',
+  provider_remove_next_step_4: '  4. `bfs prune` — opcjonalnie usuń stare zdegradowane wersje',
   provider_relocate_success: 'Nośnik "%s" przeniesiony.',
   provider_rebuild_success: 'Nośnik "%s" zastąpiony. Uruchom `bfs push`, aby zaktualizować schemat.',
 
@@ -385,7 +405,7 @@ export const pl: Strings = {
 
   // ─── vault operations ────────────────────────────────────────────────────
   vault_download_shards: 'Pobieranie wersji %s…',
-  vault_provider_not_found: 'Nośnik "%s" nie znaleziony w konfiguracji — pomijam %s',
+  vault_shard_damaged_on_provider: 'Dane kopii na nośniku "%s" są uszkodzone — pomijam.',
   vault_download_shard_progress: 'Pobieranie %s/%s',
   vault_provider_unreachable: 'Nośnik "%s" jest niedostępny — pomijam.',
   vault_file_missing_on_provider: 'Dane kopii brakują na nośniku "%s" — pomijam.',
@@ -414,12 +434,17 @@ export const pl: Strings = {
   push_recovered_location: '  • %s → %s',
   push_confirm_recovered_locations: 'Wysłać dane kopii do tych lokalizacji?',
   push_recovered_locations_declined: 'Wysyłanie przerwane: lokalizacje nośników po recovery niepotwierdzone. Sprawdź je w `.bfs/config.json` (np. `bfs config`) i spróbuj ponownie.',
-  pull_not_enough_shards: 'Za mało części: potrzeba %s, dostępne %s. Część nośników może być offline.',
+  pull_not_enough_shards: 'Za mało części: potrzeba %s, dostępne %s — tej wersji nie da się odtworzyć z nośników dostępnych w tej chwili. Uruchom `bfs verify --deep`, aby zobaczyć, które wersje wciąż można odtworzyć.',
+  pull_failed_on_damaged: 'Uszkodzone dane kopii na nośnikach: %s.',
+  pull_failed_on_missing: 'Brak danych kopii na nośnikach: %s.',
+  pull_failed_on_unreachable: 'Nośniki nieosiągalne: %s.',
+  pull_failed_on_adapter_missing: 'Nośniki wymagające niezainstalowanego adaptera: %s.',
+  pull_failed_on_not_configured: 'Nośniki zapisane w tej kopii, ale nieobecne w konfiguracji: %s.',
   pull_blob_size_unreadable: 'Nie udało się odczytać rozmiaru kopii z żadnej części.',
   pull_salt_missing: 'Tej zaszyfrowanej kopii brakuje materiału klucza — części mogą być uszkodzone lub niekompletne.',
-  pull_provider_not_found_skip: 'Nośnik "%s" nie istnieje w konfiguracji — pomijam część %s.',
-  pull_shard_header_invalid_skip: 'Część %s nie przeszła walidacji nagłówka — pomijam.',
-  pull_shard_hash_mismatch_skip: 'Część %s nie przeszła kontroli integralności przy pobieraniu — pomijam.',
+  pull_provider_not_found_skip: 'Nośnik "%s" nie istnieje w konfiguracji — pomijam jego część kopii.',
+  pull_shard_header_invalid_skip: 'Dane kopii na nośniku "%s" nie przeszły walidacji nagłówka — pomijam.',
+  pull_shard_hash_mismatch_skip: 'Dane kopii na nośniku "%s" nie przeszły kontroli integralności przy pobieraniu — pomijam.',
   pull_degraded_repair: 'Brakuje części — odtwarzam z nadmiarowości…',
   scheme_provider_count_mismatch: 'Schemat wymaga %s nośników, podano %s.',
   pull_cancelled: 'Przywracanie anulowane.',
@@ -441,6 +466,8 @@ export const pl: Strings = {
   vault_degraded_file_missing: 'Pula zdegradowana: dane kopii zostały usunięte ze sprawnego nośnika. Uruchom `bfs push`, aby odtworzyć kopię.',
   vault_degraded_adapter_missing: 'Pula zdegradowana: jeden lub więcej nośników wymaga niezainstalowanego adaptera. Zainstaluj brakujący adapter (zobacz ostrzeżenie powyżej), a następnie ponów `bfs pull`, aby dołączyć te fragmenty.',
   vault_degraded_corrupt: 'Pula zdegradowana: część kopii nie przeszła weryfikacji integralności (uszkodzenie lub manipulacja) i została odtworzona z nadmiarowości. Uruchom `bfs push`, aby ponownie utworzyć czystą kopię.',
+  vault_degraded_provider_not_configured:
+    'Pula zdegradowana: nośnik zapisany w tej kopii nie istnieje w konfiguracji: %s. Jeśli nazwa zniknęła przez pomyłkę, przywróć ją komendą `bfs repair --version all <nośnik-z-konfiguracji> "<typ>:<nośnik-z-kopii> <ustawienia nośnika>"` (jedna taka para na nazwę) i ponów `bfs pull`. Jeśli usunąłeś ten nośnik celowo, uruchom `bfs push`, aby utworzyć zdrową kopię na pozostałych nośnikach.',
 
   // ─── recovery operations (vault layer) ──────────────────────────────────
   recovery_ask_version_password: 'Podaj hasło dla wersji %s (zostaw puste, aby pominąć):',
@@ -452,6 +479,9 @@ export const pl: Strings = {
   // ─── bootstrap operations ────────────────────────────────────────────────
   bootstrap_ask_password: 'Kopia zapasowa jest zaszyfrowana. Podaj hasło dla wersji %s:',
   bootstrap_wrong_password_retry: 'Błędne hasło. Spróbuj ponownie dla wersji %s:',
+  bootstrap_copy_integrity_failed:
+    'Dane kopii na tym nośniku nie przechodzą kontroli integralności — są uszkodzone albo hasło jest błędne. Odzyskaj z innego nośnika: bfs recovery --provider <typ> --name <nazwa kopii> --bootstrap "<ustawienia tamtego nośnika>".',
+  bootstrap_copy_integrity_failed_no_password: 'Dane kopii na tym nośniku nie przechodzą kontroli integralności. Odzyskaj z innego nośnika: bfs recovery --provider <typ> --name <nazwa kopii> --bootstrap "<ustawienia tamtego nośnika>".',
   bootstrap_single_provider_warn: 'Tylko 1 nośnik dostępny — nie można zweryfikować konsensusu. Dane mogą być naruszone. Kontynuuję.',
 
   // ─── provider: ftp ──────────────────────────────────────────────────────
@@ -480,8 +510,10 @@ export const pl: Strings = {
   ftp_help_flag_user_desc: 'Nazwa użytkownika FTP',
   ftp_help_flag_password_desc: 'Hasło FTP',
   ftp_help_flag_path_desc: 'Absolutna ścieżka bazowa na serwerze FTP (musi zaczynać się od "/")',
-  ftp_help_flag_secure_desc: 'Użyj FTPS (TLS). Przyjmuje true|false|1|0|yes|no (domyślnie false)',
-  ftp_help_flag_config_file_desc: 'JSON z dowolnymi polami { host, port, user, password, path, secure }. ' + 'Flagi inline nadpisują pola wczytane z JSON-a.',
+  ftp_help_flag_secure_desc: 'Użyj FTPS (TLS). Przyjmuje true|false|1|0|yes|no (domyślnie true)',
+  ftp_help_flag_cert_fingerprint_desc: 'Przypnij certyfikat FTPS do tego odcisku SHA-256 (colon-hex, np. AB:CD:…); niezgodność przerywa jako tampering',
+  ftp_help_flag_accept_new_cert_desc: 'Zaufaj certyfikatowi prezentowanemu przy pierwszym połączeniu, gdy brak pinu (nieinteraktywny opt-in TOFU)',
+  ftp_help_flag_config_file_desc: 'JSON z dowolnymi polami { host, port, user, password, path, secure, cert_fingerprint, accept_new_cert }. ' + 'Flagi inline nadpisują pola wczytane z JSON-a.',
 
   ftp_host_required: 'Adapter FTP: pole "host" jest wymagane. Podaj --host <host> lub ' + '--config-file <ścieżka> wewnątrz spec --provider, np. ' + '--provider "ftp:nas --host 192.168.1.1 --path /backup".',
   ftp_path_required: 'Adapter FTP: pole "path" jest wymagane. Podaj --path </absolutna/ścieżka> ' + 'lub --config-file <ścieżka> wewnątrz spec --provider, np. ' + '--provider "ftp:nas --path /backup".',
@@ -510,6 +542,7 @@ export const pl: Strings = {
   recovery_consensus_vault_id_mismatch: 'Wersja %s: niezgodność tożsamości kopii — pomijam',
   recovery_consensus_filename_mismatch: 'Wersja %s: niezgodność nazwy pliku/nagłówka — pomijam',
   recovery_consensus_failed: 'Wersja %s: konsensus nieudany (pola: %s) — oznaczam jako niezaufaną',
+  recovery_map_from_sibling: 'Wersja %s: mapa lokalizacji odzyskana z rodzeństwa — nośnik(i) %s nie mógł jej dostarczyć; zweryfikuj/napraw je',
   recovery_no_manifests: 'Nie udało się odtworzyć żadnej poprawnej wersji kopii zapasowej z dostępnych nośników.',
   recovery_manifest_unreadable: 'Nie udało się odczytać najnowszej wersji %s kopii zapasowej po odzyskaniu.',
 
@@ -545,6 +578,17 @@ export const pl: Strings = {
   ftp_validate_path_required: 'FTP: path jest wymagany i musi być niepustym ciągiem znaków',
   ftp_validate_path_absolute: 'FTP: path musi zaczynać się od "/"',
   ftp_describe_config: 'host: %s, port: %s, użytkownik: %s, hasło: ****, ścieżka: %s, bezpieczne: %s',
+  ftp_describe_cert: '%s, cert: %s (%s)',
+  ftp_describe_cert_nokind: '%s, cert: %s',
+  ftp_cert_kind_self_signed: 'self-signed',
+  ftp_cert_kind_ca: 'podpisany przez CA',
+  ftp_cert_pin_mismatch: 'Certyfikat FTPS dla %s nie zgadza się z przypiętym odciskiem — możliwy atak man-in-the-middle (tampering). Oczekiwano %s, a serwer przedstawił %s. Odmawiam połączenia.',
+  ftp_cert_untrusted: 'Certyfikat FTPS dla %s nie jest zaufany (brak przypiętego odcisku). Serwer przedstawił %s. Przypnij go przez --cert-fingerprint albo podaj --accept-new-cert, aby zaufać przy pierwszym połączeniu.',
+  ftp_cert_confirm: 'Serwer FTPS %s przedstawił certyfikat typu %s o odcisku %s. Zaufać mu?',
+  ftp_cert_declined: 'Certyfikat FTPS dla %s nie został zaufany — odmawiam połączenia.',
+  ftp_cert_fingerprint_invalid: 'Adapter FTP: --cert-fingerprint musi być odciskiem SHA-256 w formacie colon-hex (32 pary hex rozdzielone ":")',
+  ftp_cert_pin_requires_secure: 'FTP: cert_fingerprint wymaga secure:true (pin certyfikatu nie ma sensu przy plaintextowym FTP)',
+  ftp_tls_not_established: 'Handshake FTPS z %s nie przedstawił certyfikatu — nie można zweryfikować tożsamości serwera.',
 
   // ─── FTP — probeConnection ─────────────────────────────────────────────────
   ftp_probe_incomplete: 'Test nieudany: niepełna konfiguracja FTP (host i path muszą być ustawione)',
@@ -570,8 +614,9 @@ export const pl: Strings = {
   ssh_host_key_confirm: 'Zaufać kluczowi hosta dla %s?\n  odcisk %s',
   ssh_host_key_declined: 'Klucz hosta dla %s nie został zaufany — połączenie odrzucone.',
   ssh_host_key_revoked: 'Klucz hosta dla %s jest unieważniony (@revoked) w ~/.ssh/known_hosts — odmawiam połączenia (klucz oznaczony jako skompromitowany).',
+  ssh_host_key_mismatch: 'Klucz hosta dla %s ZMIENIŁ SIĘ — to możliwy atak man-in-the-middle (tampering). Oczekiwano %s, a serwer przedstawił %s. Odmawiam połączenia.',
 
-  // ─── SSH — edycja (online-first klucz hosta, fallback offline) ──────────────
+  // ─── SSH — edit (online-first host key, offline fallback) ──────────────
   ssh_edit_connecting: 'Łączę się z %s, aby potwierdzić klucz hosta…',
   ssh_edit_offline_menu: 'Nie udało się połączyć z %s. Wybierz sposób ustawienia przypięcia klucza hosta:',
   ssh_edit_offline_paste: 'Wklej odcisk klucza hosta (SHA256:…)',
@@ -660,6 +705,7 @@ export const pl: Strings = {
   repair_unknown_provider: 'Nośnik "%s" nie istnieje w konfiguracji kopii zapasowej.',
   repair_duplicate_provider_in_args: 'Nośnik "%s" powtórzony w argumentach naprawy.',
   repair_spec_invalid_params: 'Nieprawidłowe parametry naprawy: "%s". Użyj flag nośnika (np. --path) lub migracji typ:nazwa.',
+  heal_shard_corrupt_skip: 'Dane kopii na nośniku „%s" nie przeszły kontroli integralności — pomijam go przy tej naprawie.',
   heal_locationmap_update_failed: 'Nie udało się zaktualizować nośnika „%s" nowymi informacjami o lokalizacji — napraw go osobno.',
   heal_relocate_unreachable: 'Nośnik „%s" nie nadaje się do użycia pod nowym adresem: %s',
 
@@ -669,10 +715,25 @@ export const pl: Strings = {
   repair_opt_password: 'Hasło kopii zaszyfrowanej (można podać wielokrotnie)',
   repair_opt_password_file: 'Wczytaj hasło kopii z pliku (można podać wielokrotnie)',
   repair_opt_ci: 'Tryb nieinteraktywny: bez promptów; błąd, gdy wymagane hasło nie pasuje',
-  repair_opt_rebuild: 'Odbuduj utracony fragment kopii kodem Reed-Solomon (pobiera pozostałe fragmenty)',
+  repair_opt_rebuild: 'Odbuduj fragment kopii utracony lub uszkodzony, kodem Reed-Solomon (pobiera pozostałe fragmenty)',
+  repair_help_syntax: `Składnia:
+  bfs repair [--version <zakres>] <nazwa-nośnika> "<nowe ustawienia>"
+      wskaż nośnikowi nową lokalizację (ustawienia zastępują dotychczasowe)
+  bfs repair [--version <zakres>] <nazwa-nośnika> "" --rebuild
+      odbuduj dane tego nośnika z pozostałych, w miejscu
+
+Przykłady:
+  bfs repair --version all usb1 "--path /mnt/new-usb"
+      dysk jest teraz podmontowany gdzie indziej
+  bfs repair --version all nas "--host 10.0.0.5 --user backup --path /backup"
+      serwer zmienił adres — podaj komplet ustawień, zastępują dotychczasowe
+  bfs repair --version 3 usb1 "" --rebuild
+      dane na usb1 są uszkodzone lub ich nie ma; odbudują je pozostałe nośniki`,
   repair_opt_force_unverified: 'Kontynuuj migrację, gdy fragmentu kopii nie da się zweryfikować (nie gdy brakuje lub jest zmieniony)',
   repair_no_versions: 'Brak pasujących wersji do naprawy.',
   repair_foreign_shard_detected: 'Fragment kopii dla wersji %s należy do innej kopii — przerywam.',
+  vault_collision_detected:
+    'W tej lokalizacji na nośniku „%s" istnieje już inna kopia zapasowa o tej nazwie. BFS nie nadpisze ani nie usunie danych innej kopii. Aby kontynuować, ręcznie usuń pliki z tej lokalizacji, użyj innej nazwy kopii, albo uruchom `bfs recovery`, jeśli to Twoja kopia. Przerywam.',
   repair_wrong_version_shard: 'Fragment kopii dla wersji %s nie odpowiada oczekiwanej wersji — przerywam.',
   repair_force_unverified_warn: 'Kontynuuję mimo niezweryfikowanego fragmentu kopii dla wersji %s.',
   repair_ask_vault_password: 'Hasło kopii dla wersji %s:',

@@ -6,7 +6,7 @@ import { PushMode, VersionHealth } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
 function okResult(overrides: Partial<PushResult> = {}): PushResult {
-  return { version: 1, file_count: 2, total_size: 100, skipped: [], uploaded_count: 3, failed: [], health: VersionHealth.Healthy, ...overrides };
+  return { version: 1, file_count: 2, total_size: 100, skipped: [], excluded: [], uploaded_count: 3, failed: [], health: VersionHealth.Healthy, ...overrides };
 }
 
 vi.mock('../../src/vault/vault-manager.js', () => ({ push: vi.fn() }));
@@ -40,7 +40,7 @@ describe('push', () => {
     vi.clearAllMocks();
   });
 
-  // ─── Sukces ───────────────────────────────────────────────────────────────
+  // ─── Success ───────────────────────────────────────────────────────────────
 
   it('should call push and print healthy completion message with shard count', async () => {
     mockPush.mockResolvedValue(okResult());
@@ -86,7 +86,7 @@ describe('push', () => {
     expect(mockPush).toHaveBeenCalledWith(expect.any(String), expect.not.objectContaining({ mode: expect.anything() }));
   });
 
-  // ─── Błędy ────────────────────────────────────────────────────────────────
+  // ─── Errors ───────────────────────────────────────────────────────────────
 
   it('should abort and print error when push throws', async () => {
     mockPush.mockRejectedValue(new Error('Brak konfiguracji'));

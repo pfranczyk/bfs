@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO } from '../../providers/provider.js';
-import { listVersions, prune } from '../../vault/vault-manager.js';
+import { assertPruneKeepsARestorableVersion, listVersions, prune } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { parseVersionRange } from '../parse-version-range.js';
 import { inquirer, isPromptCancellation, promptWithRawMode } from '../prompt.js';
@@ -24,7 +24,8 @@ export function registerPrune(program: Command): void {
     .description(t('cmd_prune_desc'))
     .option('--keep-last <n>', t('prune_opt_keep_last'))
     .option('--yes', t('prune_opt_yes'))
-    .action(async (range: string | undefined, opts: { keepLast?: string; yes?: boolean }, cmd: Command) => {
+    .option('--force', t('prune_opt_force'))
+    .action(async (range: string | undefined, opts: { keepLast?: string; yes?: boolean; force?: boolean }, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
 
       try {
@@ -92,6 +93,11 @@ export function registerPrune(program: Command): void {
           return;
         }
 
+        // Check before asking for confirmation: a refusal after the operator has
+        // picked versions and confirmed reads as the tool changing its mind.
+        // prune() re-checks — it is the gate for programmatic callers too.
+        await assertPruneKeepsARestorableVersion(rootDir, { versions: toRemove, ...(opts.force === true ? { force: true } : {}) });
+
         warn(fmt('prune_versions_to_delete', toRemove.join(', ')));
 
         if (!opts.yes) {
@@ -109,7 +115,7 @@ export function registerPrune(program: Command): void {
           }
         }
 
-        await prune(rootDir, { versions: toRemove, io: createCliProviderIO(rootDir) });
+        await prune(rootDir, { versions: toRemove, io: createCliProviderIO(rootDir), ...(opts.force === true ? { force: true } : {}) });
         success(fmt('prune_deleted', toRemove.join(', ')));
       } catch (err) {
         if (err instanceof CommandAbort) throw err;

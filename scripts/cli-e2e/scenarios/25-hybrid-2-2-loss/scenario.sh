@@ -28,7 +28,7 @@ scenario_run() {
   rm "$(shard_file 0 1)"
   rm "$(shard_file 2 1)"
   run_bfs "$vault" verify
-  assert_ok
+  assert_exit 4   # degraded: still restorable, redundancy lost
   assert_manifest_health "$vault" 1 degraded
 
   run_bfs "$vault" pull --force --yes

@@ -24,7 +24,7 @@ describe('status', () => {
     vi.clearAllMocks();
   });
 
-  // ─── Dane wyświetlane ──────────────────────────────────────────────────────
+  // ─── Displayed data ───────────────────────────────────────────────────────
 
   it('should display vault name', async () => {
     mockStatus.mockResolvedValue(makeStatusInfo() as never);
@@ -109,7 +109,7 @@ describe('status', () => {
     expect(all).toMatch(/1\/0/);
   });
 
-  // ─── Błąd status ──────────────────────────────────────────────────────────
+  // ─── status errors ────────────────────────────────────────────────────────
 
   it('should abort when vault config is missing', async () => {
     mockStatus.mockRejectedValue(new Error('No vault config found'));

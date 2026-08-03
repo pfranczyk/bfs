@@ -1,7 +1,7 @@
 import { BfsError } from '../core/errors.js';
 import { dbg, debugEnabled, stdinState } from '../debug.js';
 import { fmt, getLang } from '../i18n/index.js';
-import type { AdapterRegistrationMeta, ProviderConfig, ProviderHelp, ProviderIO, StorageProvider } from '../types/index.js';
+import type { AdapterRegistrationMeta, Nullable, ProviderConfig, ProviderHelp, ProviderIO, StorageProvider } from '../types/index.js';
 import { BFS_PROVIDER_API_VERSION } from '../version.js';
 
 // ─── Provider ID validation ───────────────────────────────────────────────────

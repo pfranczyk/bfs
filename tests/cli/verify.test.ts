@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VersionHealth } from '../../src/types/index.js';
-import { captureConsole, runCmd } from './_helpers.js';
+import { captureConsole, runCmd, runCmdExitCode } from './_helpers.js';
 
 vi.mock('../../src/vault/vault-manager.js', () => ({ listVersions: vi.fn() }));
 vi.mock('../../src/vault/verify.js', () => ({ verifyAll: vi.fn() }));
@@ -18,7 +18,7 @@ const mockVerifyAll = vi.mocked(verifyAll);
 
 /** VerifyReport fixture matching VerifyReport type from vault/verify.ts. */
 function makeReport(versions: Array<{ version: number; health: VersionHealth; available_shards: number; total_shards: number; tolerance: number }>) {
-  return { versions: versions.map((v) => ({ ...v, header_advisory: null })) };
+  return { versions: versions.map((v) => ({ ...v, header_advisory: null, retained_from_deep: false })) };
 }
 
 function makeManifest(version: number, dataN = 2, parityK = 1) {
@@ -37,7 +37,7 @@ describe('verify', () => {
     vi.clearAllMocks();
   });
 
-  // ─── Brak wersji ──────────────────────────────────────────────────────────
+  // ─── No versions ──────────────────────────────────────────────────────────
 
   it('should show "no versions" message when report is empty', async () => {
     mockVerifyAll.mockResolvedValue(makeReport([]));
@@ -48,7 +48,7 @@ describe('verify', () => {
     expect(capture.logs.some((l) => l.includes('No versions'))).toBe(true);
   });
 
-  // ─── Tabela wyników ───────────────────────────────────────────────────────
+  // ─── Results table ────────────────────────────────────────────────────────
 
   it('should display column headers', async () => {
     mockVerifyAll.mockResolvedValue(makeReport([{ version: 1, health: VersionHealth.Healthy, available_shards: 3, total_shards: 3, tolerance: 1 }]));
@@ -72,7 +72,7 @@ describe('verify', () => {
     expect(capture.logs.some((l) => l.includes('007'))).toBe(true);
   });
 
-  // ─── Zdrowie i tolerancja (pipeline krok 2) ───────────────────────────────
+  // ─── Health and tolerance (pipeline step 2) ───────────────────────────────
 
   it('healthy version (N+K shards): tolerance = K', async () => {
     // Scheme 2/1 (N=2, K=1), all 3 shards available → healthy, tolerance = 3-2 = 1
@@ -128,7 +128,7 @@ describe('verify', () => {
     expect(capture.logs.some((l) => l.includes('?'))).toBe(true);
   });
 
-  // ─── Błąd verify ──────────────────────────────────────────────────────────
+  // ─── verify errors ────────────────────────────────────────────────────────
 
   it('should abort when verifyAll throws', async () => {
     mockVerifyAll.mockRejectedValue(new Error('No vault config found'));
@@ -137,5 +137,55 @@ describe('verify', () => {
 
     expect(result).toBe('abort');
     expect(capture.errors.some((e) => e.includes('No vault config found'))).toBe(true);
+  });
+
+  // ─── exit codes ───────────────────────────────────────────────────────────
+  // The code is the only signal a scheduled check can act on, and it must stay
+  // distinct from the generic failure code so a monitor can tell "the backup is
+  // damaged" from "the check could not run".
+
+  it('should exit 0 when every version is healthy', async () => {
+    mockVerifyAll.mockResolvedValue(makeReport([{ version: 1, health: VersionHealth.Healthy, available_shards: 3, total_shards: 3, tolerance: 1 }]));
+    mockListVersions.mockResolvedValue([makeManifest(1)] as never);
+
+    expect(await runCmdExitCode(['verify'])).toBe(0);
+  });
+
+  it('should exit 4 when a version is degraded', async () => {
+    mockVerifyAll.mockResolvedValue(makeReport([{ version: 1, health: VersionHealth.Degraded, available_shards: 2, total_shards: 3, tolerance: 0 }]));
+    mockListVersions.mockResolvedValue([makeManifest(1)] as never);
+
+    expect(await runCmdExitCode(['verify'])).toBe(4);
+  });
+
+  it('should exit 5 when any version is damaged, even beside healthy ones', async () => {
+    mockVerifyAll.mockResolvedValue(
+      makeReport([
+        { version: 1, health: VersionHealth.Healthy, available_shards: 3, total_shards: 3, tolerance: 1 },
+        { version: 2, health: VersionHealth.Damaged, available_shards: 1, total_shards: 3, tolerance: 0 },
+      ]),
+    );
+    mockListVersions.mockResolvedValue([makeManifest(1), makeManifest(2)] as never);
+
+    expect(await runCmdExitCode(['verify'])).toBe(5);
+  });
+
+  it('should exit 1 — not a health code — when verify itself cannot run', async () => {
+    mockVerifyAll.mockRejectedValue(new Error('No vault config found'));
+
+    expect(await runCmdExitCode(['verify'])).toBe(1);
+  });
+
+  it('should explain a verdict it carried over from a deep check', async () => {
+    const report = makeReport([{ version: 1, health: VersionHealth.Damaged, available_shards: 3, total_shards: 3, tolerance: 1 }]);
+    const first = report.versions[0];
+    if (first === undefined) throw new Error('fixture must contain one version');
+    first.retained_from_deep = true;
+    mockVerifyAll.mockResolvedValue(report);
+    mockListVersions.mockResolvedValue([makeManifest(1)] as never);
+
+    await runCmdExitCode(['verify']);
+
+    expect(capture.errors.some((w) => w.includes('earlier deep check'))).toBe(true);
   });
 });

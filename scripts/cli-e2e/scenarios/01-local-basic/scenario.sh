@@ -29,7 +29,7 @@ scenario_run() {
   # Simulate loss of one provider's shard, then confirm degraded health.
   rm "$(shard_file 0 1)"
   run_bfs "$vault" verify
-  assert_ok
+  assert_exit 4   # degraded: still restorable, redundancy lost
   assert_manifest_health "$vault" 1 degraded
 
   # Reed-Solomon reconstructs the missing shard from the surviving 3 of 4.

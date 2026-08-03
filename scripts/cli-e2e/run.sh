@@ -21,6 +21,12 @@
 #                      [ssh://]user:pass@host[:port]/basepath
 #                    SSH scenarios are mandatory: without enough --ssh endpoints
 #                    they FAIL (loudly) rather than silently skip.
+#   --ssh-docker <n> Start <n> throwaway sshd containers and use them as the
+#                    --ssh endpoints (needs Docker; combines with --ssh). Saves
+#                    supplying a server by hand when the machine has none:
+#                    `--ssh-only --ssh-docker 3` runs every SSH scenario,
+#                    including 82, which needs three separate endpoints. The
+#                    containers are torn down with the run.
 #   --gdrive "<..>"  Reserved extension point for future built-in providers.
 #   --filter <pat>   Run only scenarios whose directory name contains <pat>
 #                    (e.g. --filter local, --filter 0, --filter ftp).
@@ -71,6 +77,7 @@ export REPO_ROOT
 FTP_SPECS=()
 GDRIVE_SPECS=()
 SSH_SPECS=()
+SSH_DOCKER_COUNT=0
 RUN_FILTER=""
 RUN_EXCLUDE=()
 DO_LIST=0
@@ -91,6 +98,7 @@ while [ $# -gt 0 ]; do
     --ftp)    FTP_SPECS+=("${2:?--ftp requires a value}"); shift 2 ;;
     --gdrive) GDRIVE_SPECS+=("${2:?--gdrive requires a value}"); shift 2 ;;
     --ssh)    SSH_SPECS+=("${2:?--ssh requires a value}"); shift 2 ;;
+    --ssh-docker) SSH_DOCKER_COUNT="${2:?--ssh-docker requires a count}"; shift 2 ;;
     --filter) RUN_FILTER="${2:?--filter requires a value}"; shift 2 ;;
     --exclude) RUN_EXCLUDE+=("${2:?--exclude requires a value}"); shift 2 ;;
     --local-only) LOCAL_ONLY=1; shift ;;
@@ -201,6 +209,26 @@ env_init
 # Clean up on normal exit AND on Ctrl+C / termination (INT/TERM exit → EXIT trap).
 trap env_cleanup EXIT
 trap 'exit 130' INT TERM
+
+# --ssh-docker provisions the endpoints the SSH scenarios are gated on, from the
+# same image the docker-managed ones use. It runs after env_init because the
+# containers are named with RUN_ID — that is what env_cleanup collects — and the
+# specs are parsed here, once they exist.
+if [ "$SSH_DOCKER_COUNT" -gt 0 ]; then
+  if ! docker_available; then
+    echo "--ssh-docker $SSH_DOCKER_COUNT needs a running Docker daemon." >&2
+    exit 2
+  fi
+  echo "[cli-e2e] starting $SSH_DOCKER_COUNT SSH container(s)…"
+  while IFS= read -r spec; do
+    [ -n "$spec" ] && SSH_SPECS+=("$spec")
+  done < <(docker_ssh_endpoints "$SSH_DOCKER_COUNT" "$RUN_ID")
+  if [ "${#SSH_SPECS[@]}" -lt "$SSH_DOCKER_COUNT" ]; then
+    echo "Could not start $SSH_DOCKER_COUNT SSH container(s) — got ${#SSH_SPECS[@]}." >&2
+    exit 2
+  fi
+  parse_ssh_specs
+fi
 
 echo "[cli-e2e] workspace: $RUN_WS"
 echo "[cli-e2e] bfs: tsx $BFS_ENTRY   |   FTP endpoints: $(ftp_count)   |   SSH endpoints: $(ssh_count)"
@@ -324,6 +352,11 @@ while IFS= read -r sc; do
   if [ "$rc" -eq 0 ]; then
     report_result PASS "$key" "$((SECONDS - start))" "$log"
   else
+    # A docker-managed scenario owns its server, so its failure log is only half
+    # the story: append the server's state and log tail before reporting. A red
+    # run that happens on one machine only (a CI runner, say) is otherwise
+    # undiagnosable without reproducing it there.
+    if [ "$REQUIRES_DOCKER" -gt 0 ]; then docker_dump_run "$RUN_ID" >>"$log" 2>&1; fi
     report_result FAIL "$key" "$((SECONDS - start))" "$log"
   fi
 done < <(discover_scenarios)

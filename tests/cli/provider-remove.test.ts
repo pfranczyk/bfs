@@ -44,7 +44,7 @@ describe('provider remove', () => {
     vi.restoreAllMocks();
   });
 
-  // ─── Brak konfiguracji ────────────────────────────────────────────────────
+  // ─── No configuration ────────────────────────────────────────────────────
 
   it('should abort when no vault config', async () => {
     mockReadConfig.mockResolvedValue(null);
@@ -55,7 +55,7 @@ describe('provider remove', () => {
     expect(capture.errors.some((l) => l.includes('bfs init'))).toBe(true);
   });
 
-  // ─── Rozwiązywanie ID / indeksu ───────────────────────────────────────────
+  // ─── ID / index resolution ───────────────────────────────────────────
 
   it('should accept provider by string ID', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -103,13 +103,13 @@ describe('provider remove', () => {
     expect(capture.errors.some((l) => l.includes('does not exist'))).toBe(true);
   });
 
-  // ─── Bez argumentu — lista interaktywna ──────────────────────────────────
+  // ─── Without an argument — interactive list ──────────────────────────────────
 
   it('should show interactive list when no argument given', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     mockPrompt
-      .mockResolvedValueOnce({ chosen: 'dysk-1' } as never) // lista providerów
-      .mockResolvedValue({ strategy: 'cancel' } as never); // wybór strategii
+      .mockResolvedValueOnce({ chosen: 'dysk-1' } as never) // provider list
+      .mockResolvedValue({ strategy: 'cancel' } as never); // strategy selection
 
     const result = await runCmd(['provider', 'remove']);
 
@@ -126,7 +126,7 @@ describe('provider remove', () => {
     expect(capture.errors.some((l) => l.includes('No providers'))).toBe(true);
   });
 
-  // ─── Strategia: cancel ────────────────────────────────────────────────────
+  // ─── Strategy: cancel ────────────────────────────────────────────────────
 
   it('should return ok (not abort) when cancel strategy chosen', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -139,7 +139,7 @@ describe('provider remove', () => {
     expect(capture.logs.some((l) => l.includes('Cancelled'))).toBe(true);
   });
 
-  // ─── Strategia: remove ────────────────────────────────────────────────────
+  // ─── Strategy: remove ────────────────────────────────────────────────────
 
   it('should call removeProvider with strategy=remove after confirmation', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -160,9 +160,9 @@ describe('provider remove', () => {
     expect(mockRemoveProvider).not.toHaveBeenCalled();
   });
 
-  // ─── Strategia: relocate (pass-through) ──────────────────────────────────
-  // Kontrakt: BFS zna tylko --strategy, --new-type, --password. Wszystko inne
-  // idzie do adaptera jako rawArgs; adapter sam zbiera config przez
+  // ─── Strategy: relocate (pass-through) ──────────────────────────────────
+  // Contract: BFS knows only --strategy, --new-type, --password. Everything else
+  // goes to the adapter as rawArgs; the adapter collects its config itself via
   // configureFromFlags / configureInteractive.
 
   describe('relocate strategy', () => {
@@ -264,7 +264,7 @@ describe('provider remove', () => {
     });
   });
 
-  // ─── Strategia: rebuild ───────────────────────────────────────────────────
+  // ─── Strategy: rebuild ───────────────────────────────────────────────────
 
   describe('rebuild strategy', () => {
     beforeEach(() => {
@@ -369,7 +369,7 @@ describe('provider remove', () => {
     });
   });
 
-  // ─── Tryb CI ──────────────────────────────────────────────────────────────
+  // ─── CI mode ──────────────────────────────────────────────────────────────
 
   it('CI: --strategy remove --yes skips all prompts', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -397,9 +397,9 @@ describe('provider remove', () => {
     expect(result).toBe('abort');
   });
 
-  // ─── Wpływ na wersje ──────────────────────────────────────────────────────
+  // ─── Effect on versions ──────────────────────────────────────────────────────
 
-  // ─── Anulowanie ───────────────────────────────────────────────────────────
+  // ─── Cancellation ───────────────────────────────────────────────────────────
 
   it('should cancel when __cancel__ selected in provider list', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -422,7 +422,7 @@ describe('provider remove', () => {
     expect(mockRemoveProvider).not.toHaveBeenCalled();
   });
 
-  // ─── Wpływ na wersje ──────────────────────────────────────────────────────
+  // ─── Effect on versions ──────────────────────────────────────────────────────
 
   it('should show affected versions warning when provider used in manifests', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);

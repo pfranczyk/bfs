@@ -56,6 +56,28 @@ docker_sshd_up() {
 # docker_sshd_down <container> — stop and remove the container (idempotent).
 docker_sshd_down() { docker rm -f "$1" >/dev/null 2>&1 || true; }
 
+# docker_ssh_endpoints <count> <run-id> — start <count> throwaway sshd containers
+# and print one `--ssh` spec per line.
+#
+# Scenarios that only need a working SSH server (as opposed to the docker-managed
+# ones, which drive its lifecycle themselves) are gated on external endpoints. On
+# a machine with Docker but no SSH server of its own that gate is unpassable,
+# even though everything needed to satisfy it is right here — so run.sh can
+# provision the endpoints from the same image instead. Containers are named with
+# the run id, which is what docker_cleanup_run collects afterwards.
+#
+# Ports start at 2300 to stay clear of 2222 (scripts/ssh-test-server.ts) and of
+# the docker-managed scenarios, which allocate their own.
+docker_ssh_endpoints() {
+  local count="$1" run="$2" i port ctr
+  for i in $(seq 1 "$count"); do
+    port=$((2300 + i))
+    ctr="bfs-e2e-${run}-ssh${i}"
+    docker_sshd_up "$ctr" "$port" "bfs-e2e-${run}-sshvol${i}" || return 1
+    printf 'ssh://%s:%s@127.0.0.1:%s%s\n' "$DOCKER_SSH_USER" "$DOCKER_SSH_PASS" "$port" "$DOCKER_SSH_BASE"
+  done
+}
+
 # _docker_ftp_wait <ctrl-port> — block until the ftpd genuinely accepts an
 # authenticated login AND a passive data transfer, not merely a TCP connect.
 # A bare TCP connect to a docker-published port is useless as a readiness signal:
@@ -92,6 +114,67 @@ docker_ftpd_up() {
 # docker_ftpd_down <container> — stop and remove the container (idempotent).
 docker_ftpd_down() { docker rm -f "$1" >/dev/null 2>&1 || true; }
 
+# gen_selfsigned_cert <cert-out> <key-out> [cn] — generate a throwaway self-signed
+# RSA cert/key pair (host openssl) so a docker FTPS server can present a cert whose
+# SHA-256 fingerprint a scenario pins. cert-out and key-out MUST live in the same
+# directory: the command runs from that directory with relative filenames, so
+# native (mingw) openssl never has to resolve an MSYS /tmp path, and
+# MSYS_NO_PATHCONV only shields the "/CN=" subject from Git Bash path rewriting.
+# Returns non-zero when openssl is unavailable.
+gen_selfsigned_cert() {
+  local cert="$1" key="$2" cn="${3:-bfs-ftps-test}"
+  command -v openssl >/dev/null 2>&1 || return 1
+  local dir; dir="$(dirname "$cert")"
+  (
+    cd "$dir" || exit 1
+    MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -nodes \
+      -keyout "$(basename "$key")" -out "$(basename "$cert")" \
+      -days 3650 -subj "/CN=${cn}" >/dev/null 2>&1
+  )
+}
+
+# ftps_cert_fingerprint <cert-file> — print the certificate's SHA-256 fingerprint
+# in the uppercase colon-separated form (AA:BB:…) that Node's TLS
+# peerCert.fingerprint256 reports, so a `--cert-fingerprint` pin matches exactly
+# what BFS observes on the wire.
+ftps_cert_fingerprint() {
+  openssl x509 -in "$1" -noout -fingerprint -sha256 2>/dev/null | sed 's/^.*Fingerprint=//'
+}
+
+# _docker_ftps_wait <ctrl-port> — like _docker_ftp_wait, but over explicit AUTH
+# TLS with a lenient (self-signed) certificate check. A vsftpd forcing SSL rejects
+# a plaintext login, so the readiness probe MUST speak FTPS or it would time out.
+_docker_ftps_wait() {
+  local port="$1"
+  DFW_USER="$DOCKER_FTP_USER" DFW_PASS="$DOCKER_FTP_PASS" node -e '
+    const {Client}=require("basic-ftp");const port=Number(process.argv[1]);const deadline=Date.now()+45000;
+    (async()=>{while(Date.now()<deadline){const c=new Client(4000);
+      try{await c.access({host:"127.0.0.1",port,user:process.env.DFW_USER,password:process.env.DFW_PASS,secure:true,secureOptions:{rejectUnauthorized:false}});await c.list();c.close();process.exit(0)}
+      catch(e){c.close();await new Promise((r)=>setTimeout(r,500))}}
+      process.exit(1)})();' "$port"
+}
+
+# docker_ftpsd_up <container> <ctrl-port> <pasv-min> <pasv-max> <volume> <cert> <key>
+# — (re)start a passive-mode FTPS server (explicit AUTH TLS, delfer's TLS_CERT/
+# TLS_KEY env => ssl_enable + force_local_{data,logins}_ssl) on ctrl-port. The
+# cert/key host files are copied into the container before it starts (docker cp:
+# winpath source so the native docker binary reads a Windows path on Git Bash;
+# MSYS_NO_PATHCONV keeps the container-side /cert.pem target intact). Waits until
+# an authenticated FTPS login + passive LIST succeeds.
+docker_ftpsd_up() {
+  local ctr="$1" port="$2" pmin="$3" pmax="$4" vol="$5" cert="$6" key="$7"
+  docker rm -f "$ctr" >/dev/null 2>&1
+  MSYS_NO_PATHCONV=1 docker create --name "$ctr" -p "${port}:21" -p "${pmin}-${pmax}:${pmin}-${pmax}" \
+    -e "USERS=${DOCKER_FTP_USER}|${DOCKER_FTP_PASS}" -e ADDRESS=127.0.0.1 \
+    -e "MIN_PORT=${pmin}" -e "MAX_PORT=${pmax}" \
+    -e TLS_CERT=/cert.pem -e TLS_KEY=/key.pem \
+    -v "${vol}:/ftp/${DOCKER_FTP_USER}" "$DOCKER_FTP_IMAGE" >/dev/null 2>&1 || return 1
+  MSYS_NO_PATHCONV=1 docker cp "$(winpath "$cert")" "${ctr}:/cert.pem" >/dev/null 2>&1 || return 1
+  MSYS_NO_PATHCONV=1 docker cp "$(winpath "$key")" "${ctr}:/key.pem" >/dev/null 2>&1 || return 1
+  docker start "$ctr" >/dev/null 2>&1 || return 1
+  _docker_ftps_wait "$port"
+}
+
 # docker_volume_reset <volume> — drop and recreate the volume EMPTY (simulates a
 # failed disk: the data is gone, the mount point is back).
 docker_volume_reset() {
@@ -101,6 +184,29 @@ docker_volume_reset() {
 
 # docker_volume_rm <volume> — remove the volume (idempotent).
 docker_volume_rm() { docker volume rm "$1" >/dev/null 2>&1 || true; }
+
+# docker_dump_run <run-id> — print the state and the log tail of every container
+# this run created. A docker-managed scenario drives a real server, so when it
+# fails the server's own account is the only evidence that separates "the medium
+# went away" from "BFS mishandled it" — the CLI output alone cannot. A failing
+# scenario exits its subshell before its own docker_*_down, so the containers are
+# still there to be questioned. Safe with no daemon (no-op).
+docker_dump_run() {
+  local run="$1" names name
+  docker_available || return 0
+  names="$(docker ps -a --filter "name=bfs-e2e-${run}" --format '{{.Names}}' 2>/dev/null)"
+  if [ -z "$names" ]; then
+    echo "[docker] no containers left for run ${run}"
+    return 0
+  fi
+  echo "[docker] container state for run ${run}:"
+  docker ps -a --filter "name=bfs-e2e-${run}" --format '  {{.Names}}  {{.Status}}  {{.Ports}}' 2>/dev/null
+  for name in $names; do
+    echo "[docker] last log lines of ${name}:"
+    docker logs --tail 40 "$name" 2>&1 | sed 's/^/  /'
+  done
+  return 0
+}
 
 # docker_cleanup_run <run-id> — remove every container and volume this run created
 # (name prefix bfs-e2e-<run-id>). Called by env_cleanup; safe to call with no

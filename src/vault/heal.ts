@@ -4,7 +4,7 @@ import { BfsError, ShardCorruptedError, TamperDetectedError } from '../core/erro
 import { assertSafeVaultName } from '../core/fs-utils.js';
 import { hashBuffer, streamToBuffer } from '../core/hash.js';
 import { rsRepair, rsRepairStriped } from '../core/reed-solomon.js';
-import { buildHeaderBytes, buildShard, buildShardHeaderFromBytes, buildShardV2, buildSidecarBytes, SHARD_HEADER_READ_BYTES } from '../core/shard-io.js';
+import { buildHeaderBytes, buildShard, buildShardHeaderFromBytes, buildShardV2, buildSidecarBytes, SHARD_HEADER_READ_BYTES, shardChecksumMatches } from '../core/shard-io.js';
 import { fmt } from '../i18n/index.js';
 import { providerRegistry } from '../providers/provider.js';
 import type {
@@ -25,7 +25,7 @@ import type {
 import { VersionHealth } from '../types/index.js';
 import { readConfig, writeConfig } from './config.js';
 import { splitLocationSecrets } from './location-map.js';
-import { listManifests, readManifest, writeManifest } from './manifest.js';
+import { applyHealthChange, listManifests, readManifest, writeManifest } from './manifest.js';
 import { readState } from './state.js';
 import { buildRemotePath, extractShardPayload } from './vault-manager.js';
 
@@ -41,9 +41,12 @@ export interface HealReport {
 // ─── Private helpers for rebuildVersion ───────────────────────────────────────
 
 /**
- * Downloads all available shard payloads for a version, skipping the removed provider.
- * Returns a slots array (null where unavailable) and a map of raw shard binaries for
- * header inspection.
+ * Downloads the shard payloads available for a version, skipping the removed
+ * provider and any shard that fails its own trailing checksum — a shard damaged
+ * on its medium must not seed the version's metadata nor enter the RS decode.
+ *
+ * @returns a slots array (null where a shard is unavailable or damaged) and a map
+ *          of the accepted raw shard binaries for header inspection
  */
 async function downloadAvailableShards(config: VaultConfig, manifest: VersionManifest, removedProviderId: string, io: ProviderIO): Promise<{ shardSlots: Nullable<Buffer>[]; shardDataMap: Map<number, Buffer> }> {
   const { data_shards: N, parity_shards: K } = manifest.scheme;
@@ -61,6 +64,17 @@ async function downloadAvailableShards(config: VaultConfig, manifest: VersionMan
       provider.setVaultName(config.vault_name);
       const stream = await provider.download({ provider_id: ms.provider_id, path: `shard_${ms.shard_index}.bfs.${version}` });
       const data = await streamToBuffer(stream);
+      // A shard that fails its own trailing checksum rotted on the medium. Its
+      // header must not seed the version's identity (extractShardMeta reads
+      // kdf_salt and the blob metadata from whichever shard it sees first) and
+      // its payload must not enter the RS decode, or the repair bakes the damage
+      // into the rebuilt shard. Dropping it here is also what keeps a divergence
+      // between the surviving shards meaningful: a header that disagrees while
+      // its own checksum verifies was rewritten deliberately, not corrupted.
+      if (!shardChecksumMatches(data)) {
+        io.warn(fmt('heal_shard_corrupt_skip', ms.provider_id));
+        continue;
+      }
       shardSlots[ms.shard_index] = extractShardPayload(data);
       shardDataMap.set(ms.shard_index, data);
     } catch {
@@ -433,7 +447,7 @@ export async function rebuildVersion(rootDir: string, version: number, options: 
     return ms;
   });
 
-  await writeManifest(rootDir, { ...manifest, shards: updatedShards, health: VersionHealth.Healthy });
+  await writeManifest(rootDir, applyHealthChange({ ...manifest, shards: updatedShards }, VersionHealth.Healthy));
 }
 
 /**
@@ -476,7 +490,7 @@ export async function rebuildShardInPlace(rootDir: string, version: number, opti
   await updateLocationMaps(rootDir, version, { newLocationMap, io, ...(password !== undefined ? { password } : {}) });
 
   const updatedShards = manifest.shards.map((ms) => (ms.provider_id === providerId ? { ...ms, remote_path: newRemotePath, shard_hash: plaintextHash } : ms));
-  await writeManifest(rootDir, { ...manifest, shards: updatedShards, health: VersionHealth.Healthy });
+  await writeManifest(rootDir, applyHealthChange({ ...manifest, shards: updatedShards }, VersionHealth.Healthy));
 }
 
 /**
@@ -606,8 +620,7 @@ export async function rebuildAllVersions(rootDir: string, options: RebuildAllVer
       // Mark as degraded
       const manifest = await readManifest(rootDir, version);
       if (manifest && manifest.health !== VersionHealth.Degraded) {
-        manifest.health = VersionHealth.Degraded;
-        await writeManifest(rootDir, manifest);
+        await writeManifest(rootDir, applyHealthChange(manifest, VersionHealth.Degraded));
       }
       report.degraded++;
       report.versions_degraded.push(version);

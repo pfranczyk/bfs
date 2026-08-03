@@ -74,7 +74,7 @@ describe('recovery', () => {
     vi.restoreAllMocks();
   });
 
-  // ─── CI mode: pełna ścieżka --bootstrap ───────────────────────────────────
+  // ─── CI mode: full --bootstrap path ───────────────────────────────────
 
   it('should run without prompts when --bootstrap, --provider, --name provided', async () => {
     await runCmd(['recovery', '--provider', 'local', '--name', 'my-vault', '--bootstrap', '--path /mnt/usb']);
@@ -122,10 +122,10 @@ describe('recovery', () => {
   it('should parse ftp adapter flags from bootstrap spec into provider config', async () => {
     await runCmd(['recovery', '--provider', 'ftp', '--name', 'my-vault', '--bootstrap', '--host nas.local --port 21 --user bob --password secret --path /storage']);
 
-    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ host: 'nas.local', port: 21, user: 'bob', password: 'secret', path: '/storage', secure: false }) }), expect.anything());
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ host: 'nas.local', port: 21, user: 'bob', password: 'secret', path: '/storage', secure: true }) }), expect.anything());
   });
 
-  // ─── CI mode: walidacja flag ─────────────────────────────────────────────
+  // ─── CI mode: flag validation ─────────────────────────────────────────────
 
   it('should reject --bootstrap without --provider', async () => {
     const result = await runCmd(['recovery', '--bootstrap', '--path /mnt/usb', '--name', 'my-vault']);
@@ -164,7 +164,7 @@ describe('recovery', () => {
     expect(capture.errors.some((l) => l.includes('host') && l.toLowerCase().includes('required'))).toBe(true);
   });
 
-  // ─── Tryb interaktywny (bez --bootstrap) ──────────────────────────────────
+  // ─── Interactive mode (without --bootstrap) ──────────────────────────────────
 
   it('should ask for provider type when --provider missing', async () => {
     // promptWithRawMode calls: provider type + vaultName.
@@ -187,7 +187,7 @@ describe('recovery', () => {
     expect(mockPrompt).toHaveBeenCalledTimes(1);
   });
 
-  // ─── Anulowanie ───────────────────────────────────────────────────────────
+  // ─── Cancellation ───────────────────────────────────────────────────────────
 
   it('should cancel when __cancel__ selected in provider type prompt', async () => {
     mockPrompt.mockResolvedValueOnce({ providerType: '__cancel__' } as never);
@@ -208,7 +208,7 @@ describe('recovery', () => {
     expect(mockRecover).not.toHaveBeenCalled();
   });
 
-  // ─── Błąd recover ────────────────────────────────────────────────────────
+  // ─── recover errors ────────────────────────────────────────────────────────
 
   it('should abort and show error when recover throws', async () => {
     mockRecover.mockRejectedValue(new Error('Nie znaleziono shardów'));
@@ -233,7 +233,7 @@ describe('recovery', () => {
     expect(mockRecover).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ passwords: ['one', 'two'] }));
   });
 
-  // ─── --password w bootstrap nie koliduje z --password w recovery ──────────
+  // ─── --password in bootstrap does not clash with --password in recovery ──────────
   // Vault `--password` (recovery flag, variadic, encryption key) and FTP
   // `--password` (inside --bootstrap, single-value, login credential)
   // coexist because the latter lives inside a quoted string Commander

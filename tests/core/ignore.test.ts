@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createIgnoreFilter } from '../../src/core/ignore.js';
+import { appendToBfsignore, createIgnoreFilter } from '../../src/core/ignore.js';
 
 function makeTmpDir(content?: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'bfs-test-'));
@@ -106,5 +107,71 @@ describe('createIgnoreFilter — no .bfsignore file', () => {
     const dir = makeTmpDir(); // no .bfsignore written
     expect(() => createIgnoreFilter(dir)).not.toThrow();
     rmSync(dir, { recursive: true });
+  });
+});
+
+describe('appendToBfsignore', () => {
+  let dir: string;
+
+  afterEach(() => rmSync(dir, { recursive: true }));
+
+  it('should append anchored patterns that the ignore filter then excludes', async () => {
+    dir = makeTmpDir('*.log\n');
+
+    await appendToBfsignore(dir, ['nested/link.txt', 'top.sock']);
+
+    const filter = createIgnoreFilter(dir);
+    expect(filter('nested/link.txt')).toBe(true);
+    expect(filter('top.sock')).toBe(true);
+    // Anchored to root: a same-named file in a different directory is untouched.
+    expect(filter('other/top.sock')).toBe(false);
+    // Pre-existing patterns still apply.
+    expect(filter('error.log')).toBe(true);
+  });
+
+  it('should create .bfsignore when it does not exist', async () => {
+    dir = makeTmpDir(); // no .bfsignore
+
+    await appendToBfsignore(dir, ['weird.txt']);
+
+    const filter = createIgnoreFilter(dir);
+    expect(filter('weird.txt')).toBe(true);
+  });
+
+  it('should escape gitignore metacharacters so literal names match exactly', async () => {
+    dir = makeTmpDir();
+
+    // A leading '#' would be a comment, '!' a negation, '[' '*' '?' globs — all
+    // must be escaped so the exact file name is what gets ignored.
+    await appendToBfsignore(dir, ['#hash.txt', '!bang.txt', 'a[1].txt', 'star*.txt']);
+
+    const filter = createIgnoreFilter(dir);
+    expect(filter('#hash.txt')).toBe(true);
+    expect(filter('!bang.txt')).toBe(true);
+    expect(filter('a[1].txt')).toBe(true);
+    expect(filter('star*.txt')).toBe(true);
+    // The escaped '*' must be literal, not a wildcard.
+    expect(filter('starXYZ.txt')).toBe(false);
+  });
+
+  it('should insert a separating newline when the file lacks a trailing one', async () => {
+    dir = makeTmpDir('*.log'); // no trailing newline
+
+    await appendToBfsignore(dir, ['link.txt']);
+
+    const content = await readFile(join(dir, '.bfsignore'), 'utf-8');
+    expect(content).toContain('*.log\n');
+    const filter = createIgnoreFilter(dir);
+    expect(filter('error.log')).toBe(true);
+    expect(filter('link.txt')).toBe(true);
+  });
+
+  it('should be a no-op for an empty path list', async () => {
+    dir = makeTmpDir('*.log\n');
+
+    await appendToBfsignore(dir, []);
+
+    const content = await readFile(join(dir, '.bfsignore'), 'utf-8');
+    expect(content).toBe('*.log\n');
   });
 });

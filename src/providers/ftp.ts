@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
+import type { DetailedPeerCertificate, TLSSocket } from 'node:tls';
 import * as ftp from 'basic-ftp';
-import { ProviderError } from '../core/errors.js';
+import { ProviderError, TamperDetectedError } from '../core/errors.js';
 import { assertSafeFilename, assertSafeVaultName, isSafeFilename } from '../core/fs-utils.js';
 import { hashBuffer, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
 import { buildShardHeaderFromBytes, computeShardHeaderSize, SHARD_HEADER_READ_BYTES, sidecarFilename } from '../core/shard-io.js';
@@ -49,6 +50,16 @@ function bufferToChunkedStream(buffer: Buffer, chunkSize = UPLOAD_CHUNK_SIZE): R
   });
 }
 
+/** Colon-hex SHA-256 fingerprint shape: 32 hex byte-pairs joined by ':' (the
+ * form Node's `X509Certificate.fingerprint256` / `getPeerCertificate().fingerprint256`
+ * and `openssl x509 -fingerprint -sha256` produce). Case-insensitive. */
+const CERT_FINGERPRINT_RE = /^([0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$/;
+
+/** True when `value` is a well-formed colon-hex SHA-256 certificate fingerprint. */
+function isValidCertFingerprint(value: string): boolean {
+  return CERT_FINGERPRINT_RE.test(value.trim());
+}
+
 /**
  * Extracts the numeric FTP reply code from a basic-ftp error (FTPError carries
  * `code`, e.g. 550 = file unavailable, 530 = not logged in). Returns null when
@@ -84,6 +95,13 @@ export class FtpProvider implements StorageProvider {
   private password: string;
   private readonly basePath: string;
   private readonly secure: boolean;
+  // Pinned FTPS certificate fingerprint (colon-hex SHA-256), or null when no pin
+  // is configured. Non-secret — travels in the location map like the SSH host-key
+  // pin, so recovery can show the operator which server identity it will trust.
+  private readonly certFingerprint: Nullable<string>;
+  // TOFU opt-in for non-interactive runs: trust whatever certificate the server
+  // presents on first connect when no pin is set (mirrors SSH --accept-new-host-key).
+  private readonly acceptNewCert: boolean;
   private readonly io: ProviderIO;
   private vaultName: Nullable<string> = null;
   // One-shot guard so the plaintext-FTP warning fires once per provider instance
@@ -103,7 +121,12 @@ export class FtpProvider implements StorageProvider {
     this.user = typeof c.user === 'string' ? c.user : '';
     this.password = typeof c.password === 'string' ? c.password : '';
     this.basePath = typeof c.path === 'string' ? c.path : '';
-    this.secure = c.secure === true;
+    // Secure by default: only an explicit `secure:false` opts out to plaintext FTP.
+    this.secure = c.secure !== false;
+    // Trim so a pin copied with trailing whitespace (e.g. from `openssl` output)
+    // still matches the presented fingerprint at connect time.
+    this.certFingerprint = typeof c.cert_fingerprint === 'string' ? c.cert_fingerprint.trim() : null;
+    this.acceptNewCert = c.accept_new_cert === true;
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
@@ -116,16 +139,141 @@ export class FtpProvider implements StorageProvider {
     const client = new ftp.Client(FTP_TIMEOUT_MS);
     try {
       this.io.debug(`FTP connecting to ${this.host}:${this.port}`);
-      await client.access({ host: this.host, port: this.port, user: this.user, password: this.password, secure: this.secure });
-      if (!this.secure) this.warnInsecureOnce();
-      // Belt-and-suspenders binary mode. access() already issues TYPE I via
-      // useDefaultSettings(); a bare repeat per session is cheap insurance
-      // against any control-channel state drift between auth and STOR.
+      await this.accessWithCertTrust(client);
+      // Belt-and-suspenders binary mode. access()/useDefaultSettings() already
+      // issue TYPE I; a bare repeat per session is cheap insurance against any
+      // control-channel state drift between auth and STOR.
       await client.send('TYPE I');
       return await op(client);
     } catch (err) {
-      if (err instanceof ProviderError) throw err;
+      // A pin mismatch is a TamperDetectedError (extends BfsError, not
+      // ProviderError) and MUST survive to the caller — wrapping it into a generic
+      // ProviderError would erase the MITM signal.
+      if (err instanceof ProviderError || err instanceof TamperDetectedError) throw err;
       throw new ProviderError(fmtFor(this.io.lang, 'ftp_operation_failed', this.host, String(this.port), err instanceof Error ? err.message : String(err)));
+    } finally {
+      client.close();
+    }
+  }
+
+  /**
+   * Connects `client` to the server, applying the FTPS certificate-trust
+   * decision BEFORE login when TLS is enabled.
+   *
+   * For `secure:true` the connection is driven step-by-step
+   * (connect → useTLS → verify certificate → login) rather than via the bundled
+   * `access()`, because `access()` sends the password (PASS) as part of login
+   * immediately after the TLS upgrade. The pin/TOFU check therefore has to happen
+   * between `useTLS` and `login`, so a mismatching or untrusted certificate aborts
+   * before any credential crosses the wire. `rejectUnauthorized:false` lets a
+   * self-signed certificate complete the handshake; trust is then established by
+   * the pinned fingerprint (or TOFU), not the CA chain.
+   *
+   * @throws TamperDetectedError when a configured pin does not match the presented
+   *   certificate; ProviderError when trust cannot be established (no pin, no TOFU
+   *   opt-in, non-interactive) or the operator declines.
+   */
+  private async accessWithCertTrust(client: ftp.Client, quiet = false): Promise<void> {
+    if (!this.secure) {
+      await client.access({ host: this.host, port: this.port, user: this.user, password: this.password, secure: false });
+      if (!quiet) this.warnInsecureOnce();
+      return;
+    }
+    await client.connect(this.host, this.port);
+    await client.useTLS({ rejectUnauthorized: false, host: this.host });
+    const cert = this.readPeerCertificate(client);
+    await this.decideCertTrust(cert);
+    await client.login(this.user, this.password);
+    await client.useDefaultSettings();
+  }
+
+  /**
+   * Reads the peer certificate off the client's (now TLS-upgraded) control
+   * socket. Uses a structural check for `getPeerCertificate` rather than
+   * `instanceof tls.TLSSocket` so the same path works over a real TLS socket and
+   * an in-memory test double.
+   *
+   * @throws ProviderError when the socket did not upgrade to TLS or presents no
+   *   certificate.
+   */
+  private readPeerCertificate(client: ftp.Client): DetailedPeerCertificate {
+    const socket = client.ftp.socket as TLSSocket;
+    if (typeof socket.getPeerCertificate !== 'function') {
+      throw new ProviderError(fmtFor(this.io.lang, 'ftp_tls_not_established', this.host));
+    }
+    const cert = socket.getPeerCertificate(true);
+    if (cert === null || typeof cert.fingerprint256 !== 'string' || cert.fingerprint256.length === 0) {
+      throw new ProviderError(fmtFor(this.io.lang, 'ftp_tls_not_established', this.host));
+    }
+    return cert;
+  }
+
+  /**
+   * Decides whether to trust the presented FTPS certificate, mirroring the SSH
+   * host-key trust ladder:
+   *   - pin set → trust only when the fingerprint matches; mismatch is tamper.
+   *   - no pin + `accept_new_cert` → trust on first use (non-interactive opt-in).
+   *   - no pin + interactive → show the operator the fingerprint and kind, confirm.
+   *   - no pin + non-interactive → fail closed (cannot establish trust).
+   *
+   * @throws TamperDetectedError on a pin mismatch; ProviderError when trust cannot
+   *   be established or the operator declines.
+   */
+  private async decideCertTrust(cert: DetailedPeerCertificate): Promise<void> {
+    const presented = cert.fingerprint256;
+    if (this.certFingerprint !== null) {
+      if (presented.toUpperCase() === this.certFingerprint.toUpperCase()) return;
+      throw new TamperDetectedError(fmtFor(this.io.lang, 'ftp_cert_pin_mismatch', `${this.host}:${this.port}`, this.certFingerprint, presented));
+    }
+    if (this.acceptNewCert) return;
+    if (this.io.interactive === false) {
+      throw new ProviderError(fmtFor(this.io.lang, 'ftp_cert_untrusted', `${this.host}:${this.port}`, presented));
+    }
+    const approved = await this.io.confirm(fmtFor(this.io.lang, 'ftp_cert_confirm', `${this.host}:${this.port}`, this.certKindLabel(cert), presented));
+    if (!approved) {
+      throw new ProviderError(fmtFor(this.io.lang, 'ftp_cert_declined', `${this.host}:${this.port}`));
+    }
+  }
+
+  /** True when the certificate is self-signed (its issuer certificate is itself). */
+  private isSelfSigned(cert: DetailedPeerCertificate): boolean {
+    return cert.raw !== undefined && cert.issuerCertificate !== undefined && cert.issuerCertificate !== null && Buffer.isBuffer(cert.raw) && Buffer.isBuffer(cert.issuerCertificate.raw) && cert.raw.equals(cert.issuerCertificate.raw);
+  }
+
+  /**
+   * Human-readable certificate kind shown at the trust prompt, so the operator
+   * distinguishes an expected self-signed HomeLab certificate from a CA-signed
+   * one (trusted or not). Self-signed is decided structurally; CA trust reflects
+   * the standard chain validation Node computes even under `rejectUnauthorized:false`.
+   */
+  private certKindLabel(cert: DetailedPeerCertificate): string {
+    if (this.isSelfSigned(cert)) return tFor(this.io.lang, 'ftp_cert_kind_self_signed');
+    return tFor(this.io.lang, 'ftp_cert_kind_ca');
+  }
+
+  /**
+   * Opens a throwaway TLS connection to capture the server's certificate for
+   * trust-on-first-use during interactive configuration: shows the operator the
+   * fingerprint and kind, and returns the pin to persist once they accept. No
+   * login is attempted — the certificate is presented during the handshake,
+   * before any credential is needed.
+   *
+   * @throws ProviderError when the operator declines or TLS does not establish.
+   */
+  private async captureCert(io: ProviderIO, host: string, port: number): Promise<{ fingerprint: string; selfSigned: boolean }> {
+    const client = new ftp.Client(FTP_TIMEOUT_MS);
+    try {
+      await client.connect(host, port);
+      await client.useTLS({ rejectUnauthorized: false, host });
+      const cert = this.readPeerCertificate(client);
+      const fingerprint = cert.fingerprint256;
+      const selfSigned = this.isSelfSigned(cert);
+      const kind = selfSigned ? tFor(io.lang, 'ftp_cert_kind_self_signed') : tFor(io.lang, 'ftp_cert_kind_ca');
+      const approved = await io.confirm(fmtFor(io.lang, 'ftp_cert_confirm', `${host}:${port}`, kind, fingerprint));
+      if (!approved) {
+        throw new ProviderError(fmtFor(io.lang, 'ftp_cert_declined', `${host}:${port}`));
+      }
+      return { fingerprint, selfSigned };
     } finally {
       client.close();
     }
@@ -275,7 +423,7 @@ export class FtpProvider implements StorageProvider {
    * @returns the password that authenticated (added to the recovery pool)
    * @throws ProviderError when the operator declines (host or blank password)
    */
-  async connectForRecovery(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<string | null> {
+  async connectForRecovery(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<Nullable<string>> {
     const target = this.port === 21 ? this.host : `${this.host}:${this.port}`;
     const remotePath = this.basePath.length > 0 ? this.basePath : '/';
     if (options?.trustLocation === true) {
@@ -628,7 +776,7 @@ export class FtpProvider implements StorageProvider {
    * @returns Sidecar bytes (BFSH format) or null when absent
    * @throws ProviderError on a transport failure other than "not found"
    */
-  async downloadHeaderSidecar(ref: RemoteRef, _maxBytes: number): Promise<Buffer | null> {
+  async downloadHeaderSidecar(ref: RemoteRef, _maxBytes: number): Promise<Nullable<Buffer>> {
     assertSafeFilename(ref.path);
     const remotePath = `${this.vaultPath()}/${sidecarFilename(ref.path)}`;
     return this.withClient(async (client) => {
@@ -656,7 +804,10 @@ export class FtpProvider implements StorageProvider {
   private async readHeaderWindowDirect(remotePath: string, maxBytes: number): Promise<Buffer> {
     const client = new ftp.Client(FTP_TIMEOUT_MS);
     try {
-      await client.access({ host: this.host, port: this.port, user: this.user, password: this.password, secure: this.secure });
+      // Quiet: verify is the silent header-inspection path (no plaintext warning).
+      // A certificate pin mismatch still throws TamperDetectedError here, which
+      // verifyShard re-throws rather than folding into an `unverifiable` result.
+      await this.accessWithCertTrust(client, true);
       await client.send('TYPE I');
       const totalSize = await client.size(remotePath);
       return totalSize <= maxBytes ? await this.downloadToBuffer(client, remotePath) : await this.collectBounded(client, remotePath, maxBytes);
@@ -686,6 +837,10 @@ export class FtpProvider implements StorageProvider {
     try {
       headerBytes = await this.readHeaderWindowDirect(remotePath, SHARD_HEADER_READ_BYTES);
     } catch (err) {
+      // A certificate pin mismatch is a deliberate MITM signal, not an
+      // "unverifiable" transport hiccup — surface it so verify/recovery refuses
+      // the tampered host instead of silently degrading.
+      if (err instanceof TamperDetectedError) throw err;
       switch (ftpReplyCode(err)) {
         case 530:
           return { ok: false, reason: 'auth_failed', detail: fmtFor(lang, 'verify_shard_auth_failed', this.id, ref.path) };
@@ -727,7 +882,18 @@ export class FtpProvider implements StorageProvider {
 
     const port = portStr.length === 0 ? 21 : Number(portStr);
 
-    return { host, port, user, password, path: remotePath, secure };
+    const config: Record<string, unknown> = { host, port, user, password, path: remotePath, secure };
+
+    // Trust-on-first-use: when TLS is enabled, connect once to read the server's
+    // certificate, show the operator its fingerprint and kind, and persist the pin
+    // once they accept — so later connections verify the identity, not the CA chain.
+    if (secure) {
+      const { fingerprint, selfSigned } = await this.captureCert(io, host, port);
+      config.cert_fingerprint = fingerprint;
+      config.cert_self_signed = selfSigned;
+    }
+
+    return config;
   }
 
   /**
@@ -749,7 +915,8 @@ export class FtpProvider implements StorageProvider {
    *         port/secure flags are invalid, or final config fails validation
    */
   async configureFromFlags(input: CliProviderInput): Promise<Record<string, unknown>> {
-    const config: Record<string, unknown> = { port: 21, secure: false };
+    // Secure by default (an explicit `--secure false` / `"secure": false` opts out).
+    const config: Record<string, unknown> = { port: 21, secure: true };
 
     const cfgFile = findStringFlag(input.rawArgs, '--config-file');
     if (cfgFile !== null && cfgFile.length > 0) {
@@ -768,6 +935,13 @@ export class FtpProvider implements StorageProvider {
       if (typeof obj.password === 'string') config.password = obj.password;
       if (typeof obj.path === 'string') config.path = obj.path;
       if (obj.secure !== undefined) config.secure = obj.secure === true;
+      if (typeof obj.cert_fingerprint === 'string') {
+        if (!isValidCertFingerprint(obj.cert_fingerprint)) {
+          throw new ProviderError(tFor(this.io.lang, 'ftp_cert_fingerprint_invalid'));
+        }
+        config.cert_fingerprint = obj.cert_fingerprint.trim();
+      }
+      if (obj.accept_new_cert !== undefined) config.accept_new_cert = obj.accept_new_cert === true;
     }
 
     const inlineHost = findStringFlag(input.rawArgs, '--host');
@@ -801,6 +975,20 @@ export class FtpProvider implements StorageProvider {
       } else {
         throw new ProviderError(tFor(this.io.lang, 'ftp_inline_secure_invalid'));
       }
+    }
+
+    const inlineCertFp = findStringFlag(input.rawArgs, '--cert-fingerprint');
+    if (inlineCertFp !== null) {
+      if (!isValidCertFingerprint(inlineCertFp)) {
+        throw new ProviderError(tFor(this.io.lang, 'ftp_cert_fingerprint_invalid'));
+      }
+      config.cert_fingerprint = inlineCertFp.trim();
+    }
+
+    // Presence-only flag (no value): checked directly, not via findStringFlag,
+    // which would consume the following token (e.g. `--host`) as its value.
+    if (input.rawArgs.includes('--accept-new-cert')) {
+      config.accept_new_cert = true;
     }
 
     if (typeof config.host !== 'string' || config.host.length === 0) {
@@ -846,6 +1034,16 @@ export class FtpProvider implements StorageProvider {
       }
     }
 
+    const certFp = config.cert_fingerprint;
+    if (certFp !== undefined && certFp !== null) {
+      if (typeof certFp !== 'string' || !isValidCertFingerprint(certFp)) {
+        errors.push(tFor(lang, 'ftp_cert_fingerprint_invalid'));
+      } else if (config.secure === false) {
+        // A certificate pin is meaningless without TLS to present a certificate.
+        errors.push(tFor(lang, 'ftp_cert_pin_requires_secure'));
+      }
+    }
+
     return errors;
   }
 
@@ -859,7 +1057,15 @@ export class FtpProvider implements StorageProvider {
     const user = typeof config.user === 'string' ? config.user : '';
     const remotePath = typeof config.path === 'string' ? config.path : '';
     const secure = config.secure === true;
-    return fmtFor(this.io.lang, 'ftp_describe_config', host, port, user, remotePath, String(secure));
+    const base = fmtFor(this.io.lang, 'ftp_describe_config', host, port, user, remotePath, String(secure));
+    const certFp = typeof config.cert_fingerprint === 'string' ? config.cert_fingerprint : null;
+    if (certFp === null) return base;
+    // The certificate kind is known only when TOFU-capture recorded it; a pin
+    // supplied by flag has no captured kind, so show the fingerprint without
+    // claiming self-signed vs CA.
+    if (typeof config.cert_self_signed !== 'boolean') return fmtFor(this.io.lang, 'ftp_describe_cert_nokind', base, certFp);
+    const kind = config.cert_self_signed ? tFor(this.io.lang, 'ftp_cert_kind_self_signed') : tFor(this.io.lang, 'ftp_cert_kind_ca');
+    return fmtFor(this.io.lang, 'ftp_describe_cert', base, certFp, kind);
   }
 
   /**
@@ -961,7 +1167,7 @@ const ftpFactory: ProviderFactory = {
   create: (config, io) => new FtpProvider(config, io),
   help(): ProviderHelp {
     return {
-      usage: '[--host <h>] [--port <n>] [--user <u>] [--password <p>] ' + '[--path <p>] [--secure <b>] [--config-file <path>]',
+      usage: '[--host <h>] [--port <n>] [--user <u>] [--password <p>] ' + '[--path <p>] [--secure <b>] [--cert-fingerprint <fp>] [--accept-new-cert] [--config-file <path>]',
       description: tFor(this.lang, 'ftp_help_description'),
       flags: [
         { flag: '--host <host>', description: tFor(this.lang, 'ftp_help_flag_host_desc') },
@@ -970,6 +1176,8 @@ const ftpFactory: ProviderFactory = {
         { flag: '--password <password>', description: tFor(this.lang, 'ftp_help_flag_password_desc') },
         { flag: '--path <path>', description: tFor(this.lang, 'ftp_help_flag_path_desc') },
         { flag: '--secure <bool>', description: tFor(this.lang, 'ftp_help_flag_secure_desc') },
+        { flag: '--cert-fingerprint <fp>', description: tFor(this.lang, 'ftp_help_flag_cert_fingerprint_desc') },
+        { flag: '--accept-new-cert', description: tFor(this.lang, 'ftp_help_flag_accept_new_cert_desc') },
         { flag: '--config-file <path>', description: tFor(this.lang, 'ftp_help_flag_config_file_desc') },
       ],
       examples: [

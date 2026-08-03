@@ -191,5 +191,48 @@ export async function suiteA(vaultDir: string): Promise<SuiteResult> {
     }),
   );
 
+  // ── Foreign-vault collision rejection (P1-C) ─────────────────────────────
+  // init must refuse a target location that already holds a DIFFERENT backup of
+  // the same name (foreign vault_id). Machine A owns "docs"; machine B then
+  // inits "docs" at the same media. Guards exit≠0, the user-facing collision
+  // message (EN or PL), and that B's config is not written.
+
+  tests.push(
+    await runTest('A13', 'bfs init onto a location holding a foreign backup → abort', async () => {
+      const base = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-smoke-collision-'));
+      const srcA = path.join(base, 'A');
+      const srcB = path.join(base, 'B');
+      const d0 = path.join(base, 'm0');
+      const d1 = path.join(base, 'm1');
+      const d2 = path.join(base, 'm2');
+      try {
+        await fs.mkdir(srcA);
+        await fs.mkdir(srcB);
+        await fs.writeFile(path.join(srcA, 'f.txt'), 'hello');
+
+        const media = ['--provider', `local:a0 --path ${d0}`, '--provider', `local:a1 --path ${d1}`, '--provider', `local:a2 --path ${d2}`];
+        const initArgs = ['init', 'docs', '--ci', '--no-enc', '--no-compress', '--data-shards', '2', '--parity-shards', '1', ...media];
+
+        const ra = runBfs(initArgs, srcA);
+        assert(ra.status === 0, `machine A init should succeed, got exit ${ra.status ?? 'null'}: ${(ra.stdout + ra.stderr).slice(0, 200)}`);
+        const rp = runBfs(['push', '--new'], srcA);
+        assert(rp.status === 0, `machine A push should succeed, got exit ${rp.status ?? 'null'}: ${(rp.stdout + rp.stderr).slice(0, 200)}`);
+
+        const rb = runBfs(initArgs, srcB);
+        assert(rb.status !== 0, `machine B init should abort on collision, got exit ${rb.status ?? 'null'}`);
+        const out = rb.stdout + rb.stderr;
+        assert(out.includes('already holds a different backup') || out.includes('istnieje już inna kopia'), `expected collision message, got: ${out.slice(0, 300)}`);
+
+        const cfgExists = await fs
+          .stat(path.join(srcB, '.bfs', 'config.json'))
+          .then(() => true)
+          .catch(() => false);
+        assert(!cfgExists, 'machine B config.json must NOT be written when the location holds another backup');
+      } finally {
+        await fs.rm(base, { recursive: true, force: true }).catch(() => {});
+      }
+    }),
+  );
+
   return { name: 'Suite A — CLI bootstrap', tests };
 }

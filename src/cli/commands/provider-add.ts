@@ -3,6 +3,7 @@ import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO, providerRegistry, validateProviderId } from '../../providers/provider.js';
 import type { CliProviderInput, ProviderConfig } from '../../types/index.js';
 import { readConfig, writeConfig } from '../../vault/config.js';
+import { assertNoForeignVault } from '../../vault/vault-collision.js';
 import { resolveCwd } from '../cwd.js';
 import { validateProviderIdsUnique } from '../parse-provider-spec.js';
 import { promptWithRawMode } from '../prompt.js';
@@ -169,6 +170,16 @@ export function registerProviderAdd(providerCmd: Command): void {
         // Interactive: validate + probe with in-place recovery (retry / re-enter
         // / abort), so a typo in a connection field doesn't discard the session.
         providerConfig = await probeProviderWithRecovery({ factory, ref: { id: name, type, adapterPackage }, io, vaultName: config.vault_name });
+      }
+
+      // Refuse to add a provider whose location already holds a DIFFERENT backup
+      // (foreign vault_id) — otherwise the next push would silently overwrite it.
+      try {
+        const guardInstance = factory.create({ id: name, type, adapterPackage, config: providerConfig }, io);
+        await assertNoForeignVault(guardInstance, config.vault_name, config.vault_id, io);
+      } catch (err) {
+        error(err instanceof Error ? err.message : String(err));
+        throw new CommandAbort();
       }
 
       const newProvider: ProviderConfig = { id: name, type, adapterPackage, config: providerConfig };

@@ -79,7 +79,7 @@ describe('clear', () => {
     expect(calledPaths.every((p: string) => !p.startsWith(configDir))).toBe(true);
   });
 
-  // ─── Toleruje brakujące pliki ─────────────────────────────────────────────
+  // ─── Tolerates missing files ──────────────────────────────────────────────
 
   it('should succeed even when files do not exist (unlink rejects)', async () => {
     const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
@@ -90,7 +90,7 @@ describe('clear', () => {
     expect(result).toBe('ok');
   });
 
-  // ─── Komunikat sukcesu ────────────────────────────────────────────────────
+  // ─── Success message ────────────────────────────────────────────────────
 
   it('should print clear_done on success', async () => {
     await runCmd(['clear']);

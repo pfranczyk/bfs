@@ -117,6 +117,61 @@ export async function suiteP(): Promise<SuiteResult> {
         assert(combined.includes('--restore-headers'), `expected --restore-headers in repair help, got:\n${combined}`);
       }),
     );
+
+    // `--lang` persists the choice in global settings, so these runs get their
+    // own config home — otherwise the suite would leave the machine (and every
+    // later suite in the same run) switched to whichever language it asked for.
+    const helpLangDir = path.join(tmpBase, 'lang-home');
+    await fs.mkdir(helpLangDir, { recursive: true });
+    const helpEnv: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: helpLangDir };
+
+    /** The `--rebuild` entry of a help listing, anchored to the option line. */
+    const rebuildEntry = (out: string): string => {
+      const match = /^[ \t]+--rebuild\b/m.exec(out);
+      if (match === null) return '';
+      const rest = out.slice(match.index + match[0].length);
+      const next = rest.search(/\n[ \t]+-/);
+      return next === -1 ? rest : rest.slice(0, next);
+    };
+
+    // P7 — the help must show HOW to invoke repair. The command takes a device
+    // name and a settings string, but both arrive as unparsed operands, so the
+    // generated usage line (`bfs repair [options]`) reveals neither: an operator
+    // reading the help cannot work out the syntax.
+    tests.push(
+      await runTest('P7', 'bfs repair --help shows the device + settings syntax', () => {
+        const r = runBfs(['--lang', 'en', 'repair', '--help'], sourceDir, undefined, helpEnv);
+        assert(r.status === 0, `repair --help exit ${r.status ?? 'null'}\n${r.stdout}\n${r.stderr}`);
+        const combined = r.stdout + r.stderr;
+        assert(/bfs repair\s+\S+\s+["'<]/.test(combined), `expected the device + settings syntax in the help, got:\n${combined}`);
+        assert(/--rebuild/.test(combined) && /example|przykład|e\.g\./i.test(combined), `expected a worked example in the help, got:\n${combined}`);
+        // An example must be runnable as printed. A `type:name` prefix means
+        // "migrate to a new device", which is rejected outright when the name is
+        // one the backup already uses — so it cannot illustrate repairing an
+        // existing device.
+        const examples = combined.split('\n').filter((line) => /^\s*bfs repair\b/.test(line));
+        assert(examples.length > 0, `expected example invocations in the help, got:\n${combined}`);
+        for (const line of examples) {
+          assert(!/"\s*[a-z0-9-]+:[a-z0-9-]+/i.test(line), `example uses the migrate-to-a-new-device form, which fails for an existing device:\n${line}`);
+        }
+      }),
+    );
+
+    // P8 — a part that is present but rotted is repaired by the same flag as a
+    // lost one (rebuildShardInPlace reconstructs and uploads unconditionally),
+    // yet the description mentions only loss, so nobody in that situation tries
+    // it — while `prune`'s refusal already points them at this very command.
+    tests.push(
+      await runTest('P8', 'bfs repair --help says --rebuild also fixes damaged data (EN + PL)', () => {
+        const en = runBfs(['--lang', 'en', 'repair', '--help'], sourceDir, undefined, helpEnv);
+        const enEntry = rebuildEntry(en.stdout + en.stderr);
+        assert(/damaged|corrupt/i.test(enEntry), `--rebuild must mention damaged data, its entry reads:\n${enEntry}`);
+
+        const pl = runBfs(['--lang', 'pl', 'repair', '--help'], sourceDir, undefined, helpEnv);
+        const plEntry = rebuildEntry(pl.stdout + pl.stderr);
+        assert(/uszkodzon/i.test(plEntry), `Polish --rebuild entry must mention damaged data, it reads:\n${plEntry}`);
+      }),
+    );
   } finally {
     await fs.rm(tmpBase, { recursive: true, force: true }).catch(() => {});
   }

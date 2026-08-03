@@ -5,7 +5,23 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LockConcurrentActiveError, LockPartialStatePushError } from '../../src/core/errors.js';
 import { writeJsonAtomic } from '../../src/core/fs-utils.js';
-import { assertNoActiveLock, isLockStale, isPidAlive, LOCK_FORMAT_VERSION, LOCK_STALE_MS, type PushLock, pushLockPath, type RepairLock, readLock, removeLock, repairLockPath, writeLockAtomic } from '../../src/vault/lockfile.js';
+import {
+  acquireCachePushLock,
+  acquirePushLock,
+  acquireRepairLock,
+  isLockLive,
+  isLockStale,
+  isPidAlive,
+  LOCK_FORMAT_VERSION,
+  LOCK_STALE_MS,
+  type PushLock,
+  pushLockPath,
+  type RepairLock,
+  readLock,
+  removeLock,
+  repairLockPath,
+  writeLockAtomic,
+} from '../../src/vault/lockfile.js';
 
 function makePushLock(overrides: Partial<PushLock> = {}): PushLock {
   return {
@@ -168,11 +184,26 @@ describe('isLockStale', () => {
   });
 });
 
-describe('assertNoActiveLock — push operation', () => {
+describe('isLockLive', () => {
+  it('should return true for the current process with a fresh timestamp', () => {
+    expect(isLockLive({ pid: process.pid, started_at: new Date().toISOString() })).toBe(true);
+  });
+
+  it('should return false when the process is dead', () => {
+    expect(isLockLive({ pid: 0x7fffffff, started_at: new Date().toISOString() })).toBe(false);
+  });
+
+  it('should return false when the lock is stale even though the pid is alive', () => {
+    const stale = new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString();
+    expect(isLockLive({ pid: process.pid, started_at: stale })).toBe(false);
+  });
+});
+
+describe('acquirePushLock — fresh push', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-asserta-push-'));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-acqpush-'));
     await fs.mkdir(path.join(tmpDir, '.bfs'), { recursive: true });
   });
 
@@ -180,45 +211,74 @@ describe('assertNoActiveLock — push operation', () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('should pass when no lockfile exists', async () => {
-    await expect(assertNoActiveLock(tmpDir, 'push')).resolves.toBeUndefined();
+  it('should create push.lock with the current pid when the vault is clean', async () => {
+    await acquirePushLock(tmpDir, makePushLock());
+
+    const written = await readLock<PushLock>(pushLockPath(tmpDir));
+    expect(written?.pid).toBe(process.pid);
   });
 
-  it('should throw LockConcurrentActiveError when a live push.lock exists', async () => {
+  it('should reject a later acquisition once a live lock is already held', async () => {
+    await acquirePushLock(tmpDir, makePushLock());
+
+    await expect(acquirePushLock(tmpDir, makePushLock())).rejects.toThrow(LockConcurrentActiveError);
+  });
+
+  // The core regression guard: two GENUINELY concurrent acquisitions race for the
+  // same path. The exclusive create (O_EXCL) is the reservation, so exactly one
+  // wins — a non-atomic read-then-write would let BOTH through (both read no lock,
+  // both write) and corrupt version state. This is the test that goes RED on a
+  // regression to non-atomic acquisition; the sequential case above would not.
+  it('should admit exactly one of two concurrent acquisitions (TOCTOU race closed)', async () => {
+    const results = await Promise.allSettled([acquirePushLock(tmpDir, makePushLock()), acquirePushLock(tmpDir, makePushLock())]);
+
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+  });
+
+  it('should reject with ConcurrentActive when a live push.lock already exists', async () => {
     await writeLockAtomic(pushLockPath(tmpDir), makePushLock());
 
-    await expect(assertNoActiveLock(tmpDir, 'push')).rejects.toThrow(LockConcurrentActiveError);
+    await expect(acquirePushLock(tmpDir, makePushLock())).rejects.toThrow(LockConcurrentActiveError);
   });
 
-  it('should throw LockPartialStatePushError when a stale push.lock exists', async () => {
-    const stale = makePushLock({ pid: 0x7fffffff, started_at: new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString(), version: 42 });
-    await writeLockAtomic(pushLockPath(tmpDir), stale);
+  it('should reject with PartialState carrying the version when a dead push.lock leftover exists', async () => {
+    const dead = makePushLock({ pid: 0x7fffffff, started_at: new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString(), version: 42 });
+    await writeLockAtomic(pushLockPath(tmpDir), dead);
 
-    const promise = assertNoActiveLock(tmpDir, 'push');
+    const promise = acquirePushLock(tmpDir, makePushLock());
 
     await expect(promise).rejects.toThrow(LockPartialStatePushError);
     await expect(promise).rejects.toMatchObject({ version: 42 });
   });
 
-  it('should throw LockConcurrentActiveError when a live repair.lock exists', async () => {
-    await writeLockAtomic(repairLockPath(tmpDir), makeRepairLock());
+  // A racing winner may have created the file but not finished writing its
+  // JSON yet: an empty/torn read must classify as partial state, never crash.
+  it('should treat an empty/torn push.lock as partial state', async () => {
+    await fs.writeFile(pushLockPath(tmpDir), '', 'utf-8');
 
-    await expect(assertNoActiveLock(tmpDir, 'push')).rejects.toThrow(LockConcurrentActiveError);
+    await expect(acquirePushLock(tmpDir, makePushLock())).rejects.toThrow(LockPartialStatePushError);
   });
 
-  it('should throw LockPartialStatePushError when a stale repair.lock exists', async () => {
-    const stale = makeRepairLock({ pid: 0x7fffffff, started_at: new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString() });
-    await writeLockAtomic(repairLockPath(tmpDir), stale);
+  it('should reject with ConcurrentActive when a live repair.lock exists', async () => {
+    await writeLockAtomic(repairLockPath(tmpDir), makeRepairLock());
 
-    await expect(assertNoActiveLock(tmpDir, 'push')).rejects.toThrow(LockPartialStatePushError);
+    await expect(acquirePushLock(tmpDir, makePushLock())).rejects.toThrow(LockConcurrentActiveError);
+  });
+
+  it('should reject with PartialState when a dead repair.lock leftover exists', async () => {
+    const dead = makeRepairLock({ pid: 0x7fffffff, started_at: new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString() });
+    await writeLockAtomic(repairLockPath(tmpDir), dead);
+
+    await expect(acquirePushLock(tmpDir, makePushLock())).rejects.toThrow(LockPartialStatePushError);
   });
 });
 
-describe('assertNoActiveLock — repair operation', () => {
+describe('acquireCachePushLock — push --cache resume', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-asserta-repair-'));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-acqcache-'));
     await fs.mkdir(path.join(tmpDir, '.bfs'), { recursive: true });
   });
 
@@ -226,33 +286,90 @@ describe('assertNoActiveLock — repair operation', () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('should pass when no lockfile exists', async () => {
-    await expect(assertNoActiveLock(tmpDir, 'repair')).resolves.toBeUndefined();
+  it('should take over a dead push.lock leftover and write fresh content', async () => {
+    const dead = makePushLock({ pid: 0x7fffffff, version: 7 });
+    await writeLockAtomic(pushLockPath(tmpDir), dead);
+
+    await acquireCachePushLock(tmpDir, makePushLock({ version: 8 }));
+
+    const written = await readLock<PushLock>(pushLockPath(tmpDir));
+    expect(written?.pid).toBe(process.pid);
+    expect(written?.version).toBe(8);
   });
 
-  it('should throw LockConcurrentActiveError when a live repair.lock exists', async () => {
+  it('should take over its own live lock (re-entrant resume of this process)', async () => {
+    await writeLockAtomic(pushLockPath(tmpDir), makePushLock());
+
+    await expect(acquireCachePushLock(tmpDir, makePushLock())).resolves.toBeUndefined();
+  });
+
+  // Previously --cache skipped the concurrency check entirely; now a live
+  // repair blocks it.
+  it('should reject when a live repair.lock is present', async () => {
     await writeLockAtomic(repairLockPath(tmpDir), makeRepairLock());
 
-    await expect(assertNoActiveLock(tmpDir, 'repair')).rejects.toThrow(LockConcurrentActiveError);
+    await expect(acquireCachePushLock(tmpDir, makePushLock())).rejects.toThrow(LockConcurrentActiveError);
+  });
+});
+
+describe('acquireRepairLock', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-acqrepair-'));
+    await fs.mkdir(path.join(tmpDir, '.bfs'), { recursive: true });
   });
 
-  it('should pass when a stale repair.lock exists (idempotent retry semantics)', async () => {
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should create repair.lock with the current pid when the vault is clean', async () => {
+    await acquireRepairLock(tmpDir, makeRepairLock());
+
+    const written = await readLock<RepairLock>(repairLockPath(tmpDir));
+    expect(written?.pid).toBe(process.pid);
+  });
+
+  it('should reject a later acquisition once a live lock is already held', async () => {
+    await acquireRepairLock(tmpDir, makeRepairLock());
+
+    await expect(acquireRepairLock(tmpDir, makeRepairLock())).rejects.toThrow(LockConcurrentActiveError);
+  });
+
+  // With no pre-existing lock, two concurrent repairs race for repair.lock and
+  // the exclusive create admits exactly one. (Takeover of a *pre-existing* stale
+  // lock under concurrency retains a narrow residual race — see decisions.md.)
+  it('should admit exactly one of two concurrent acquisitions (TOCTOU race closed)', async () => {
+    const results = await Promise.allSettled([acquireRepairLock(tmpDir, makeRepairLock()), acquireRepairLock(tmpDir, makeRepairLock())]);
+
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+  });
+
+  it('should take over a stale repair.lock (idempotent retry)', async () => {
     const stale = makeRepairLock({ pid: 0x7fffffff, started_at: new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString() });
     await writeLockAtomic(repairLockPath(tmpDir), stale);
 
-    await expect(assertNoActiveLock(tmpDir, 'repair')).resolves.toBeUndefined();
+    await acquireRepairLock(tmpDir, makeRepairLock());
+
+    const written = await readLock<RepairLock>(repairLockPath(tmpDir));
+    expect(written?.pid).toBe(process.pid);
   });
 
-  it('should pass when a live push.lock exists (repair cleans up after push)', async () => {
+  it('should reject when a live push.lock is present (first-to-start wins)', async () => {
     await writeLockAtomic(pushLockPath(tmpDir), makePushLock());
 
-    await expect(assertNoActiveLock(tmpDir, 'repair')).resolves.toBeUndefined();
+    await expect(acquireRepairLock(tmpDir, makeRepairLock())).rejects.toThrow(LockConcurrentActiveError);
   });
 
-  it('should pass when a stale push.lock exists (repair cleans up after push)', async () => {
-    const stale = makePushLock({ pid: 0x7fffffff, started_at: new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString() });
-    await writeLockAtomic(pushLockPath(tmpDir), stale);
+  it('should ignore a dead push.lock and proceed (repair recovers partial push state)', async () => {
+    const dead = makePushLock({ pid: 0x7fffffff, started_at: new Date(Date.now() - (LOCK_STALE_MS + 1000)).toISOString() });
+    await writeLockAtomic(pushLockPath(tmpDir), dead);
 
-    await expect(assertNoActiveLock(tmpDir, 'repair')).resolves.toBeUndefined();
+    await acquireRepairLock(tmpDir, makeRepairLock());
+
+    const written = await readLock<RepairLock>(repairLockPath(tmpDir));
+    expect(written?.pid).toBe(process.pid);
   });
 });

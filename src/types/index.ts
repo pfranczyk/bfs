@@ -3,10 +3,41 @@ import type { Readable } from 'node:stream';
 import type { SkippedFile } from '../core/errors.js';
 import type { PushLockFailedEntry } from '../vault/lockfile.js';
 
+/**
+ * `T` or explicit `null` — the project's canonical "present but not set" type.
+ * Also available as a global ambient (`src/types/global.d.ts`); it is defined
+ * and exported here as well so the provider contract's `Nullable` references
+ * survive tsup's .d.ts bundling into `dist/lib.d.ts` (global ambients are
+ * dropped by the bundler). Within this module the local definition shadows the
+ * global; both are the identical `T | null`.
+ */
+export type Nullable<T> = T | null;
+
 // ─── Enums ────────────────────────────────────────────────────
 
 /** Bitfield constants for BlobHeader.flags (uint32 LE). */
 export const BLOB_FLAGS = { ENCRYPTED: 0x01, COMPRESSED: 0x02 } as const;
+
+/**
+ * Blob format version written by pack. v2 keeps the 70-byte header but extends
+ * each file-table entry with a `kind` discriminator and a `created_at` timestamp,
+ * so a single per-file table carries location, integrity AND full metadata
+ * (mode/mtime/created_at) for both the raw and compressed paths — no separate
+ * metadata stream. v1 blobs (fixed entry, no kind/created_at) stay fully
+ * readable; the file-table parser dispatches on this version.
+ */
+export const BLOB_FORMAT_VERSION = 2;
+
+/**
+ * File-table entry kind (uint8, v2+). `NEW_FILE` is the only kind a full backup
+ * emits: the entry carries the file's location, integrity and metadata, and its
+ * bytes live in the data section. `METADATA_ONLY` (attributes changed, content
+ * inherited from the base) and `DELETED` (tombstone) are reserved for incremental
+ * backups — the format documents their shapes and the parser rejects them until
+ * incremental restore is implemented, so they can be added additively within
+ * format_version 2 (no further bump).
+ */
+export const BLOB_ENTRY_KIND = { NEW_FILE: 0, METADATA_ONLY: 1, DELETED: 2 } as const;
 
 /** Push behavior mode — what to do with the existing version. */
 export enum PushMode {
@@ -41,9 +72,9 @@ export interface VaultConfig {
   push_mode: PushMode;
   providers: ProviderConfig[];
   /** Overrides default .bfs/cache directory. Defaults to {rootDir}/.bfs/cache when null/absent. */
-  cache_dir?: string | null;
+  cache_dir?: Nullable<string>;
   /** Overrides default os.tmpdir() for temporary files. Defaults to os.tmpdir() when null/absent. */
-  temp_dir?: string | null;
+  temp_dir?: Nullable<string>;
   /** RAM limit for RS encoding (MB). null/undefined = auto (25% os.totalmem()). */
   max_ram_mb?: Nullable<number>;
 }
@@ -115,6 +146,18 @@ export interface VersionManifest {
   encrypted: boolean;
   shards: ManifestShard[]; // 1..N+K entries (partial-committed versions hold fewer)
   health: VersionHealth; // push: healthy/degraded/damaged from uploaded vs N+K; recovery: degraded (until verify)
+  /**
+   * true when the recorded `health` rests on payload corruption a deep verify
+   * actually read off the media. Such a verdict outlives a later shallow verify,
+   * which inspects only the header window and is blind to rot by construction —
+   * without this, the cheap check would erase the expensive one's finding. A
+   * verdict caused by an unreachable shard does NOT set it: nothing was
+   * established about the bytes, so it must retire as soon as the shard is back.
+   * Absent on manifests written before this field existed = no rot recorded.
+   */
+  health_deep_rot?: boolean;
+  /** ISO 8601 timestamp of the verify pass that produced `health`. */
+  health_checked_at?: string;
   // Streaming pipeline fields (FORMAT_VERSION=2 shards). Absent = legacy format.
   rs_striped?: boolean; // true = striped RS encoding (always for new pushes)
   rs_stripe_size?: number; // stripe size in bytes (only when rs_striped=true)
@@ -163,6 +206,20 @@ export interface CatalogDrift {
   readonly appeared: readonly string[];
 }
 
+/**
+ * A directory entry excluded from a backup because it is neither a regular file
+ * nor a directory — a symbolic link, or a special file (socket, FIFO, block or
+ * character device). Such entries are never packed into a blob (a link may be a
+ * loop; a device is not a file). The push surfaces them so the user can add them
+ * to .bfsignore or pass --allow-excluded.
+ */
+export interface ExcludedEntry {
+  /** Path relative to the scan root, forward slashes. */
+  path: string;
+  /** Why it was excluded: a symlink, or a special file. */
+  reason: 'symlink' | 'special';
+}
+
 /** Result returned by push() — successful, partial, or damaged. */
 export interface PushResult {
   version: number;
@@ -170,6 +227,8 @@ export interface PushResult {
   total_size: number;
   /** Files skipped due to read errors (non-empty only in REPL interactive mode when user accepted). */
   skipped: SkippedFile[];
+  /** Entries excluded by type (symlinks/special files); non-empty only with allowExcluded. */
+  excluded: ExcludedEntry[];
   /** Count of shards uploaded successfully (manifest.shards.length). */
   uploaded_count: number;
   /** Shards whose upload failed; mirrors .bfs/push.lock.failed for callers that need detail without re-reading the lock. */
@@ -209,6 +268,13 @@ export interface PushOptions {
    * PushDriftError.
    */
   allowDrift?: boolean;
+  /**
+   * When true, proceeds despite entries that cannot be backed up (symbolic
+   * links, special files), excluding them from the blob instead of aborting.
+   * When false/absent: interactive mode offers to add them to .bfsignore and
+   * retry; non-interactive mode throws PushExcludedError (CLI exit code 3).
+   */
+  allowExcluded?: boolean;
   /** Directory for temporary parity files during push. Defaults to cacheDir. */
   tempDir?: string;
   /** Overrides cache directory for push.blob.pending. Defaults to {rootDir}/.bfs/cache. */
@@ -234,7 +300,7 @@ export type IgnoreFilter = (relativePath: string) => boolean;
 
 export interface BlobHeader {
   magic: 'BFS\0'; // 4 bytes
-  format_version: number; // 2 bytes (uint16, value: 1)
+  format_version: number; // 2 bytes (uint16, current value: 2 — v2 file-table entries carry kind + created_at)
   vault_id: string; // 16 bytes (UUID as binary)
   flags: number; // 4 bytes (bitfield: bit 0 = encrypted, bit 1 = compressed)
   created_at: bigint; // 8 bytes (unix timestamp ms, uint64 LE)
@@ -244,15 +310,17 @@ export interface BlobHeader {
   data_offset: bigint; // 8 bytes
   data_length: bigint; // 8 bytes
 }
-// Total header size: 70 bytes
+// Total header size: 70 bytes (unchanged between v1 and v2 — the version bump is in the file-table entry)
 
 export interface FileEntry {
   path: string; // relative path (UTF-8, / separators)
+  kind: number; // BLOB_ENTRY_KIND (uint8, v2+). v1 entries default to NEW_FILE.
   size: bigint; // 8 bytes
   data_offset: bigint; // offset into data section, 8 bytes
   hash: string; // SHA-256, 32 bytes
   mode: number; // permissions, 4 bytes
   modified_at: bigint; // unix timestamp ms, 8 bytes (uint64 LE)
+  created_at: bigint; // unix timestamp ms, 8 bytes (uint64 LE; v2+; 0 = unavailable / v1)
 }
 
 // ─── Shard — binary format ───────────────────────────────────
@@ -654,7 +722,7 @@ export interface StorageProvider {
    * @throws BfsError when usesSidecar() === false (contract violation)
    * @throws ProviderError on transport failure
    */
-  downloadHeaderSidecar(ref: RemoteRef, maxBytes: number): Promise<Buffer | null>;
+  downloadHeaderSidecar(ref: RemoteRef, maxBytes: number): Promise<Nullable<Buffer>>;
 
   /**
    * Checks whether the shard under `ref` has the expected identity (vault_id,
@@ -675,9 +743,8 @@ export interface StorageProvider {
    * the entire credential interaction. The provider MUST show the operator the
    * connection target (host/endpoint) BEFORE collecting or reusing any secret —
    * BFS-core is blind to which config field is the destination vs the secret, so
-   * only the provider can present a meaningful target (see
-   * architecture/decisions.md → "Provider jest właścicielem sekretu i weryfikacji
-   * celu"). It may reuse a secret from `pool` (collected for other providers,
+   * only the provider can present a meaningful target. It may reuse a secret from
+   * `pool` (collected for other providers,
    * each labelled with its origin) or collect a fresh one via io.askSecret, MUST
    * let the operator decline, then connect + authenticate.
    *
@@ -697,7 +764,7 @@ export interface StorageProvider {
    * @throws when the operator declines or the connection/authentication fails —
    *         BFS treats it as a degraded skip of this provider
    */
-  connectForRecovery?(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<string | null>;
+  connectForRecovery?(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<Nullable<string>>;
 }
 
 /**

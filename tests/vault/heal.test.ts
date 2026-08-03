@@ -5,11 +5,11 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { packBlob } from '../../src/core/blob-pack.js';
-import { BfsError, ProviderError } from '../../src/core/errors.js';
+import { BfsError, ProviderError, TamperDetectedError } from '../../src/core/errors.js';
 import { hashBuffer, SHA256_BYTES } from '../../src/core/hash.js';
 import { createIgnoreFilter } from '../../src/core/ignore.js';
 import { rsEncode } from '../../src/core/reed-solomon.js';
-import { buildShard, buildShardHeaderFromBytes, buildShardV2, computeShardHeaderSize, parseShardHeaderFromStream, readShardHeader, uuidToBuffer } from '../../src/core/shard-io.js';
+import { buildShard, buildShardHeaderFromBytes, buildShardV2, computeShardHeaderSize, parseShardHeaderFromStream, readShardHeader, shardChecksumMatches, uuidToBuffer } from '../../src/core/shard-io.js';
 // Importing LocalFsProvider registers its factory in the global ProviderRegistry,
 // which init/push/heal resolve by string "local".
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
@@ -34,21 +34,26 @@ function localProvider(id: string, dir: string): ProviderConfig {
 }
 
 /**
- * Builds a 2+1 vault on three local providers, pushes two files, then registers
- * a fourth (unused) provider in config as a heal target. The fourth provider is
- * absent from the v1 manifest, satisfying rebuildVersion's "target must not yet
- * hold a shard for this version" invariant.
+ * Builds a vault (2+1 unless another scheme is given) on one local provider per
+ * shard, pushes two files, then registers one extra, unused provider in config
+ * as a heal target. That extra provider is absent from the v1 manifest,
+ * satisfying rebuildVersion's "target must not yet hold a shard for this
+ * version" invariant. Provider `pN` owns `providerDirs[N]` and shard N; the heal
+ * target is the last id and dir.
  */
-async function setupVault(opts: { encrypted: boolean; password?: string }): Promise<{ root: string; providerDirs: string[]; io: ProviderIO }> {
+async function setupVault(opts: { encrypted: boolean; password?: string; scheme?: { data_shards: number; parity_shards: number } }): Promise<{ root: string; providerDirs: string[]; io: ProviderIO }> {
+  const scheme = opts.scheme ?? { data_shards: 2, parity_shards: 1 };
+  const shardCount = scheme.data_shards + scheme.parity_shards;
   const root = await tmp();
-  const providerDirs = [await tmp(), await tmp(), await tmp(), await tmp()];
+  const providerDirs: string[] = [];
+  for (let i = 0; i <= shardCount; i++) providerDirs.push(await tmp());
   const { io } = createMockProviderIO();
 
   await init(root, {
     vault_name: 'heal-test',
-    scheme: { data_shards: 2, parity_shards: 1 },
+    scheme,
     encryption: { enabled: opts.encrypted, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
-    providers: providerDirs.slice(0, 3).map((d, i) => localProvider(`p${i}`, d)),
+    providers: providerDirs.slice(0, shardCount).map((d, i) => localProvider(`p${i}`, d)),
     push_mode: PushMode.NewVersion,
     io,
   });
@@ -59,7 +64,7 @@ async function setupVault(opts: { encrypted: boolean; password?: string }): Prom
 
   const config = await readConfig(root);
   if (!config) throw new Error('config missing after init');
-  await writeConfig(root, { ...config, providers: [...config.providers, localProvider('p3', providerDirs[3])] });
+  await writeConfig(root, { ...config, providers: [...config.providers, localProvider(`p${shardCount}`, providerDirs[shardCount])] });
 
   return { root, providerDirs, io };
 }
@@ -697,5 +702,153 @@ describe('rebuildShardInPlace (repair --rebuild)', () => {
     await fs.rm(path.join(setup.providerDirs[2], 'heal-test', 'shard_2.bfs.1'));
 
     await expect(rebuildShardInPlace(setup.root, 1, { providerId: 'p2', io: setup.io })).rejects.toThrow(BfsError);
+  });
+});
+
+/** Path of a version-1 shard inside a local provider's directory. */
+function shardPath(providerDir: string, shardIndex: number): string {
+  return path.join(providerDir, 'heal-test', `shard_${shardIndex}.bfs.1`);
+}
+
+/** Flips one payload bit and leaves the trailing checksum stale — plain bit-rot. */
+async function rotShardPayload(file: string): Promise<void> {
+  const data = await fs.readFile(file);
+  const pos = computeShardHeaderSize(data);
+  data.writeUInt8(data.readUInt8(pos) ^ 0x01, pos);
+  await fs.writeFile(file, data);
+}
+
+/**
+ * Flips one bit inside the header (vault_id, fixed offset 6) and leaves the
+ * trailing checksum stale — bit-rot in the region the sibling cross-check reads.
+ */
+async function rotShardHeader(file: string): Promise<void> {
+  const data = await fs.readFile(file);
+  data.writeUInt8(data.readUInt8(6) ^ 0x01, 6);
+  await fs.writeFile(file, data);
+}
+
+/**
+ * Rewrites a shard's vault_id (fixed offset 6) and re-seals the trailing
+ * checksum, so the shard stays byte-valid — the shape of a deliberate forgery
+ * rather than of medium damage.
+ */
+async function forgeShardVaultId(file: string): Promise<void> {
+  const data = await fs.readFile(file);
+  data.writeUInt8(data.readUInt8(6) ^ 0x01, 6);
+  const body = data.subarray(0, data.length - SHA256_BYTES);
+  Buffer.from(hashBuffer(body), 'hex').copy(data, data.length - SHA256_BYTES);
+  await fs.writeFile(file, data);
+}
+
+// A shard whose trailing checksum no longer matches rotted on its medium: its
+// header must not seed the version's metadata and its payload must not enter the
+// RS decode, or the repair either refuses a recoverable version or bakes the
+// damage into the rebuilt shard. A shard whose header diverges while its own
+// checksum verifies was rewritten deliberately and must still stop the repair —
+// the checksum is what tells the two apart.
+describe('rebuildVersion with a damaged sibling', () => {
+  let dirs: string[];
+
+  beforeEach(() => {
+    dirs = [];
+  });
+
+  afterEach(async () => {
+    await cleanup(dirs);
+  });
+
+  it('should rebuild from the intact siblings when one fails its own checksum', async () => {
+    const setup = await setupVault({ encrypted: false, scheme: { data_shards: 2, parity_shards: 2 } });
+    dirs = [setup.root, ...setup.providerDirs];
+    await rotShardPayload(shardPath(setup.providerDirs[1], 1));
+
+    await rebuildVersion(setup.root, 1, { removedProviderId: 'p0', targetProviderId: 'p4', io: setup.io });
+
+    // rebuildVersion moves the shard; dropping the replaced provider from config
+    // is removeProvider's half of the flow, and pull requires the provider count
+    // to match the scheme.
+    const config = await readConfig(setup.root);
+    if (!config) throw new Error('config missing after rebuild');
+    await writeConfig(setup.root, { ...config, providers: config.providers.filter((p) => p.id !== 'p0') });
+
+    // Prove the rebuilt shard carries sound bytes: drop the rotted sibling and
+    // one intact original, leaving exactly N, so the restore depends on it.
+    await fs.rm(shardPath(setup.providerDirs[1], 1));
+    await fs.rm(shardPath(setup.providerDirs[2], 2));
+    await fs.rm(path.join(setup.root, 'a.txt'));
+    await fs.rm(path.join(setup.root, 'b.txt'));
+
+    await pull(setup.root, { io: setup.io, force: true });
+
+    expect(await fs.readFile(path.join(setup.root, 'a.txt'), 'utf-8')).toBe('aaa');
+    expect(await fs.readFile(path.join(setup.root, 'b.txt'), 'utf-8')).toBe('bbb');
+  });
+
+  it('should rebuild when a sibling header rotted, instead of reporting tampering', async () => {
+    const setup = await setupVault({ encrypted: false, scheme: { data_shards: 2, parity_shards: 2 } });
+    dirs = [setup.root, ...setup.providerDirs];
+    await rotShardHeader(shardPath(setup.providerDirs[1], 1));
+
+    await rebuildVersion(setup.root, 1, { removedProviderId: 'p0', targetProviderId: 'p4', io: setup.io });
+
+    const manifest = await readManifest(setup.root, 1);
+    expect(manifest?.shards.find((s) => s.shard_index === 0)?.provider_id).toBe('p4');
+  });
+
+  it('should rebuild an encrypted version when a sibling payload rotted', async () => {
+    const password = 'correct horse battery staple';
+    const setup = await setupVault({ encrypted: true, password, scheme: { data_shards: 2, parity_shards: 2 } });
+    dirs = [setup.root, ...setup.providerDirs];
+    await rotShardPayload(shardPath(setup.providerDirs[1], 1));
+
+    await rebuildVersion(setup.root, 1, { removedProviderId: 'p0', targetProviderId: 'p4', io: setup.io, password });
+
+    const manifest = await readManifest(setup.root, 1);
+    expect(manifest?.shards.find((s) => s.shard_index === 0)?.provider_id).toBe('p4');
+  });
+
+  it('should rebuild a lost shard in place while a sibling is damaged', async () => {
+    const setup = await setupVault({ encrypted: false, scheme: { data_shards: 2, parity_shards: 2 } });
+    dirs = [setup.root, ...setup.providerDirs];
+    const lost = shardPath(setup.providerDirs[2], 2);
+    await fs.rm(lost);
+    await rotShardPayload(shardPath(setup.providerDirs[1], 1));
+
+    await rebuildShardInPlace(setup.root, 1, { providerId: 'p2', io: setup.io });
+
+    await expect(fs.access(lost)).resolves.toBeUndefined();
+  });
+
+  it('should rebuild a part that is present but rotted, not only a missing one', async () => {
+    // `bfs repair --rebuild` is what the CLI points operators at when data is
+    // damaged, so it must replace rotted bytes in place — the part is there, it
+    // is simply no longer readable.
+    const setup = await setupVault({ encrypted: false, scheme: { data_shards: 2, parity_shards: 2 } });
+    dirs = [setup.root, ...setup.providerDirs];
+    const rotted = shardPath(setup.providerDirs[2], 2);
+    await rotShardPayload(rotted);
+
+    await rebuildShardInPlace(setup.root, 1, { providerId: 'p2', io: setup.io });
+
+    const healed = await fs.readFile(rotted);
+    expect(shardChecksumMatches(healed)).toBe(true);
+  });
+
+  it('should refuse the repair when every available sibling fails its checksum', async () => {
+    const setup = await setupVault({ encrypted: false });
+    dirs = [setup.root, ...setup.providerDirs];
+    await rotShardPayload(shardPath(setup.providerDirs[0], 0));
+    await rotShardPayload(shardPath(setup.providerDirs[1], 1));
+
+    await expect(rebuildVersion(setup.root, 1, { removedProviderId: 'p2', targetProviderId: 'p3', io: setup.io })).rejects.toThrow(/Not enough shards/);
+  });
+
+  it('should still refuse when a sibling header diverges and its checksum verifies', async () => {
+    const setup = await setupVault({ encrypted: false, scheme: { data_shards: 2, parity_shards: 2 } });
+    dirs = [setup.root, ...setup.providerDirs];
+    await forgeShardVaultId(shardPath(setup.providerDirs[1], 1));
+
+    await expect(rebuildVersion(setup.root, 1, { removedProviderId: 'p0', targetProviderId: 'p4', io: setup.io })).rejects.toThrow(TamperDetectedError);
   });
 });

@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # A push.lock present in the vault must NOT block read-side operations. Only
-# `push` calls assertNoActiveLock — pull / verify / versions / provider list
-# must keep working even while a push appears to be in flight. Control
+# `push` acquires the lock (acquirePushLock) — pull / verify / versions /
+# provider list must keep working even while a push appears to be in flight. Control
 # assertion at the end confirms that the same lock IS recognized as live by
 # a real push (LockConcurrentActiveError).
 #
@@ -50,7 +50,7 @@ scenario_run() {
 EOF
   assert_lock_exists "$vault"
 
-  # Read commands keep working — none of them call assertNoActiveLock.
+  # Read commands keep working — none of them acquire the push lock.
   run_bfs "$vault" verify
   assert_ok
   assert_manifest_health "$vault" 1 healthy

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable, type Writable } from 'node:stream';
 import { Client, type ConnectConfig, type FileEntry, type SFTPWrapper } from 'ssh2';
-import { HostKeyDeclinedError, ProviderError } from '../core/errors.js';
+import { HostKeyDeclinedError, ProviderError, TamperDetectedError } from '../core/errors.js';
 import { assertSafeFilename, assertSafeVaultName, isSafeFilename } from '../core/fs-utils.js';
 import { hashBuffer, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
 import { buildShardHeaderFromBytes, computeShardHeaderSize, SHARD_HEADER_READ_BYTES, sidecarFilename } from '../core/shard-io.js';
@@ -40,8 +40,7 @@ type AuthOptions = { password: string } | { privateKey: Buffer; passphrase?: str
 /**
  * Wraps a Buffer in a Readable that emits it as fixed-size chunks. A single
  * multi-MB `Readable.from(buffer)` push loses bytes through some SFTP write
- * pipelines (see `.claude/rules/streaming.md`); 64 KB chunks cooperate with
- * backpressure and remove the truncation.
+ * pipelines; 64 KB chunks cooperate with backpressure and remove the truncation.
  */
 function bufferToChunkedStream(buffer: Buffer, chunkSize = UPLOAD_CHUNK_SIZE): Readable {
   let offset = 0;
@@ -120,7 +119,7 @@ function entryIsDirectory(entry: FileEntry): boolean {
  * reply within the window" means the server stalled after the handshake — reject
  * instead of hanging forever (ssh2 has no per-op timeout once `ready` fires).
  */
-function withSftpTimeout<T>(op: string, run: (done: (err: Error | null | undefined, val?: T) => void) => void): Promise<T> {
+function withSftpTimeout<T>(op: string, run: (done: (err: Nullable<Error> | undefined, val?: T) => void) => void): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`SFTP ${op} stalled: no response for ${SFTP_IDLE_TIMEOUT_MS}ms after handshake`)), SFTP_IDLE_TIMEOUT_MS);
     run((err, val) => {
@@ -276,6 +275,10 @@ export class SshProvider implements StorageProvider {
   private readonly hostKeyFingerprint: Nullable<string>;
   // Non-interactive "trust a new host key" opt-in (`--accept-new-host-key`).
   private readonly acceptNewHostKey: boolean;
+  // Set by decideHostKeyTrust when a pinned host key does NOT match the key the
+  // server presented (and it is not @revoked): a changed identity is tampering.
+  // withClient reads it to surface TamperDetectedError instead of a generic error.
+  private hostKeyMismatch: Nullable<{ pin: string; presented: string }> = null;
   private readonly io: ProviderIO;
   private vaultName: Nullable<string> = null;
 
@@ -335,7 +338,14 @@ export class SshProvider implements StorageProvider {
       io.warn(fmtFor(io.lang, 'ssh_host_key_revoked', `${user}@${host}:${port}`));
       return false;
     }
-    if (pin !== null && pin.length > 0) return fp === pin;
+    if (pin !== null && pin.length > 0) {
+      if (fp === pin) return true;
+      // Pin set, presented key differs, and not @revoked → the server identity
+      // changed under a pinned fingerprint: a possible MITM. Flag it so withClient
+      // surfaces TamperDetectedError rather than a generic transport failure.
+      this.hostKeyMismatch = { pin, presented: fp };
+      return false;
+    }
     if (known === 'trusted') return true;
     if (io.interactive === false) return acceptNew;
     return io.confirm(fmtFor(io.lang, 'ssh_host_key_confirm', `${user}@${host}:${port}`, fp));
@@ -454,6 +464,7 @@ export class SshProvider implements StorageProvider {
    */
   private async withClient<T>(op: (sftp: SFTPWrapper) => Promise<T>): Promise<T> {
     const conn = new Client();
+    this.hostKeyMismatch = null;
     try {
       this.io.debug(`SSH connecting to ${this.host}:${this.port}`);
       await this.establish(conn, await this.authOptions());
@@ -461,6 +472,13 @@ export class SshProvider implements StorageProvider {
       return await op(sftp);
     } catch (err) {
       if (err instanceof ProviderError) throw err;
+      // A pinned host key that did not match the presented key (set by
+      // decideHostKeyTrust) is tampering — surface it as TamperDetectedError so
+      // the operator sees a MITM signal, not a generic "verification failed".
+      if (this.hostKeyMismatch !== null) {
+        const { pin, presented } = this.hostKeyMismatch;
+        throw new TamperDetectedError(fmtFor(this.io.lang, 'ssh_host_key_mismatch', `${this.user}@${this.host}:${this.port}`, pin, presented));
+      }
       throw new ProviderError(fmtFor(this.io.lang, 'ssh_operation_failed', this.host, String(this.port), err instanceof Error ? err.message : String(err)));
     } finally {
       conn.end();
@@ -690,7 +708,7 @@ export class SshProvider implements StorageProvider {
    * @returns the secret that authenticated (added to the recovery pool)
    * @throws ProviderError when the operator declines (host or blank secret)
    */
-  async connectForRecovery(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<string | null> {
+  async connectForRecovery(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<Nullable<string>> {
     const target = `${this.user}@${this.host}:${this.port}`;
     const remotePath = this.basePath.length > 0 ? this.basePath : '/';
     const fingerprint = this.hostKeyFingerprint ?? tFor(this.io.lang, 'ssh_recovery_unpinned');
@@ -975,7 +993,7 @@ export class SshProvider implements StorageProvider {
    * @returns Sidecar bytes (BFSH format) or null when absent
    * @throws ProviderError on a transport failure other than "not found"
    */
-  async downloadHeaderSidecar(ref: RemoteRef, _maxBytes: number): Promise<Buffer | null> {
+  async downloadHeaderSidecar(ref: RemoteRef, _maxBytes: number): Promise<Nullable<Buffer>> {
     assertSafeFilename(ref.path);
     const remotePath = `${this.vaultPath()}/${sidecarFilename(ref.path)}`;
     return this.withClient(async (sftp) => {

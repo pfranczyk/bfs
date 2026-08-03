@@ -321,6 +321,7 @@ export function registerProviderRemove(providerCmd: Command): void {
             info(t('provider_remove_next_step_1'));
             info(t('provider_remove_next_step_2'));
             info(t('provider_remove_next_step_3'));
+            info(t('provider_remove_next_step_4'));
             break;
           case 'relocate':
             success(fmt('provider_relocate_success', providerId));

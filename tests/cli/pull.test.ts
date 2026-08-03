@@ -37,7 +37,7 @@ describe('pull', () => {
     vi.clearAllMocks();
   });
 
-  // ─── Sukces ───────────────────────────────────────────────────────────────
+  // ─── Success ───────────────────────────────────────────────────────────────
 
   it('should call pull and print success message', async () => {
     const result = await runCmd(['pull']);
@@ -47,7 +47,7 @@ describe('pull', () => {
     expect(capture.logs.some((l) => l.includes('Files restored'))).toBe(true);
   });
 
-  // ─── Flagi → opcje pull ───────────────────────────────────────────────────
+  // ─── Flags → pull options ───────────────────────────────────────────────────
 
   it('should pass version when --version flag given', async () => {
     await runCmd(['pull', '--version', '5']);
@@ -73,10 +73,10 @@ describe('pull', () => {
     expect(mockPull).toHaveBeenCalledWith(expect.any(String), expect.not.objectContaining({ version: expect.anything() }));
   });
 
-  // ─── io — potwierdzenie nadpisania (pipeline krok 4 Tryb A) ───────────────
+  // ─── io — overwrite confirmation (pipeline step 4, Mode A) ───────────────
 
   it('should pass io with confirm for overwrite confirmation', async () => {
-    // Pipeline step 4 (Mode A): "Na dysku: wersja X. Przywrócenie wersji Y nadpisze katalog."
+    // Pipeline step 4 (Mode A): "On disk: version X. Restoring version Y overwrites the directory."
     mockPull.mockImplementation(async (_dir, opts) => {
       const cont = await opts.io.confirm('Na dysku: wersja 1. Przywrócenie wersji 2 nadpisze katalog. Kontynuować?');
       expect(cont).toBe(true);
@@ -113,10 +113,10 @@ describe('pull', () => {
     expect(result).toBe('abort');
   });
 
-  // ─── io — hasło deszyfrowania (pipeline krok 9) ───────────────────────────
+  // ─── io — decryption password (pipeline step 9) ───────────────────────────
 
   it('should pass io with askSecret for decryption password prompt', async () => {
-    // Pipeline step 9: "poproś o hasło → deriveKey → decryptBlob"
+    // Pipeline step 9: "ask for password → deriveKey → decryptBlob"
     mockPull.mockImplementation(async (_dir, opts) => {
       const pw = await opts.io.askSecret('Podaj hasło deszyfrowania:');
       expect(pw).toBe('');
@@ -162,7 +162,7 @@ describe('pull', () => {
     expect(mockPull).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ cacheDir: '/custom/cache' }));
   });
 
-  // ─── Odrzucenie usuniętych opcji ──────────────────────────────────────────
+  // ─── Rejecting removed options ──────────────────────────────────────────
 
   it('should reject unknown --host option', async () => {
     const result = await runCmd(['pull', '--host', '192.168.1.10']);
@@ -193,7 +193,7 @@ describe('pull', () => {
     expect(mockPull).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ fromCache: true }));
   });
 
-  // ─── Błąd pull ────────────────────────────────────────────────────────────
+  // ─── pull errors ────────────────────────────────────────────────────────────
 
   it('should abort and print error when pull throws', async () => {
     mockPull.mockRejectedValue(new Error('Za mało shardów'));

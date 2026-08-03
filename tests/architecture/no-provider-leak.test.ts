@@ -5,10 +5,10 @@ import { describe, expect, it } from 'vitest';
 /**
  * Architecture-as-code test.
  *
- * Enforces the BFS rule from CLAUDE.md / architecture/index.md:
- * > Provider sam rządzi tym co się u niego dzieje — konfiguracja, prompty,
- * > walidacja, upload/download/verify. BFS core/CLI jest ŚLEPE na konkretne
- * > typy providerów.
+ * Enforces the core BFS rule:
+ * > A provider governs everything that happens on its side — configuration,
+ * > prompts, validation, upload/download/verify. The BFS core/CLI is BLIND to
+ * > concrete provider types.
  *
  * Any regression that reintroduces provider-specific knowledge into `src/cli/`
  * or `src/core/` surfaces here as a failing assertion with a pointer to the

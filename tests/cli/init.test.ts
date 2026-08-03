@@ -48,7 +48,7 @@ describe('init', () => {
     vi.clearAllMocks();
   });
 
-  // ─── Tryb CI — podstawowy ─────────────────────────────────────────────────
+  // ─── CI mode — basic ─────────────────────────────────────────────────
 
   it('CI: should call init with vault_name from argument', async () => {
     await runCmd(ciBaseArgs);
@@ -146,7 +146,7 @@ describe('init', () => {
     expect(output).toContain('push');
   });
 
-  // ─── Błąd init ────────────────────────────────────────────────────────────
+  // ─── init errors ──────────────────────────────────────────────────────────
 
   it('CI: should abort when init throws', async () => {
     mockInit.mockRejectedValue(new Error('Scheme requires 3 providers, configured: 2'));
@@ -157,7 +157,7 @@ describe('init', () => {
     expect(capture.errors.some((e) => e.includes('Scheme requires'))).toBe(true);
   });
 
-  // ─── Walidacja wejścia w trybie CI (brak magii w defaults) ────────────────
+  // ─── Input validation in CI mode (no magic defaults) ──────────────────────
 
   it('CI: should abort when --ci given without vault_name argument', async () => {
     const result = await runCmd(['init', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2', '--provider', 'local:p3 --path /mnt/d3']);
@@ -222,7 +222,7 @@ describe('init', () => {
     expect(mockPrompt).not.toHaveBeenCalled();
   });
 
-  // ─── Tryb interaktywny — prompty ──────────────────────────────────────────
+  // ─── Interactive mode — prompts ──────────────────────────────────────────
 
   it('interactive: should ask for vault name when not given as argument', async () => {
     // When vault_name is not passed as CLI arg, inquirer is called for it

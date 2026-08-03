@@ -32,7 +32,7 @@
   <section class="min-h-screen flex flex-col items-center justify-center px-6 text-center">
     <div class="max-w-3xl">
       <div class="inline-block mb-6 px-3 py-1 rounded-full border border-slate-700 text-xs text-slate-400 tracking-widest uppercase">
-        v0.12.0 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 24
+        v0.13.0 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 24
       </div>
 
       <h1 class="text-7xl font-black tracking-tight mb-4 bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
@@ -94,8 +94,9 @@
           <div class="text-3xl mb-3">🔐</div>
           <h3 class="text-lg font-semibold mb-2" data-i18n="feat1_title">Your Eyes Only</h3>
           <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat1_desc">
-            Optional AES-256-GCM encryption with Argon2id key derivation.
-            When enabled, each drive holds one piece — encrypted, incomplete, and useless on its own.
+            AES-256-GCM encryption with Argon2id key derivation, on by default —
+            opt out with <span class="text-white font-mono">--no-enc</span>.
+            Each drive holds one piece: encrypted, incomplete, and useless on its own.
           </p>
         </div>
 
@@ -236,8 +237,8 @@
               <td class="px-6 py-4 text-slate-300" data-i18n="cmd_status">Show backup health and version info</td>
             </tr>
             <tr class="hover:bg-slate-900/50 transition-colors">
-              <td class="px-6 py-4 font-mono text-green-400">bfs verify</td>
-              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_verify">Check piece availability across providers; flag missing/damaged header files</td>
+              <td class="px-6 py-4 font-mono text-green-400">bfs verify [--deep]</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_verify">Check piece availability and health across providers; flag missing/damaged header files. Exits 0 healthy, 4 degraded, 5 damaged; --deep verifies every piece's full data and catches damage the header check cannot see</td>
             </tr>
             <tr class="hover:bg-slate-900/50 transition-colors">
               <td class="px-6 py-4 font-mono text-green-400">bfs recovery</td>
@@ -265,7 +266,7 @@
   <footer class="border-t border-slate-800 py-10 px-6 text-center text-slate-500 text-sm">
     <p class="mb-2">
       <span class="text-white font-semibold">BFS</span>
-      &nbsp;v0.12.0
+      &nbsp;v0.13.0
       &nbsp;·&nbsp;
       <a href="https://github.com/pfranczyk/BFS/blob/main/LICENSE" class="hover:text-white transition-colors">AGPL-3.0</a>
       &nbsp;·&nbsp;
@@ -289,7 +290,7 @@
                                                 feat2_title:   'Survive Drive Failures',
                                                 feat2_desc:    'Your backup is split into <span class="text-white font-mono">N+K</span> pieces using Reed-Solomon erasure coding — the same math that keeps CDs readable despite scratches. Lose up to K drives and still recover everything from any N.',
                                                 feat1_title:   'Your Eyes Only',
-                                                feat1_desc:    'Optional AES-256-GCM encryption with Argon2id key derivation. When enabled, each drive holds one piece — encrypted, incomplete, and useless on its own.',
+                                                feat1_desc:    'AES-256-GCM encryption with Argon2id key derivation, on by default — opt out with <span class="text-white font-mono">--no-enc</span>. Each drive holds one piece: encrypted, incomplete, and useless on its own.',
                                                 feat0_title:   'Smaller Backups, Automatically',
                                                 feat0_desc:    'ZIP/Deflate compression is on by default. BFS detects already-compressed files (photos, videos, archives) and skips them — no wasted CPU, smaller pieces.',
                                                 feat3_title:   'Use Whatever Storage You Have',
@@ -313,7 +314,7 @@
                                                 cmd_push:      'Backup current directory → new version',
                                                 cmd_pull:      'Restore files from backup',
                                                 cmd_status:    'Show backup health and version info',
-                                                cmd_verify:    'Check piece availability across providers; flag missing/damaged header files',
+                                                cmd_verify:    "Check piece availability and health across providers; flag missing/damaged header files. Exits 0 healthy, 4 degraded, 5 damaged; --deep verifies every piece's full data and catches damage the header check cannot see",
                                                 cmd_recovery:  'Rebuild backup config from provider pieces',
                                                 cmd_repair:    'Fix storage locations without re-uploading — repoint a moved device, rebuild a lost piece, or restore missing/damaged header files',
                                                 cmd_prune:     'Delete old backup versions',
@@ -331,7 +332,7 @@
                                                 feat2_title:   'Odporność na awarie dysków',
                                                 feat2_desc:    'Backup jest dzielony na <span class="text-white font-mono">N+K</span> fragmentów za pomocą kodowania Reed-Solomona — tej samej matematyki, dzięki której porysowane CD wciąż działają. Stracisz do K dysków i nadal odtworzysz wszystko z dowolnych N.',
                                                 feat1_title:   'Tylko dla Twoich oczu',
-                                                feat1_desc:    'Opcjonalne szyfrowanie AES-256-GCM z Argon2id. Po włączeniu każdy dysk przechowuje jeden fragment — zaszyfrowany, niekompletny i bezużyteczny sam w sobie.',
+                                                feat1_desc:    'Szyfrowanie AES-256-GCM z Argon2id, domyślnie włączone — wyłączysz je flagą <span class="text-white font-mono">--no-enc</span>. Każdy dysk przechowuje jeden fragment: zaszyfrowany, niekompletny i bezużyteczny sam w sobie.',
                                                 feat0_title:   'Mniejsze backupy, automatycznie',
                                                 feat0_desc:    'Kompresja ZIP (deflate) domyślnie włączona. BFS wykrywa już skompresowane pliki (zdjęcia, filmy, archiwa) i je pomija — bez marnowania CPU, mniejsze fragmenty.',
                                                 feat3_title:   'Użyj czegokolwiek, co masz',
@@ -355,7 +356,7 @@
                                                 cmd_push:      'Backup bieżącego katalogu → nowa wersja',
                                                 cmd_pull:      'Odtworzenie plików z backupu',
                                                 cmd_status:    'Pokaż stan kopii zapasowej i informacje o wersjach',
-                                                cmd_verify:    'Sprawdź dostępność fragmentów na nośnikach; sygnalizuj brakujące/uszkodzone pliki nagłówków',
+                                                cmd_verify:    'Sprawdź dostępność i stan fragmentów na nośnikach; sygnalizuj brakujące/uszkodzone pliki nagłówków. Kody wyjścia: 0 zdrowa, 4 zdegradowana, 5 uszkodzona; --deep sprawdza pełne dane każdego fragmentu i wykrywa uszkodzenia niewidoczne w nagłówku',
                                                 cmd_recovery:  'Odbuduj konfigurację kopii zapasowej z fragmentów',
                                                 cmd_repair:    'Napraw lokalizacje nośników bez ponownego wysyłania — wskaż przeniesiony nośnik, odbuduj utracony fragment lub odtwórz brakujące/uszkodzone pliki nagłówków',
                                                 cmd_prune:     'Usuń stare wersje backupu',

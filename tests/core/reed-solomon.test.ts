@@ -280,7 +280,7 @@ describe('rsEncodeStriped / rsDecodeStriped', () => {
     const parityPath0 = parityPaths[0];
     if (!parityPath0) throw new Error('Internal: parityPaths[0] missing');
     const parityBuf = await fs.readFile(parityPath0);
-    const shardStreams: (Readable | null)[] = [...dataShards.map((s) => Readable.from(s)), Readable.from(parityBuf)];
+    const shardStreams: Nullable<Readable>[] = [...dataShards.map((s) => Readable.from(s)), Readable.from(parityBuf)];
 
     const decoded = await streamToBuffer(rsDecodeStriped(shardStreams, { N, K, stripeSize, blobSize: blob.length }));
 
@@ -303,7 +303,7 @@ describe('rsEncodeStriped / rsDecodeStriped', () => {
     const shard1 = dataShards[1];
     if (!shard1) throw new Error('Internal: dataShards[1] missing');
     // Drop shard 0 — recover using shard 1 + parity
-    const shardStreams: (Readable | null)[] = [null, Readable.from(shard1), Readable.from(parityBuf)];
+    const shardStreams: Nullable<Readable>[] = [null, Readable.from(shard1), Readable.from(parityBuf)];
 
     const decoded = await streamToBuffer(rsDecodeStriped(shardStreams, { N, K, stripeSize, blobSize: blob.length }));
 
@@ -323,7 +323,7 @@ describe('rsEncodeStriped / rsDecodeStriped', () => {
     const parityPath0 = parityPaths[0];
     if (!parityPath0) throw new Error('Internal: parityPaths[0] missing');
     const parityBuf = await fs.readFile(parityPath0);
-    const shardStreams: (Readable | null)[] = [...dataShards.map((s) => Readable.from(s)), Readable.from(parityBuf)];
+    const shardStreams: Nullable<Readable>[] = [...dataShards.map((s) => Readable.from(s)), Readable.from(parityBuf)];
 
     const decoded = await streamToBuffer(rsDecodeStriped(shardStreams, { N, K, stripeSize, blobSize: blob.length }));
 

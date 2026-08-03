@@ -3,7 +3,7 @@ import path from 'node:path';
 import { assert, runBfs, runTest } from '../smoke-runner.js';
 import type { SmokeContext, SuiteResult, TestResult } from '../smoke-types.js';
 
-// ─── Suite C — Push + odczyt ─────────────────────────────────────────────────
+// ─── Suite C — Push + read ─────────────────────────────────────────────────
 
 export async function suiteC(ctx: SmokeContext): Promise<SuiteResult> {
   const tests: TestResult[] = [];

@@ -2,8 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ─── Bug under test (offline `provider edit` re-arms the host-key MITM window) ─
 //
-// `bfs provider edit` via flags/`--ci` is offline (architecture/decisions.md →
-// "`bfs provider edit` — edycja configu z gwarancją ukończenia offline"): the
+// `bfs provider edit` via flags/`--ci` is offline: the
 // flag path never contacts the medium (no probeConnection / healthCheck) and does
 // a FULL replacement of the provider's connection-config (configureFromFlags
 // starts from an empty {}).

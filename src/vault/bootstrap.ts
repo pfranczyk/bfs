@@ -1,7 +1,7 @@
 import { Readable } from 'node:stream';
 import { deriveKey } from '../core/crypto.js';
-import { BfsError, TamperDetectedError } from '../core/errors.js';
-import { parseShardHeaderFromStream, readShardHeaderBytes, SHARD_HEADER_READ_BYTES } from '../core/shard-io.js';
+import { BfsError, ShardCorruptedError, TamperDetectedError } from '../core/errors.js';
+import { parseShardHeaderFromStream, readShardHeaderBytes, SHARD_HEADER_READ_BYTES, shardIntegrityFailure } from '../core/shard-io.js';
 import { fmt, t } from '../i18n/index.js';
 import { providerRegistry } from '../providers/provider.js';
 import type { ProviderConfig, ProviderIO, RecoverySecret, RemoteRef, ShardHeader, ShardLocation, StorageProvider } from '../types/index.js';
@@ -357,11 +357,43 @@ export async function bootstrapFromProvider(bootstrapProvider: StorageProvider, 
   // Pull only the header window — providers MUST avoid streaming the full
   // payload over the wire (FTP issues SIZE + aborts after maxBytes).
   const bootstrapRef = findTargetShard(refs, version);
+  // Whether this copy checks out is a property of the bytes, not of any one
+  // attempt, so the (expensive) full read happens at most once per bootstrap and
+  // only once something has already failed — the healthy path stays header-only.
+  let integrityFailure: Nullable<string> | undefined;
+  const copyFailsIntegrityCheck = async (): Promise<boolean> => {
+    if (integrityFailure === undefined) {
+      try {
+        integrityFailure = await shardIntegrityFailure(bootstrapProvider, bootstrapRef);
+      } catch {
+        // A read that broke for any other reason — a dropped transfer, a file
+        // briefly locked — says nothing about the bytes, so it decides nothing.
+        // The verdict stays unknown and the password path carries on: this read
+        // is diagnostic, and letting it end a recovery would turn a transient
+        // network hiccup into a failed restore of a healthy backup.
+        return false;
+      }
+    }
+    return integrityFailure !== null;
+  };
+
   // Sidecar-aware: prefer the sidecar's current location map over the frozen
   // in-shard one so a relocated sibling is discovered at its new address.
-  const headerBytes = await readShardHeaderBytes(bootstrapProvider, bootstrapRef, SHARD_HEADER_READ_BYTES);
-  const { header: meta, payloadStream: ps1 } = await parseShardHeaderFromStream(Readable.from(headerBytes));
-  ps1.on('error', () => {}).destroy();
+  let headerBytes: Buffer;
+  let meta: ShardHeader;
+  try {
+    headerBytes = await readShardHeaderBytes(bootstrapProvider, bootstrapRef, SHARD_HEADER_READ_BYTES);
+    const parsed = await parseShardHeaderFromStream(Readable.from(headerBytes));
+    parsed.payloadStream.on('error', () => {}).destroy();
+    meta = parsed.header;
+  } catch (err) {
+    // The header itself is unreadable — a rotted sidecar, a mangled magic, a
+    // truncated header, or (unencrypted) a location map that no longer parses.
+    // The internal parser text names a byte range; the operator needs to be told
+    // which medium is at fault and that a sibling carries the same map.
+    if (err instanceof ShardCorruptedError) throw new BfsError(t('bootstrap_copy_integrity_failed_no_password'));
+    throw err;
+  }
 
   const parsedFilename = parseVersionFromFilename(bootstrapRef.path);
   if (!parsedFilename) throw new BfsError(`Shard filename format invalid: ${bootstrapRef.path}`);
@@ -392,6 +424,18 @@ export async function bootstrapFromProvider(bootstrapProvider: StorageProvider, 
         // wrong password — try next
       }
     }
+    // A key that does not open the map looks the same whether the password is
+    // wrong or the bytes rotted. Only now, with one attempt already spent, is it
+    // worth reading the shard to tell those apart — and if the copy does not
+    // check out, no password can open it, so asking again would send the
+    // operator after the one thing that is not wrong.
+    // `candidates.length` guards the read: with nothing supplied up front no
+    // attempt has been made yet, so there is nothing to tell apart — reading
+    // here would charge every interactive recovery of a healthy backup a full
+    // shard transfer. That operator meets the same fork one prompt later.
+    if (!resolved && candidates.length > 0 && (await copyFailsIntegrityCheck())) {
+      throw new BfsError(t('bootstrap_copy_integrity_failed'));
+    }
     if (!resolved) {
       // Ask interactively, retrying until the password works or the operator
       // gives up with a blank entry. Unbounded: at this critical recovery moment
@@ -413,7 +457,12 @@ export async function bootstrapFromProvider(bootstrapProvider: StorageProvider, 
           candidates.push(pwd);
           resolved = true;
         } catch {
-          // wrong password — retry
+          // Same fork as above, now for the operator who supplied nothing up
+          // front: one attempt is spent, so the copy can be told apart from the
+          // password. The read is cached, so further tries cost nothing.
+          if (await copyFailsIntegrityCheck()) {
+            throw new BfsError(t('bootstrap_copy_integrity_failed'));
+          }
         }
       }
     }

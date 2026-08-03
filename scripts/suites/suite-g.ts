@@ -77,7 +77,7 @@ export async function suiteG(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── G2/G3: opisy opcji --cache w --help (EN) ──────────────────────────────
+  // ── G2/G3: --cache option descriptions in --help (EN) ──────────────────────────────
 
   tests.push(
     await runTest('G2', 'bfs push --help contains --cache description (EN)', () => {

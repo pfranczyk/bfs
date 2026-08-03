@@ -211,6 +211,20 @@ export interface Strings {
   /** %s = count */
   push_drift_header: string;
   push_drift_hint: string;
+  push_opt_allow_excluded: string;
+  push_excluded_label_symlink: string;
+  push_excluded_label_special: string;
+  /** %s = count */
+  push_excluded_header: string;
+  push_excluded_hint: string;
+  /** %s = count, %s = list */
+  push_excluded_confirm: string;
+  /** %s = count, %s = list */
+  push_excluded_allowed: string;
+  /** %s = count */
+  push_excluded_added: string;
+  /** %s = list */
+  push_excluded_unignorable: string;
   vault_compressing: string;
   vault_decompressing: string;
   opt_temp_dir_desc: string;
@@ -272,6 +286,9 @@ export interface Strings {
 
   // ─── prune ────────────────────────────────────────────────────────────────
   prune_opt_keep_last: string;
+  prune_opt_force: string;
+  /** %s = version number */
+  prune_last_restorable: string;
   prune_opt_yes: string;
   /** %s = range string */
   prune_range_invalid: string;
@@ -303,7 +320,19 @@ export interface Strings {
   verify_col_scheme: string;
   verify_col_tolerance: string;
   verify_shard_check_failed: string;
+  /** %s = file name, %s = provider name, %s = reason */
+  verify_shard_medium_unreachable: string;
+  /** %s = file name, %s = provider name, %s = reason */
+  verify_shard_unreadable: string;
+  /** %s = file name, %s = provider name, %s = reason */
+  verify_shard_adapter_missing: string;
+  /** %s = file name, %s = provider name */
+  verify_shard_provider_unknown: string;
+  verify_reason_health_check: string;
+  /** %s = version number */
+  verify_verdict_retained: string;
   verify_header_advisory: string;
+  verify_opt_deep: string;
 
   // ─── recovery ─────────────────────────────────────────────────────────────
   recovery_provider_type_prompt: string;
@@ -443,6 +472,7 @@ export interface Strings {
   provider_remove_next_step_1: string;
   provider_remove_next_step_2: string;
   provider_remove_next_step_3: string;
+  provider_remove_next_step_4: string;
   /** %s = id */
   provider_relocate_success: string;
   /** %s = id */
@@ -469,8 +499,8 @@ export interface Strings {
   // ─── vault operations ────────────────────────────────────────────────────
   /** %s = version */
   vault_download_shards: string;
-  /** %s = provider_id, %s = shard_index */
-  vault_provider_not_found: string;
+  /** %s = provider_id */
+  vault_shard_damaged_on_provider: string;
   /** %s = shard_index+1 (1-based), %s = N+K total */
   vault_download_shard_progress: string;
   /** %s = provider_id */
@@ -509,13 +539,23 @@ export interface Strings {
   // ─── vault — pull / versions / provider runtime ──────────────────────────
   /** %s = data count N (need), %s = available/found count (got) */
   pull_not_enough_shards: string;
+  /** %s = comma-separated provider ids */
+  pull_failed_on_damaged: string;
+  /** %s = comma-separated provider ids */
+  pull_failed_on_missing: string;
+  /** %s = comma-separated provider ids */
+  pull_failed_on_unreachable: string;
+  /** %s = comma-separated provider ids */
+  pull_failed_on_adapter_missing: string;
+  /** %s = comma-separated provider ids */
+  pull_failed_on_not_configured: string;
   pull_blob_size_unreadable: string;
   pull_salt_missing: string;
-  /** %s = provider name, %s = piece index */
+  /** %s = provider name */
   pull_provider_not_found_skip: string;
-  /** %s = piece index */
+  /** %s = provider name */
   pull_shard_header_invalid_skip: string;
-  /** %s = piece index */
+  /** %s = provider name */
   pull_shard_hash_mismatch_skip: string;
   pull_degraded_repair: string;
   /** %s = required provider count (N+K), %s = given count */
@@ -545,6 +585,8 @@ export interface Strings {
   vault_degraded_file_missing: string;
   vault_degraded_adapter_missing: string;
   vault_degraded_corrupt: string;
+  /** %s = comma-separated provider names recorded in the backup */
+  vault_degraded_provider_not_configured: string;
 
   // ─── recovery operations (vault layer) ──────────────────────────────────
   recovery_ask_version_password: string;
@@ -556,6 +598,8 @@ export interface Strings {
   // ─── bootstrap operations ────────────────────────────────────────────────
   bootstrap_ask_password: string;
   bootstrap_wrong_password_retry: string;
+  bootstrap_copy_integrity_failed: string;
+  bootstrap_copy_integrity_failed_no_password: string;
   bootstrap_single_provider_warn: string;
 
   // ─── provider: ftp ──────────────────────────────────────────────────────
@@ -589,6 +633,8 @@ export interface Strings {
   ftp_help_flag_password_desc: string;
   ftp_help_flag_path_desc: string;
   ftp_help_flag_secure_desc: string;
+  ftp_help_flag_cert_fingerprint_desc: string;
+  ftp_help_flag_accept_new_cert_desc: string;
   ftp_help_flag_config_file_desc: string;
 
   // ─── Provider configuration errors ───────────────────────────────────────
@@ -630,6 +676,8 @@ export interface Strings {
   recovery_consensus_filename_mismatch: string;
   /** %s = version, %s = mismatched fields */
   recovery_consensus_failed: string;
+  /** %s = version, %s = comma-separated provider ids that could not supply the map */
+  recovery_map_from_sibling: string;
   recovery_no_manifests: string;
   /** %s = version */
   recovery_manifest_unreadable: string;
@@ -685,6 +733,24 @@ export interface Strings {
   ftp_validate_path_absolute: string;
   /** %s = host, %s = port, %s = user, %s = path, %s = secure */
   ftp_describe_config: string;
+  /** %s = base describeConfig line, %s = cert fingerprint, %s = cert kind */
+  ftp_describe_cert: string;
+  /** %s = base describeConfig line, %s = cert fingerprint (kind unknown) */
+  ftp_describe_cert_nokind: string;
+  ftp_cert_kind_self_signed: string;
+  ftp_cert_kind_ca: string;
+  /** %s = host:port, %s = expected pin, %s = presented fingerprint */
+  ftp_cert_pin_mismatch: string;
+  /** %s = host:port, %s = presented fingerprint */
+  ftp_cert_untrusted: string;
+  /** %s = host:port, %s = cert kind, %s = presented fingerprint */
+  ftp_cert_confirm: string;
+  /** %s = host:port */
+  ftp_cert_declined: string;
+  ftp_cert_fingerprint_invalid: string;
+  ftp_cert_pin_requires_secure: string;
+  /** %s = host:port */
+  ftp_tls_not_established: string;
 
   // ─── FTP — probeConnection ───────────────────────────────────────────────
   ftp_probe_incomplete: string;
@@ -713,6 +779,8 @@ export interface Strings {
   ssh_host_key_declined: string;
   /** %s = user@host:port */
   ssh_host_key_revoked: string;
+  /** %s = user@host:port, %s = expected pin, %s = presented fingerprint */
+  ssh_host_key_mismatch: string;
   /** %s = user@host:port */
   ssh_edit_connecting: string;
   /** %s = host:port */
@@ -808,6 +876,8 @@ export interface Strings {
   /** %s = params string */
   repair_spec_invalid_params: string;
   /** %s = provider/storage name */
+  /** %s = provider_id */
+  heal_shard_corrupt_skip: string;
   heal_locationmap_update_failed: string;
   heal_relocate_unreachable: string;
 
@@ -818,10 +888,14 @@ export interface Strings {
   repair_opt_password_file: string;
   repair_opt_ci: string;
   repair_opt_rebuild: string;
+  /** Multi-line syntax + examples block appended to `bfs repair --help`. */
+  repair_help_syntax: string;
   repair_opt_force_unverified: string;
   repair_no_versions: string;
   /** %s = version */
   repair_foreign_shard_detected: string;
+  /** %s = storage name (provider id) */
+  vault_collision_detected: string;
   /** %s = version */
   repair_wrong_version_shard: string;
   /** %s = version */

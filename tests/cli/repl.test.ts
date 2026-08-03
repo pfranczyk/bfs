@@ -69,7 +69,7 @@ describe('REPL', () => {
     vi.restoreAllMocks();
   });
 
-  // ─── Wyjście ──────────────────────────────────────────────────────────────
+  // ─── Exit ──────────────────────────────────────────────────────────────
 
   it('should close readline when user types "exit"', async () => {
     const { rl } = withFakeRl(['exit']);
@@ -89,7 +89,7 @@ describe('REPL', () => {
     expect(logs.some((l) => l.includes('Goodbye'))).toBe(true);
   });
 
-  // ─── Puste linie ──────────────────────────────────────────────────────────
+  // ─── Empty lines ──────────────────────────────────────────────────────────
 
   it('should ignore empty lines and not call runCommand', async () => {
     const called: string[][] = [];
@@ -112,7 +112,7 @@ describe('REPL', () => {
     expect(all).toContain('provider remove');
   });
 
-  // ─── CommandAbort — zostaje w REPL ───────────────────────────────────────
+  // ─── CommandAbort — stays in the REPL ───────────────────────────────────────
 
   it('should stay in REPL after CommandAbort', async () => {
     let calls = 0;
@@ -134,7 +134,7 @@ describe('REPL', () => {
     expect(errors.some((l) => l.includes('Błąd:'))).toBe(false);
   });
 
-  // ─── Generic Error — zostaje w REPL ──────────────────────────────────────
+  // ─── Generic Error — stays in the REPL ──────────────────────────────────────
 
   it('should stay in REPL after generic Error', async () => {
     let calls = 0;
@@ -155,7 +155,7 @@ describe('REPL', () => {
     expect(errors.some((l) => l.includes('test-error-message'))).toBe(true);
   });
 
-  // ─── CommanderError (help) — zostaje w REPL ───────────────────────────────
+  // ─── CommanderError (help) — stays in the REPL ───────────────────────────────
 
   it('should stay in REPL after CommanderError for help', async () => {
     const helpErr = Object.assign(new Error('(outputHelp)'), { code: 'commander.help' });
@@ -179,7 +179,7 @@ describe('REPL', () => {
     expect(all).not.toContain('outputHelp');
   });
 
-  // ─── Kolejność komend ─────────────────────────────────────────────────────
+  // ─── Command order ─────────────────────────────────────────────────────
 
   it('should dispatch commands in sequence', async () => {
     const received: string[][] = [];
@@ -212,7 +212,7 @@ describe('REPL', () => {
     expect(received).toEqual([['good', 'arg']]);
   });
 
-  // ─── Zarządzanie stdin dla Inquirer ───────────────────────────────────────
+  // ─── stdin management for Inquirer ───────────────────────────────────────
 
   it('should pause readline before dispatching command so Inquirer gets exclusive stdin access', async () => {
     // Bug: when readline (REPL) is actively listening to stdin while Inquirer

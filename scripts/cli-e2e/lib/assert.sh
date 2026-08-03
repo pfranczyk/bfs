@@ -146,3 +146,26 @@ assert_state() {
   grep -q "\"$field\": $want" "$sf" ||
     _fail "state.$field != $want. Got: $(grep "\"$field\"" "$sf" || echo '<none>')"
 }
+
+# assert_file_mtime_epoch <file> <epoch> — fail unless <file>'s mtime, in whole
+# seconds, equals <epoch>. GNU/MSYS `stat -c %Y` reads the same value on Windows
+# Git Bash and on Linux, so mtime fidelity is asserted uniformly across OSes.
+assert_file_mtime_epoch() {
+  local file="$1" want="$2" got
+  [ -f "$file" ] || _fail "expected file to exist for mtime check: $file"
+  got="$(stat -c '%Y' "$file")"
+  [ "$got" = "$want" ] || _fail "mtime epoch for $file: expected $want, got $got"
+}
+
+# assert_file_mode <file> <octal> — fail unless <file>'s POSIX permission bits
+# equal <octal>. No-op on Windows (Git Bash / Cygwin / MSYS), where POSIX mode
+# is not a real ACL and chmod does not take effect; there the check is skipped.
+assert_file_mode() {
+  local file="$1" want="$2" got
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) return 0 ;;
+  esac
+  [ -f "$file" ] || _fail "expected file to exist for mode check: $file"
+  got="$(stat -c '%a' "$file")"
+  [ "$got" = "$want" ] || _fail "mode for $file: expected $want, got $got"
+}

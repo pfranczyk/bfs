@@ -6,11 +6,16 @@
 # against the pin. Here the original box is destroyed and a brand-new EMPTY sshd
 # (a fresh, different host key) is stood up on the SAME port — a textbook
 # impostor. A routine `bfs push` must then REFUSE the changed key and never
-# upload shard_2 (nor send the password) to the impostor.
+# upload shard_2 (nor send the password) to the impostor — AND tell the operator
+# in plain terms that the HOST KEY CHANGED (a possible MITM), not merely that
+# "an operation failed".
 #
-# Under the H1 bug --accept-new-host-key trusts whatever key is presented on
-# EVERY connection, so the impostor is trusted and shard_2 is uploaded to it
-# (credential + data leak) — this scenario is RED until the pin is captured.
+# The pin capture already refuses the impostor and blocks the leak. What is still
+# missing is that user-facing SIGNAL: today the refusal surfaces as a generic
+# `ssh_operation_failed` ("SSH operation failed … Host denied (verification
+# failed)"), indistinguishable from an ordinary transport error. Under the new
+# SSH contract a pin mismatch is a TamperDetectedError whose message names the
+# host-key change / MITM — RED until GREEN surfaces that tamper signal.
 #
 # local/ftp: N/A — host-key trust is SSH-specific.
 # Docker-managed: self-provisions its sshd (no --ssh needed). SKIPs without Docker.
@@ -60,9 +65,20 @@ scenario_run() {
   # A routine new push. The operator changed nothing; the address is the same.
   # First contact pinned K1, so the presented K2 MUST be refused before any
   # credential or byte leaves: shard_2 is never uploaded → the impostor holds
-  # nothing. Under the H1 bug --accept-new-host-key trusts K2 every time, so the
-  # shard lands on the impostor (credential + data leak).
+  # nothing.
   run_bfs "$vault" push --new
+
+  # The refusal must reach the operator as an unambiguous host-key tamper / MITM
+  # signal — NOT a generic "operation failed", which reads like an ordinary
+  # transport error and hides that the SERVER IDENTITY changed. Under the new SSH
+  # contract a pin mismatch throws TamperDetectedError and the CLI prints its
+  # message. GREEN must add an i18n key (proposed: `ssh_host_key_mismatch`, en.ts
+  # + pl.ts + Strings) whose EN value contains this exact phrase, e.g.:
+  #   'Host key for %s has CHANGED — this is a possible man-in-the-middle attack
+  #    (tampering). Expected %s, but the server presented %s. Refusing to connect.'
+  # RED today: the message is `ssh_operation_failed` → "SSH operation failed on
+  # 127.0.0.1:2331: Host denied (verification failed)" — carries no tamper signal.
+  assert_out_contains 'possible man-in-the-middle attack (tampering)'
 
   local impostorshard="${PV_SSH_REMOTE[2]}/${name}/shard_2.bfs.2"
   if [ -n "$(ssh_sha "$se" "$impostorshard")" ]; then

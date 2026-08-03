@@ -7,21 +7,22 @@ import { pipeline } from 'node:stream/promises';
 import { parseBlobFileTable, parseBlobFileTableFromFile, unpackBlob, unpackBlobFromFile } from '../core/blob-unpack.js';
 import { trackFile, untrackFile } from '../core/cleanup.js';
 import { decryptBlob, decryptStream, deriveKey, deriveShardNonce } from '../core/crypto.js';
-import { BfsError, PullSkippedError, ShardCorruptedError } from '../core/errors.js';
+import { BfsError, ProviderError, PullSkippedError, ShardCorruptedError } from '../core/errors.js';
 import { hashBuffer, hashFileExcludingTail, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
 import { DEFAULT_BFSIGNORE_CONTENT } from '../core/ignore-defaults.js';
 import { calcShardPayloadSize, rsDecode, rsDecodeStriped, rsRepair } from '../core/reed-solomon.js';
 import { computeShardHeaderSize, parseShardHeaderFromStream } from '../core/shard-io.js';
 import { debugEnabled } from '../debug.js';
-import { fmt, t } from '../i18n/index.js';
+import { fmt, type Strings, t } from '../i18n/index.js';
 import { providerRegistry } from '../providers/provider.js';
-import type { FileEntry, ManifestShard, ProviderConfig, ProviderIO, PullResult, SkippedFile, StorageProvider, VaultConfig, VaultState, VersionManifest } from '../types/index.js';
+import type { FileEntry, ManifestShard, ProviderConfig, ProviderIO, PullResult, ShardHeader, SkippedFile, StorageProvider, VaultConfig, VaultState, VersionManifest } from '../types/index.js';
 import { type PushMode, VersionHealth } from '../types/index.js';
 import { checkVersionMismatch, detectMissingAdapters, formatMissingAdaptersMessage } from './adapter-preflight.js';
 import { assertSchemeValid, readConfig, writeConfig } from './config.js';
-import { deleteManifest, listManifests, readManifest, writeManifest } from './manifest.js';
+import { applyHealthChange, deleteManifest, listManifests, readManifest, writeManifest } from './manifest.js';
 import { confirmRecoveredLocations } from './recovered-locations.js';
 import { DEFAULT_STATE, readState, writeState } from './state.js';
+import { assertNoForeignVault } from './vault-collision.js';
 
 // Public push entry points, re-exported from the push pipeline module.
 export {
@@ -87,6 +88,13 @@ export interface PruneOptions {
   /** Version numbers to remove from providers and disk. */
   versions: number[];
   /**
+   * Deletes even when the operation would leave no restorable version behind.
+   * Without it prune refuses that case, so routine housekeeping cannot destroy
+   * the last copy that can still be restored; with it an operator can still wipe
+   * a backup deliberately.
+   */
+  force?: boolean;
+  /**
    * Optional IO for surfacing best-effort delete failures. Deleting a pruned
    * version's data is best-effort, but a genuine failure would otherwise orphan
    * it on the medium silently; when provided, such failures are warned through here.
@@ -134,12 +142,128 @@ async function _validateConfigDir(dir: string, configFlag: string): Promise<void
 
 // ─── Shard failure diagnostics ───────────────────────────────────────────────
 
-type ShardFailureReason = 'provider_unreachable' | 'file_missing' | 'adapter_missing' | 'corrupt';
+type ShardFailureReason = 'provider_unreachable' | 'file_missing' | 'adapter_missing' | 'corrupt' | 'provider_not_configured';
+
+/**
+ * Classifies why a shard could not be read, from the error the attempt raised.
+ *
+ * The distinction is what the operator acts on: unreadable content calls for a
+ * repair, an unreachable medium for reconnecting it. Anything unrecognised is
+ * reported as absent — the conservative reading, since a part that could not be
+ * obtained is, as far as the restore is concerned, not there.
+ *
+ * @param err - Error thrown while fetching or parsing the shard
+ * @returns the failure reason to record for that shard
+ */
+function _failureReason(err: unknown): ShardFailureReason {
+  if (err instanceof ShardCorruptedError) return 'corrupt';
+  if (err instanceof ProviderError) return 'provider_unreachable';
+  return 'file_missing';
+}
+
+/**
+ * Classifies a failure from the download phase, where the medium has already
+ * answered its health check: data that arrived but does not parse is damage,
+ * anything else is read as absent. Calling damage "absent" would send the
+ * operator hunting for a medium that never left, instead of at the repair.
+ *
+ * {@link _failureReason} does not stand in here — it maps every ProviderError to
+ * an unreachable medium, which at this point would blame a medium that responded
+ * moments earlier.
+ *
+ * @param err - Error thrown while fetching or parsing the shard
+ * @returns the failure reason to record for that shard
+ */
+function _downloadFailureReason(err: unknown): ShardFailureReason {
+  return err instanceof ShardCorruptedError ? 'corrupt' : 'file_missing';
+}
+
+/**
+ * Builds the sentence naming which media failed and how, for a restore that
+ * cannot go ahead.
+ *
+ * What the operator does next depends entirely on the cause — a medium that could
+ * not be reached calls for reconnecting it, damaged data for a look at which
+ * versions survived — so each cause names its own media instead of the whole set
+ * being blamed on one guess. Rebuilding is deliberately not offered here: this
+ * runs only below the reconstruction threshold, where a repair cannot succeed
+ * either (see `architecture/decisions.md` → "Nieudany pull: przyczyna per nośnik,
+ * rada tylko wykonalna"). Only the medium's name is disclosed: its address and
+ * credentials are the provider's business, and BFS-core does not read them (see
+ * `architecture/decisions.md` → "Provider jest właścicielem sekretu…").
+ *
+ * @param manifest - Version manifest, to map shard indexes to medium names
+ * @param failures - Shard index → why that shard could not be used
+ * @returns a sentence per cause, or an empty string when nothing was recorded
+ */
+function _describeShardFailures(manifest: VersionManifest, failures: Map<number, ShardFailureReason>): string {
+  const naming: Array<{ reason: ShardFailureReason; key: keyof Strings }> = [
+    { reason: 'corrupt', key: 'pull_failed_on_damaged' },
+    { reason: 'file_missing', key: 'pull_failed_on_missing' },
+    { reason: 'provider_unreachable', key: 'pull_failed_on_unreachable' },
+    { reason: 'adapter_missing', key: 'pull_failed_on_adapter_missing' },
+    { reason: 'provider_not_configured', key: 'pull_failed_on_not_configured' },
+  ];
+
+  const parts: string[] = [];
+  for (const { reason, key } of naming) {
+    const ids = _mediaFailingWith(manifest, failures, reason);
+    if (ids.length > 0) parts.push(fmt(key, ids.join(', ')));
+  }
+  return parts.join(' ');
+}
+
+/**
+ * Collects the media that failed for one cause, under the names the backup
+ * records for them.
+ *
+ * @param manifest - Version manifest, to map shard indexes to medium names
+ * @param failures - Shard index → why that shard could not be used
+ * @param reason - The cause to collect media for
+ * @returns the medium names recorded for that cause
+ */
+function _mediaFailingWith(manifest: VersionManifest, failures: Map<number, ShardFailureReason>, reason: ShardFailureReason): string[] {
+  return [...failures.entries()]
+    .filter(([, r]) => r === reason)
+    .map(([index]) => manifest.shards.find((s) => s.shard_index === index)?.provider_id)
+    .filter((id): id is string => id !== undefined);
+}
+
+/** Inputs for {@link _notEnoughShards}. */
+interface NotEnoughShardsOptions {
+  /** Version manifest being restored — maps shard indexes to medium names. */
+  manifest: VersionManifest;
+  /** Parts required to reconstruct (N). */
+  needed: number;
+  /** Parts actually usable. */
+  have: number;
+  /** Shard index → why that shard could not be used. */
+  failures: Map<number, ShardFailureReason>;
+}
+
+/**
+ * Reports that too few parts survived to rebuild the version, naming the media
+ * behind each cause when the caller collected them.
+ *
+ * @param options - Manifest, counts and the per-shard failure map
+ * @returns the error to throw at the caller's failure point
+ */
+function _notEnoughShards(options: NotEnoughShardsOptions): BfsError {
+  const detail = _describeShardFailures(options.manifest, options.failures);
+  const count = fmt('pull_not_enough_shards', String(options.needed), String(options.have));
+  return new BfsError(detail ? `${count} ${detail}` : count);
+}
 
 /**
  * Emits appropriate degradation warnings based on shard failure reasons.
+ *
+ * @param failures - Shard index → why that shard could not be used
+ * @param manifest - Version manifest, to name the media the configuration lost;
+ *   that one warning is withheld when it is unavailable, since a name the
+ *   operator cannot act on is worse than silence
+ * @param io - ProviderIO the warnings are written to
  */
-function _emitDegradedWarnings(failures: Map<number, ShardFailureReason>, io: ProviderIO): void {
+function _emitDegradedWarnings(failures: Map<number, ShardFailureReason>, manifest: Nullable<VersionManifest>, io: ProviderIO): void {
   const reasons = [...failures.values()];
   if (reasons.some((r) => r === 'provider_unreachable')) {
     io.warn(t('vault_degraded_provider_unreachable'));
@@ -152,6 +276,55 @@ function _emitDegradedWarnings(failures: Map<number, ShardFailureReason>, io: Pr
   }
   if (reasons.some((r) => r === 'corrupt')) {
     io.warn(t('vault_degraded_corrupt'));
+  }
+  // A medium the backup records but the configuration has lost reads two ways —
+  // a name lost by accident, or one the operator deliberately removed — and this
+  // code cannot tell them apart. Naming the medium and offering both routes lets
+  // the operator pick; assuming the first would tell someone who just ran
+  // `provider remove` to undo it.
+  if (manifest !== null && reasons.some((r) => r === 'provider_not_configured')) {
+    const ids = _mediaFailingWith(manifest, failures, 'provider_not_configured');
+    if (ids.length > 0) io.warn(fmt('vault_degraded_provider_not_configured', ids.join(', ')));
+  }
+}
+
+/**
+ * Drains one shard's payload to finalize its trailing SHA-256, then returns the
+ * per-version blob_size and kdf_salt from its header — or null if the checksum
+ * fails. The salt is shared across a version's shards, so any checksum-clean
+ * shard is an authoritative source; a bit-rotted kdf_salt also corrupts this
+ * checksum, so a damaged shard is rejected here and a healthy sibling supplies
+ * the salt instead. The stream is drained through a null sink, so peak RAM stays
+ * O(chunk), not O(shard).
+ *
+ * @param payloadStream - checksum-verified payload stream from parseShardHeaderFromStream
+ * @param header        - parsed shard header carrying blob_size and kdf_salt
+ * @returns `meta` with the version's blob_size and kdf_salt, or null `meta` when
+ *   the read did not complete; `corrupt` tells the two apart — true only for a
+ *   failed checksum, false for a read that broke for any other reason and says
+ *   nothing about the bytes
+ */
+async function _adoptSaltFromVerifiedShard(payloadStream: Readable, header: ShardHeader): Promise<{ meta: Nullable<{ blobSize: number; kdf_salt: Nullable<Buffer> }>; corrupt: boolean }> {
+  try {
+    await pipeline(
+      payloadStream,
+      new Writable({
+        write(_chunk, _enc, cb) {
+          cb();
+        },
+      }),
+    );
+    return { meta: { blobSize: Number(header.blob_size), kdf_salt: header.kdf_salt }, corrupt: false };
+  } catch (err) {
+    if (debugEnabled) {
+      process.stderr.write(`[bfs:debug] salt-source shard failed checksum, deferring to a sibling: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+    payloadStream.destroy();
+    // Only a failed checksum condemns the part. A read that broke for any other
+    // reason — a file briefly locked by a scanner, an I/O hiccup — says nothing
+    // about the bytes, so it must not be reported as damage; the part keeps its
+    // place and is read again, independently, by _validateShardIntegrity.
+    return { meta: null, corrupt: err instanceof ShardCorruptedError };
   }
 }
 
@@ -178,7 +351,8 @@ async function _downloadShardsToTempFiles(
   for (const ms of manifest.shards) {
     const pc = config.providers.find((p) => p.id === ms.provider_id);
     if (!pc) {
-      options.io.warn(fmt('vault_provider_not_found', ms.provider_id, String(ms.shard_index)));
+      failures.set(ms.shard_index, 'provider_not_configured');
+      options.io.warn(fmt('pull_provider_not_found_skip', ms.provider_id));
       continue;
     }
     // Adapter for pc.type may be unregistered (an external adapter left
@@ -211,22 +385,40 @@ async function _downloadShardsToTempFiles(
         const stat = await fs.stat(tmpPath);
         process.stderr.write(`[bfs:debug] shard ${ms.shard_index} downloaded: ${stat.size} bytes\n`);
       }
-      // Parse header from stable temp file — destroy both payload stream and the
-      // underlying file stream to stop the orphaned background SHA-256 task from
-      // holding the file handle open (prevents cleanup failure on Windows).
+      // Parse header from stable temp file. Adopt the per-version blob_size and
+      // kdf_salt only from a shard whose trailing checksum verifies
+      // (_adoptSaltFromVerifiedShard); one that fails there is dropped with its
+      // cause recorded, while a shard read after the size is known is checked
+      // later by _validateShardIntegrity instead. Destroying the streams stops
+      // the orphaned background SHA-256 task from holding the file handle open
+      // on Windows.
       const fs1 = createReadStream(tmpPath);
       const { header, payloadStream } = await parseShardHeaderFromStream(fs1);
-      payloadStream.on('error', () => {}).destroy();
-      fs1.destroy();
       if (blobSize === 0) {
-        blobSize = Number(header.blob_size);
-        kdf_salt = header.kdf_salt;
+        const { meta, corrupt } = await _adoptSaltFromVerifiedShard(payloadStream, header);
+        if (meta) {
+          blobSize = meta.blobSize;
+          kdf_salt = meta.kdf_salt;
+        } else if (corrupt) {
+          // The part read back but failed its own checksum. Recording that here
+          // is what lets the restore name this medium as damaged instead of
+          // dying on an unread size with nothing to act on.
+          fs1.destroy();
+          failures.set(ms.shard_index, 'corrupt');
+          options.io.warn(fmt('vault_shard_damaged_on_provider', pc.id));
+          continue;
+        }
+      } else {
+        payloadStream.on('error', () => {}).destroy();
       }
+      fs1.destroy();
       tmpPaths.set(ms.shard_index, tmpPath);
       options.io.progress(fmt('vault_download_shard_progress', String(ms.shard_index + 1), String(N + K)), ((ms.shard_index + 1) / (N + K)) * 100);
-    } catch {
-      failures.set(ms.shard_index, 'file_missing');
-      options.io.warn(fmt('vault_file_missing_on_provider', pc.id));
+    } catch (err) {
+      const reason = _downloadFailureReason(err);
+      failures.set(ms.shard_index, reason);
+      const notice = reason === 'corrupt' ? 'vault_shard_damaged_on_provider' : 'vault_file_missing_on_provider';
+      options.io.warn(fmt(notice, pc.id));
     }
   }
   if (debugEnabled) {
@@ -323,6 +515,10 @@ interface ValidateShardsOptions {
   targetVersion: number;
   /** Shard failure map; corrupt shards are added with reason 'corrupt'. */
   failures: Map<number, ShardFailureReason>;
+  /** Version manifest, to name the medium a rejected part came from. */
+  manifest: VersionManifest;
+  /** ProviderIO the per-medium damage notice is written to. */
+  io: ProviderIO;
 }
 
 /**
@@ -334,12 +530,14 @@ interface ValidateShardsOptions {
  * Without this, a present-but-corrupt shard would surface its error mid-decode
  * and abort the whole restore even when the redundancy to survive it is intact.
  * Streams are drained, never buffered — peak RAM stays O(chunk), not O(shard).
+ * Each rejected part names its medium, so a restore that survives on redundancy
+ * still tells the operator where the damage is.
  *
- * @param options - tmpPaths (mutated: corrupt removed), encKey, targetVersion, failures (mutated)
+ * @param options - tmpPaths (mutated: corrupt removed), encKey, targetVersion, failures (mutated), manifest, io
  * @returns nothing; mutates `tmpPaths` and `failures` in place
  */
 async function _validateShardIntegrity(options: ValidateShardsOptions): Promise<void> {
-  const { tmpPaths, encKey, targetVersion, failures } = options;
+  const { tmpPaths, encKey, targetVersion, failures, manifest, io } = options;
   for (const [shardIdx, tmpPath] of [...tmpPaths]) {
     try {
       const fileStream = createReadStream(tmpPath);
@@ -368,6 +566,12 @@ async function _validateShardIntegrity(options: ValidateShardsOptions): Promise<
       if (!(err instanceof ShardCorruptedError)) throw err;
       tmpPaths.delete(shardIdx);
       failures.set(shardIdx, 'corrupt');
+      // Which medium holds the damage is the one thing the operator can act on,
+      // and a restore that survives on redundancy is exactly where it would
+      // otherwise go unsaid — the summary sentence only appears when the restore
+      // fails outright.
+      const damaged = manifest.shards.find((s) => s.shard_index === shardIdx)?.provider_id;
+      if (damaged !== undefined) io.warn(fmt('vault_shard_damaged_on_provider', damaged));
       if (debugEnabled) {
         process.stderr.write(`[bfs:debug] shard ${shardIdx} failed integrity check: ${err.message}\n`);
       }
@@ -399,7 +603,7 @@ async function _pullV2(config: VaultConfig, manifest: VersionManifest, options: 
   const tmpPaths = new Map<number, string>();
   try {
     const { blobSize, kdf_salt, failures } = await _downloadShardsToTempFiles(config, manifest, options, tmpDir, tmpPaths);
-    if (tmpPaths.size < N) throw new BfsError(fmt('pull_not_enough_shards', String(N), String(tmpPaths.size)));
+    if (tmpPaths.size < N) throw _notEnoughShards({ manifest, needed: N, have: tmpPaths.size, failures });
     if (blobSize === 0) throw new BfsError(t('pull_blob_size_unreadable'));
     const shardSize = calcShardPayloadSize(blobSize, N);
     const numStripes = Math.ceil(shardSize / stripeSize);
@@ -419,8 +623,8 @@ async function _pullV2(config: VaultConfig, manifest: VersionManifest, options: 
     // but corrupt shard (bit rot, truncation, tamper) is excluded here and
     // reconstructed from the healthy shards + parity, instead of poisoning the
     // decode and aborting the whole restore.
-    await _validateShardIntegrity({ tmpPaths, encKey, targetVersion, failures });
-    if (tmpPaths.size < N) throw new BfsError(fmt('pull_not_enough_shards', String(N), String(tmpPaths.size)));
+    await _validateShardIntegrity({ tmpPaths, encKey, targetVersion, failures, manifest, io: options.io });
+    if (tmpPaths.size < N) throw _notEnoughShards({ manifest, needed: N, have: tmpPaths.size, failures });
     await _decodeFromTempFiles({ tmpPaths, N, K, stripeSize, blobSize, targetVersion, encKey, outputPath, io: options.io });
     return { isDegraded: tmpPaths.size < N + K, failures };
   } finally {
@@ -464,7 +668,8 @@ async function downloadShardSlots(
   for (const ms of manifest.shards) {
     const pc = config.providers.find((p) => p.id === ms.provider_id);
     if (!pc) {
-      io.warn(fmt('pull_provider_not_found_skip', ms.provider_id, String(ms.shard_index)));
+      failures.set(ms.shard_index, 'provider_not_configured');
+      io.warn(fmt('pull_provider_not_found_skip', ms.provider_id));
       continue;
     }
     // See _downloadShardsToTempFiles: an unregistered adapter type must skip
@@ -484,19 +689,31 @@ async function downloadShardSlots(
     }
     try {
       const shardData = await fetchShard({ pc, ms, config, cacheDir, targetVersion, io });
-      if (!shardData) continue;
+      // fetchShard returns null for a part whose bytes no longer match the hash
+      // recorded for it — the part is there and readable, its contents are not
+      // what they should be. That is damage, and the failure report must say so
+      // rather than leave this medium unaccounted for.
+      if (!shardData) {
+        failures.set(ms.shard_index, 'corrupt');
+        continue;
+      }
       const { header: meta } = await parseShardHeaderFromStream(Readable.from(shardData));
       if (meta.shard_index !== ms.shard_index || meta.version !== targetVersion || meta.vault_id !== config.vault_id) {
-        io.warn(fmt('pull_shard_header_invalid_skip', String(ms.shard_index)));
+        failures.set(ms.shard_index, 'corrupt');
+        io.warn(fmt('pull_shard_header_invalid_skip', ms.provider_id));
         continue;
       }
       shardSlots[ms.shard_index] = extractShardPayload(shardData);
       if (blobSize === 0) blobSize = Number(meta.blob_size);
       if (!kdf_salt && meta.kdf_salt) kdf_salt = meta.kdf_salt;
       io.progress(fmt('vault_download_shard_progress', String(ms.shard_index + 1), String(N + K)), ((ms.shard_index + 1) / (N + K)) * 100);
-    } catch {
-      failures.set(ms.shard_index, 'file_missing');
-      io.warn(fmt('vault_file_missing_on_provider', pc.id));
+    } catch (err) {
+      // The per-medium notice has to agree with the cause recorded for it —
+      // otherwise one run tells the operator "missing" here and "damaged" in the
+      // closing sentence, about the same medium.
+      const reason = _failureReason(err);
+      failures.set(ms.shard_index, reason);
+      io.warn(fmt(reason === 'corrupt' ? 'vault_shard_damaged_on_provider' : 'vault_file_missing_on_provider', pc.id));
     }
   }
   return { shardSlots, blobSize, kdf_salt, failures };
@@ -542,7 +759,7 @@ async function fetchShard(options: FetchShardOptions): Promise<Nullable<Buffer>>
   const shardStream = await provider.download({ provider_id: ms.provider_id, path: filename });
   const shardData = await streamToBuffer(shardStream);
   if (hashBuffer(extractShardPayload(shardData)) !== ms.shard_hash) {
-    io.warn(fmt('pull_shard_hash_mismatch_skip', String(ms.shard_index)));
+    io.warn(fmt('pull_shard_hash_mismatch_skip', ms.provider_id));
     return null;
   }
   return shardData;
@@ -651,6 +868,10 @@ export async function init(rootDir: string, options: InitOptions): Promise<void>
     const p = providerRegistry.create(pc, options.io);
     p.setVaultName(options.vault_name);
     await p.probeConnection();
+    // Refuse a target that already holds a DIFFERENT backup of the same name: a
+    // fresh init has no vault_id yet, so any shard present is foreign. Stops a
+    // later push from silently overwriting another machine's shards.
+    await assertNoForeignVault(p, options.vault_name, null, options.io);
   }
 
   const config: VaultConfig = {
@@ -752,7 +973,7 @@ async function _downloadAndVerifyBlob({
     const downloaded = await downloadShardSlots(config, manifest, rootDir, options.io);
     shardFailures = downloaded.failures;
     const available = downloaded.shardSlots.filter((s) => s !== null).length;
-    if (available < N) throw new BfsError(fmt('pull_not_enough_shards', String(N), String(available)));
+    if (available < N) throw _notEnoughShards({ manifest, needed: N, have: available, failures: shardFailures });
     options.io.info(t('vault_decoding_rs'));
     const decoded = await decodeAndDecrypt({ shardSlots: downloaded.shardSlots, manifest, kdf_salt: downloaded.kdf_salt, blobSize: downloaded.blobSize, targetVersion, cacheDir, options });
     plainBlob = decoded.plainBlob;
@@ -868,7 +1089,7 @@ async function _finalizePullState({ rootDir, cacheDir, state, targetVersion, man
       // cache dir may not exist — fine
     }
   } else {
-    _emitDegradedWarnings(shardFailures, io);
+    _emitDegradedWarnings(shardFailures, manifest, io);
   }
   untrackFile(blobCachePath);
   await fs.unlink(blobCachePath).catch(() => {});
@@ -924,12 +1145,43 @@ export async function pull(rootDir: string, options: PullOptions): Promise<PullR
 }
 
 /**
+ * Refuses a prune that would leave no version anyone could restore.
+ *
+ * Housekeeping picks versions by number, so `--keep-last 1` over a backup whose
+ * newest version rotted deletes the operator's only good copy and keeps the
+ * unrecoverable one. The verdict comes from what the last verify recorded — the
+ * only knowledge available without pulling every version over the network — so a
+ * backup that has never been verified deeply may still hold surprises; the
+ * message says as much. Nothing is refused when no restorable version exists in
+ * the first place: unrecoverable versions must stay deletable.
+ *
+ * @param rootDir - Absolute path to the vault working directory
+ * @param options - The prune request (`force` skips this guard entirely)
+ * @throws BfsError when the request would delete the last restorable version
+ */
+export async function assertPruneKeepsARestorableVersion(rootDir: string, options: PruneOptions): Promise<void> {
+  if (options.force) return;
+
+  const manifests = await listManifests(rootDir);
+  const restorable = manifests.filter((m) => m.health !== VersionHealth.Damaged);
+  if (restorable.length === 0) return;
+
+  const doomed = restorable.filter((m) => options.versions.includes(m.version));
+  const surviving = restorable.filter((m) => !options.versions.includes(m.version));
+  if (doomed.length > 0 && surviving.length === 0) {
+    const last = doomed[doomed.length - 1];
+    throw new BfsError(fmt('prune_last_restorable', String(last?.version ?? '')));
+  }
+}
+
+/**
  * Deletes specified versions: removes shards from all providers and manifests from disk.
  * Updates state.json if the latest version was pruned.
  *
  * @param rootDir - Absolute path to the vault working directory
  * @param options - Versions to delete and associated ProviderIO
- * @throws BfsError if config is missing.
+ * @throws BfsError if config is missing, or if the request would delete the last
+ *   version that can still be restored (unless `force` is set).
  */
 export async function prune(rootDir: string, options: PruneOptions): Promise<void> {
   const config = await readConfig(rootDir);
@@ -938,6 +1190,8 @@ export async function prune(rootDir: string, options: PruneOptions): Promise<voi
   assertSchemeValid(config);
 
   const state = await readState(rootDir);
+
+  await assertPruneKeepsARestorableVersion(rootDir, options);
 
   const silentIO: ProviderIO = {
     lang: 'en',
@@ -1037,8 +1291,7 @@ export async function removeProvider(rootDir: string, providerId: string, option
     const manifests = await listManifests(rootDir);
     for (const manifest of manifests) {
       if (manifest.shards.some((s) => s.provider_id === providerId) && manifest.health === VersionHealth.Healthy) {
-        manifest.health = VersionHealth.Degraded;
-        await writeManifest(rootDir, manifest);
+        await writeManifest(rootDir, applyHealthChange(manifest, VersionHealth.Degraded));
       }
     }
     return;

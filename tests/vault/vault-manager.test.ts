@@ -253,7 +253,9 @@ describe('push', () => {
   it('push → prune → manifest deleted from disk', async () => {
     await createTestFiles(root);
     await push(root, { io: mockIO() });
-    await prune(root, { versions: [1] });
+    // v1 is the only restorable version, so wiping the backup is a deliberate
+    // act that goes through `force` — the guard protects routine housekeeping.
+    await prune(root, { versions: [1], force: true });
     expect(await readManifest(root, 1)).toBeNull();
   });
 
@@ -716,7 +718,6 @@ describe('pull (roundtrip)', () => {
       };
     }
 
-    // it.fails: TDD red phase — remove .fails when the bug is fixed
     it('should restore files and update manifest.file_count when interactive retry succeeds and manifest.file_count is null (recovery case)', async () => {
       // Arrange
       await fs.writeFile(path.join(root, 'hello.txt'), 'Hello, World!');
@@ -736,7 +737,11 @@ describe('pull (roundtrip)', () => {
       expect(result.version).toBe(1);
       expect(await fs.readFile(path.join(root, 'hello.txt'), 'utf-8')).toBe('Hello, World!');
       const updated = await readManifest(root, 1);
-      expect(updated?.file_count).toBe(1);
+      // The backup holds two files — hello.txt and the .bfsignore that init created
+      // (only .bfs/ is excluded, not .bfsignore) — so the recovery-case recompute
+      // reports 2. (A compressed blob's file table now lists one entry per user
+      // file, not a single "bfs.pack.zip" pseudo-entry.)
+      expect(updated?.file_count).toBe(2);
     });
 
     it('should restore files and return version when interactive retry succeeds and file_count is already set', async () => {
@@ -922,7 +927,7 @@ describe('removeProvider — strategy: relocate', () => {
 
   it('should throw when shards do not exist at the new provider address', async () => {
     // p0newDir is empty — no shard files were copied there
-    // Spec: "Sprawdź czy shardy istnieją (list). Jeśli nie istnieją → błąd"
+    // Spec: "Check that shards exist (list). If they don't → error"
     const emptyDir = await tmp();
     try {
       await expect(removeProvider(root, 'p0', { strategy: 'relocate', newConnectionConfig: { path: emptyDir }, io: mockIO() })).rejects.toThrow();
@@ -982,7 +987,7 @@ describe('scheme — manifests preserve original per-version scheme', () => {
 
     // Change scheme to 2/2 directly in config (same 4 providers, N+K unchanged)
     // Spec: "bfs scheme set zmienia jedynie config.json —
-    //        istniejące wersje zachowują swój oryginalny schemat"
+    //        existing versions keep their original scheme"
     const config = await readConfig(root);
     if (!config) throw new Error('no config');
     await writeConfig(root, { ...config, scheme: { data_shards: 2, parity_shards: 2 } });

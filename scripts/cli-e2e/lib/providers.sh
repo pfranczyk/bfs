@@ -14,7 +14,7 @@
 # parse_ftp_specs — fill FTP_HOST/PORT/USER/PASS/BASE/SECURE from FTP_SPECS.
 # Grammar: [ftp[s]://]user:pass@host[:port]/basepath
 parse_ftp_specs() {
-  FTP_HOST=(); FTP_PORT=(); FTP_USER=(); FTP_PASS=(); FTP_BASE=(); FTP_SECURE=()
+  FTP_HOST=(); FTP_PORT=(); FTP_USER=(); FTP_PASS=(); FTP_BASE=(); FTP_SECURE=(); FTP_CERT_FP=()
   local spec secure userpass rest hostport host port path
   for spec in "${FTP_SPECS[@]:-}"; do
     [ -n "$spec" ] || continue
@@ -46,18 +46,23 @@ parse_ftp_specs() {
     port="${hostport#*:}"; [ "$port" = "$hostport" ] && port=21
     FTP_HOST+=("$host"); FTP_PORT+=("$port"); FTP_USER+=("$user")
     FTP_PASS+=("$pass"); FTP_BASE+=("$path"); FTP_SECURE+=("$secure")
+    # `--ftp` specs carry no certificate pin (plaintext or non-pinned FTPS);
+    # keep the array index-aligned with the other endpoint arrays.
+    FTP_CERT_FP+=("")
   done
 }
 
 ftp_count() { printf '%s' "${#FTP_HOST[@]}"; }
 
-# register_ftp_endpoint <host> <port> <user> <pass> <base> <secure> — append a
-# scenario-managed FTP endpoint to the pool arrays; the new index is left in the
-# global REG_FTP_INDEX. (Must NOT be captured via $(...) — command substitution's
-# subshell would drop the array appends.) Lets a docker-managed scenario provision
-# its own ftpd (not from --ftp flags).
+# register_ftp_endpoint <host> <port> <user> <pass> <base> <secure> [cert-fp] —
+# append a scenario-managed FTP endpoint to the pool arrays; the new index is left
+# in the global REG_FTP_INDEX. (Must NOT be captured via $(...) — command
+# substitution's subshell would drop the array appends.) Lets a docker-managed
+# scenario provision its own ftpd (not from --ftp flags). The optional 7th arg is
+# a SHA-256 certificate fingerprint (AA:BB:… form): when given, _pool_add_ftp adds
+# `--cert-fingerprint <fp>` so `bfs` pins the endpoint's self-signed FTPS cert.
 register_ftp_endpoint() {
-  FTP_HOST+=("$1"); FTP_PORT+=("$2"); FTP_USER+=("$3"); FTP_PASS+=("$4"); FTP_BASE+=("$5"); FTP_SECURE+=("$6")
+  FTP_HOST+=("$1"); FTP_PORT+=("$2"); FTP_USER+=("$3"); FTP_PASS+=("$4"); FTP_BASE+=("$5"); FTP_SECURE+=("$6"); FTP_CERT_FP+=("${7:-}")
   REG_FTP_INDEX="$(( ${#FTP_HOST[@]} - 1 ))"
 }
 
@@ -146,7 +151,14 @@ _pool_add_ftp() {
   e=$(( PV_FTP_ALLOC % $(ftp_count) ))
   PV_FTP_ALLOC=$((PV_FTP_ALLOC + 1))
   remote="${FTP_BASE[$e]%/}/bfs-e2e-${RUN_ID}/${id}"
-  PROVIDER_ARGS+=(--provider "ftp:${id} --host ${FTP_HOST[$e]} --port ${FTP_PORT[$e]} --user ${FTP_USER[$e]} --password ${FTP_PASS[$e]} --path ${remote} --secure ${FTP_SECURE[$e]}")
+  local spec="ftp:${id} --host ${FTP_HOST[$e]} --port ${FTP_PORT[$e]} --user ${FTP_USER[$e]} --password ${FTP_PASS[$e]} --path ${remote} --secure ${FTP_SECURE[$e]}"
+  # A pinned endpoint (registered with a cert fingerprint) adds the pin so `bfs`
+  # verifies the FTPS server's self-signed certificate against it. Empty for
+  # every plaintext / non-pinned endpoint, so existing scenarios are unchanged.
+  if [ -n "${FTP_CERT_FP[$e]:-}" ]; then
+    spec="${spec} --cert-fingerprint ${FTP_CERT_FP[$e]}"
+  fi
+  PROVIDER_ARGS+=(--provider "$spec")
   PV_ID+=("$id"); PV_TYPE+=("ftp"); PV_LOCALDIR+=("")
   PV_FTP_REMOTE+=("$remote"); PV_FTP_ENDPOINT+=("$e")
   PV_SSH_REMOTE+=(""); PV_SSH_ENDPOINT+=("")

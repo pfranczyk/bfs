@@ -5,7 +5,7 @@ import { DecryptionError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
 import type { ShardLocation } from '../../src/types/index.js';
 
-// Argon2id z parametrami produkcyjnymi (64 MiB) jest wolny — wyższy timeout.
+// Argon2id with production parameters (64 MiB) is slow — higher timeout.
 const TIMEOUT = 30_000;
 
 const SAMPLE_LOCATIONS: ShardLocation[] = [
@@ -133,9 +133,9 @@ describe('crypto', () => {
         const { encrypted: e1, salt: s1 } = await encryptBlob(data, 'pw');
         const { encrypted: e2, salt: s2 } = await encryptBlob(data, 'pw');
 
-        // Różne nonce → różny ciphertext (nawet jeśli hasło i dane identyczne)
+        // Different nonce → different ciphertext (even if password and data are identical)
         expect(e1.equals(e2)).toBe(false);
-        // Każda wersja ma swój salt
+        // Each version has its own salt
         expect(s1.equals(s2)).toBe(false);
       },
       TIMEOUT,
@@ -163,11 +163,11 @@ describe('crypto', () => {
         const password = 'recovery-password';
         const salt = generateSalt();
 
-        // Szyfrowanie — jak przy push
+        // Encryption — as in push
         const keyForEncrypt = await deriveKey(password, salt);
         const encrypted = encryptLocationMap(SAMPLE_LOCATIONS, keyForEncrypt);
 
-        // Deszyfrowanie — jak przy recovery: salt z nagłówka sharda, hasło od usera
+        // Decryption — as in recovery: salt from the shard header, password from the user
         const keyForDecrypt = await deriveKey(password, salt);
         const decrypted = decryptLocationMap(encrypted, keyForDecrypt);
 

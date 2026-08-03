@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { assert, runBfs, runTest } from '../smoke-runner.js';
+import { assert, runBfs, runTest, skipTest } from '../smoke-runner.js';
 import type { SmokeContext, SuiteResult, TestResult } from '../smoke-types.js';
 import { buildInitArgs, fileExists, readJson } from '../smoke-vault.js';
 
@@ -235,6 +235,149 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
+  // ── provider remove --strategy remove: the recommended next steps ──────────
+  // Dropping a storage leaves the backup with fewer storages than its scheme
+  // declares, and every command the removal recommends — `bfs pull`, `bfs push`,
+  // `bfs prune` — passes through the same scheme check, so all three refuse to
+  // run until the scheme matches the storages that are left. `bfs scheme set` is
+  // what unblocks them, which is why it has to lead the list; `bfs provider add`
+  // cannot, because it raises parity by one and so widens the very mismatch it
+  // would have to close.
+  //
+  // Each test runs the real CLI in two parts. First the reality proof: the three
+  // recommended commands are blocked, then `bfs scheme set` with numbers that fit
+  // the remaining storages makes `bfs pull` work — evidence that the way out
+  // exists and starts where the list should point. Then the contract: the printed
+  // list names those steps in that order.
+  //
+  // XDG_CONFIG_HOME is redirected because `--lang` persists the choice in the
+  // global settings file, which would otherwise be the developer's own.
+
+  const rmLangDir = path.join(ctx.sourceDir, 'rm-lang-config');
+  const rmEnv: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: rmLangDir };
+
+  tests.push(
+    await runTest('B10a', 'provider remove --strategy remove — recommended steps are ordered and actionable (EN)', async () => {
+      await fs.mkdir(rmLangDir, { recursive: true });
+      const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rm-en', rmEnv);
+      const rr = runBfs(['--lang', 'en', 'provider', 'remove', 'rm-en-p4', '--strategy', 'remove', '--yes'], vaultDir, undefined, rmEnv);
+      assert(rr.status === 0, `remove exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
+      const steps = rr.stdout + rr.stderr;
+
+      // Reality, part 1 — every recommended command is dead until the scheme is fixed.
+      for (const { label, args } of RECOMMENDED_AFTER_REMOVAL) {
+        const rb = runBfs(['--lang', 'en', ...args], vaultDir, undefined, rmEnv);
+        const blockedOut = rb.stdout + rb.stderr;
+        assert(rb.status !== 0, `expected \`${label}\` to fail after removal, got exit ${rb.status ?? 'null'}\n${blockedOut.slice(0, 400)}`);
+        assert(blockedOut.includes('Scheme requires 4 providers, configured: 3'), `expected provider-count mismatch from \`${label}\`: ${blockedOut.slice(0, 400)}`);
+        assert(blockedOut.includes('Match the scheme to the storages you have with `bfs scheme set <N> <K>`.'), `expected \`bfs scheme set <N> <K>\` as the way out of the mismatch from \`${label}\`: ${blockedOut.slice(0, 400)}`);
+        assert(!blockedOut.includes('bfs provider add'), `\`bfs provider add\` raises the required provider count together with the pool, so it never closes this gap and must not be advised by \`${label}\`: ${blockedOut.slice(0, 400)}`);
+      }
+
+      // Reality, part 2 — `bfs scheme set` is the step that opens the road.
+      const rs = runBfs(['--lang', 'en', 'scheme', 'set', '2', '1'], vaultDir, undefined, rmEnv);
+      assert(rs.status === 0, `\`bfs scheme set 2 1\` exit ${rs.status ?? 'null'}\nstdout: ${rs.stdout}\nstderr: ${rs.stderr}`);
+      const rl = runBfs(['--lang', 'en', 'pull', '--force'], vaultDir, undefined, rmEnv);
+      assert(rl.status === 0, `expected \`bfs pull\` to work after \`bfs scheme set 2 1\`, got exit ${rl.status ?? 'null'}\nstdout: ${rl.stdout}\nstderr: ${rl.stderr}`);
+
+      // Contract — the printed list leads down that same road, in that order.
+      assert(/1\.\s*`bfs scheme set/.test(steps), `expected step 1 to be \`bfs scheme set\` in: ${steps.slice(0, 600)}`);
+      assert(/2\.\s*`bfs pull`/.test(steps), `expected step 2 to be \`bfs pull\` in: ${steps.slice(0, 600)}`);
+      assert(/3\.\s*`bfs push`/.test(steps), `expected step 3 to be \`bfs push\` in: ${steps.slice(0, 600)}`);
+      assert(/4\.\s*`bfs prune`/.test(steps), `expected step 4 to be \`bfs prune\` in: ${steps.slice(0, 600)}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('B10b', 'provider remove --strategy remove — recommended steps are ordered and actionable (PL)', async () => {
+      await fs.mkdir(rmLangDir, { recursive: true });
+      const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rm-pl', rmEnv);
+      const rr = runBfs(['--lang', 'pl', 'provider', 'remove', 'rm-pl-p4', '--strategy', 'remove', '--yes'], vaultDir, undefined, rmEnv);
+      assert(rr.status === 0, `remove exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
+      const steps = rr.stdout + rr.stderr;
+
+      for (const { label, args } of RECOMMENDED_AFTER_REMOVAL) {
+        const rb = runBfs(['--lang', 'pl', ...args], vaultDir, undefined, rmEnv);
+        const blockedOut = rb.stdout + rb.stderr;
+        assert(rb.status !== 0, `expected \`${label}\` to fail after removal, got exit ${rb.status ?? 'null'}\n${blockedOut.slice(0, 400)}`);
+        assert(blockedOut.includes('Schemat wymaga 4 nośników, skonfigurowano: 3'), `expected provider-count mismatch from \`${label}\`: ${blockedOut.slice(0, 400)}`);
+        assert(blockedOut.includes('Dopasuj schemat do posiadanych nośników przez `bfs scheme set <N> <K>`.'), `expected \`bfs scheme set <N> <K>\` as the way out of the mismatch from \`${label}\`: ${blockedOut.slice(0, 400)}`);
+        assert(!blockedOut.includes('bfs provider add'), `\`bfs provider add\` raises the required provider count together with the pool, so it never closes this gap and must not be advised by \`${label}\`: ${blockedOut.slice(0, 400)}`);
+      }
+
+      const rs = runBfs(['--lang', 'pl', 'scheme', 'set', '2', '1'], vaultDir, undefined, rmEnv);
+      assert(rs.status === 0, `\`bfs scheme set 2 1\` exit ${rs.status ?? 'null'}\nstdout: ${rs.stdout}\nstderr: ${rs.stderr}`);
+      const rl = runBfs(['--lang', 'pl', 'pull', '--force'], vaultDir, undefined, rmEnv);
+      assert(rl.status === 0, `expected \`bfs pull\` to work after \`bfs scheme set 2 1\`, got exit ${rl.status ?? 'null'}\nstdout: ${rl.stdout}\nstderr: ${rl.stderr}`);
+
+      assert(/1\.\s*`bfs scheme set/.test(steps), `expected step 1 to be \`bfs scheme set\` in: ${steps.slice(0, 600)}`);
+      assert(/2\.\s*`bfs pull`/.test(steps), `expected step 2 to be \`bfs pull\` in: ${steps.slice(0, 600)}`);
+      assert(/3\.\s*`bfs push`/.test(steps), `expected step 3 to be \`bfs push\` in: ${steps.slice(0, 600)}`);
+      assert(/4\.\s*`bfs prune`/.test(steps), `expected step 4 to be \`bfs prune\` in: ${steps.slice(0, 600)}`);
+    }),
+  );
+
+  // ── provider remove: what the [R]emove strategy promises ───────────────────
+  // The strategy list is an Inquirer rawlist, but it is written to stdout before
+  // the closed stdin cancels the prompt, so the wording is observable without a
+  // terminal. Dropping a storage leaves the scheme untouched, so the [R]emove
+  // entry has to send the operator to `bfs scheme set` instead of claiming the
+  // N/K scheme follows along by itself. Inquirer hard-wraps a piped stdout at 80
+  // columns and the break lands mid-word, hence the whitespace-collapsed compare.
+
+  tests.push(
+    await runTest('B10c', 'provider remove — [R]emove strategy sends the operator to `bfs scheme set` (EN)', async () => {
+      await fs.mkdir(rmLangDir, { recursive: true });
+      const r = runBfs(['--lang', 'en', 'provider', 'remove', 'cli-p1'], cliVaultDir, '', rmEnv);
+      const listed = collapseWhitespace(r.stdout + r.stderr);
+      assert(listed.includes('[R]emove—removeproviderwithoutreplacement(matchtheN/Kschemeafterwardswith`bfsschemeset`)'), `expected the [R]emove strategy to point at \`bfs scheme set\`: ${(r.stdout + r.stderr).slice(0, 800)}`);
+      assert(!listed.includes('withoutreplacement,updateN/Kscheme'), `removal leaves the scheme untouched, so [R]emove must not promise to update it: ${(r.stdout + r.stderr).slice(0, 800)}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('B10d', 'provider remove — [R]emove strategy sends the operator to `bfs scheme set` (PL)', async () => {
+      await fs.mkdir(rmLangDir, { recursive: true });
+      const r = runBfs(['--lang', 'pl', 'provider', 'remove', 'cli-p1'], cliVaultDir, '', rmEnv);
+      const listed = collapseWhitespace(r.stdout + r.stderr);
+      assert(listed.includes('[R]emove—usuńnośnikbezzastępstwa(schematN/Kdopasujpotemprzez`bfsschemeset`)'), `expected the [R]emove strategy to point at \`bfs scheme set\`: ${(r.stdout + r.stderr).slice(0, 800)}`);
+      assert(!listed.includes('bezzastępstwa,zaktualizujschematN/K'), `removal leaves the scheme untouched, so [R]emove must not promise to update it: ${(r.stdout + r.stderr).slice(0, 800)}`);
+    }),
+  );
+
+  // ── a scheme that cannot be used at all ────────────────────────────────────
+  // A data_shards below the format minimum can only reach the config by hand,
+  // and no command can run with it. `bfs provider add` cannot repair it either —
+  // it grows the pool and the required total together — so the message has one
+  // way out to offer, `bfs scheme set`. `bfs push` validates the scheme before it
+  // reads a single file, so an unpushed vault is enough to reach the message.
+
+  tests.push(
+    await runTest('B10e', 'unusable data_shards — the fix offered is `bfs scheme set` alone (EN)', async () => {
+      await fs.mkdir(rmLangDir, { recursive: true });
+      const vaultDir = await initVaultWithBrokenScheme(ctx.sourceDir, 'bs-en', rmEnv);
+      const r = runBfs(['--lang', 'en', 'push'], vaultDir, undefined, rmEnv);
+      const out = r.stdout + r.stderr;
+      assert(r.status !== 0, `expected \`bfs push\` to refuse an unusable scheme, got exit ${r.status ?? 'null'}\n${out.slice(0, 400)}`);
+      assert(out.includes('Invalid scheme: data_shards must be an integer >= 2, got "1"'), `expected the invalid-scheme message in: ${out.slice(0, 400)}`);
+      assert(out.includes('Use `bfs scheme set <N> <K>` to fix.'), `expected \`bfs scheme set <N> <K>\` as the fix in: ${out.slice(0, 400)}`);
+      assert(!out.includes('bfs provider add'), `\`bfs provider add\` cannot bring data_shards back above the minimum and must not be advised: ${out.slice(0, 400)}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('B10f', 'unusable data_shards — the fix offered is `bfs scheme set` alone (PL)', async () => {
+      await fs.mkdir(rmLangDir, { recursive: true });
+      const vaultDir = await initVaultWithBrokenScheme(ctx.sourceDir, 'bs-pl', rmEnv);
+      const r = runBfs(['--lang', 'pl', 'push'], vaultDir, undefined, rmEnv);
+      const out = r.stdout + r.stderr;
+      assert(r.status !== 0, `expected \`bfs push\` to refuse an unusable scheme, got exit ${r.status ?? 'null'}\n${out.slice(0, 400)}`);
+      assert(out.includes('Nieprawidłowy schemat: data_shards musi być liczbą całkowitą >= 2, podano "1"'), `expected the invalid-scheme message in: ${out.slice(0, 400)}`);
+      assert(out.includes('Użyj `bfs scheme set <N> <K>`, aby naprawić.'), `expected \`bfs scheme set <N> <K>\` as the fix in: ${out.slice(0, 400)}`);
+      assert(!out.includes('bfs provider add'), `\`bfs provider add\` cannot bring data_shards back above the minimum and must not be advised: ${out.slice(0, 400)}`);
+    }),
+  );
+
   // ── init --ci --provider pass-through grammar ────────────────────────────
   // type:name + shell-style flags. Credentials live in JSON files, not argv.
 
@@ -378,5 +521,153 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
+  // ── excluded entries (symlinks / special files) ────────────────────────────
+  // push refuses entries that can never be in a backup, listing them and
+  // pointing at .bfsignore; --allow-excluded backs up everything else.
+  tests.push(
+    await runTest('B21', 'bfs push --help lists --allow-excluded (EN)', () => {
+      const r = runBfs(['--lang', 'en', 'push', '--help'], cliVaultDir);
+      assert(r.status === 0, `exit ${r.status ?? 'null'}\n${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('--allow-excluded'), `expected --allow-excluded flag in help: ${out.slice(0, 500)}`);
+      assert(/symbolic links/.test(out), `expected EN --allow-excluded description in help: ${out.slice(0, 500)}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('B22', 'bfs push --help shows Polish --allow-excluded description (PL)', () => {
+      const r = runBfs(['--lang', 'pl', 'push', '--help'], cliVaultDir);
+      assert(r.status === 0, `exit ${r.status ?? 'null'}\n${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      assert(/dowiązaniami symbolicznymi/.test(out), `expected Polish --allow-excluded description in help: ${out.slice(0, 500)}`);
+    }),
+  );
+
+  // POSIX-only: creating a real symlink needs admin/developer mode on Windows.
+  const exclVaultDir = path.join(ctx.sourceDir, 'excl-vault');
+  const exclDirs = [path.join(ctx.sourceDir, 'excl-p1'), path.join(ctx.sourceDir, 'excl-p2'), path.join(ctx.sourceDir, 'excl-p3')];
+  if (process.platform === 'win32') {
+    tests.push(skipTest('B23', 'push aborts (exit 3) on a symlink and names .bfsignore', 'symlinks require admin on Windows'));
+    tests.push(skipTest('B24', 'push --allow-excluded backs up the rest (exit 0, healthy)', 'symlinks require admin on Windows'));
+  } else {
+    tests.push(
+      await runTest('B23', 'push aborts (exit 3) on a symlink and names .bfsignore', async () => {
+        await fs.mkdir(exclVaultDir, { recursive: true });
+        for (const d of exclDirs) await fs.mkdir(d, { recursive: true });
+        await fs.writeFile(path.join(exclVaultDir, 'real.txt'), 'excluded smoke test');
+        const ri = runBfs(
+          buildInitArgs(
+            'excl-vault',
+            [
+              { id: 'excl-p1', dir: exclDirs[0] as string },
+              { id: 'excl-p2', dir: exclDirs[1] as string },
+              { id: 'excl-p3', dir: exclDirs[2] as string },
+            ],
+            ['--no-enc'],
+          ),
+          exclVaultDir,
+        );
+        assert(ri.status === 0, `init exit ${ri.status ?? 'null'}\n${ri.stderr}`);
+        await fs.symlink('real.txt', path.join(exclVaultDir, 'link.txt'));
+        const r = runBfs(['push'], exclVaultDir);
+        assert(r.status === 3, `expected exit 3, got ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+        const out = r.stdout + r.stderr;
+        assert(out.includes('.bfsignore'), `expected .bfsignore hint in: ${out.slice(0, 500)}`);
+        assert(out.includes('link.txt'), `expected link.txt listed in: ${out.slice(0, 500)}`);
+      }),
+    );
+
+    tests.push(
+      await runTest('B24', 'push --allow-excluded backs up the rest (exit 0, healthy)', () => {
+        const r = runBfs(['push', '--allow-excluded'], exclVaultDir);
+        assert(r.status === 0, `expected exit 0, got ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+        const out = r.stdout + r.stderr;
+        assert(/healthy|zdrow/i.test(out), `expected healthy in: ${out.slice(0, 300)}`);
+      }),
+    );
+  }
+
   return { name: 'Suite B — CLI init (subprocess)', tests };
+}
+
+/**
+ * The commands `bfs provider remove --strategy remove` tells the operator to run
+ * next. All of them go through the scheme check, so all of them are unreachable
+ * while the scheme still counts the storage that was dropped.
+ */
+const RECOMMENDED_AFTER_REMOVAL: Array<{ label: string; args: string[] }> = [
+  { label: 'bfs pull', args: ['pull', '--force'] },
+  { label: 'bfs push', args: ['push'] },
+  { label: 'bfs prune', args: ['prune', '1', '--yes'] },
+];
+
+/**
+ * Creates an isolated vault with four local providers (scheme 3+1) and two
+ * pushed versions. `provider remove --strategy remove` refuses to drop a storage
+ * from a pool of three or fewer, the pushed versions make the removal act on a
+ * real backup, and the second version keeps `bfs prune 1` from being refused for
+ * deleting the only restorable version — so prune reaches the scheme check.
+ *
+ * @param sourceDir - Smoke temp root that holds the vault and provider dirs
+ * @param name      - Prefix for the vault dir, vault name and provider names
+ * @param env       - Environment for every spawned `bfs` (isolated XDG_CONFIG_HOME)
+ * @returns           Path of the created vault directory
+ */
+async function initVaultForRemoval(sourceDir: string, name: string, env: NodeJS.ProcessEnv): Promise<string> {
+  const vaultDir = path.join(sourceDir, `${name}-vault`);
+  const providerDirs = [1, 2, 3, 4].map((i) => path.join(sourceDir, `${name}-p${i}`));
+  await Promise.all([vaultDir, ...providerDirs].map((d) => fs.mkdir(d, { recursive: true })));
+  await fs.writeFile(path.join(vaultDir, 'remove-test.txt'), 'provider remove next-steps smoke');
+
+  const initArgs = ['init', `${name}-vault`, '--ci', '--data-shards', '3', '--parity-shards', '1', ...providerDirs.flatMap((d, i) => ['--provider', `local:${name}-p${i + 1} --path ${d}`]), '--push-mode', 'new_version', '--no-enc'];
+  const ri = runBfs(initArgs, vaultDir, undefined, env);
+  assert(ri.status === 0, `init exit ${ri.status ?? 'null'}\nstdout: ${ri.stdout}\nstderr: ${ri.stderr}`);
+
+  for (const version of [1, 2]) {
+    await fs.writeFile(path.join(vaultDir, 'remove-test.txt'), `provider remove next-steps smoke v${version}`);
+    const rp = runBfs(['push'], vaultDir, undefined, env);
+    assert(rp.status === 0, `push v${version} exit ${rp.status ?? 'null'}\nstdout: ${rp.stdout}\nstderr: ${rp.stderr}`);
+  }
+
+  return vaultDir;
+}
+
+/**
+ * Creates an isolated vault whose stored scheme is unusable: `data_shards` is
+ * lowered to 1 in `.bfs/config.json`, below the minimum the format allows — a
+ * state only hand-editing produces. No push is needed, because `bfs push`
+ * validates the scheme before it touches any data.
+ *
+ * @param sourceDir - Smoke temp root that holds the vault and provider dirs
+ * @param name      - Prefix for the vault dir, vault name and provider names
+ * @param env       - Environment for every spawned `bfs` (isolated XDG_CONFIG_HOME)
+ * @returns           Path of the created vault directory
+ */
+async function initVaultWithBrokenScheme(sourceDir: string, name: string, env: NodeJS.ProcessEnv): Promise<string> {
+  const vaultDir = path.join(sourceDir, `${name}-vault`);
+  const providers = [1, 2, 3].map((i) => ({ id: `${name}-p${i}`, dir: path.join(sourceDir, `${name}-p${i}`) }));
+  await Promise.all([vaultDir, ...providers.map((p) => p.dir)].map((d) => fs.mkdir(d, { recursive: true })));
+  await fs.writeFile(path.join(vaultDir, 'broken-scheme-test.txt'), 'unusable scheme smoke');
+
+  const ri = runBfs(buildInitArgs(`${name}-vault`, providers, ['--push-mode', 'new_version', '--no-enc']), vaultDir, undefined, env);
+  assert(ri.status === 0, `init exit ${ri.status ?? 'null'}\nstdout: ${ri.stdout}\nstderr: ${ri.stderr}`);
+
+  const configPath = path.join(vaultDir, '.bfs', 'config.json');
+  const config = await readJson<{ scheme: { data_shards: number; parity_shards: number } }>(configPath);
+  config.scheme.data_shards = 1;
+  await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
+
+  return vaultDir;
+}
+
+/**
+ * Removes every whitespace run from CLI output so a substring assertion survives
+ * the hard wrap Inquirer applies to a piped (non-TTY) stdout at 80 columns — the
+ * break lands mid-word, which a plain `includes` would miss.
+ *
+ * @param text - Raw stdout+stderr of a `bfs` run
+ * @returns      The same text with all whitespace stripped
+ */
+function collapseWhitespace(text: string): string {
+  return text.replace(/\s+/g, '');
 }

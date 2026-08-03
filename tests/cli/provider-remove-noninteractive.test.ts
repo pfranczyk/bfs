@@ -16,7 +16,7 @@ import { makeConfig, runCmd } from './_helpers.js';
 // and "works" by accident. The bug is only observable by simulating a TTY, which
 // is why this lives as a CLI unit test and not in smoke.
 
-const hoisted = vi.hoisted(() => ({ captured: null as ProviderIO | null, real: null as ((workDir: string, interactive?: boolean) => ProviderIO) | null }));
+const hoisted = vi.hoisted(() => ({ captured: null as Nullable<ProviderIO>, real: null as Nullable<(workDir: string, interactive?: boolean) => ProviderIO> }));
 
 vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn(), writeConfig: vi.fn() }));
 vi.mock('../../src/vault/vault-manager.js', () => ({ listVersions: vi.fn(), removeProvider: vi.fn() }));

@@ -425,7 +425,7 @@ export class LocalFsProvider implements StorageProvider {
    * @returns Sidecar bytes (BFSH format) or null when absent
    * @throws ProviderError on a read failure other than "not found"
    */
-  async downloadHeaderSidecar(ref: RemoteRef, _maxBytes: number): Promise<Buffer | null> {
+  async downloadHeaderSidecar(ref: RemoteRef, _maxBytes: number): Promise<Nullable<Buffer>> {
     const sidecarPath = path.join(this.vaultDir(), sidecarFilename(ref.path));
     try {
       return await fs.readFile(sidecarPath);

@@ -9,9 +9,6 @@ export const LOCK_FORMAT_VERSION = 1;
 /** Threshold above which an active-PID lock is treated as stale (ms). */
 export const LOCK_STALE_MS = 24 * 60 * 60 * 1000;
 
-/** Which long-running operation owns a given lockfile. */
-export type LockOperation = 'push' | 'repair';
-
 /** Reason a shard failed to upload, recorded in push.lock and used in CLI exit messages. */
 export type PushLockFailedReason = 'not_found' | 'mismatch' | 'auth_failed' | 'corrupted' | 'unverifiable' | 'network_error' | 'quota_exceeded' | 'unknown';
 
@@ -105,7 +102,7 @@ export function repairLockPath(rootDir: string): string {
  * exist (also tolerates ENOENT mid-flight when a concurrent `bfs clear`
  * removes the file between stat and read).
  */
-export async function readLock<T>(filePath: string): Promise<T | null> {
+export async function readLock<T>(filePath: string): Promise<Nullable<T>> {
   try {
     const content = await fs.readFile(filePath, 'utf-8');
     return JSON.parse(content) as T;
@@ -158,42 +155,136 @@ export function isLockStale(started_at: string): boolean {
 }
 
 /**
- * Pre-flight check for concurrent or partial-state operations.
- *
- * - For `push`: throws if any live lock exists, throws PartialState if a
- *   stale/dead lock exists. Push requires a clean vault.
- * - For `repair`: throws only on a live repair.lock. A stale repair.lock
- *   is left for idempotent retry; any push.lock (live or stale) is left
- *   for repair itself to consume.
+ * Max attempts to atomically take over a stale lock before treating persistent
+ * contention as an active peer. Only exhausted under pathological churn (a peer
+ * re-creating the lock every iteration).
  */
-export async function assertNoActiveLock(rootDir: string, operation: LockOperation): Promise<void> {
-  const pushLock = await readLock<PushLock>(pushLockPath(rootDir));
-  const repairLock = await readLock<RepairLock>(repairLockPath(rootDir));
+const LOCK_ACQUIRE_ATTEMPTS = 10;
 
-  switch (operation) {
-    case 'push': {
-      if (repairLock !== null) {
-        if (isPidAlive(repairLock.pid) && !isLockStale(repairLock.started_at)) {
-          throw new LockConcurrentActiveError('repair', repairLock.pid, repairLock.started_at);
-        }
-        throw new LockPartialStatePushError(0);
-      }
-      if (pushLock !== null) {
-        if (isPidAlive(pushLock.pid) && !isLockStale(pushLock.started_at)) {
-          throw new LockConcurrentActiveError('push', pushLock.pid, pushLock.started_at);
-        }
-        throw new LockPartialStatePushError(pushLock.version);
-      }
-      return;
-    }
-    case 'repair': {
-      if (repairLock !== null) {
-        if (isPidAlive(repairLock.pid) && !isLockStale(repairLock.started_at)) {
-          throw new LockConcurrentActiveError('repair', repairLock.pid, repairLock.started_at);
-        }
-        return;
-      }
-      return;
-    }
+/**
+ * True when a lock's owning process is alive AND the lock is younger than
+ * LOCK_STALE_MS — i.e. someone is actively holding it right now.
+ */
+export function isLockLive(lock: { pid: number; started_at: string }): boolean {
+  return isPidAlive(lock.pid) && !isLockStale(lock.started_at);
+}
+
+/**
+ * Reads and parses a lockfile, returning null for BOTH a missing file and a
+ * torn/unparseable one. Used after an exclusive create loses the race: the peer
+ * that just won may be mid-write, leaving a briefly empty file. Treating that as
+ * "no readable owner" lets the caller classify it as leftover state instead of
+ * crashing on JSON.parse.
+ */
+async function readLockSafe<T>(filePath: string): Promise<Nullable<T>> {
+  try {
+    const content = await fs.readFile(filePath, 'utf-8');
+    return JSON.parse(content) as T;
+  } catch (err: unknown) {
+    if (isEnoent(err) || err instanceof SyntaxError) return null;
+    throw err;
   }
+}
+
+/**
+ * Atomically creates a lockfile with O_EXCL (flag 'wx') and writes the JSON
+ * payload to the open handle. The exclusive create IS the mutual-exclusion
+ * point: of any number of racing callers, exactly one create succeeds.
+ *
+ * @returns true when this caller created (owns) the file; false on EEXIST.
+ */
+async function createLockExclusive<T>(filePath: string, lock: T): Promise<boolean> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  // 'wx' = O_CREAT | O_EXCL | O_WRONLY; mode 0o600 keeps forensic locks
+  // owner-only on POSIX (no-op on Windows NTFS).
+  const handle = await fs.open(filePath, 'wx', 0o600).catch((err: unknown) => {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return null;
+    throw err;
+  });
+  if (handle === null) return false;
+  try {
+    await handle.writeFile(JSON.stringify(lock, null, 2), { encoding: 'utf-8' });
+  } finally {
+    await handle.close();
+  }
+  return true;
+}
+
+/**
+ * Atomically acquires .bfs/push.lock for a fresh push, writing `lock` as the
+ * forensic payload. The exclusive create serialises concurrent pushes: exactly
+ * one wins the race, the losers are rejected — closing the TOCTOU window that a
+ * read-then-write pre-flight left open.
+ *
+ * @throws LockConcurrentActiveError when a live push or repair already holds the vault
+ * @throws LockPartialStatePushError when a dead/stale push.lock or repair.lock leftover is present (push requires a clean vault)
+ */
+export async function acquirePushLock(rootDir: string, lock: PushLock): Promise<void> {
+  // repair.lock is a separate file, so it stays a read-check: a live repair
+  // blocks, a dead one is partial state. The push-vs-push race is closed by the
+  // exclusive create below, not by this read.
+  const repairLock = await readLock<RepairLock>(repairLockPath(rootDir));
+  if (repairLock !== null) {
+    if (isLockLive(repairLock)) throw new LockConcurrentActiveError('repair', repairLock.pid, repairLock.started_at);
+    throw new LockPartialStatePushError(0);
+  }
+  if (await createLockExclusive(pushLockPath(rootDir), lock)) return;
+  // EEXIST: another push created push.lock first (or crashed holding it).
+  const existing = await readLockSafe<PushLock>(pushLockPath(rootDir));
+  if (existing !== null && isLockLive(existing)) {
+    throw new LockConcurrentActiveError('push', existing.pid, existing.started_at);
+  }
+  throw new LockPartialStatePushError(existing?.version ?? 0);
+}
+
+/**
+ * Acquires .bfs/push.lock for a `--cache` resume. Unlike a fresh push, the lock
+ * is expected to already exist (the crashed push being resumed), so O_EXCL
+ * cannot apply. Refuses only when a DIFFERENT live process currently holds it
+ * (or a live repair does); otherwise the caller's fresh forensic content
+ * replaces the dead/own lock. Callers must have already validated the resume
+ * state (cached blob present).
+ *
+ * @throws LockConcurrentActiveError when a live repair, or a live foreign push, holds the vault
+ */
+export async function acquireCachePushLock(rootDir: string, lock: PushLock): Promise<void> {
+  const repairLock = await readLock<RepairLock>(repairLockPath(rootDir));
+  if (repairLock !== null && isLockLive(repairLock)) {
+    throw new LockConcurrentActiveError('repair', repairLock.pid, repairLock.started_at);
+  }
+  const existing = await readLockSafe<PushLock>(pushLockPath(rootDir));
+  if (existing !== null && existing.pid !== process.pid && isLockLive(existing)) {
+    throw new LockConcurrentActiveError('push', existing.pid, existing.started_at);
+  }
+  await writeLockAtomic(pushLockPath(rootDir), lock);
+}
+
+/**
+ * Atomically acquires .bfs/repair.lock, writing `lock` as the forensic payload.
+ * The exclusive create serialises concurrent repairs; a dead/stale repair.lock
+ * is taken over (idempotent retry). A live push holds the vault, so repair
+ * refuses (first-to-start wins); a dead/stale push.lock is leftover partial
+ * state that repair is meant to recover, so it does not block.
+ *
+ * @throws LockConcurrentActiveError when a live push, or a live repair, already holds the vault
+ */
+export async function acquireRepairLock(rootDir: string, lock: RepairLock): Promise<void> {
+  const pushLock = await readLock<PushLock>(pushLockPath(rootDir));
+  if (pushLock !== null && isLockLive(pushLock)) {
+    throw new LockConcurrentActiveError('push', pushLock.pid, pushLock.started_at);
+  }
+  const lockPath = repairLockPath(rootDir);
+  for (let attempt = 0; attempt < LOCK_ACQUIRE_ATTEMPTS; attempt++) {
+    if (await createLockExclusive(lockPath, lock)) return;
+    const existing = await readLockSafe<RepairLock>(lockPath);
+    if (existing !== null && isLockLive(existing)) {
+      throw new LockConcurrentActiveError('repair', existing.pid, existing.started_at);
+    }
+    // Dead / stale / torn leftover — drop it and retry the exclusive create. A
+    // peer that recreates it first re-triggers the liveness check next round.
+    await removeLock(lockPath);
+  }
+  // Persistent contention: a peer keeps re-acquiring — treat as active.
+  const existing = await readLockSafe<RepairLock>(lockPath);
+  throw new LockConcurrentActiveError('repair', existing?.pid ?? 0, existing?.started_at ?? new Date().toISOString());
 }

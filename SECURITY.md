@@ -141,16 +141,30 @@ listed under *Out of Scope* below.
 
 ### Transport to a provider
 
-BFS does not encrypt the channel to a storage provider on your behalf. The FTP
-adapter can use FTPS (TLS) when you enable its `secure` option, but that option
-is **off by default**: a plain FTP connection sends the storage password and the
-shard bytes in cleartext over the network. This is independent of whether the
-backup itself is encrypted, and it matters most for an unencrypted backup, whose
-shard payloads and plaintext location map would then also cross the network in
-the clear. Enable FTPS, or run BFS only over a network you already trust, when
-the path to a provider is untrusted. When a backup operation connects over plain
+The FTP adapter uses FTPS (TLS) **by default**: storing a device's part over
+plain FTP now requires an explicit opt-out (`--secure false`). A plain FTP
+connection sends the storage password and the shard bytes in cleartext over the
+network — independent of whether the backup itself is encrypted, and worst for an
+unencrypted backup, whose shard payloads and plaintext location map would then
+also cross the network in the clear. When a backup operation connects over plain
 FTP, BFS prints a warning naming the server, so an unintended insecure transport
-is hard to miss.
+is hard to miss. The SSH/SFTP adapter is always encrypted.
+
+BFS verifies **who** it is talking to before sending your password, so an
+attacker on the network cannot intercept the connection. On the first FTPS
+connection to a server, BFS shows you the server certificate's fingerprint (and
+whether it is self-signed or CA-signed) and pins it — trust on first use — so a
+self-signed certificate is usable by trusting its fingerprint directly, without a
+CA chain. You can also pin a fingerprint up front (`--cert-fingerprint`) or
+accept a new one non-interactively (`--accept-new-cert`). The certificate is
+checked **before** the password is sent, and the check happens against the pinned
+fingerprint, not merely the CA chain. SSH host keys work the same way: the key is
+verified on first connection and pinned. If a server later presents a **different**
+identity than the one pinned — a changed FTPS certificate, or a changed SSH host
+key — BFS stops and reports it as detected tampering (a possible
+machine-in-the-middle), rather than silently connecting or failing with a generic
+error. This defends the transport channel against interception; it is separate
+from, and does not replace, an encrypted backup's protection of the data itself.
 
 ### Local credentials at rest
 
@@ -192,13 +206,32 @@ enforced separately, in layers:
   reconstruction and the backup is rebuilt from the remaining healthy shards plus
   parity, the same path as a shard that is missing entirely. Corrupting up to `K`
   shards is therefore as survivable as losing `K` providers, and a single damaged
-  shard cannot deny an otherwise-recoverable restore. A wrong password is
-  distinguished from corruption: it fails a shard's authentication tag (not its
-  checksum) on every shard, so it surfaces as a password error rather than being
-  mistaken for damage. `bfs verify` and `bfs
+  shard cannot deny an otherwise-recoverable restore. For an encrypted backup
+  this covers the header too: the per-version KDF salt is taken from a shard
+  whose checksum verifies, not blindly from the first shard read, so bit-rot in
+  one shard's salt — which also breaks that shard's own checksum — cannot derive
+  a wrong key and sink the whole version. This full header+payload coverage is a
+  property of the current striped format. The legacy non-striped format, which
+  `bfs push` no longer writes, validates only the manifest's payload hash on
+  restore, so header bit-rot there — the KDF salt included — is undetected and
+  can block decryption of an entire version; re-pushing the backup rewrites it
+  in the current striped format, which restores single-damaged-shard
+  survivability. A wrong password is distinguished from corruption: it fails a
+  shard's authentication tag (not its checksum) on every shard, so it surfaces as
+  a password error rather than being mistaken for damage. Disaster recovery makes
+  the same distinction at its entry point: when the shard `bfs recovery
+  --bootstrap` starts from will not open, that shard is checked against its own
+  checksum before the password is blamed, and one that fails is reported as
+  damaged — pointing at any other device of the same backup, which carries the
+  same information — instead of prompting for a password that could not help.
+  `bfs verify` and `bfs
   recovery` read only the shard header window (see *Format validation*): they
   confirm a shard is present and carries a consistent header, but do not
-  re-check its payload bytes.
+  re-check its payload bytes. `bfs verify --deep` closes that gap on demand —
+  it streams every shard end-to-end and re-computes its trailing checksum,
+  catching silent bit-rot the header check misses and setting the affected shard
+  aside as damaged. It needs no password (the checksum covers the stored bytes,
+  ciphertext included) but downloads all shard data, so it is opt-in.
 - **Content hash.** The reconstructed backup data is checked against the SHA-256
   content hash recorded for the backup. Individual files are checked too: on the
   default compressed path each file is validated against a stored CRC-32 and its
@@ -221,9 +254,14 @@ enforced separately, in layers:
   for an unencrypted backup — though it does not cover the payload, nor tampering
   applied consistently across the providers an attacker controls.
 
-As further defense-in-depth, a restore refuses to write any file whose stored
-path would land outside the directory you are restoring into (absolute paths,
-`..` traversal, NUL bytes). BFS also rejects a backup — or an individual shard —
+On the backup side, BFS never follows symbolic links or packs special files
+(sockets, FIFOs, devices): a link cannot pull data from outside the backup
+directory into the blob, and such entries are reported and excluded rather than
+silently followed (`bfs push` stops on them unless you pass `--allow-excluded` or
+list them in `.bfsignore`). As further defense-in-depth, a restore refuses to
+write any file whose stored path would land outside the directory you are
+restoring into (absolute paths, `..` traversal, NUL bytes). BFS also rejects a
+backup — or an individual shard —
 whose internal size fields have been altered to implausible values, failing with
 a clear error rather than over-allocating memory or failing unpredictably; the
 shard-header check runs during verify and recovery as well as restore. And
@@ -233,6 +271,21 @@ maximum deflate ratio and half of the machine's RAM — so a tampered or
 maliciously crafted archive that would inflate past that ceiling is stopped
 before it can exhaust memory.
 
+A restore also reapplies each file's recorded POSIX mode, so the permission bits
+are part of what a backup carries: a private key comes back as `0600` rather than
+whatever the umask would have given it, and an executable stays executable. That
+mode is a field in the backup's file table like any other, which places it under
+the same trust boundary as the rest: for an **encrypted** backup the field is
+covered by the AES-GCM tag and cannot be altered undetected, while for an
+**unencrypted** one it falls under the cleartext-trust limitation described below
+— an attacker who controls the parts can set it, `setuid` and `setgid` bits
+included, and recompute the checksums that guard it. Restoring an unencrypted
+backup you do not fully trust is therefore something to do as an ordinary user
+rather than as `root`: a forged `setuid` bit is only worth something to an
+attacker if the restoring account is privileged. On Windows the mode bits are a
+no-op, and a backup written before this release is restored without its recorded
+mode — exactly as it always was.
+
 Together these bound what a corrupted or faulty storage device can do during a
 restore. They are not, however, a substitute for encryption: apart from the
 cross-provider header check, these checks all rely on values stored in the clear,
@@ -240,6 +293,23 @@ so for an unencrypted backup a deliberate attacker who controls the shards can
 read the data and recompute them after altering it. Robust protection against
 deliberate tampering comes from an encrypted backup's AES-GCM tag, which is bound
 to a key you hold and cannot be forged without it.
+
+### Overwriting a different backup on shared storage
+
+One storage location can end up holding two different backups — two machines
+running `bfs init documents` against the same network share, or a path reused
+after a backup was abandoned. Before writing anything, `bfs init`, `bfs push` and
+`bfs provider add` read the backup UUID recorded in the parts already present at
+that location and refuse to proceed when it belongs to a *different* backup. The
+refusal is unconditional: there is no `--force` and no prompt, because the loss it
+prevents is silent and total — the second machine's push would otherwise replace
+the first machine's only copy.
+
+This bounds accidental destruction, not a hostile co-tenant: anyone who holds
+write credentials to your storage can delete or replace your files regardless of
+what BFS checks. Treat it as collision protection between your own backups, and
+give each backup a storage location whose credentials are not shared with parties
+you would not trust with the data.
 
 ### Currency of a packed backup
 
@@ -332,6 +402,7 @@ The following are explicitly outside BFS's threat model:
 - **Traffic and access-pattern analysis.** BFS does not obscure when, how often,
   or in what sizes it talks to your providers.
 - **Provider-side security of your storage accounts** (their own authentication
-  and access controls). BFS does not add transport encryption on your behalf; see
-  *Transport to a provider* for what the FTP adapter does and does not secure.
+  and access controls). See *Transport to a provider* for what each adapter does
+  and does not secure over the network — including plain FTP as an explicit
+  opt-out.
 - **Recovery of a lost password.** There is no escrow or backdoor by design.

@@ -33,7 +33,7 @@ scenario_run() {
   # path would still pass).
   ssh_rm "${PV_SSH_ENDPOINT[0]}" "${PV_SSH_REMOTE[0]}/${POOL_VAULTNAME}/shard_0.bfs.1"
   run_bfs "$vault" verify
-  assert_ok
+  assert_exit 4   # degraded: still restorable, redundancy lost
   assert_manifest_health "$vault" 1 degraded
 
   # Wipe the working tree (keep .bfs/) so the restore is a genuine reconstruction,

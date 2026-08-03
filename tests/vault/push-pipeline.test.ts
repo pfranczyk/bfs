@@ -20,7 +20,7 @@ import { registerSecretProvider, SecretLocalProvider, secretProviderConfig, unre
 // read during packing — reproducing an external process changing a file inside
 // the pack window, so snapshotAfter diverges from snapshotBefore (drift).
 // Null = pure call-through, so every other test in this file sees the real fs.
-const midPack = vi.hoisted(() => ({ target: null as { triggerFile: string; mutateFile: string; mutateContent: Buffer } | null }));
+const midPack = vi.hoisted(() => ({ target: null as Nullable<{ triggerFile: string; mutateFile: string; mutateContent: Buffer }> }));
 
 // Mock at the module boundary so the whole push pipeline shares one mocked
 // module. Only readFile is overridden; default behaviour is a faithful

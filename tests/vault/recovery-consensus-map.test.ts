@@ -7,35 +7,30 @@ import { createMockProviderIO, providerRegistry } from '../../src/providers/prov
 import type { ProviderConfig, RemoteRef, ShardHeader, ShardLocation, StorageProvider } from '../../src/types/index.js';
 import { recover } from '../../src/vault/recovery.js';
 
-// ─── Contract under test (RED) — S2 sibling, in the multi-version recovery loop ─
+// ─── Contract under test — S2 sibling, in the multi-version recovery loop ──────
 //
-// `processVersion` (src/vault/recovery.ts, ~lines 186-200) runs its OWN, weaker
-// consensus than bootstrap's `runConsensusCheck`. It downloads up to two shard
-// headers for a version and compares ONLY header fields between them
-// (vault_id / blob_hash / version / data_shards / parity_shards). On divergence
-// it does a soft `io.warn` + `consensusOk = false` — it never throws, and it
-// NEVER compares the CONTENTS of the location_map.
+// `processVersion` (src/vault/recovery.ts) runs its OWN, softer consensus than
+// bootstrap's `runConsensusCheck`: it downloads up to two shard headers for a
+// version and, on divergence, does a soft `io.warn` + `consensusOk = false`
+// instead of throwing — it loops over many versions, so one bad version must not
+// abort the rest.
 //
 // With encryption off the location_map is raw JSON guarded only by an unkeyed
 // trailing SHA-256. An attacker who rewrites a single shard can redirect a
-// sibling provider's connection coordinates (host/port/path) without touching
-// any compared header field. The re-sealed shard is byte-valid, so today's
-// per-version consensus reports the version as consensus-OK despite the tamper.
+// sibling provider's connection coordinates (host/port/path) while every compared
+// HEADER field (vault_id / blob_hash / version / data_shards / parity_shards)
+// stays identical, and the re-sealed shard is byte-valid. That is why
+// `shardHeaderConsensusMismatch` (src/vault/consensus.ts) also compares the map
+// CONTENTS for unencrypted copies: for each shard_index present in both the
+// primary and the reachable sibling's location_map it checks provider_type,
+// connection_config, required_inputs and remote_path, and any divergence marks
+// that version `report.versions[v].consensus === false`.
 //
-// GREEN contract: for each shard_index present in BOTH the primary and the
-// reachable sibling's location_map, processVersion also compares provider_type,
-// connection_config (host/port/path), required_inputs and remote_path. Any
-// divergence marks that version consensus NON-OK — i.e.
-// report.versions[v].consensus === false. Consistent with processVersion's
-// existing soft model (a flag, not a hard throw — it loops over many versions).
-//
-// The latest version (the bootstrap target) is kept honest so bootstrap's own
-// hard consensus passes and recovery reaches the per-version loop; an OLDER
-// version is forged so its detection is processVersion's soft flag, not a
-// bootstrap throw. RED today: the forged older map and the honest sibling map
-// agree on every HEADER field, so processVersion never sets consensusOk = false
-// → that version is reported consensus === true. The strict-false assertion
-// below fails for the right reason (no location_map comparison), not a setup error.
+// Two versions are needed to exercise the soft path. The latest version is the
+// bootstrap target, so it is kept honest for bootstrap's own hard consensus to
+// pass and for recovery to reach the per-version loop; the OLDER version carries
+// the forged map, so its detection is processVersion's flag rather than a
+// bootstrap throw.
 
 const VAULT_ID = '550e8400-e29b-41d4-a716-446655440000';
 const VAULT_NAME = 'recovery-consensus-map';

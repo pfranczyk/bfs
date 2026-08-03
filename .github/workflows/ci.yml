@@ -27,8 +27,7 @@ jobs:
   # is the only layer that exercises the shipped bundle instead of src/. The
   # bundle-boundary `instanceof` bug (Inquirer cancellation leaking a raw
   # "User force closed" instead of a clean abort) materializes only in dist/ and
-  # canonically on Windows, so this job is where it gets caught. See
-  # .claude/rules/bundling.md.
+  # canonically on Windows, so this job is where it gets caught.
   #
   # smoke:dist is a private npm script (stripped from the public package.json by
   # the sync), so invoke scripts/smoke.ts directly — that file IS synced to the

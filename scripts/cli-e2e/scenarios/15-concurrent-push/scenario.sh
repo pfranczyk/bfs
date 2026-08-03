@@ -1,8 +1,8 @@
 # shellcheck shell=bash
 # Concurrent push: when .bfs/push.lock points at a live process, a second push
 # must fail fast with LockConcurrentActiveError instead of corrupting the lock
-# or starting a parallel upload. Covers src/vault/lockfile.ts
-# assertNoActiveLock('push') live-PID branch (lockfile.ts:200-207).
+# or starting a parallel upload. Covers acquirePushLock's live-lock branch in
+# src/vault/lockfile.ts.
 #
 # Deterministic across Linux / WSL / Git Bash on Windows: we spawn an idle
 # node holder, take ITS native process.pid (printed by node itself — bash $$

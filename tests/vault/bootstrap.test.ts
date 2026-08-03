@@ -10,7 +10,7 @@ import { bootstrapFromProvider } from '../../src/vault/bootstrap.js';
 // The recovery credential-phishing fix introduces an OPTIONAL provider hook:
 //
 //   connectForRecovery?(io: ProviderIO, pool: readonly RecoverySecret[]):
-//     Promise<string | null>;
+//     Promise<Nullable<string>>;
 //
 // `connectProvidersFromMap` (private, in src/vault/bootstrap.ts) must dispatch
 // to this hook whenever the provider implements it — INDEPENDENT of the
@@ -89,7 +89,7 @@ function registerMockProviders(): void {
     lang: 'en',
     displayName: 'Mock (recovery hook)',
     create: (config: ProviderConfig, _io: ProviderIO): StorageProvider => {
-      const p = baseProvider(config.id, TYPE_WITH_HOOK) as StorageProvider & { connectForRecovery?: (io: ProviderIO, pool: readonly { value: string; origin: string }[]) => Promise<string | null> };
+      const p = baseProvider(config.id, TYPE_WITH_HOOK) as StorageProvider & { connectForRecovery?: (io: ProviderIO, pool: readonly { value: string; origin: string }[]) => Promise<Nullable<string>> };
       const spy = vi.fn(async (_io: ProviderIO, _pool: readonly { value: string; origin: string }[]) => null);
       recoverySpies.set(config.id, spy);
       p.connectForRecovery = spy;

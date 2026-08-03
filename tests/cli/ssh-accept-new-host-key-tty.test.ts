@@ -130,6 +130,9 @@ describe('provider add --ci --type ssh on a TTY — --accept-new-host-key must p
     // the test stays hermetic (no SFTP round-trip) and focuses on the persisted
     // config content.
     vi.spyOn(SshProvider.prototype, 'probeConnection').mockResolvedValue(undefined);
+    // The add-time collision guard lists the target sub-directory over SFTP; stub
+    // it so the test stays hermetic (no SFTP round-trip) and does not hang.
+    vi.spyOn(SshProvider.prototype, 'list').mockResolvedValue([]);
   });
 
   afterEach(() => {

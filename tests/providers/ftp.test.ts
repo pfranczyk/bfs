@@ -86,12 +86,61 @@ const mockState: {
 };
 
 vi.mock('basic-ftp', () => {
+  // Self-signed certificate double presented on the mock's TLS-upgraded control
+  // socket. The provider's secure path reads it via getPeerCertificate(true);
+  // issuerCertificate points back at the cert so isSelfSigned()
+  // (raw.equals(issuerCertificate.raw)) is true, mirroring a HomeLab self-signed
+  // FTPS certificate. The value only needs to be a well-formed colon-hex string
+  // for the unpinned/TOFU secure-path tests (they trust via accept_new_cert and
+  // never compare the fingerprint).
+  const MOCK_CERT_FP = 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99';
+  interface MockCert {
+    fingerprint256: string;
+    raw: Buffer;
+    issuerCertificate: MockCert;
+  }
+  function makeCertDouble(): MockCert {
+    const raw = Buffer.from('mock-der-certificate');
+    const cert = { fingerprint256: MOCK_CERT_FP, raw } as MockCert;
+    cert.issuerCertificate = cert;
+    return cert;
+  }
+
+  class MockTlsSocket {
+    readonly authorized = false;
+    private readonly cert = makeCertDouble();
+    getPeerCertificate(_detailed: boolean): MockCert {
+      return this.cert;
+    }
+  }
+
   class MockFtpContext {
     readonly timeout = 0;
+    // TLS-upgraded control socket, always present so the secure path
+    // (connect → useTLS → readPeerCertificate) resolves against the in-memory
+    // mock exactly as it would over a real TLS socket.
+    readonly socket = new MockTlsSocket();
   }
 
   class MockClient {
     ftp = new MockFtpContext();
+
+    // Secure-path connection primitives (secure:true). No-ops like access(): the
+    // mock performs no real networking. login() must never throw so the
+    // certificate-trust decision — not a fake auth failure — governs the outcome
+    // of the secure path.
+    async connect(_host: string, _port: number): Promise<void> {
+      // no-op: the mock does not open a real socket
+    }
+    async useTLS(_opts: unknown): Promise<void> {
+      // no-op: the fixture cert double is already on ftp.socket
+    }
+    async login(_user: string, _password: string): Promise<void> {
+      // no-op: never throws — trust is decided before login on the real path
+    }
+    async useDefaultSettings(): Promise<void> {
+      // no-op: no control-channel state to negotiate in the mock
+    }
 
     async access(): Promise<void> {
       if (mockState.accessShouldFail) {
@@ -396,7 +445,10 @@ describe('FtpProvider', () => {
 
   it('should not warn about plaintext FTP when secure=true', async () => {
     const { io, logs } = createMockProviderIO();
-    const secure = new FtpProvider(makeConfig({ secure: true }), io);
+    // accept_new_cert makes the unpinned secure connection trust the presented
+    // (self-signed) cert without an interactive prompt, so the secure path
+    // completes and the plaintext-warning branch is never taken.
+    const secure = new FtpProvider(makeConfig({ secure: true, accept_new_cert: true }), io);
     secure.setVaultName('testvault');
 
     await uploadBuf(secure, 'shard_0.bfs.1', Buffer.alloc(64, 1));
@@ -755,13 +807,19 @@ describe('FtpProvider', () => {
 
   describe('configureInteractive', () => {
     it('should prompt for all fields and return a complete config', async () => {
-      const { io } = createMockProviderIO({ 'FTP host:': 'ftp.example.com', 'Port (default 21):': '2121', 'Username:': 'alice', 'Password:': 'supersecret', 'Base path on server:': '/backup', 'Use FTPS (secure connection)?': 'true' });
+      // This test focuses on prompting for every base field. It answers the FTPS
+      // prompt with 'false' so it does NOT enter the secure=true TOFU cert-capture
+      // branch (connect → useTLS → cert-trust confirm) — that branch is covered by
+      // the real-TLS 'TOFU-captures the presented cert...' case in
+      // ftp-tls-pin.test.ts, so exercising it here would only duplicate coverage
+      // and depend on the cert-trust confirm answer.
+      const { io } = createMockProviderIO({ 'FTP host:': 'ftp.example.com', 'Port (default 21):': '2121', 'Username:': 'alice', 'Password:': 'supersecret', 'Base path on server:': '/backup', 'Use FTPS (secure connection)?': 'false' });
       const { io: ctorIO } = createMockProviderIO();
       const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, ctorIO);
 
       const config = await p.configureInteractive(io);
 
-      expect(config).toEqual({ host: 'ftp.example.com', port: 2121, user: 'alice', password: 'supersecret', path: '/backup', secure: true });
+      expect(config).toEqual({ host: 'ftp.example.com', port: 2121, user: 'alice', password: 'supersecret', path: '/backup', secure: false });
     });
 
     it('should default port to 21 when user enters empty string', async () => {
@@ -817,7 +875,9 @@ describe('FtpProvider', () => {
       const config = await p.configureFromFlags(cliInput({ rawArgs: ['--host', 'h', '--path', '/b'] }));
 
       expect(config.port).toBe(21);
-      expect(config.secure).toBe(false);
+      // The secure default (now true — secure-by-default) is owned by the
+      // dedicated 'FTPS cert pinning + TOFU + secure-by-default' suite below,
+      // so this port-default test no longer asserts on it.
     });
 
     it('should reject --port outside 1..65535', async () => {
@@ -1083,7 +1143,7 @@ describe('FtpProvider', () => {
   // ─── connectForRecovery — show the host BEFORE collecting the secret ────────
   //
   // The recovery credential-phishing defence is an optional provider hook:
-  //   connectForRecovery(io, pool): Promise<string | null>
+  //   connectForRecovery(io, pool): Promise<Nullable<string>>
   // Contract: the provider MUST surface the connection target (host:port) to the
   // operator BEFORE it collects or sends any secret, may reuse a secret from the
   // supplied pool, connects + authenticates itself, and returns the secret to add
@@ -1091,7 +1151,7 @@ describe('FtpProvider', () => {
   // Declining the host MUST throw before any secret is collected.
   describe('connectForRecovery', () => {
     type RecoverySecret = { value: string; origin: string };
-    type WithRecovery = FtpProvider & { connectForRecovery(io: ProviderIO, pool: readonly RecoverySecret[]): Promise<string | null> };
+    type WithRecovery = FtpProvider & { connectForRecovery(io: ProviderIO, pool: readonly RecoverySecret[]): Promise<Nullable<string>> };
 
     /**
      * Builds a recording io: askSecret returns `secret` and pushes a marker into
@@ -1195,6 +1255,194 @@ describe('FtpProvider', () => {
       expect(askSecretCalled).toBe(false);
       const declinedAt = order.findIndex((e) => e.startsWith('confirm:') && e.includes('203.0.113.7'));
       expect(declinedAt).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  // ─── FTPS cert pinning + TOFU + secure-by-default ──────────────────────────
+  //
+  // GREEN contract this suite pins (the field / flag names GREEN must adopt):
+  //   - config field `cert_fingerprint`: uppercase colon-hex SHA-256 of the DER
+  //     certificate — 32 hex pairs joined by ':' (e.g. "AB:CD:…:EF"). Non-secret.
+  //   - config field `cert_self_signed`: optional boolean marker of the cert kind.
+  //   - config field `accept_new_cert`: boolean, set true by the presence of the
+  //     inline `--accept-new-cert` flag (TOFU: trust-on-first-use). This snake_case
+  //     name is the chosen contract — GREEN must read/write exactly this key.
+  //   - `secure` defaults to TRUE (secure-by-default): a missing key => true, an
+  //     explicit `false` => false. Applies to both the constructor and
+  //     configureFromFlags.
+  //   - validateConfig rejects a malformed `cert_fingerprint`, and rejects a
+  //     `cert_fingerprint` paired with `secure:false` (a pin is meaningless
+  //     without TLS).
+  //   - describeConfig surfaces the fingerprint and the self-signed marker; the
+  //     EN rendering (mock IO lang is 'en') includes the literal "self-signed".
+  //
+  // Assertions target config values and thrown error types, never translated
+  // strings — the i18n keys this feature needs do not exist yet (GREEN adds them).
+  //
+  // GREEN contract (runtime, exercised by cli-e2e / a live TLS handshake, not
+  // asserted in this unit suite): withClient must re-throw TamperDetectedError
+  // (extends BfsError, NOT ProviderError) instead of wrapping it — otherwise the
+  // mismatch/verify assertions fail even after GREEN, because the fingerprint
+  // mismatch would surface as a generic ProviderError.
+  describe('FTPS cert pinning + TOFU + secure-by-default', () => {
+    // Valid uppercase colon-hex SHA-256: 32 hex pairs joined by ':'.
+    const GOOD_FP = 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99';
+    // Not colon-hex at all — must be rejected as a malformed fingerprint.
+    const BAD_FP = 'zzz';
+
+    // 1a — configureFromFlags stores a well-formed --cert-fingerprint.
+    it('should accept a valid --cert-fingerprint and store it in config', async () => {
+      const { io } = createMockProviderIO();
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--host', 'h', '--path', '/b', '--cert-fingerprint', GOOD_FP] }));
+
+      expect(config.cert_fingerprint).toBe(GOOD_FP);
+    });
+
+    // 1b — a malformed --cert-fingerprint is rejected at flag-parse time.
+    it('should reject a malformed --cert-fingerprint with ProviderError', async () => {
+      const { io } = createMockProviderIO();
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--host', 'h', '--path', '/b', '--cert-fingerprint', BAD_FP] }))).rejects.toThrow(ProviderError);
+    });
+
+    // 1c — a fingerprint copied with surrounding whitespace (e.g. from openssl
+    // output) is stored trimmed, so it still matches the presented cert at connect.
+    it('should trim surrounding whitespace from --cert-fingerprint', async () => {
+      const { io } = createMockProviderIO();
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--host', 'h', '--path', '/b', '--cert-fingerprint', `  ${GOOD_FP}  `] }));
+
+      expect(config.cert_fingerprint).toBe(GOOD_FP);
+    });
+
+    // 2 — the presence of --accept-new-cert (a boolean flag with no value) sets
+    // the `accept_new_cert` config field (TOFU opt-in).
+    it('should set accept_new_cert=true when the --accept-new-cert flag is present', async () => {
+      const { io } = createMockProviderIO();
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--host', 'h', '--path', '/b', '--accept-new-cert'] }));
+
+      expect(config.accept_new_cert).toBe(true);
+    });
+
+    // 3a — secure-by-default: no --secure flag means secure:true.
+    it('should default secure to true when --secure is omitted (secure-by-default)', async () => {
+      const { io } = createMockProviderIO();
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--host', 'h', '--path', '/b'] }));
+
+      expect(config.secure).toBe(true);
+    });
+
+    // 3b — an explicit --secure false still disables TLS (opt-out preserved).
+    it('should keep secure=false when --secure false is given explicitly', async () => {
+      const { io } = createMockProviderIO();
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--host', 'h', '--path', '/b', '--secure', 'false'] }));
+
+      expect(config.secure).toBe(false);
+    });
+
+    // 4 — the constructor also defaults secure to true. Observable property: a
+    // secure connection emits NO plaintext-FTP warning. A config with no `secure`
+    // key must therefore stay quiet (today it defaults to false and warns → RED).
+    it('should treat a config without the secure key as secure=true (no plaintext warning)', async () => {
+      const { io, logs } = createMockProviderIO();
+      // No `secure` key → constructor defaults it to true (secure-by-default).
+      // accept_new_cert lets the unpinned secure connection trust the presented
+      // cert without a prompt, so the upload completes over the secure path and
+      // the plaintext-warning branch is never reached.
+      const p = new FtpProvider({ id: 'test-ftp', type: 'ftp', adapterPackage: null, config: { host: 'localhost', port: 21, user: 'testuser', password: 'testpass', path: '/backup', accept_new_cert: true } }, io);
+      p.setVaultName('testvault');
+
+      await uploadBuf(p, 'shard_0.bfs.1', Buffer.alloc(64, 1));
+
+      const insecureWarnings = logs.filter((l) => l.level === 'warn' && l.message.includes('not encrypted'));
+      expect(insecureWarnings).toHaveLength(0);
+    });
+
+    // 5a — validateConfig rejects a malformed cert_fingerprint.
+    it('validateConfig should reject a malformed cert_fingerprint', () => {
+      const { io } = createMockProviderIO();
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+      const errors = p.validateConfig({ host: 'h', port: 21, path: '/backup', secure: true, cert_fingerprint: BAD_FP });
+
+      expect(errors.length).toBeGreaterThan(0);
+    });
+
+    // 5b — validateConfig rejects a cert_fingerprint pinned with secure:false —
+    // a certificate pin is meaningless without TLS.
+    it('validateConfig should reject cert_fingerprint set together with secure:false', () => {
+      const { io } = createMockProviderIO();
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+      const errors = p.validateConfig({ host: 'h', port: 21, path: '/backup', secure: false, cert_fingerprint: GOOD_FP });
+
+      expect(errors.length).toBeGreaterThan(0);
+    });
+
+    // 6 — describeConfig surfaces the fingerprint and the self-signed marker.
+    it('describeConfig should surface the cert fingerprint and the self-signed marker', () => {
+      const { io } = createMockProviderIO();
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+      const desc = p.describeConfig({ host: 'ftp.example.com', port: 21, user: 'alice', password: 'secret', path: '/backup', secure: true, cert_fingerprint: GOOD_FP, cert_self_signed: true });
+
+      expect(desc).toContain(GOOD_FP);
+      // GREEN contract: the EN describeConfig renders the literal "self-signed"
+      // when cert_self_signed is true (mock IO lang is 'en').
+      expect(desc).toMatch(/self-signed/i);
+    });
+
+    // 7 — POSITIVE validateConfig: a well-formed cert_fingerprint with secure:true
+    // is accepted (no errors). Guards against an over-strict GREEN validator that
+    // rejects EVERY fingerprint — the negative validateConfig tests above would not
+    // catch that failure mode. (Note: today's validator ignores cert_fingerprint,
+    // so this already passes; it is a forward guard, not a RED.)
+    it('validateConfig should accept a well-formed cert_fingerprint with secure:true', () => {
+      const { io } = createMockProviderIO();
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+      const errors = p.validateConfig({ host: 'h', port: 21, path: '/backup', secure: true, cert_fingerprint: GOOD_FP });
+
+      expect(errors).toEqual([]);
+    });
+
+    // 8 — configureFromFlags reads cert_fingerprint AND accept_new_cert from a
+    // --config-file JSON (same temp-JSON pattern as the other config-file tests).
+    it('should read cert_fingerprint and accept_new_cert from a --config-file JSON', async () => {
+      const file = await writeJsonConfig(JSON.stringify({ host: 'ftp.example.com', port: 21, user: 'alice', password: 'secret', path: '/backup', secure: true, cert_fingerprint: GOOD_FP, accept_new_cert: true }));
+      const { io } = createMockProviderIO();
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }));
+
+      expect(config.cert_fingerprint).toBe(GOOD_FP);
+      expect(config.accept_new_cert).toBe(true);
+    });
+
+    // 9 — --accept-new-cert is presence-only: it must NOT swallow the following
+    // token as its value. GREEN must detect presence (not via findStringFlag, which
+    // would consume '--host' and leave accept_new_cert a string, failing the strict
+    // `.toBe(true)`). --path is supplied so configureFromFlags returns instead of
+    // throwing "path required"; the guarded adjacency is --accept-new-cert
+    // immediately before --host h.
+    it('should treat --accept-new-cert as presence-only and not swallow the next arg', async () => {
+      const { io } = createMockProviderIO();
+      const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--accept-new-cert', '--host', 'h', '--path', '/b'] }));
+
+      expect(config.accept_new_cert).toBe(true);
+      expect(config.host).toBe('h');
     });
   });
 });

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VersionHealth } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
-vi.mock('../../src/vault/vault-manager.js', () => ({ listVersions: vi.fn(), prune: vi.fn() }));
+vi.mock('../../src/vault/vault-manager.js', () => ({ listVersions: vi.fn(), prune: vi.fn(), assertPruneKeepsARestorableVersion: vi.fn() }));
 vi.mock('inquirer', () => ({
   default: {
     prompt: vi.fn(),
@@ -17,10 +17,11 @@ vi.mock('inquirer', () => ({
 }));
 
 import inquirer from 'inquirer';
-import { listVersions, prune } from '../../src/vault/vault-manager.js';
+import { assertPruneKeepsARestorableVersion, listVersions, prune } from '../../src/vault/vault-manager.js';
 
 const mockListVersions = vi.mocked(listVersions);
 const mockPrune = vi.mocked(prune);
+const mockGuard = vi.mocked(assertPruneKeepsARestorableVersion);
 const mockPrompt = vi.mocked(inquirer.prompt);
 
 function makeManifests(versions: number[]) {
@@ -51,7 +52,7 @@ describe('prune', () => {
     vi.clearAllMocks();
   });
 
-  // ─── Brak wersji ──────────────────────────────────────────────────────────
+  // ─── No versions ──────────────────────────────────────────────────────────
 
   it('should show message when no versions exist', async () => {
     mockListVersions.mockResolvedValue([]);
@@ -62,7 +63,7 @@ describe('prune', () => {
     expect(mockPrune).not.toHaveBeenCalled();
   });
 
-  // ─── Zakres jako argument ─────────────────────────────────────────────────
+  // ─── Range as an argument ─────────────────────────────────────────────────
 
   it('should prune single version', async () => {
     mockListVersions.mockResolvedValue(makeManifests([1, 2, 3]) as never);
@@ -148,7 +149,7 @@ describe('prune', () => {
     expect(result).toBe('abort');
   });
 
-  // ─── --yes (tryb CI) ──────────────────────────────────────────────────────
+  // ─── --yes (CI mode) ──────────────────────────────────────────────────────
 
   it('should skip confirmation with --yes flag', async () => {
     mockListVersions.mockResolvedValue(makeManifests([1, 2, 3]) as never);
@@ -170,13 +171,13 @@ describe('prune', () => {
     expect(capture.logs.some((l) => l.includes('Cancelled'))).toBe(true);
   });
 
-  // ─── Bez argumentu — lista interaktywna ──────────────────────────────────
+  // ─── Without an argument — interactive list ──────────────────────────────────
 
   it('should show checkbox list when no argument provided', async () => {
     mockListVersions.mockResolvedValue(makeManifests([1, 2, 3]) as never);
     mockPrompt
       .mockResolvedValueOnce({ picked: ['2'] } as never) // checkbox
-      .mockResolvedValueOnce({ confirmed: true } as never); // potwierdzenie
+      .mockResolvedValueOnce({ confirmed: true } as never); // confirmation
 
     await runCmd(['prune']);
 
@@ -205,7 +206,7 @@ describe('prune', () => {
     expect(mockPrune).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ versions: [1, 2] }));
   });
 
-  // ─── Anulowanie ───────────────────────────────────────────────────────────
+  // ─── Cancellation ───────────────────────────────────────────────────────────
 
   it('should treat ExitPromptError as empty selection during checkbox', async () => {
     mockListVersions.mockResolvedValue(makeManifests([1, 2, 3]) as never);
@@ -226,5 +227,26 @@ describe('prune', () => {
     expect(result).toBe('ok');
     expect(mockPrune).not.toHaveBeenCalled();
     expect(capture.logs.some((l) => l.includes('Cancelled') || l.includes('Anulowano'))).toBe(true);
+  });
+
+  // ─── Guard on the last restorable version ─────────────────────────────────
+
+  it('should pass --force through to the prune call', async () => {
+    mockListVersions.mockResolvedValue(makeManifests([1, 2]) as never);
+
+    await runCmd(['prune', '1', '--yes', '--force']);
+
+    expect(mockPrune).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ versions: [1], force: true }));
+  });
+
+  it('should check the guard before asking for confirmation', async () => {
+    mockListVersions.mockResolvedValue(makeManifests([1, 2]) as never);
+    mockGuard.mockRejectedValueOnce(new Error('would leave no version that can still be restored'));
+
+    const result = await runCmd(['prune', '1']);
+
+    expect(result).toBe('abort');
+    expect(mockPrompt).not.toHaveBeenCalled();
+    expect(mockPrune).not.toHaveBeenCalled();
   });
 });

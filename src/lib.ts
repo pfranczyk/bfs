@@ -35,10 +35,14 @@ export {
   ProviderRegistry,
   providerRegistry,
 } from './providers/provider.js';
-// Types & interfaces — the provider contract.
+// Types & interfaces — the provider contract. `Nullable<T>` is re-exported here
+// (not only a global ambient) because tsup's .d.ts bundler drops global
+// ambients: the contract types below reference `Nullable`, so its definition
+// must travel into dist/lib.d.ts for external adapters to compile.
 export type {
   AdapterRegistrationMeta,
   CliProviderInput,
+  Nullable,
   ProviderConfig,
   ProviderHelp,
   ProviderHelpFlag,

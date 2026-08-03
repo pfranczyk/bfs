@@ -16,7 +16,7 @@ export async function suiteK(): Promise<SuiteResult> {
   const p2Dir = path.join(tmpBase, 'p2');
   const p3Dir = path.join(tmpBase, 'p3');
 
-  // ── K0 — init --ci z katalogiem .jpg → compression.enabled=false ─────────
+  // ── K0 — init --ci with a .jpg directory → compression.enabled=false ─────────
 
   tests.push(
     await runTest('K0', 'bfs init --ci w katalogu .jpg → compression.enabled=false', async () => {

@@ -70,6 +70,26 @@ export function buildTestProgram(): Command {
 }
 
 /**
+ * Runs a CLI command and returns the exit code it would leave the process with.
+ * A command that completes without aborting yields 0; otherwise the code carried
+ * by its CommandAbort. Use when the code itself is the contract — the outcome
+ * strings from {@link runCmd} cannot tell 1 from 4 or 5.
+ *
+ * @param tokens - argv tokens after `bfs`
+ * @returns the process exit code the command implies
+ */
+export async function runCmdExitCode(tokens: string[]): Promise<number> {
+  const program = buildTestProgram();
+  try {
+    await program.parseAsync(['node', 'bfs', ...tokens]);
+    return 0;
+  } catch (err) {
+    if (err instanceof CommandAbort) return err.exitCode;
+    throw err;
+  }
+}
+
+/**
  * Runs a CLI command string and returns whether it threw CommandAbort.
  * Logs and errors are captured via spies — assert on them in tests.
  *
