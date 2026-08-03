@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 // ─── Contract under test ────────────────────────────────────────────────────
@@ -21,8 +21,17 @@ import { describe, expect, it } from 'vitest';
 // This pins the rule against both CI definitions at once, so a job added later
 // cannot reintroduce it quietly.
 
-/** CI definitions that drive the cli-e2e harness. */
+/**
+ * CI definitions that drive the cli-e2e harness. Not every checkout carries both:
+ * the GitLab definition targets a self-hosted runner and stays out of the public
+ * mirror, so a checkout without it must skip that assertion visibly rather than
+ * fail the suite for a file it was never meant to have. The guard below keeps
+ * that leniency from quietly emptying the whole rule.
+ */
 const CI_FILES = ['.github/workflows/e2e.yml', '.gitlab-ci.yml'];
+
+/** The CI definition every checkout carries, whichever repo it is. */
+const ALWAYS_PRESENT = '.github/workflows/e2e.yml';
 
 /** A job hands the harness a server it did not provision itself. */
 const SUPPLIES_EXTERNAL_ENDPOINT = /--ftp\s|--ssh\s|--ssh-docker\s/;
@@ -40,8 +49,16 @@ function harnessInvocations(file: string): string[] {
 }
 
 describe('cli-e2e CI jobs partition self-provisioned servers from supplied ones', () => {
+  // Every other assertion here skips a CI definition it cannot find, so without
+  // this one a rename or a restructured job would leave the rule pinned against
+  // nothing at all — green, and guarding no job.
+  it('should find harness invocations in the CI definition every checkout carries', () => {
+    expect(existsSync(ALWAYS_PRESENT)).toBe(true);
+    expect(harnessInvocations(ALWAYS_PRESENT).length).toBeGreaterThan(0);
+  });
+
   for (const file of CI_FILES) {
-    it(`should pass --exclude-docker wherever ${file} supplies an endpoint`, () => {
+    it.skipIf(!existsSync(file))(`should pass --exclude-docker wherever ${file} supplies an endpoint`, () => {
       const offenders = harnessInvocations(file)
         .filter((cmd) => SUPPLIES_EXTERNAL_ENDPOINT.test(cmd))
         .filter((cmd) => !cmd.includes('--exclude-docker'));
@@ -56,7 +73,7 @@ describe('cli-e2e CI jobs partition self-provisioned servers from supplied ones'
     // The rule above removes those scenarios from every endpoint-supplying job,
     // so something else has to run them; otherwise the fix trades a false red for
     // a silent coverage hole.
-    const all = CI_FILES.flatMap(harnessInvocations);
+    const all = CI_FILES.filter((file) => existsSync(file)).flatMap(harnessInvocations);
 
     expect(all.some((cmd) => cmd.includes('--docker-only'))).toBe(true);
   });
