@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Full local .bfs/ loss → rebuild metadata from a single provider via
+# Full local .bfs/ loss -> rebuild metadata from a single provider via
 # `recovery --bootstrap`, then restore every version. Mirrors tests/e2e
 # full-disaster-recovery + tests/cli/recovery.
 

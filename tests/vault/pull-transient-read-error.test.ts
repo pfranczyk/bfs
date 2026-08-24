@@ -10,15 +10,15 @@ import { PushMode } from '../../src/types/index.js';
 import { init, pull, push } from '../../src/vault/vault-manager.js';
 
 // A part that could not be read is not the same thing as a part that read back
-// wrong. The first is a passing condition of the medium — a file briefly locked
-// by an indexer or antivirus, a device that answered EBUSY/EPERM/EIO once — and
+// wrong. The first is a passing condition of the medium - a file briefly locked
+// by an indexer or antivirus, a device that answered EBUSY/EPERM/EIO once - and
 // the part is still whole; the second is damage. The restore has one moment
 // where it reads a part solely to learn the size and salt the version was made
 // with, and a fault there must not be allowed to condemn the medium: the same
 // bytes are read again, independently, by the integrity pass that follows.
 //
 // The fault is armed for a single read of one temp file, so the second read of
-// that same part succeeds — which is exactly what makes the medium's data
+// that same part succeeds - which is exactly what makes the medium's data
 // demonstrably intact, and the accusation demonstrably wrong.
 const readFault = vi.hoisted(() => ({ target: null as Nullable<{ basename: string }> }));
 
@@ -33,7 +33,7 @@ vi.mock('node:fs', async (importOriginal) => {
       readFault.target = null;
       const data = actual.readFileSync(p);
       // Everything but the last byte arrives, so the header parses and the
-      // failure lands where the payload is being drained — then the medium
+      // failure lands where the payload is being drained - then the medium
       // reports a transient I/O fault instead of ending the stream.
       return Readable.from(
         (async function* faulty() {
@@ -133,7 +133,7 @@ describe('pull survives a passing read fault on a sound medium', () => {
       .slice(loggedBefore)
       .filter((l) => l.level === 'warn')
       .map((l) => l.message);
-    // Every part is whole on its medium — the only thing that went wrong was one
+    // Every part is whole on its medium - the only thing that went wrong was one
     // read. Calling that damage sends the operator to repair sound data.
     expect(warnings.filter((m) => /damaged|integrity/i.test(m))).toEqual([]);
   });

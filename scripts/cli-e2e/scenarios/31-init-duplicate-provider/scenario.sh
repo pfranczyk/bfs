@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # init must REJECT two providers sharing the same id (name) instead of silently
 # writing a duplicate. A duplicate id would land twice in .bfs/config.json, and
-# every lookup-by-id resolves to the first match — orphaning the rest and
+# every lookup-by-id resolves to the first match - orphaning the rest and
 # desyncing the N+K scheme. Correct behaviour: abort exit!=0, no config.json,
 # message names the colliding id.
 
@@ -20,19 +20,19 @@ scenario_run() {
   local dirA="$SC_DIR/prov/a" dirB="$SC_DIR/prov/b" dirC="$SC_DIR/prov/c"
   mkdir -p "$dirA" "$dirB" "$dirC"
 
-  # ── 1. Duplicate id "dup" on two providers → init must abort ──────────────
+  # -- 1. Duplicate id "dup" on two providers -> init must abort --------------
   run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 2 --parity-shards 1 \
     --provider "local:dup --path $(winpath "$dirA")" \
     --provider "local:dup --path $(winpath "$dirB")" \
     --provider "local:ok --path $(winpath "$dirC")"
   assert_fail
-  # Config must NOT have been written — the duplicate is caught before persist.
+  # Config must NOT have been written - the duplicate is caught before persist.
   assert_no_file "$vault/.bfs/config.json"
   # The error must name the colliding id so the user knows which to rename.
   assert_out_contains "dup"
 
-  # ── 2. Contrast: the same 3 media with UNIQUE ids → init succeeds ──────────
+  # -- 2. Contrast: the same 3 media with UNIQUE ids -> init succeeds ----------
   # Documents that we block only the duplicate, not a well-formed init.
   run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 2 --parity-shards 1 \

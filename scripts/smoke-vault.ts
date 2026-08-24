@@ -19,7 +19,7 @@ export function sha256(buf: Buffer): string {
  *
  * @param dir  - Base directory
  * @param base - Relative path prefix (used internally during recursion)
- * @returns    Map of relativePath → SHA-256 hex
+ * @returns    Map of relativePath -> SHA-256 hex
  */
 export async function hashDir(dir: string, base = ''): Promise<Map<string, string>> {
   const result = new Map<string, string>();
@@ -96,7 +96,7 @@ export async function readJson<T>(filePath: string): Promise<T> {
  * Builds args for `bfs init --ci` with local providers (scheme 2+1).
  *
  * @param vaultName - Vault name (positional argument)
- * @param providers - List of {id, dir} — one entry per provider
+ * @param providers - List of {id, dir} - one entry per provider
  * @param extra     - Additional flags, e.g. ['--no-compress']
  * @returns         Argument array ready to pass to runBfs
  */
@@ -127,7 +127,7 @@ export async function initTestVault(vaultDir: string, vaultName: string, provide
  * Verifies SHA-256 of restored files against the original hash map.
  *
  * @param vaultDir - Vault directory (files are restored here)
- * @param hashes   - Map of relativePath → SHA-256 hex
+ * @param hashes   - Map of relativePath -> SHA-256 hex
  * @param label    - Label for error messages (e.g. "after pull")
  * @throws         When a file is missing or its SHA-256 does not match
  */

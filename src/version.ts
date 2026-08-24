@@ -1,8 +1,8 @@
 /**
- * Current BFS release version. Must stay in sync with package.json — update
+ * Current BFS release version. Must stay in sync with package.json - update
  * both together for a release. Used for diagnostic display ("BFS x.y.z").
  */
-export const BFS_VERSION = '0.13.0';
+export const BFS_VERSION = '0.14.0';
 
 /**
  * Provider contract API version.
@@ -13,7 +13,7 @@ export const BFS_VERSION = '0.13.0';
  *
  * Bump policy: one bump per public release. All unreleased contract changes
  * collapse into the same version number until a release cuts a new tag.
- * This integer has nothing in common with BFS_VERSION semver — it only
+ * This integer has nothing in common with BFS_VERSION semver - it only
  * tracks the public adapter contract.
  *
  * Adapter authors declare the minimum version they need via
@@ -21,10 +21,10 @@ export const BFS_VERSION = '0.13.0';
  * to register a factory that requires a newer API than this BFS ships.
  *
  * History:
- *   1 — first publicly exported adapter contract. BFS v0.4.0 and earlier
+ *   1 - first publicly exported adapter contract. BFS v0.4.0 and earlier
  *       did not expose an adapter API; version 1 is the initial release of
  *       the contract as shipped in the next public BFS version:
- *         • StorageProvider runtime I/O — authenticate, setVaultName, upload,
+ *         * StorageProvider runtime I/O - authenticate, setVaultName, upload,
  *           download, delete, rename, updateShardHeader, list, getSize,
  *           downloadHeader, listVaults, healthCheck. `getSize(ref)` returns
  *           the byte size via a lightweight metadata call (FTP SIZE,
@@ -32,78 +32,79 @@ export const BFS_VERSION = '0.13.0';
  *           first `maxBytes` bytes; implementations MUST avoid pulling more
  *           than `maxBytes` over the wire (FTP aborts after the limit;
  *           LocalFS uses a bounded createReadStream).
- *         • Configuration lifecycle on StorageProvider —
+ *         * Configuration lifecycle on StorageProvider -
  *           configureInteractive, configureFromFlags, validateConfig,
  *           describeConfig, getSecretFields, probeConnection.
- *         • configureFromFlags receives CliProviderInput ({ name, rawArgs })
+ *         * configureFromFlags receives CliProviderInput ({ name, rawArgs })
  *           and returns Promise<Record<string, unknown>>. BFS never
- *           interprets adapter flags — rawArgs carries every CLI token the
+ *           interprets adapter flags - rawArgs carries every CLI token the
  *           user typed after --ci/--name/--type, verbatim and in order. The
  *           adapter parses whatever grammar it documents, including any
  *           --config-file / --bucket / --private-key conventions it chooses.
- *         • ProviderFactory is an object interface with `lang` (mutable
+ *         * ProviderFactory is an object interface with `lang` (mutable
  *           string, BFS keeps in sync via ProviderRegistry.setLang()),
- *           `displayName` (readonly string, technical/brand name — NOT
+ *           `displayName` (readonly string, technical/brand name - NOT
  *           translated), `create`, optional `requiresApiVersion`, and a
  *           required `help()` returning structured ProviderHelp. Adapters
  *           may read `this.lang` from inside `help()` to localize their
  *           description / flags / examples; built-in adapters use BFS's
  *           own i18n via `tFor(this.lang, key)`.
- *         • ProviderIO primitives — ask, askSecret, confirm, choose, info,
- *           debug, warn, progress — plus readonly lang: string (informational)
+ *         * ProviderIO primitives - ask, askSecret, confirm, choose, info,
+ *           debug, warn, progress - plus readonly lang: string (informational)
  *           and readonly workDir: string (BFS working directory, respects
  *           `bfs --cwd`; adapters use it to resolve relative paths their
  *           own flags or prompts may accept). `debug(message)` is silenced
  *           unless the user runs `bfs --debug`; built-in providers route
  *           connection chatter and retry diagnostics through it so
  *           verify/push/pull stay quiet by default.
- *         • ProviderRegistry.register() accepts optional
+ *         * ProviderRegistry.register() accepts optional
  *           AdapterRegistrationMeta ({ packageName, packageVersion });
  *           external adapters MUST pass it so BFS can persist
  *           ProviderConfig.adapterPackage for disaster-recovery
  *           reproducibility.
- *         • ProviderConfig carries adapterPackage: Nullable<string>,
+ *         * ProviderConfig carries adapterPackage: Nullable<string>,
  *           persisted in .bfs/config.json, manifest and shard header JSON
  *           location map. Backward compatible when reading shards produced
- *           by pre-contract BFS — the field defaults to null, which is the
+ *           by pre-contract BFS - the field defaults to null, which is the
  *           correct semantics for built-in providers.
- *         • `bfs provider add` and `bfs init --ci --provider` are strictly
+ *         * `bfs provider add` and `bfs init --ci --provider` are strictly
  *           pass-through: BFS recognizes only --ci, --name, --type (plus
  *           `type:name` in the init spec) and forwards every other token
  *           to the provider via rawArgs.
- *   2 — header storage strategy + shard verification on StorageProvider.
+ *   2 - header storage strategy + shard verification on StorageProvider.
  *       Adds four methods every adapter must implement; an adapter compiled
  *       against version 1 no longer satisfies the interface, hence the bump:
- *         • usesSidecar(): boolean — reports whether the adapter keeps an
- *           updated header in a sidecar file (true) or rewrites it in place
- *           inside the shard (false; built-in local/ftp).
- *         • uploadHeaderSidecar(ref, sidecarBytes) / downloadHeaderSidecar(ref,
- *           maxBytes) — sidecar I/O in the standard BFSH binary format. Called
+ *         * usesSidecar(): boolean - reports whether the adapter keeps an
+ *           updated header in a sidecar file (true; built-in local/ftp/ssh) or
+ *           rewrites it in place inside the shard (false).
+ *         * uploadHeaderSidecar(ref, sidecarBytes) / downloadHeaderSidecar(ref,
+ *           maxBytes) - sidecar I/O in the standard BFSH binary format. Called
  *           only when usesSidecar() === true; MUST throw otherwise. On the
  *           read-path a present sidecar wins over the in-shard header.
- *         • verifyShard(ref, expected: ShardIdentity) — returns a
+ *         * verifyShard(ref, expected: ShardIdentity) - returns a
  *           VerifyShardResult classifying the shard identity check
  *           (ok / not_found / mismatch / auth_failed / corrupted /
  *           unverifiable) without requiring the vault key.
- *         • connectForRecovery(io, pool, options?) — OPTIONAL, added without a
+ *         * connectForRecovery(io, pool, options?) - OPTIONAL, added without a
  *           bump: lets an adapter show the destination host and collect/reuse
  *           the transport secret during `bfs recovery`, so a forged --no-enc
  *           location map cannot phish the secret before the operator sees the
  *           target. Adapters that omit it fall back to the legacy
  *           required_inputs prompt flow (and stay exposed).
- *         • ProviderIO.interactive?: boolean — OPTIONAL, added without a bump:
+ *         * ProviderIO.interactive?: boolean - OPTIONAL, added without a bump:
  *           informational flag (like lang/workDir) telling the adapter whether
- *           BFS can prompt (absent/true = interactive, false = --ci/--bootstrap/
- *           no TTY). An adapter MUST NOT block on a prompt when false; it picks
+ *           BFS can prompt (absent/true = interactive, false = --ci or no TTY -
+ *           a data-carrying flag like --bootstrap does NOT set it). An adapter
+ *           MUST NOT block on a prompt when false; it picks
  *           a safe default instead. Adapters that ignore the field keep their
  *           previous behaviour, so the addition breaks nothing.
- *         • CliProviderInput.offline?: boolean — OPTIONAL, added without a bump:
+ *         * CliProviderInput.offline?: boolean - OPTIONAL, added without a bump:
  *           informational flag telling configureFromFlags that the command edits
  *           config WITHOUT contacting the medium (`bfs provider edit`). An
  *           adapter whose flag needs a live connection (SSH --accept-new-host-key,
  *           which must dial the server to capture and pin the key) MUST reject it
  *           when true. Adapters that ignore the field are unaffected.
- *         • StorageProvider.configureInteractiveForEdit?(io, ctx) — OPTIONAL,
+ *         * StorageProvider.configureInteractiveForEdit?(io, ctx) - OPTIONAL,
  *           added without a bump: edit-aware interactive configure that receives
  *           the existing connection-config (ConfigureEditContext). SSH uses it for
  *           online-first host-key pinning with an offline fallback; adapters that

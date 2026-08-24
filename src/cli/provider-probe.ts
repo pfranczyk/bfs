@@ -44,8 +44,8 @@ async function askRecoveryChoice(io: ProviderIO): Promise<RecoveryChoice> {
 
 /**
  * Collects a provider's connection config interactively, validates it, then
- * probes connectivity before accepting it. A rejected config or a failed probe
- * — transient, or a typo in host/port/password/path — is recoverable in place
+ * probes connectivity before accepting it. A rejected config or a failed probe -
+ * transient, or a typo in host/port/password/path - is recoverable in place
  * (retry / re-enter / abort), so a single failure never discards the whole
  * interactive session. Shared by `bfs init` and `bfs provider add`.
  *

@@ -4,7 +4,7 @@ import { assert, runBfs, runTest } from '../smoke-runner.js';
 import type { SmokeContext, SuiteResult, TestResult } from '../smoke-types.js';
 import { readJson } from '../smoke-vault.js';
 
-// ─── Suite H — --cache-dir flag + bfs config ─────────────────────────────────
+// --- Suite H - --cache-dir flag + bfs config ---------------------------------
 
 /**
  * Tests:
@@ -16,7 +16,7 @@ import { readJson } from '../smoke-vault.js';
  */
 export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
   const tests: TestResult[] = [];
-  // Isolated lang env → EN for deterministic assertions
+  // Isolated lang env -> EN for deterministic assertions
   const hLangDir = path.join(ctx.sourceDir, 'h-lang-config');
   const hEnv: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: hLangDir };
   await fs.mkdir(hLangDir, { recursive: true });
@@ -80,11 +80,11 @@ export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── Validation of non-existent paths ────────────────────────────────────────
+  // -- Validation of non-existent paths ----------------------------------------
 
   tests.push(
-    await runTest('H6', 'bfs config --cache-dir <nonexistent> → rejected with error message', async () => {
-      // Path with a missing parent — guaranteed to fail validation on both
+    await runTest('H6', 'bfs config --cache-dir <nonexistent> -> rejected with error message', async () => {
+      // Path with a missing parent - guaranteed to fail validation on both
       // Windows and Linux. Hardcoded "X:\\..." would only fail on Windows;
       // on Linux it's a relative single-segment filename whose parent is
       // the cwd (vaultDir), which exists, so validation would let it pass.
@@ -96,7 +96,7 @@ export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
   );
 
   tests.push(
-    await runTest('H7', 'bfs push with nonexistent cache_dir → clear error + hint', async () => {
+    await runTest('H7', 'bfs push with nonexistent cache_dir -> clear error + hint', async () => {
       // Set a nonexistent cache_dir directly in config.json. Use a path
       // under vaultDir so missing-parent semantics work on both Windows
       // and Linux (see H6 for why hardcoded "Z:\\..." is unsafe).
@@ -119,5 +119,5 @@ export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  return { name: 'Suite H — --cache-dir + bfs config', tests };
+  return { name: 'Suite H - --cache-dir + bfs config', tests };
 }

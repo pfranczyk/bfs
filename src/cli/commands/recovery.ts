@@ -6,7 +6,9 @@ import { createCliProviderIO, providerRegistry } from '../../providers/provider.
 import type { ProviderIO, StorageProvider } from '../../types/index.js';
 import { recover } from '../../vault/recovery.js';
 import { resolveCwd } from '../cwd.js';
+import { isCiRun } from '../interactive-mode.js';
 import { parseRecoveryBootstrapSpec } from '../parse-provider-spec.js';
+import { readPasswordFiles } from '../password-input.js';
 import { isPromptCancellation, promptWithRawMode } from '../prompt.js';
 import { createSpinnerIo } from '../spinner-io.js';
 import { CommandAbort, error, formatHealth, success, table } from '../ui.js';
@@ -16,6 +18,7 @@ interface RecoveryOpts {
   bootstrap?: string;
   name?: string;
   password: string[];
+  passwordFile: string[];
   allowMissingAdapters?: boolean;
   trustLocations?: boolean;
 }
@@ -23,21 +26,24 @@ interface RecoveryOpts {
 /**
  * Registers the `bfs recovery` command on the given Commander program.
  * Rebuilds .bfs/ (config, manifests, state) from remote providers.
- * Does NOT restore files — use `bfs pull` afterwards.
+ * Does NOT restore files - use `bfs pull` afterwards.
  *
- * Two execution modes:
- *  - **Non-interactive (CI):** triggered by `--bootstrap`. Adapter flags are
- *    forwarded verbatim to `StorageProvider.configureFromFlags()` — same
- *    grammar as `bfs init --ci` adapter-flags. Requires `--provider <type>`
- *    and `--name <vaultName>`.
- *  - **Interactive:** without `--bootstrap`. Falls back to the provider's
- *    `configureInteractive()` flow (REPL prompts for host/user/password/etc).
+ * Where the first storage is comes either from `--bootstrap "<adapter-flags>"`
+ * (forwarded verbatim to `StorageProvider.configureFromFlags()`, same grammar as
+ * `bfs init --ci` adapter-flags, and requiring `--provider` and `--name`), or -
+ * without it - from the provider's own `configureInteractive()` prompts.
+ *
+ * That choice is about data, not about mode: everything else recovery needs (the
+ * backup password, approval of each host a secret is about to reach, secrets
+ * stripped from the headers) is still collected interactively. A run that must
+ * not be asked anything declares `bfs --ci`, and then an incomplete command
+ * fails instead of asking.
  *
  * Examples:
  *   bfs recovery --provider local --name picture \
  *     --bootstrap "--path /mnt/usb"
- *   bfs recovery --provider ftp --name temp \
- *     --bootstrap "--host x --user u --password p --path /a"
+ *   bfs --ci recovery --provider ftp --name temp --password-file ./pw \
+ *     --bootstrap "--host x --user u --password p --path /a" --trust-locations
  *
  * @param program - Commander program to attach the command to
  */
@@ -49,17 +55,28 @@ export function registerRecovery(program: Command): void {
     .option('--bootstrap <spec>', t('recovery_opt_bootstrap'))
     .option('--name <vaultName>', t('recovery_opt_name'))
     .option('--password <password>', t('recovery_opt_password'), (val: string, prev: string[]) => [...prev, val], [] as string[])
+    .option('--password-file <path>', t('recovery_opt_password_file'), (val: string, prev: string[]) => [...prev, val], [] as string[])
     .option('--allow-missing-adapters', t('recovery_opt_allow_missing_adapters'))
     .option('--trust-locations', t('recovery_opt_trust_locations'))
     .action(async (opts: RecoveryOpts, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
-      // CI mode is gated by --bootstrap. Without it, recovery falls back to the
-      // interactive flow (rawlist + configureInteractive) so the REPL is unchanged.
-      const isCi = opts.bootstrap !== undefined;
-      // In CI a missing sibling path must not prompt — the provider auto-creates
-      // it (empty → its shard is treated as absent) so recovery keeps going.
-      const io = createCliProviderIO(rootDir, !isCi);
-      if (isCi) {
+      // --bootstrap says where the first storage is, not that nobody is watching:
+      // it replaces the prompts that collect that one provider's settings, and
+      // nothing else. Recovering a machine is an operator's job - the password of
+      // an encrypted backup, the host each secret is about to reach, the secrets
+      // stripped from the headers are all still asked for when there is a
+      // terminal. A run that must not be asked anything says so with --ci.
+      const hasBootstrapSpec = opts.bootstrap !== undefined;
+      const isCi = isCiRun(cmd);
+      const io = createCliProviderIO(rootDir, isCi ? false : undefined);
+      // Without a bootstrap spec the command asks the operator which adapter to
+      // start from and where - questions a `--ci` run cannot answer, and cannot
+      // be answered for it later either. Refuse on the command line instead.
+      if (isCi && !hasBootstrapSpec) {
+        error(t('recovery_ci_bootstrap_required'));
+        throw new CommandAbort();
+      }
+      if (hasBootstrapSpec) {
         _validateCiRecoveryOpts(opts);
       }
 
@@ -71,6 +88,18 @@ export function registerRecovery(program: Command): void {
 
       const { connectionConfig, bootstrapAdapterPackage } = await _resolveConnectionConfig({ providerType, bootstrapSpec: opts.bootstrap, io });
       const vaultName = await _resolveRecoveryVaultName(opts.name);
+
+      // A pool, not a single value: versions of one backup may carry different
+      // passwords, so a file adds to what --password supplied instead of
+      // replacing it. Read before the spinner starts - a bad file is the
+      // operator's typo, not a failure of the recovery.
+      let passwords: string[];
+      try {
+        passwords = [...opts.password, ...(await readPasswordFiles(opts.passwordFile))];
+      } catch (err) {
+        error(err instanceof Error ? err.message : String(err));
+        throw new CommandAbort();
+      }
 
       const spinner = ora(t('recovery_connecting')).start();
       const wrappedIo = createSpinnerIo(io, spinner);
@@ -88,7 +117,7 @@ export function registerRecovery(program: Command): void {
         const report = await recover(rootDir, {
           vaultName,
           provider,
-          ...(opts.password.length > 0 ? { passwords: opts.password } : {}),
+          ...(passwords.length > 0 ? { passwords } : {}),
           ...(Object.keys(bootstrapInputs).length > 0 ? { bootstrapInputs } : {}),
           ...(opts.allowMissingAdapters === true ? { allowMissingAdapters: true } : {}),
           ...(opts.trustLocations === true ? { trustLocations: true } : {}),
@@ -106,7 +135,7 @@ export function registerRecovery(program: Command): void {
     });
 }
 
-// ─── Section resolvers (private) ─────────────────────────────────────────────────
+// --- Section resolvers (private) -------------------------------------------------
 
 /** Validates the flags --bootstrap (CI) contractually requires: --provider and --name. */
 function _validateCiRecoveryOpts(opts: RecoveryOpts): void {
@@ -168,7 +197,7 @@ async function _resolveRecoveryVaultName(name: string | undefined): Promise<stri
 
 /**
  * Reuses the operator's bootstrap credentials for sibling providers that share
- * them — seeds the recovery input pool so they connect without an extra prompt
+ * them - seeds the recovery input pool so they connect without an extra prompt
  * (a stripped vault keeps no transport secret in headers).
  */
 function _collectBootstrapInputs(provider: StorageProvider, connectionConfig: Record<string, unknown>): Record<string, string> {
@@ -183,8 +212,16 @@ function _collectBootstrapInputs(provider: StorageProvider, connectionConfig: Re
 /** Prints the recovery summary table (rebuilt count + per-version health/consensus). */
 function _renderRecoveryReport(report: Awaited<ReturnType<typeof recover>>): void {
   console.log(chalk.bold(fmt('recovery_rebuilt', String(report.manifests_rebuilt))));
-  const rows = report.versions.map((v) => [`v${String(v.version).padStart(3, '0')}`, formatHealth(v.health), v.consensus ? chalk.green('✓') : chalk.red('✗')]);
+  const rows = report.versions.map((v) => [`v${String(v.version).padStart(3, '0')}`, formatHealth(v.health), v.consensus ? chalk.green('OK') : chalk.red('X')]);
   table([t('recovery_col_version'), t('recovery_col_status'), t('recovery_col_consensus')], rows);
   console.log();
+  // A run that skipped a version cannot close by pointing at "the latest": that
+  // one is exactly what stayed sealed. Name the newest version this directory can
+  // actually restore, so the closing line is a command that works.
+  if (report.unrecovered_versions.length > 0 && report.versions.length > 0) {
+    const newest = Math.max(...report.versions.map((v) => v.version));
+    success(fmt('recovery_success_partial', String(newest), report.unrecovered_versions.map((v) => `v${String(v).padStart(3, '0')}`).join(', ')));
+    return;
+  }
   success(t('recovery_success'));
 }

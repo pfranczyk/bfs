@@ -11,16 +11,16 @@ import type { ProviderConfig, RemoteRef, ShardHeader, ShardLocation, StorageProv
 import { readManifest } from '../../src/vault/manifest.js';
 import { recover } from '../../src/vault/recovery.js';
 
-// ─── Contract under test ─────────────────────────────────────────────────────
+// --- Contract under test -----------------------------------------------------
 //
 // Within one version every shard carries the SAME kdf_salt and the SAME location
-// map — only the map's ciphertext differs (a fresh random nonce per seal). So the
+// map - only the map's ciphertext differs (a fresh random nonce per seal). So the
 // map of a version opens from ANY of its shards with the same password.
 //
-// `processVersion` (src/vault/recovery.ts) resolves the map from `primaryData`,
+// `rebuildVersionManifest` (src/vault/version-rebuild.ts) resolves the map from `primaryData`,
 // the FIRST shard header it managed to collect for that version. It stops
 // collecting at two headers, and the second one feeds `shardHeaderConsensusMismatch`
-// (src/vault/consensus.ts) only — it is never used as an alternative map source.
+// (src/vault/consensus.ts) only - it is never used as an alternative map source.
 // When the primary's encrypted map is undecryptable, `tryDecryptLocationMap`
 // (src/vault/password-pool.ts) burns through the password pool, recovery warns
 // (`recovery_decrypt_skip`) and returns null: the WHOLE version is dropped even
@@ -50,13 +50,13 @@ const PASSWORD = 'sibling-map-secret';
 /** Media in the pool; slot number doubles as the shard index it stores. */
 const SLOTS = [0, 1, 2] as const;
 
-/** Map id of the medium whose v1 map is damaged — what a report must name. */
+/** Map id of the medium whose v1 map is damaged - what a report must name. */
 const DAMAGED_MEDIUM_ID = 'p0';
 
 /** v2 = latest (bootstrap target, always intact); v1 = the damaged one. */
 const VERSIONS = [1, 2] as const;
 
-/** slot → version → serialized shard-header bytes that medium serves. */
+/** slot -> version -> serialized shard-header bytes that medium serves. */
 let media: Map<number, Map<number, Buffer>>;
 
 /** Argon2id is expensive; salts are fixed per version, so derive each key once. */
@@ -123,7 +123,7 @@ function shardHeaderFor(slot: number, version: number, locationMap: ShardLocatio
 }
 
 /**
- * Flips the last byte of a serialized header — the tail of the GCM tag sealing
+ * Flips the last byte of a serialized header - the tail of the GCM tag sealing
  * the encrypted location map. The header still parses (every plaintext field is
  * intact), but no password opens its map. Mirrors the single-byte header damage
  * the CLI e2e harness injects.
@@ -158,7 +158,7 @@ async function seedVault(corruptV1Slots: readonly number[]): Promise<void> {
 }
 
 /**
- * Base of a connected StorageProvider — every method a no-op stub except the
+ * Base of a connected StorageProvider - every method a no-op stub except the
  * ones recovery and verify touch (authenticate, setVaultName, list, getSize,
  * downloadHeader). The medium-specific ones are overridden per instance.
  */
@@ -193,7 +193,7 @@ function baseProvider(id: string): StorageProvider {
 
 /**
  * Builds a provider bound to one medium (`slot`). The id is independent of the
- * slot, so two ids can point at the SAME physical medium — the layout a real
+ * slot, so two ids can point at the SAME physical medium - the layout a real
  * `bfs recovery --bootstrap` produces when the bootstrap medium is also one of
  * the configured providers.
  */
@@ -232,7 +232,7 @@ function warnCount(logs: Array<{ level: string; message: string }>, message: str
   return logs.filter((l) => l.level === 'warn' && l.message === message).length;
 }
 
-/** Counts warnings naming a medium — how a report points the operator at it. */
+/** Counts warnings naming a medium - how a report points the operator at it. */
 function warnsNaming(logs: Array<{ level: string; message: string }>, mediumId: string): number {
   return logs.filter((l) => l.level === 'warn' && l.message.includes(mediumId)).length;
 }
@@ -274,18 +274,18 @@ describe('recover() resolving a version location map across sibling shards', () 
     const key = await vaultKeyFor(1);
 
     // Parsed WITHOUT a key: the damage must be confined to the sealed map, or the
-    // fixture would be testing an unreadable HEADER — a different failure entirely.
+    // fixture would be testing an unreadable HEADER - a different failure entirely.
     const plaintextFields = buildShardHeaderFromBytes(damaged);
 
-    expect(plaintextFields.shard_index, 'the damaged header must still expose its shard index — the damage is in the sealed map, not the header layout').toBe(0);
+    expect(plaintextFields.shard_index, 'the damaged header must still expose its shard index - the damage is in the sealed map, not the header layout').toBe(0);
     expect(plaintextFields.version, 'the damaged header must still expose its version').toBe(1);
     expect(plaintextFields.encrypted, 'the damaged header must still declare itself encrypted').toBe(true);
-    expect(plaintextFields.kdf_salt, 'the KDF salt must survive the damage — a wrong salt would fail for a different reason').toEqual(saltFor(1));
-    expect(() => buildShardHeaderFromBytes(damaged, key), 'the pooled password must NOT open the damaged map — that IS the injected damage').toThrow(DecryptionError);
+    expect(plaintextFields.kdf_salt, 'the KDF salt must survive the damage - a wrong salt would fail for a different reason').toEqual(saltFor(1));
+    expect(() => buildShardHeaderFromBytes(damaged, key), 'the pooled password must NOT open the damaged map - that IS the injected damage').toThrow(DecryptionError);
 
     expect((await openServedMap(1, 1))?.length, 'slot 1 v1 map must open with the pooled password').toBe(3);
     expect((await openServedMap(2, 1))?.length, 'slot 2 v1 map must open with the pooled password').toBe(3);
-    expect((await openServedMap(0, 2))?.length, 'slot 0 v2 map must open — bootstrap reads this one').toBe(3);
+    expect((await openServedMap(0, 2))?.length, 'slot 0 v2 map must open - bootstrap reads this one').toBe(3);
   });
 
   it('should report the damaged medium and withhold consensus when the map comes from a sibling', async () => {
@@ -296,10 +296,10 @@ describe('recover() resolving a version location map across sibling shards', () 
 
     const report = await recover(root, { vaultName: VAULT_NAME, provider: bootstrapProvider, io, passwords: [PASSWORD] });
 
-    expect(report.versions.find((v) => v.version === 1)?.consensus, 'a version rebuilt from a sibling map must not be reported as consensus-clean — the medium that disagreed is still damaged after recovery finishes').toBe(false);
+    expect(report.versions.find((v) => v.version === 1)?.consensus, 'a version rebuilt from a sibling map must not be reported as consensus-clean - the medium that disagreed is still damaged after recovery finishes').toBe(false);
     expect(
       warnsNaming(logs, DAMAGED_MEDIUM_ID),
-      `recovery must name the medium whose map could not be opened ("${DAMAGED_MEDIUM_ID}") so verify/repair can be pointed at it — healing the version silently leaves a damaged shard nobody knows about`,
+      `recovery must name the medium whose map could not be opened ("${DAMAGED_MEDIUM_ID}") so verify/repair can be pointed at it - healing the version silently leaves a damaged shard nobody knows about`,
     ).toBeGreaterThanOrEqual(1);
   });
 
@@ -312,7 +312,7 @@ describe('recover() resolving a version location map across sibling shards', () 
 
     const report = await recover(root, { vaultName: VAULT_NAME, provider: bootstrapProvider, io, passwords: [PASSWORD] });
 
-    expect(askSecret.mock.calls.length, 'the pooled password already opens v1 on a healthy sibling — every prompt here is one the operator should never have seen').toBe(0);
+    expect(askSecret.mock.calls.length, 'the pooled password already opens v1 on a healthy sibling - every prompt here is one the operator should never have seen').toBe(0);
     expect(warnCount(logs, fmt('recovery_pool_password_failed', '1')), 'the pool is not exhausted while a sibling still opens with a pooled password').toBe(0);
     expect(warnCount(logs, fmt('recovery_decrypt_skip', '1')), 'a version resolved from a sibling map must not be reported as skipped').toBe(0);
     expect(
@@ -326,14 +326,14 @@ describe('recover() resolving a version location map across sibling shards', () 
     const root = await tmp();
     const { io } = createMockProviderIO({});
     // Bootstrap id matches the map entry for slot 0, so the collected headers are
-    // the damaged primary (slot 0) plus a HEALTHY sibling (slot 1) — the sibling
+    // the damaged primary (slot 0) plus a HEALTHY sibling (slot 1) - the sibling
     // is fetched for consensus, but never consulted for the location map.
     const bootstrapProvider = buildMediumProvider('p0', 0);
 
     const report = await recover(root, { vaultName: VAULT_NAME, provider: bootstrapProvider, io, passwords: [PASSWORD] });
 
     const rebuilt = report.versions.map((v) => v.version).sort((a, b) => a - b);
-    expect(rebuilt, 'v1 must be rebuilt from a healthy sibling whose map opens with the pooled password — dropping it loses a recoverable version').toEqual([1, 2]);
+    expect(rebuilt, 'v1 must be rebuilt from a healthy sibling whose map opens with the pooled password - dropping it loses a recoverable version').toEqual([1, 2]);
 
     const v1 = await readManifest(root, 1);
     expect(
@@ -380,7 +380,7 @@ describe('recover() resolving a version location map across sibling shards', () 
       'an undamaged backup must report every version as agreed',
     ).toBe(true);
     // Control for the fallback assertions above: with nothing damaged, no warning
-    // names a medium — so a passing "the damaged medium is named" assertion cannot
+    // names a medium - so a passing "the damaged medium is named" assertion cannot
     // be satisfied by chatter recovery emits anyway.
     expect(warnsNaming(logs, DAMAGED_MEDIUM_ID), 'an undamaged backup must not name any medium in a warning').toBe(0);
   });
@@ -400,10 +400,10 @@ describe('recover() resolving a version location map across sibling shards', () 
     ).toEqual([2]);
     expect(await readManifest(root, 1)).toBeNull();
     // Counts, not presence: walking the candidate shards must cost the operator
-    // nothing extra. One damaged version is one prompt and one report line — three
+    // nothing extra. One damaged version is one prompt and one report line - three
     // of each would be the pool being burned per shard instead of per version.
     expect(askSecret.mock.calls.length, 'the operator must be asked once per VERSION, not once per candidate shard').toBe(1);
     expect(warnCount(logs, fmt('recovery_pool_password_failed', '1')), 'the exhausted pool must be reported once per version, not once per candidate shard').toBe(1);
-    expect(warnCount(logs, fmt('recovery_decrypt_skip', '1')), 'the skip must be reported exactly once — reported, and not repeated per shard').toBe(1);
+    expect(warnCount(logs, fmt('recovery_decrypt_skip', '1')), 'the skip must be reported exactly once - reported, and not repeated per shard').toBe(1);
   });
 });

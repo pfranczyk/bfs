@@ -5,28 +5,28 @@
 // Driven entirely by environment variables so credentials never appear in the
 // process argument list:
 //   SO_HOST SO_PORT SO_USER SO_PASS SO_BASE   connection + base path
-//   SO_MODE   'mkdir' → ensureDir each path in SO_PATHS ('|'-separated). BFS
+//   SO_MODE   'mkdir' -> ensureDir each path in SO_PATHS ('|'-separated). BFS
 //                       init lists a provider's base path and fails if absent,
 //                       so the harness must create it first (like a local
 //                       provider's `mkdir -p`).
-//             'file'  → write a 1-byte regular file at SO_FILE (parent dir
+//             'file'  -> write a 1-byte regular file at SO_FILE (parent dir
 //                       ensured first). Used to plant a "path segment is a file"
 //                       obstacle so a directory op nested under it fails on any
 //                       compliant server, regardless of write permissions.
-//             'rename'→ move SO_FROM → SO_TO (the parent of SO_TO is ensured
+//             'rename'-> move SO_FROM -> SO_TO (the parent of SO_TO is ensured
 //                       first). Simulates a storage relocation an operator then
 //                       points a provider at with `bfs provider edit`.
-//             'rm'    → delete the single remote file SO_FILE (a shard), to
+//             'rm'    -> delete the single remote file SO_FILE (a shard), to
 //                       simulate a lost shard / unreachable server for RS
 //                       reconstruction tests. Missing file is a no-op.
-//             'put'   → upload the local file SO_LOCAL to the remote path SO_FILE
+//             'put'   -> upload the local file SO_LOCAL to the remote path SO_FILE
 //                       (parent ensured first). Used to pre-place the SAME shard
 //                       bytes on a new-type provider before a no-rebuild repair
-//                       repoints to it — the cross-type "canonical layout"
-//                       migration (local → ftp → ssh).
-//             'run'   → remove SO_BASE/bfs-e2e-<SO_RUN> only.
-//             'all'   → remove every SO_BASE/bfs-e2e-* directory.
-//             'sha'   → download SO_FILE, print its SHA-256 (hex) to stdout.
+//                       repoints to it - the cross-type "canonical layout"
+//                       migration (local -> ftp -> ssh).
+//             'run'   -> remove SO_BASE/bfs-e2e-<SO_RUN> only.
+//             'all'   -> remove every SO_BASE/bfs-e2e-* directory.
+//             'sha'   -> download SO_FILE, print its SHA-256 (hex) to stdout.
 //                       Exit 3 when the file is absent so callers can
 //                       distinguish "not there" from a real transport error.
 //                       Read-only; used by e2e to prove a repair did NOT
@@ -69,7 +69,7 @@ function connect(host: string, port: number, user: string, password: string): Pr
       password,
       readyTimeout: CONNECT_TIMEOUT_MS,
       // The harness owns the test server, so its host key is trusted
-      // unconditionally — parallel to ftp-ops' rejectUnauthorized:false under
+      // unconditionally - parallel to ftp-ops' rejectUnauthorized:false under
       // FTPS. This is harness plumbing, not a security decision under test:
       // BFS's own TOFU/known_hosts path is exercised by the `bfs` invocations.
       hostVerifier: () => true,
@@ -161,7 +161,7 @@ async function removeDir(sftp: SFTPWrapper, dir: string): Promise<void> {
   try {
     entries = await readdirAsync(sftp, dir);
   } catch {
-    return; // does not exist → nothing to remove
+    return; // does not exist -> nothing to remove
   }
   for (const entry of entries) {
     const full = `${dir}/${entry.filename}`;
@@ -225,7 +225,7 @@ async function main(): Promise<void> {
       try {
         entries = await readdirAsync(sftp, base);
       } catch {
-        return; // base path does not exist → nothing to clean
+        return; // base path does not exist -> nothing to clean
       }
       for (const item of entries) {
         if (entryIsDirectory(item) && item.filename.startsWith('bfs-e2e-')) {
@@ -239,7 +239,7 @@ async function main(): Promise<void> {
         try {
           await unlinkAsync(sftp, file);
         } catch {
-          // already gone — nothing to remove
+          // already gone - nothing to remove
         }
       }
     } else if (mode === 'put') {
@@ -264,7 +264,7 @@ async function main(): Promise<void> {
       try {
         digest = await downloadSha(sftp, file);
       } catch {
-        // missing file or any transport failure → signal "absent" distinctly.
+        // missing file or any transport failure -> signal "absent" distinctly.
         process.exit(3);
       }
       process.stdout.write(`${digest}\n`);

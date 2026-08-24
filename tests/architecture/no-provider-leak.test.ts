@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
  * Architecture-as-code test.
  *
  * Enforces the core BFS rule:
- * > A provider governs everything that happens on its side — configuration,
+ * > A provider governs everything that happens on its side - configuration,
  * > prompts, validation, upload/download/verify. The BFS core/CLI is BLIND to
  * > concrete provider types.
  *
@@ -46,7 +46,7 @@ async function grepLines(file: string, pattern: RegExp): Promise<Array<{ line: n
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i] ?? '';
     const trimmed = raw.trim();
-    // Skip pure single-line comments — documentation may legitimately mention
+    // Skip pure single-line comments - documentation may legitimately mention
     // provider types (e.g. "// e.g. 'ftp' or 'local'"). Block comments with
     // code on the same line are still checked.
     if (trimmed.startsWith('//')) continue;
@@ -59,7 +59,7 @@ async function grepLines(file: string, pattern: RegExp): Promise<Array<{ line: n
 
 /**
  * Read a source file, drop `//` comment lines, and return all long-form flag
- * names registered via Commander's `.option('--flag …', …)`. Multi-line
+ * names registered via Commander's `.option('--flag ...', ...)`. Multi-line
  * `.option(` calls are supported (the first literal after the opening paren is
  * captured).
  */
@@ -92,7 +92,7 @@ describe('architecture: provider leak prevention', () => {
       }
     }
 
-    expect(violations, `Found ${violations.length} leak(s) — CLI/core must be blind to concrete provider classes:\n${violations.map((v) => `  ${v.file}:${v.line}  ${v.text}`).join('\n')}`).toEqual([]);
+    expect(violations, `Found ${violations.length} leak(s) - CLI/core must be blind to concrete provider classes:\n${violations.map((v) => `  ${v.file}:${v.line}  ${v.text}`).join('\n')}`).toEqual([]);
   });
 
   it('src/cli and src/core MUST NOT contain the literals "ftp" or "local" as provider-type strings', async () => {
@@ -112,7 +112,7 @@ describe('architecture: provider leak prevention', () => {
       }
     }
 
-    expect(violations, `Found ${violations.length} hardcoded provider-type literal(s) — replace with providerRegistry.listTypes() / getFactory():\n${violations.map((v) => `  ${v.file}:${v.line}  ${v.text}`).join('\n')}`).toEqual([]);
+    expect(violations, `Found ${violations.length} hardcoded provider-type literal(s) - replace with providerRegistry.listTypes() / getFactory():\n${violations.map((v) => `  ${v.file}:${v.line}  ${v.text}`).join('\n')}`).toEqual([]);
   });
 
   it('no file imports src/cli/prompt-ftp.ts (the file must stay deleted)', async () => {
@@ -135,7 +135,7 @@ describe('architecture: provider leak prevention', () => {
   it('provider-add MUST only register the three BFS-level flags (pass-through whitelist)', async () => {
     // Provider-specific flags belong in the adapter's own grammar (consumed
     // from CliProviderInput.rawArgs), never as BFS-level Commander options.
-    // Adding a fourth flag here requires a deliberate decision — update this
+    // Adding a fourth flag here requires a deliberate decision - update this
     // whitelist AND note the exception in CHANGELOG.md / ### Changed.
     const flags = await extractOptionFlags(path.join(SRC, 'cli', 'commands', 'provider-add.ts'));
     expect(flags.sort()).toEqual(['--ci', '--name', '--type']);
@@ -143,9 +143,9 @@ describe('architecture: provider leak prevention', () => {
 
   it('init MUST only register the closed set of BFS-level flags (no provider-specific knowledge)', async () => {
     // init takes a fixed set of BFS-level flags. Provider-specific knobs
-    // (--host, --port, --path, --config-file, …) must live inside the
+    // (--host, --port, --path, --config-file, ...) must live inside the
     // --provider spec value, which is tokenized shell-style and forwarded
-    // to the adapter via rawArgs — never as top-level Commander options.
+    // to the adapter via rawArgs - never as top-level Commander options.
     const flags = await extractOptionFlags(path.join(SRC, 'cli', 'commands', 'init.ts'));
     expect(flags.sort()).toEqual(['--ci', '--compress', '--data-shards', '--enc', '--max-ram', '--no-compress', '--no-enc', '--parity-shards', '--provider', '--push-mode']);
   });
@@ -154,7 +154,7 @@ describe('architecture: provider leak prevention', () => {
     // Without BOTH calls, adapter-specific flags like `--private-key /path`
     // either fail ("unknown option") or get truncated (value token becomes an
     // "excess positional argument"). The two together are what makes rawArgs
-    // pass-through actually work — removing either silently breaks the model.
+    // pass-through actually work - removing either silently breaks the model.
     const files = [path.join(SRC, 'cli', 'commands', 'provider-add.ts'), path.join(SRC, 'cli', 'commands', 'provider-remove.ts')];
     for (const file of files) {
       const content = await fs.readFile(file, 'utf8');
@@ -167,7 +167,7 @@ describe('architecture: provider leak prevention', () => {
     }
   });
 
-  it('init MUST NOT use Commander pass-through — its flag set is closed and adapter flags go through --provider', async () => {
+  it('init MUST NOT use Commander pass-through - its flag set is closed and adapter flags go through --provider', async () => {
     // init is NOT a pass-through command at the Commander level. Adapter
     // flags travel inside the `--provider "<type>:<name> [flags]"` value,
     // which is tokenized by shellParse(), not by Commander. Enabling

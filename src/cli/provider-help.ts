@@ -12,10 +12,11 @@ const FLAG_COLUMN_GAP = 4;
  * Iterates every registered provider type, asks the factory for its
  * {@link ProviderHelp}, and prints a uniform block per type. BFS prepends
  * `Usage: bfs provider add --name <name> --type <type>` before the
- * provider-specific suffix — adapter authors fill fields, not free text.
+ * provider-specific suffix - adapter authors fill fields, not free text.
  *
- * When the registry is empty (no providers registered — should not happen
- * in practice because built-in `local` and `ftp` register at import time),
+ * When the registry is empty (no providers registered - should not happen
+ * in practice because the built-in `local`, `ftp` and `ssh` adapters register
+ * at import time),
  * returns an empty string so Commander's own help remains unchanged.
  *
  * @returns multi-line help block starting with a leading newline, or empty
@@ -39,8 +40,8 @@ export function buildProviderHelpSection(): string {
 /**
  * Resolves the "install: ..." hint shown next to a provider's heading.
  * Precedence:
- *   1. {@link ProviderHelp.installation} — adapter's own custom text.
- *   2. Registry meta → `npm install -g <packageName>` (no version in help
+ *   1. {@link ProviderHelp.installation} - adapter's own custom text.
+ *   2. Registry meta -> `npm install -g <packageName>` (no version in help
  *      because help is generic; version lives in ProviderConfig.adapterPackage
  *      per provider instance).
  *   3. null for built-ins without meta.
@@ -60,7 +61,7 @@ function resolveInstallHint(type: string, help: ProviderHelp): Nullable<string> 
  */
 function renderProviderSection(type: string, displayName: string, help: ProviderHelp, installHint: Nullable<string>): string {
   const headingSuffix = installHint !== null ? `  ${fmt('provider_help_install_hint', installHint)}` : '';
-  const heading = `${INDENT_HEADING}${type} — ${displayName}${headingSuffix}`;
+  const heading = `${INDENT_HEADING}${type} - ${displayName}${headingSuffix}`;
 
   const usageSuffix = help.usage.length > 0 ? ` ${help.usage}` : '';
   const usageLine = `${INDENT_BODY}${t('provider_help_usage_label')} bfs provider add --name <name> --type ${type}${usageSuffix}`;

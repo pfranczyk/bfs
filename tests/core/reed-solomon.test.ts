@@ -7,7 +7,7 @@ import { BfsError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
 import { calcShardPayloadSize, rsDecode, rsDecodeStriped, rsEncode, rsEncodeStriped, rsRepair, rsRepairStriped, SHARD_ALIGNMENT } from '../../src/core/reed-solomon.js';
 
-// ─── Helpers ───────────────────────────────────────────────────────────────
+// --- Helpers ---------------------------------------------------------------
 
 /** Generates a Buffer of `size` bytes with non-zero, non-repeating pattern. */
 function makeData(size: number): Buffer {
@@ -21,7 +21,7 @@ function dropShards(shards: Buffer[], indices: number[]): Nullable<Buffer>[] {
   return shards.map((s, i) => (indices.includes(i) ? null : s));
 }
 
-// ─── Tests ─────────────────────────────────────────────────────────────────
+// --- Tests -----------------------------------------------------------------
 
 describe('SHARD_ALIGNMENT', () => {
   it('should be a positive integer', () => {
@@ -79,7 +79,7 @@ describe('rsRepairStriped', () => {
     const numStripes = 2;
     const full = buildStripedSet(N, K, stripeSize, numStripes);
 
-    // Drop a DATA shard (index 0) — exercises the reconstruct branch.
+    // Drop a DATA shard (index 0) - exercises the reconstruct branch.
     const repaired = rsRepairStriped(dropShards(full, [0]), N, K, stripeSize);
     expect(Buffer.compare(repaired[0] as Buffer, full[0] as Buffer)).toBe(0);
   });
@@ -131,21 +131,21 @@ describe('rsEncode', () => {
 });
 
 describe('rsDecode', () => {
-  it('should decode 3/1 → roundtrip with all shards present', () => {
+  it('should decode 3/1 -> roundtrip with all shards present', () => {
     const data = makeData(100);
     const shards = rsEncode(data, 3, 1);
     const decoded = rsDecode(shards, 3, 1, data.length);
     expect(decoded.equals(data)).toBe(true);
   });
 
-  it('should decode 5/2 → roundtrip with all shards present', () => {
+  it('should decode 5/2 -> roundtrip with all shards present', () => {
     const data = makeData(500);
     const shards = rsEncode(data, 5, 2);
     const decoded = rsDecode(shards, 5, 2, data.length);
     expect(decoded.equals(data)).toBe(true);
   });
 
-  it('should reconstruct when K shards are missing (3/1 → drop 1)', () => {
+  it('should reconstruct when K shards are missing (3/1 -> drop 1)', () => {
     const data = makeData(96);
     const shards = rsEncode(data, 3, 1);
     // Drop parity shard (index 3)
@@ -154,7 +154,7 @@ describe('rsDecode', () => {
     expect(decoded.equals(data)).toBe(true);
   });
 
-  it('should reconstruct when K shards are missing (5/2 → drop 2)', () => {
+  it('should reconstruct when K shards are missing (5/2 -> drop 2)', () => {
     const data = makeData(200);
     const shards = rsEncode(data, 5, 2);
     // Drop any 2 shards
@@ -180,7 +180,7 @@ describe('rsDecode', () => {
   });
 
   it('should handle non-aligned data length (originalSize strips padding)', () => {
-    // 13 bytes — not aligned to SHARD_ALIGNMENT
+    // 13 bytes - not aligned to SHARD_ALIGNMENT
     const data = makeData(13);
     const shards = rsEncode(data, 3, 1);
     const decoded = rsDecode(shards, 3, 1, data.length);
@@ -302,7 +302,7 @@ describe('rsEncodeStriped / rsDecodeStriped', () => {
     const parityBuf = await fs.readFile(parityPath0);
     const shard1 = dataShards[1];
     if (!shard1) throw new Error('Internal: dataShards[1] missing');
-    // Drop shard 0 — recover using shard 1 + parity
+    // Drop shard 0 - recover using shard 1 + parity
     const shardStreams: Nullable<Readable>[] = [null, Readable.from(shard1), Readable.from(parityBuf)];
 
     const decoded = await streamToBuffer(rsDecodeStriped(shardStreams, { N, K, stripeSize, blobSize: blob.length }));

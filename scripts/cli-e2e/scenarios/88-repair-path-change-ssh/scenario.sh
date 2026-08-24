@@ -3,7 +3,7 @@
 # operator reorganises their storage, moving shard_2's directory to a new path on
 # the same host:port. The data is intact at the new path, so `bfs repair
 # --config-file` (no --rebuild) just repoints the provider and rewrites the
-# location map in every shard's header. Distinct from a disk failure — here the
+# location map in every shard's header. Distinct from a disk failure - here the
 # bytes were deliberately moved, not lost. Proves repair repoints a path change
 # without re-uploading the shard.
 
@@ -36,7 +36,7 @@ scenario_run() {
   before="$(ssh_sha "$e" "$newshard")"
   [ -n "$before" ] || _fail "shard not present at the new path after the move"
 
-  # Repoint p2 at the new path — data intact, so NO --rebuild.
+  # Repoint p2 at the new path - data intact, so NO --rebuild.
   local sshjson="$SC_DIR/ssh-p2.json"
   printf '{"host":"%s","port":%s,"user":"%s","password":"%s","path":"%s"}\n' \
     "${SSH_HOST[$e]}" "${SSH_PORT[$e]}" "${SSH_USER[$e]}" "${SSH_PASS[$e]}" "$newbase" >"$sshjson"

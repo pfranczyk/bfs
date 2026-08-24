@@ -5,7 +5,7 @@
 # src/vault/lockfile.ts.
 #
 # Deterministic across Linux / WSL / Git Bash on Windows: we spawn an idle
-# node holder, take ITS native process.pid (printed by node itself — bash $$
+# node holder, take ITS native process.pid (printed by node itself - bash $$
 # is POSIX-emulated under Git Bash and useless here), and stamp that pid into
 # a hand-crafted push.lock. No race window, no large fixture, ~1 s of work.
 
@@ -46,7 +46,7 @@ EOF
   assert_lock_exists "$vault"
 
   # A real push now must observe the live lock and bail with the concurrent
-  # active error — the exact branch we want to cover.
+  # active error - the exact branch we want to cover.
   run_bfs "$vault" push --new
   assert_fail
   assert_out_contains "another push in progress"

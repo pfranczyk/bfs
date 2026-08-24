@@ -13,7 +13,7 @@ REQUIRES_FTP=1
 scenario_run() {
   local vault="$SC_DIR/vault" base="$SC_DIR/baseline.txt" name="bfs68"
   make_fixtures "$vault"
-  build_pool_seq "$SC_DIR" "$name" local local ftp   # p0 L · p1 L · p2 F
+  build_pool_seq "$SC_DIR" "$name" local local ftp   # p0 L - p1 L - p2 F
 
   run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 2 --parity-shards 1 "${PROVIDER_ARGS[@]}"

@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # All-SSH backup: every N+K provider is a distinct SFTP sub-path on one SSH
-# endpoint. Proves the full create → restore → disaster-recovery cycle over a
+# endpoint. Proves the full create -> restore -> disaster-recovery cycle over a
 # real sshd, with an 8 MB binary file verified byte-for-byte (SHA-256) so a
 # truncated or reordered SFTP transfer cannot pass silently.
 

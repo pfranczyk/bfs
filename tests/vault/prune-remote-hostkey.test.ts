@@ -15,8 +15,8 @@ import { init, prune, push } from '../../src/vault/vault-manager.js';
 // `confirm: () => false` and WITHOUT `interactive: false`. A provider that must
 // make a host-key trust decision (SSH) therefore takes the interactive path,
 // gets a `false` from confirm(), and rejects the connection; the delete throws
-// and prune's best-effort `catch {}` swallows it — the shard is orphaned on the
-// medium (silent storage leak). FTP has no host-key decision, so it is immune —
+// and prune's best-effort `catch {}` swallows it - the shard is orphaned on the
+// medium (silent storage leak). FTP has no host-key decision, so it is immune -
 // which is exactly why this must be proven at the vault-manager level, not in a
 // provider unit: the defect is in how prune drives the IO, not in any provider.
 
@@ -26,8 +26,8 @@ const GATED_TYPE = 'hostkey-gated-test';
  * Local-disk provider that models SSH's host-key trust gate
  * (decideHostKeyTrust in src/providers/ssh.ts). With no pinned fingerprint a
  * non-interactive caller (io.interactive === false) falls back to
- * accept_new_host_key — true here, mirroring the `--accept-new-host-key` the SSH
- * pool passes at init — while an interactive caller is asked via confirm(). A
+ * accept_new_host_key - true here, mirroring the `--accept-new-host-key` the SSH
+ * pool passes at init - while an interactive caller is asked via confirm(). A
  * silent IO that neither signals interactive:false nor confirms drives
  * authenticate() into rejection, exactly as a real sshd refuses the connection.
  * delete() stays the real local delete, so whether the shard actually leaves the
@@ -54,7 +54,7 @@ async function mkTmp(prefix: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
-describe('prune — remote shard deletion through a host-key-gated provider', () => {
+describe('prune - remote shard deletion through a host-key-gated provider', () => {
   let root: string;
   let pdirs: string[];
 
@@ -93,14 +93,14 @@ describe('prune — remote shard deletion through a host-key-gated provider', ()
       io: presentIo,
     });
     await push(root, { io: presentIo }); // v1
-    await push(root, { io: presentIo }); // v2 — leaves a surviving version after pruning v1
+    await push(root, { io: presentIo }); // v2 - leaves a surviving version after pruning v1
 
     const gatedShardV1 = path.join(pdirs[2] ?? '', 'vault', 'shard_2.bfs.1');
     const plainShardV1 = path.join(pdirs[0] ?? '', 'vault', 'shard_0.bfs.1');
     expect(existsSync(gatedShardV1)).toBe(true);
     expect(existsSync(plainShardV1)).toBe(true);
 
-    // prune() constructs its own silent ProviderIO internally — no operator.
+    // prune() constructs its own silent ProviderIO internally - no operator.
     await prune(root, { versions: [1] });
 
     // A/B control: the plain local shard is always removed (no host-key gate).

@@ -12,8 +12,8 @@ import { init, pull, push } from '../../src/vault/vault-manager.js';
 
 // When a restore cannot go ahead, the operator's next move depends entirely on
 // why: data damaged on a medium calls for a repair, a medium that is offline
-// calls for plugging it back in. pull already knows which parts failed and how —
-// it builds that map to exclude them from the decode — so the failure it reports
+// calls for plugging it back in. pull already knows which parts failed and how -
+// it builds that map to exclude them from the decode - so the failure it reports
 // names the media per cause instead of guessing at one.
 //
 // The failure text is asserted in English: t() answers in the default language
@@ -31,7 +31,7 @@ function localProvider(id: string, dir: string): ProviderConfig {
   return { id, type: 'local', adapterPackage: null, config: { path: dir } };
 }
 
-/** Flips one payload byte, leaving the trailing checksum stale — bit-rot. */
+/** Flips one payload byte, leaving the trailing checksum stale - bit-rot. */
 async function rotShardPayload(file: string): Promise<void> {
   const buf = await fs.readFile(file);
   const pos = computeShardHeaderSize(buf);
@@ -40,7 +40,7 @@ async function rotShardPayload(file: string): Promise<void> {
 }
 
 /**
- * Flips one byte of the shard's magic — bit-rot inside the header, so the part
+ * Flips one byte of the shard's magic - bit-rot inside the header, so the part
  * is present and readable but its own description of itself no longer parses.
  */
 async function rotShardHeader(file: string): Promise<void> {
@@ -141,7 +141,7 @@ describe('pull attributes a failed restore to the right cause', () => {
 
     const message = await pullFailure(root, io);
 
-    // Each medium must appear under its own cause — one needs a repair, the
+    // Each medium must appear under its own cause - one needs a repair, the
     // other needs plugging back in, and the message decides which is which.
     expect(message).toMatch(/damaged|integrity/i);
     expect(message).toMatch(/missing/i);
@@ -168,9 +168,9 @@ describe('pull attributes a failed restore to the right cause', () => {
 
   it('should report every part damaged as a shortage of usable parts, naming the media', async () => {
     // Every part fails its own checksum, so none can supply the size the restore
-    // is sized against. Nothing has recorded a cause at that point — the part
+    // is sized against. Nothing has recorded a cause at that point - the part
     // consulted for the size defers to a sibling on failure without noting it,
-    // and the integrity pass has not run yet — so the restore has to reach the
+    // and the integrity pass has not run yet - so the restore has to reach the
     // same conclusion it reaches for any other unusable set of parts: too few
     // parts left, and the damaged media named, rather than a message of its own
     // about an unreadable size that leaves the operator with nowhere to go.
@@ -179,7 +179,7 @@ describe('pull attributes a failed restore to the right cause', () => {
     // at `bfs repair --rebuild` here sends them after a command that refuses on
     // the same shortage. The message states instead that this version can no
     // longer be restored from what the media still hold. The wording itself, and
-    // its EN/PL pair, belong to smoke — asserted here only as: no rebuild
+    // its EN/PL pair, belong to smoke - asserted here only as: no rebuild
     // advised, and the impossibility said out loud.
     await setup(false);
     for (let i = 0; i < 3; i++) {
@@ -200,7 +200,7 @@ describe('pull attributes a failed restore to the right cause', () => {
 
   it('should restore from the surviving parts when enough of them are still sound', async () => {
     // The counterpart of the case above, and the boundary the advice to rebuild
-    // hangs on: one part rots while N sound ones remain — which is both what the
+    // hangs on: one part rots while N sound ones remain - which is both what the
     // decode needs and what a rebuild would read. The restore goes ahead, so the
     // shortage message never fires while enough parts survive.
     await setup(false);
@@ -224,7 +224,7 @@ describe('pull attributes a failed restore to the right cause', () => {
     // degraded restore, and it must not depend on the order the parts happen to
     // be read in. The size the restore is sized against is adopted from the
     // first part that passes its own checksum, and the parts are read in
-    // manifest order — so shard 0 on p0 supplies it here and p1's rotted part is
+    // manifest order - so shard 0 on p0 supplies it here and p1's rotted part is
     // reached only by the main integrity pass, which drops it and names nobody.
     await setup(false);
     await rotShardPayload(shardPath(mediumDir(pdirs, 1), 1));
@@ -240,7 +240,7 @@ describe('pull attributes a failed restore to the right cause', () => {
       .filter((l) => l.level === 'warn')
       .map((l) => l.message);
     // The generic note that the pool is degraded names no medium, so satisfying
-    // this needs a warning that says which one — and it must be the rotted one,
+    // this needs a warning that says which one - and it must be the rotted one,
     // not a sound sibling.
     const named = warnings.find((m) => /damaged|integrity/i.test(m) && /\bp1\b/.test(m));
     assert(named !== undefined, 'restore must name the medium whose part was rejected as damaged');
@@ -250,7 +250,7 @@ describe('pull attributes a failed restore to the right cause', () => {
 
   it('should tell the operator how to bring back a medium the configuration no longer lists', async () => {
     // A medium the backup records but the configuration has lost is the one
-    // degradation an operator can undo without touching any data — so the
+    // degradation an operator can undo without touching any data - so the
     // restore that survived it must name that medium and the command that puts
     // it back, in a warning of its own rather than folded into the note about
     // the part it skipped.
@@ -286,7 +286,7 @@ describe('pull attributes a failed restore to the right cause', () => {
   it('should offer both ways forward for a medium the configuration no longer lists', async () => {
     // The same branch fires for two opposite situations: a name lost from the
     // configuration by accident, and a medium deliberately dropped from the pool
-    // — after `bfs provider remove --strategy remove` the older versions still
+    // - after `bfs provider remove --strategy remove` the older versions still
     // record it. Advice that only says "put that name back" tells the second
     // operator to undo the very thing they just did, and contradicts the step
     // the removal itself printed: make a fresh copy on the media that remain.
@@ -318,7 +318,7 @@ describe('pull attributes a failed restore to the right cause', () => {
 
   it('should still report a wrong password as a password problem', async () => {
     // A wrong key fails every part at once. Reporting that as "these media are
-    // damaged" would send the operator to repair perfectly good data — the
+    // damaged" would send the operator to repair perfectly good data - the
     // distinction between corruption and a wrong password is a closed decision.
     await setup(true, 'correct horse battery staple');
 

@@ -7,7 +7,7 @@ import { providerRegistry } from '../providers/provider.js';
 import type { ProviderConfig, ProviderIO, RecoverySecret, RemoteRef, ShardHeader, ShardLocation, StorageProvider } from '../types/index.js';
 import { shardHeaderConsensusMismatch } from './consensus.js';
 
-// ─── Result types ─────────────────────────────────────────────────────────────
+// --- Result types -------------------------------------------------------------
 
 export interface BootstrapResult {
   vault_id: string;
@@ -36,7 +36,7 @@ export function parseVersionFromFilename(filename: string): Nullable<{ shardInde
   return { shardIndex: Number(match[1]), version: Number(match[2]) };
 }
 
-// ─── Private helpers ──────────────────────────────────────────────────────────
+// --- Private helpers ----------------------------------------------------------
 
 /**
  * Finds the RemoteRef for the given version among a provider's listed shard files.
@@ -55,11 +55,13 @@ function findTargetShard(refs: RemoteRef[], version: number): RemoteRef {
 
 /**
  * Asks the operator for one required input (a stripped secret) interactively.
- * Returns null when nothing usable was supplied — an empty answer, or no
- * interactive terminal (askSecret throws on EOF / non-TTY). Recovery treats
- * null as "cannot supply" and degrades by skipping the provider, never crashing.
+ * Returns null when nothing usable was supplied - an empty answer, or a run with
+ * nobody to answer (`io.interactive === false`), where the question is not asked
+ * at all. Recovery treats null as "cannot supply" and degrades by skipping the
+ * provider, never crashing.
  */
 async function promptInput(io: ProviderIO, providerId: string, field: string): Promise<Nullable<string>> {
+  if (io.interactive === false) return null;
   try {
     const value = await io.askSecret(fmt('recovery_ask_transport_password', field, providerId));
     return value.length > 0 ? value : null;
@@ -83,8 +85,8 @@ async function connectOne(loc: ShardLocation, config: Record<string, unknown>, v
 
 /**
  * Connects a provider whose location map declares required_inputs (secrets
- * stripped from the header). Each input is taken from the shared pool first —
- * one credential reused across many providers, so the operator is asked once —
+ * stripped from the header). Each input is taken from the shared pool first -
+ * one credential reused across many providers, so the operator is asked once -
  * otherwise prompted interactively. On success the supplied values are written
  * back into loc.connection_config (so reconstructConfig persists them) and into
  * the pool. Returns null (degraded skip) when the operator gives up (blank
@@ -93,7 +95,7 @@ async function connectOne(loc: ShardLocation, config: Record<string, unknown>, v
 async function connectWithInputs(loc: ShardLocation, required: string[], vaultName: string, io: ProviderIO, inputPool: Map<string, string>): Promise<Nullable<StorageProvider>> {
   // Unbounded by design: at this critical disaster-recovery moment the operator
   // retries as long as they need (recall the password, fix a typo). A blank
-  // answer (promptInput → null) is the explicit "give up" signal; in a
+  // answer (promptInput -> null) is the explicit "give up" signal; in a
   // non-interactive session promptInput also returns null on the first prompt,
   // so this never spins forever.
   let reusePool = true;
@@ -105,14 +107,14 @@ async function connectWithInputs(loc: ShardLocation, required: string[], vaultNa
       // once a pooled value has failed to connect, later rounds always prompt.
       const pooled = reusePool ? inputPool.get(field) : undefined;
       const value = pooled ?? (await promptInput(io, loc.provider_id, field));
-      if (value === null) return null; // operator gave up, or no interactive TTY → degraded
+      if (value === null) return null; // operator gave up, or no interactive TTY -> degraded
       config[field] = value;
       collected.set(field, value);
     }
     const provider = await connectOne(loc, config, vaultName, io);
     if (provider) {
       for (const [field, value] of collected) {
-        loc.connection_config[field] = value; // persist into BootstrapResult map → config.json
+        loc.connection_config[field] = value; // persist into BootstrapResult map -> config.json
         inputPool.set(field, value);
       }
       return provider;
@@ -142,9 +144,12 @@ interface RecoveryHookArgs {
  * connectForRecovery (the provider shows the target host and collects/reuses the
  * secret itself). The hook authenticates; on success the provider joins the
  * connected set and any returned secret is added to the pool for sibling reuse.
- * The secret is NOT written back into connection_config — BFS is blind to which
- * field it is — so it is never persisted to config.json by this path. Returns
- * null (degraded skip) when the operator declines or the connection fails.
+ * When the entry declares exactly one required input, the secret is also written
+ * back into connection_config under that field, so reconstructConfig persists it
+ * to config.json and a later pull/push reconnects without prompting again. With
+ * several required inputs BFS cannot tell which one the returned secret is, so
+ * nothing is persisted. Returns null (degraded skip) when the operator declines
+ * or the connection fails.
  */
 async function connectViaRecoveryHook(args: RecoveryHookArgs): Promise<Nullable<StorageProvider>> {
   const { provider, loc, vaultName, io, pool, trustLocations } = args;
@@ -157,8 +162,8 @@ async function connectViaRecoveryHook(args: RecoveryHookArgs): Promise<Nullable<
       pool.push({ value: secret, origin: loc.provider_id });
       // Persist the collected secret into config.json (parity with the legacy
       // path and with a normal config) so a later non-interactive pull/push can
-      // reconnect. required_inputs names the stripped secret field — BFS knows
-      // it is a secret (getSecretFields → required_inputs); only "which field is
+      // reconnect. required_inputs names the stripped secret field - BFS knows
+      // it is a secret (getSecretFields -> required_inputs); only "which field is
       // the host" is opaque to it, and the provider already showed that.
       const fields = loc.required_inputs ?? [];
       if (fields.length === 1) {
@@ -168,7 +173,7 @@ async function connectViaRecoveryHook(args: RecoveryHookArgs): Promise<Nullable<
     }
     return provider;
   } catch {
-    return null; // operator declined or the provider was unreachable → degraded skip
+    return null; // operator declined or the provider was unreachable -> degraded skip
   }
 }
 
@@ -176,7 +181,7 @@ async function connectViaRecoveryHook(args: RecoveryHookArgs): Promise<Nullable<
  * Creates and connects a StorageProvider for each location-map entry.
  *
  * A provider that implements connectForRecovery owns the whole credential step:
- * BFS dispatches to it — INDEPENDENT of the entry's required_inputs — so a
+ * BFS dispatches to it - INDEPENDENT of the entry's required_inputs - so a
  * crafted map cannot bypass the "show host before secret" guard by omitting
  * required_inputs. The pool of secrets collected this way is carried between
  * such providers (blind courier) for reuse.
@@ -187,14 +192,14 @@ async function connectViaRecoveryHook(args: RecoveryHookArgs): Promise<Nullable<
  * (degraded mode).
  *
  * Pool seeding: the connectForRecovery pool starts EMPTY for interactive
- * recovery — the operator's bootstrap secret is never auto-sent to a (possibly
+ * recovery - the operator's bootstrap secret is never auto-sent to a (possibly
  * redirected) sibling without them seeing the host. It is seeded from the
  * bootstrap credential ONLY under --trust-locations (trustLocations=true), where
  * the operator pre-approved the recovered locations for an unattended run.
  */
 async function connectProvidersFromMap(locationMap: ShardLocation[], vaultName: string, io: ProviderIO, seedInputs: Map<string, string>, trustLocations: boolean): Promise<StorageProvider[]> {
   const providers: StorageProvider[] = [];
-  const inputPool = new Map(seedInputs); // legacy fallback pool (field → value)
+  const inputPool = new Map(seedInputs); // legacy fallback pool (field -> value)
   // connectForRecovery pool (value + origin). Empty for interactive recovery;
   // seeded from the bootstrap credential only when the operator opted into
   // unattended recovery with --trust-locations.
@@ -240,15 +245,15 @@ interface ConsensusCheckArgs {
 
 /**
  * Cross-checks the bootstrap shard against the other shards in its location map
- * BEFORE any credential is sent. Each sibling is read with NO secret — built
+ * BEFORE any credential is sent. Each sibling is read with NO secret - built
  * from the stripped connection_config and connected with a bare authenticate;
  * a provider that needs a credential just to connect (e.g. FTP) throws here and
  * is skipped, so consensus never sends a secret. For every reachable sibling the
- * header fields and — for unencrypted vaults — the location_map contents are
+ * header fields and - for unencrypted vaults - the location_map contents are
  * compared with the bootstrap shard; any divergence aborts recovery. This is the
  * gate that stops a forged, unencrypted location map from redirecting a provider
  * to an attacker host. When no sibling is reachable without a secret it warns and
- * continues — the per-provider connectForRecovery host gate is the remaining
+ * continues - the per-provider connectForRecovery host gate is the remaining
  * defense.
  *
  * @throws TamperDetectedError when a reachable sibling's header or location_map
@@ -261,7 +266,7 @@ async function runConsensusCheck(args: ConsensusCheckArgs): Promise<void> {
     if (loc.provider_id === bootstrapProvider.id) continue;
 
     // A sibling whose secret was stripped (required_inputs non-empty) is
-    // unreachable at consensus time — consensus runs before any per-provider
+    // unreachable at consensus time - consensus runs before any per-provider
     // credential is collected. Skip it BEFORE building/authenticating, so a
     // credentialed transport (e.g. SSH password auth) never mounts a doomed
     // auth attempt. A burst of such failed attempts from one source trips
@@ -269,10 +274,10 @@ async function runConsensusCheck(args: ConsensusCheckArgs): Promise<void> {
     // recovery connection. Consensus already skipped these after a failed
     // auth; doing it beforehand drops the harmful attempt without changing
     // which siblings are actually cross-checked. required_inputs === null is
-    // legacy (secret still inline in connection_config) — those stay reachable.
+    // legacy (secret still inline in connection_config) - those stay reachable.
     // For an unencrypted vault the map (hence required_inputs) is attacker-
     // controlled, so an attacker can shrink consensus scope by marking siblings
-    // required_inputs — accepted BY DESIGN: consensus is best-effort, not the
+    // required_inputs - accepted BY DESIGN: consensus is best-effort, not the
     // primary defense. The real guards against a forged --no-enc map are the
     // per-provider connectForRecovery host gate and the locations_confirmed=false
     // confirmation required before the first push/heal.
@@ -284,7 +289,7 @@ async function runConsensusCheck(args: ConsensusCheckArgs): Promise<void> {
       await sibling.authenticate();
       sibling.setVaultName(vaultName);
     } catch {
-      continue; // unreachable (inline secret wrong / transport down) — skip for consensus
+      continue; // unreachable (inline secret wrong / transport down) - skip for consensus
     }
 
     let cm: ShardHeader;
@@ -294,7 +299,7 @@ async function runConsensusCheck(args: ConsensusCheckArgs): Promise<void> {
       parsed.payloadStream.on('error', () => {}).destroy();
       cm = parsed.header;
     } catch {
-      continue; // header unreadable — skip this sibling
+      continue; // header unreadable - skip this sibling
     }
 
     const mismatch = shardHeaderConsensusMismatch({ ...meta, location_map: locationMap }, cm);
@@ -319,7 +324,7 @@ export interface BootstrapOptions {
   targetVersion?: number | undefined;
   /** Known passwords to try for encrypted vaults (asks interactively if none work). */
   passwords?: string[] | undefined;
-  /** Stripped transport secrets seeded into sibling connections (field → value). */
+  /** Stripped transport secrets seeded into sibling connections (field -> value). */
   transportInputs?: Record<string, string> | undefined;
   /** When true, seed sibling recovery from the bootstrap credential (unattended run). */
   trustLocations?: boolean | undefined;
@@ -334,7 +339,9 @@ export interface BootstrapOptions {
  * @param bootstrapProvider - Already authenticated provider to start from
  * @param options           - vault name, IO, and optional version / passwords / transport inputs / trust flag
  * @returns BootstrapResult
- * @throws BfsError if no shards found or fewer than N shards available
+ * @throws BfsError when no shard is found for the vault or the requested version,
+ *         when the header contradicts its filename, or when the location map
+ *         cannot be opened (integrity failure, or no password supplied)
  * @throws TamperDetectedError if consensus check fails
  */
 export async function bootstrapFromProvider(bootstrapProvider: StorageProvider, options: BootstrapOptions): Promise<BootstrapResult> {
@@ -354,20 +361,20 @@ export async function bootstrapFromProvider(bootstrapProvider: StorageProvider, 
   }
   const version = targetVersion !== undefined ? targetVersion : Math.max(...versionSet);
 
-  // Pull only the header window — providers MUST avoid streaming the full
+  // Pull only the header window - providers MUST avoid streaming the full
   // payload over the wire (FTP issues SIZE + aborts after maxBytes).
   const bootstrapRef = findTargetShard(refs, version);
   // Whether this copy checks out is a property of the bytes, not of any one
   // attempt, so the (expensive) full read happens at most once per bootstrap and
-  // only once something has already failed — the healthy path stays header-only.
+  // only once something has already failed - the healthy path stays header-only.
   let integrityFailure: Nullable<string> | undefined;
   const copyFailsIntegrityCheck = async (): Promise<boolean> => {
     if (integrityFailure === undefined) {
       try {
         integrityFailure = await shardIntegrityFailure(bootstrapProvider, bootstrapRef);
       } catch {
-        // A read that broke for any other reason — a dropped transfer, a file
-        // briefly locked — says nothing about the bytes, so it decides nothing.
+        // A read that broke for any other reason - a dropped transfer, a file
+        // briefly locked - says nothing about the bytes, so it decides nothing.
         // The verdict stays unknown and the password path carries on: this read
         // is diagnostic, and letting it end a recovery would turn a transient
         // network hiccup into a failed restore of a healthy backup.
@@ -387,7 +394,7 @@ export async function bootstrapFromProvider(bootstrapProvider: StorageProvider, 
     parsed.payloadStream.on('error', () => {}).destroy();
     meta = parsed.header;
   } catch (err) {
-    // The header itself is unreadable — a rotted sidecar, a mangled magic, a
+    // The header itself is unreadable - a rotted sidecar, a mangled magic, a
     // truncated header, or (unencrypted) a location map that no longer parses.
     // The internal parser text names a byte range; the operator needs to be told
     // which medium is at fault and that a sibling carries the same map.
@@ -408,7 +415,7 @@ export async function bootstrapFromProvider(bootstrapProvider: StorageProvider, 
     if (!meta.kdf_salt) throw new BfsError('kdf_salt missing from encrypted shard header.');
 
     // Try provided passwords first, then ask interactively with retry.
-    // We already hold the header bytes — re-parse them with each candidate
+    // We already hold the header bytes - re-parse them with each candidate
     // key instead of re-fetching the shard from the provider per attempt.
     const candidates = passwords ?? [];
     let resolved = false;
@@ -421,39 +428,47 @@ export async function bootstrapFromProvider(bootstrapProvider: StorageProvider, 
         resolved = true;
         break;
       } catch {
-        // wrong password — try next
+        // wrong password - try next
       }
     }
     // A key that does not open the map looks the same whether the password is
     // wrong or the bytes rotted. Only now, with one attempt already spent, is it
-    // worth reading the shard to tell those apart — and if the copy does not
+    // worth reading the shard to tell those apart - and if the copy does not
     // check out, no password can open it, so asking again would send the
     // operator after the one thing that is not wrong.
     // `candidates.length` guards the read: with nothing supplied up front no
-    // attempt has been made yet, so there is nothing to tell apart — reading
+    // attempt has been made yet, so there is nothing to tell apart - reading
     // here would charge every interactive recovery of a healthy backup a full
     // shard transfer. That operator meets the same fork one prompt later.
     if (!resolved && candidates.length > 0 && (await copyFailsIntegrityCheck())) {
       throw new BfsError(t('bootstrap_copy_integrity_failed'));
     }
+    // Stands AFTER the integrity fork on purpose: a copy that does not check out
+    // must be named as such, and that verdict is the same whether or not anyone
+    // is at the keyboard. Only once the bytes are not the suspect does the
+    // missing password become the thing to report - with the flag that supplies
+    // one, since there is no prompt to fall back on.
+    if (!resolved && io.interactive === false) {
+      throw new BfsError(t('bootstrap_password_required_noninteractive'));
+    }
     if (!resolved) {
       // Ask interactively, retrying until the password works or the operator
       // gives up with a blank entry. Unbounded: at this critical recovery moment
-      // they keep trying until they recall the password. A blank entry (or no
-      // interactive TTY) aborts — the encrypted vault cannot be opened without it.
+      // they keep trying until they recall the password. A blank entry aborts -
+      // the encrypted vault cannot be opened without it.
       let firstTry = true;
       while (!resolved) {
         const ver = String(version);
         const prompt = firstTry ? fmt('bootstrap_ask_password', ver) : fmt('bootstrap_wrong_password_retry', ver);
         firstTry = false;
         const pwd = await io.askSecret(prompt);
-        if (!pwd) throw new BfsError('Password required for encrypted backup.');
+        if (!pwd) throw new BfsError(t('vault_password_required'));
         try {
           encKey = await deriveKey(pwd, meta.kdf_salt);
           const { header: h, payloadStream: ps } = await parseShardHeaderFromStream(Readable.from(headerBytes), encKey);
           ps.on('error', () => {}).destroy();
           location_map = h.location_map;
-          // Add successful interactive password to the pool for processVersion
+          // Add successful interactive password to the pool for rebuildVersionManifest
           candidates.push(pwd);
           resolved = true;
         } catch {

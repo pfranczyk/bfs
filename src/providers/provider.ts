@@ -4,7 +4,7 @@ import { fmt, getLang } from '../i18n/index.js';
 import type { AdapterRegistrationMeta, Nullable, ProviderConfig, ProviderHelp, ProviderIO, StorageProvider } from '../types/index.js';
 import { BFS_PROVIDER_API_VERSION } from '../version.js';
 
-// ─── Provider ID validation ───────────────────────────────────────────────────
+// --- Provider ID validation ---------------------------------------------------
 
 /**
  * Charset allowed for provider ids. `id` is a technical key: it names the
@@ -42,11 +42,11 @@ export function validateVaultName(name: string): void {
   }
 }
 
-// ─── Provider Factory ─────────────────────────────────────────────────────────
+// --- Provider Factory ---------------------------------------------------------
 
 /**
  * Factory describing how to create a provider of a given type.
- * Exported as part of the public adapter contract — third-party plugin
+ * Exported as part of the public adapter contract - third-party plugin
  * authors (bfs-provider-* npm packages) declare one and register it via
  * {@link providerRegistry}.
  */
@@ -56,7 +56,7 @@ export interface ProviderFactory {
    * sync with the user's `--lang` setting via
    * {@link ProviderRegistry.setLang}. Adapters MAY read `this.lang` from
    * inside {@link help} to localize their description / flags / examples.
-   * Adapters that don't support i18n can ignore the field — BFS still
+   * Adapters that don't support i18n can ignore the field - BFS still
    * sets it, but the adapter is free to return an English-only payload.
    */
   lang: string;
@@ -64,7 +64,7 @@ export interface ProviderFactory {
   /**
    * Provider's own name (technical / brand label like "OneDrive",
    * "FTP/FTPS"). Shown in `bfs provider -h` headings and in interactive
-   * "select provider type" prompts. NOT translated — proper nouns and
+   * "select provider type" prompts. NOT translated - proper nouns and
    * protocol names stay identical across UI languages.
    */
   readonly displayName: string;
@@ -72,7 +72,7 @@ export interface ProviderFactory {
   /**
    * Minimum BFS_PROVIDER_API_VERSION required by this factory. Registry
    * refuses the registration when BFS_PROVIDER_API_VERSION < required.
-   * Omitted → assumed 1 (for adapters published before this contract existed).
+   * Omitted -> assumed 1 (for adapters published before this contract existed).
    */
   readonly requiresApiVersion?: number;
 
@@ -86,19 +86,18 @@ export interface ProviderFactory {
    * Structured help describing the provider for `bfs provider -h`. BFS
    * prepends `Usage: bfs provider add --name <name> --type <type>` before
    * {@link ProviderHelp.usage} and renders flags / examples uniformly.
-   * Required — even providers with no extra flags return an object with
+   * Required - even providers with no extra flags return an object with
    * empty `flags` / `examples`. Implementations may read `this.lang` to
    * localize the returned payload.
    */
   help(): ProviderHelp;
 }
 
-// ─── Provider Registry ────────────────────────────────────────────────────────
+// --- Provider Registry --------------------------------------------------------
 
 /**
- * Registry of provider factories keyed by type string.
- * Instantiate directly for isolated test scenarios; for production use the
- * default {@link providerRegistry} singleton.
+ * One registry slot: the factory for a provider type plus the adapter package
+ * metadata it registered with (null for built-ins).
  */
 interface RegistryEntry {
   readonly factory: ProviderFactory;
@@ -130,6 +129,11 @@ function assertProviderApiComplete(type: string, provider: StorageProvider): voi
   }
 }
 
+/**
+ * Registry of provider factories keyed by type string.
+ * Instantiate directly for isolated test scenarios; for production use the
+ * default {@link providerRegistry} singleton.
+ */
 export class ProviderRegistry {
   private readonly entries = new Map<string, RegistryEntry>();
 
@@ -211,21 +215,33 @@ export class ProviderRegistry {
 /** Default provider registry singleton. */
 export const providerRegistry = new ProviderRegistry();
 
-// ─── CLI ProviderIO ────────────────────────────────────────────────────────────
+// --- CLI ProviderIO ------------------------------------------------------------
 
 /**
  * Creates a ProviderIO implementation backed by Inquirer.js prompts and chalk output.
  * Use this in the CLI/REPL context.
  *
- * @param workDir - BFS working directory (absolute) — exposed to providers
+ * @param workDir - BFS working directory (absolute) - exposed to providers
  *                  as `io.workDir` so they can resolve relative paths their
  *                  own flags or prompts accept.
  * @param interactive - Whether prompts can reach a user. Defaults to whether
  *                  stdin is a TTY, so a piped/`</dev/null` run is treated as
- *                  non-interactive automatically. Commands with an explicit
- *                  non-interactive mode (`repair --ci`, `recovery --bootstrap`)
- *                  pass `false` so the decision holds even on a TTY.
- * @returns       A ProviderIO that reads from stdin and writes to stdout
+ *                  non-interactive automatically. Commands that declare a
+ *                  non-interactive run (`bfs --ci`, or a command's own `--ci`
+ *                  such as `repair --ci`) pass `false` so the decision holds
+ *                  even on a TTY; a flag that merely supplies data
+ *                  (`--bootstrap`, `--strategy`) does not.
+ *
+ *                  When it resolves to `false`, no prompt is issued at all:
+ *                  `ask`/`askSecret`/`choose` throw and `confirm` answers "no".
+ *                  A prompt with nobody to answer it never settles - the event
+ *                  loop empties, the process ends where it stands with exit code
+ *                  0, and the rejection arrives during shutdown, too late for
+ *                  any caller to act on. This is what makes the contract's "a
+ *                  provider MUST NOT block on a prompt when this is false"
+ *                  enforceable rather than advisory.
+ * @returns       A ProviderIO that reads from stdin, writes `info` to stdout and
+ *                `warn` / `debug` to stderr
  */
 export function createCliProviderIO(workDir: string, interactive?: boolean): ProviderIO {
   const isInteractive = interactive ?? process.stdin.isTTY === true;
@@ -235,6 +251,7 @@ export function createCliProviderIO(workDir: string, interactive?: boolean): Pro
     interactive: isInteractive,
 
     async ask(prompt: string): Promise<string> {
+      if (!isInteractive) throw new BfsError(fmt('prompt_no_operator', prompt));
       const { default: inquirer } = await import('inquirer');
       dbg('inquirer:ask:before', { prompt, ...stdinState() });
       try {
@@ -249,6 +266,7 @@ export function createCliProviderIO(workDir: string, interactive?: boolean): Pro
     },
 
     async askSecret(prompt: string): Promise<string> {
+      if (!isInteractive) throw new BfsError(fmt('prompt_no_operator', prompt));
       const { default: inquirer } = await import('inquirer');
       dbg('inquirer:askSecret:before', { prompt, ...stdinState() });
       try {
@@ -263,6 +281,19 @@ export function createCliProviderIO(workDir: string, interactive?: boolean): Pro
     },
 
     async confirm(message: string): Promise<boolean> {
+      // A yes/no question has a safe answer when nobody is there to give one:
+      // "no" leaves the caller's guard standing, whatever that guard protects.
+      // Asking anyway would never settle - the event loop empties and the
+      // process dies where it stands.
+      //
+      // It is a floor, not a verdict. A caller that can name what the missing
+      // answer would have settled owes the operator that instead of a refusal
+      // attributed to them, and checks `interactive === false` before asking -
+      // the recovered-locations gate and the push/pull overwrite gates do.
+      if (!isInteractive) {
+        dbg('inquirer:confirm:declined-no-operator', { message });
+        return false;
+      }
       const { default: inquirer } = await import('inquirer');
       dbg('inquirer:confirm:before', { message, ...stdinState() });
       try {
@@ -277,6 +308,9 @@ export function createCliProviderIO(workDir: string, interactive?: boolean): Pro
     },
 
     async choose(message: string, options: string[]): Promise<string> {
+      // Unlike a yes/no question, a menu has no safe answer to invent: which
+      // entry means "give up" is the caller's knowledge, not this layer's.
+      if (!isInteractive) throw new BfsError(fmt('prompt_no_operator', message));
       const { default: inquirer } = await import('inquirer');
       dbg('inquirer:choose:before', { message, options, ...stdinState() });
       try {
@@ -291,13 +325,13 @@ export function createCliProviderIO(workDir: string, interactive?: boolean): Pro
     },
 
     info(message: string): void {
-      // Dynamic import not needed — chalk is a regular ESM dependency
+      // Dynamic import not needed - chalk is a regular ESM dependency
       // eslint-disable-next-line no-console
       console.log(message);
     },
 
     debug(message: string): void {
-      // Live-binding from src/debug.ts — `enableDebug()` flips it during
+      // Live-binding from src/debug.ts - `enableDebug()` flips it during
       // process startup when --debug is detected on argv.
       if (!debugEnabled) return;
       // eslint-disable-next-line no-console
@@ -316,7 +350,7 @@ export function createCliProviderIO(workDir: string, interactive?: boolean): Pro
   };
 }
 
-// ─── Mock ProviderIO ───────────────────────────────────────────────────────────
+// --- Mock ProviderIO -----------------------------------------------------------
 
 /**
  * Creates a ProviderIO backed by pre-defined answers for use in tests.
@@ -326,7 +360,7 @@ export function createCliProviderIO(workDir: string, interactive?: boolean): Pro
  * `info`, `debug` and `warn` are no-ops (captured in the returned `logs`
  * array, tagged with their level).
  *
- * @param answers - Map of prompt/message text → answer string
+ * @param answers - Map of prompt/message text -> answer string
  * @param workDir - Optional working directory exposed as `io.workDir`.
  *                  Defaults to `process.cwd()` so existing tests that don't
  *                  exercise path resolution keep working unchanged.

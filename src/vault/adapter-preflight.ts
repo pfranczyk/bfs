@@ -5,7 +5,7 @@ import type { ProviderConfig } from '../types/index.js';
 
 /**
  * A provider type used in a vault configuration for which the corresponding
- * adapter is not registered in the current BFS process. Grouped per type —
+ * adapter is not registered in the current BFS process. Grouped per type -
  * multiple provider entries sharing the same unregistered type produce a
  * single MissingAdapter with all affected provider ids listed.
  */
@@ -41,8 +41,8 @@ export interface VersionMismatch {
  * {@link providerRegistry} has no factory. Groups results by type so one
  * missing adapter used by N providers is reported once with all ids.
  *
- * Built-in types (ftp, local) only end up here when BFS itself was built
- * without them — a pathological case indicating a broken installation, not
+ * Built-in types (local, ftp, ssh) only end up here when BFS itself was built
+ * without them - a pathological case indicating a broken installation, not
  * a plugin gap.
  */
 export function detectMissingAdapters(providers: readonly ProviderConfig[]): MissingAdapter[] {
@@ -70,14 +70,14 @@ export function formatMissingAdaptersMessage(missing: readonly MissingAdapter[])
   const maxTypeLen = external.reduce((max, m) => Math.max(max, m.type.length), 0);
   const installLabel = t('adapter_preflight_install_label');
   for (const m of external) {
-    lines.push(`  ${m.type.padEnd(maxTypeLen)}   — ${installLabel} npm install -g ${m.adapterPackage}`);
+    lines.push(`  ${m.type.padEnd(maxTypeLen)}   - ${installLabel} npm install -g ${m.adapterPackage}`);
   }
   lines.push('', t('adapter_preflight_retry_hint'));
   return lines.join('\n');
 }
 
 /**
- * Factory for a ProviderError that describes one unregistered type — for a
+ * Factory for a ProviderError that describes one unregistered type - for a
  * single unknown type, where a batched pull/recovery preflight report is not
  * appropriate.
  */
@@ -125,10 +125,10 @@ export function checkVersionMismatch(providers: readonly ProviderConfig[]): Vers
 
 /**
  * Decides whether a recorded/installed delta should warn loudly or quietly.
- * Major version difference → `strong` (likely breaking config format).
- * Different package names → `strong` (wholesale replacement).
- * Minor/patch difference → `soft` (should be backwards compatible under semver).
- * Unparseable versions → `strong` (fail loud rather than silently downgrade).
+ * Major version difference -> `strong` (likely breaking config format).
+ * Different package names -> `strong` (wholesale replacement).
+ * Minor/patch difference -> `soft` (should be backwards compatible under semver).
+ * Unparseable versions -> `strong` (fail loud rather than silently downgrade).
  */
 function compareSeverity(recorded: string, installed: string): 'soft' | 'strong' {
   const r = splitSpec(recorded);
@@ -141,7 +141,7 @@ function compareSeverity(recorded: string, installed: string): 'soft' | 'strong'
 /**
  * Parses a pinned npm spec into its package name and major version. Accepts
  * scoped names ("@corp/pkg@1.2.3") and unscoped ("pkg@1.2.3"). Pre-release
- * tags ("1.2.3-beta.1") are allowed — only the leading integer matters.
+ * tags ("1.2.3-beta.1") are allowed - only the leading integer matters.
  */
 function splitSpec(spec: string): Nullable<{ name: string; major: number }> {
   const at = spec.lastIndexOf('@');

@@ -10,7 +10,7 @@ import { assert, runBfs, runTest } from '../smoke-runner.js';
 import type { SmokeContext, SuiteResult, TestResult } from '../smoke-types.js';
 import { fileExists, readJson } from '../smoke-vault.js';
 
-// ─── Suite N — push partial-commit + lockfile pattern (PR1) ─────────────────
+// --- Suite N - push partial-commit + lockfile pattern (PR1) -----------------
 //
 // Verifies the PR1 user-facing surface: partial-commit push semantics
 // (Degraded/Damaged exit codes + messages), push.lock + repair.lock
@@ -24,7 +24,7 @@ export async function suiteN(ctx: SmokeContext): Promise<SuiteResult> {
   const nP1Dir = path.join(nTmpDir, 'p1');
   const nP2Dir = path.join(nTmpDir, 'p2');
   const nP3Dir = path.join(nTmpDir, 'p3');
-  // Isolated XDG_CONFIG_HOME → no global settings → default lang 'en'.
+  // Isolated XDG_CONFIG_HOME -> no global settings -> default lang 'en'.
   const nLangDir = path.join(nTmpDir, 'lang-config');
   const nEnv: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: nLangDir };
 
@@ -33,7 +33,7 @@ export async function suiteN(ctx: SmokeContext): Promise<SuiteResult> {
   const pushBlobPending = path.join(nVaultDir, '.bfs', 'cache', 'push.blob.pending');
   const pullBlobPending = path.join(nVaultDir, '.bfs', 'cache', 'pull.blob.pending');
 
-  // ── N0: Setup isolated vault 2/1 with 3 local providers ───────────────────
+  // -- N0: Setup isolated vault 2/1 with 3 local providers -------------------
 
   tests.push(
     await runTest('N0', 'setup: vault N (partial-commit)', async () => {
@@ -55,10 +55,10 @@ export async function suiteN(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── N1: bfs push happy → healthy, lock + cache cleaned ────────────────────
+  // -- N1: bfs push happy -> healthy, lock + cache cleaned --------------------
 
   tests.push(
-    await runTest('N1', 'bfs push happy — healthy + no leftover lock/cache', async () => {
+    await runTest('N1', 'bfs push happy - healthy + no leftover lock/cache', async () => {
       const r = runBfs(['push'], nVaultDir, undefined, nEnv);
       assert(r.status === 0, `expected exit 0, got ${r.status}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
       const out = r.stdout + r.stderr;
@@ -68,10 +68,10 @@ export async function suiteN(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── N2: bfs push partial — break p3 dir → degraded ────────────────────────
+  // -- N2: bfs push partial - break p3 dir -> degraded ------------------------
 
   tests.push(
-    await runTest('N2', 'bfs push partial — exit != 0, degraded manifest, lock retained', async () => {
+    await runTest('N2', 'bfs push partial - exit != 0, degraded manifest, lock retained', async () => {
       // Break provider p3: replace its directory with a regular file so
       // LocalFS `mkdir(vaultDir, recursive: true)` inside upload() fails
       // with ENOTDIR. Push then commits 2/3 shards as Degraded.
@@ -103,10 +103,10 @@ export async function suiteN(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── N3: bfs clear — removes all 4 leftover files ──────────────────────────
+  // -- N3: bfs clear - removes all 4 leftover files --------------------------
 
   tests.push(
-    await runTest('N3', 'bfs clear — removes push.lock + repair.lock + both blob.pending', async () => {
+    await runTest('N3', 'bfs clear - removes push.lock + repair.lock + both blob.pending', async () => {
       // Pre-condition: N2 left push.lock + push.blob.pending in place.
       // Manually create repair.lock + pull.blob.pending so this test
       // covers all four cleanup targets in one shot.
@@ -126,10 +126,10 @@ export async function suiteN(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── N4: bfs push --cache without push.lock → PushCacheNoLockError ─────────
+  // -- N4: bfs push --cache without push.lock -> PushCacheNoLockError ---------
 
   tests.push(
-    await runTest('N4', 'bfs push --cache without push.lock — exit != 0, missing files reported', async () => {
+    await runTest('N4', 'bfs push --cache without push.lock - exit != 0, missing files reported', async () => {
       // Pre-condition: N3 cleared everything; lock + blob absent.
       const r = runBfs(['push', '--cache'], nVaultDir, undefined, nEnv);
       assert(r.status !== 0, `expected non-zero exit, got ${r.status}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
@@ -138,13 +138,13 @@ export async function suiteN(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── N5: bfs status warn for scheme below minimum (3/0) ────────────────────
+  // -- N5: bfs status warn for scheme below minimum (3/0) --------------------
 
   tests.push(
-    await runTest('N5', 'bfs status — push-disabled warn when scheme is 3/0', async () => {
+    await runTest('N5', 'bfs status - push-disabled warn when scheme is 3/0', async () => {
       // Manually downgrade the scheme below minimum to trigger the warn.
       // `status()` is a read-only command and does not call assertSchemeValid,
-      // so the command still succeeds — only the warn line is emitted.
+      // so the command still succeeds - only the warn line is emitted.
       const cfgPath = path.join(nVaultDir, '.bfs', 'config.json');
       const cfg = await readJson<VaultConfig>(cfgPath);
       cfg.scheme = { data_shards: 3, parity_shards: 0 };
@@ -158,10 +158,10 @@ export async function suiteN(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── N6 + N7 prep: fresh mini-vault driven by --cwd flag only ──────────────
+  // -- N6 + N7 prep: fresh mini-vault driven by --cwd flag only --------------
   // Separate from the N0-N5 vault because N5 mutates scheme to 3/0. These two
   // tests spawn bfs from PROJECT_ROOT (unrelated cwd) and rely entirely on
-  // `--cwd <vault>` to point the CLI at the right place — i.e. every
+  // `--cwd <vault>` to point the CLI at the right place - i.e. every
   // .bfs/cache, .bfs/push.lock, manifest path inside push must be derived
   // from the flag, not process.cwd().
 
@@ -173,7 +173,7 @@ export async function suiteN(ctx: SmokeContext): Promise<SuiteResult> {
   const nCwdPushBlobPending = path.join(nCwdVaultDir, '.bfs', 'cache', 'push.blob.pending');
 
   tests.push(
-    await runTest('N6', 'bfs --cwd <vault> push — healthy, cache + lock land under --cwd', async () => {
+    await runTest('N6', 'bfs --cwd <vault> push - healthy, cache + lock land under --cwd', async () => {
       await fs.mkdir(nCwdVaultDir, { recursive: true });
       await fs.mkdir(nCwdP1Dir, { recursive: true });
       await fs.mkdir(nCwdP2Dir, { recursive: true });
@@ -190,18 +190,18 @@ export async function suiteN(ctx: SmokeContext): Promise<SuiteResult> {
 
       const r = runBfs(['push'], nCwdVaultDir, undefined, nEnv, true);
       assert(r.status === 0, `expected exit 0, got ${r.status}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
-      // Healthy push cleans both artifacts under nCwdVaultDir — proving
+      // Healthy push cleans both artifacts under nCwdVaultDir - proving
       // the cleanup also resolves paths via --cwd (not process.cwd()).
       assert(!(await fileExists(nCwdPushLock)), 'push.lock should be removed on healthy push under --cwd');
       assert(!(await fileExists(nCwdPushBlobPending)), 'push.blob.pending should be removed on healthy push under --cwd');
-      // Manifest v1 must land in the --cwd vault — proves rootDir
+      // Manifest v1 must land in the --cwd vault - proves rootDir
       // propagated all the way through manifest write.
       assert(await fileExists(path.join(nCwdVaultDir, '.bfs', 'manifests', 'v001.json')), 'manifest v001.json missing under --cwd vault');
     }),
   );
 
   tests.push(
-    await runTest('N7', 'bfs --cwd <vault> push --cache — resume reads cache from --cwd, not process.cwd()', async () => {
+    await runTest('N7', 'bfs --cwd <vault> push --cache - resume reads cache from --cwd, not process.cwd()', async () => {
       // Force a partial push so push.lock + push.blob.pending are written
       // into nCwdVaultDir, then resume with --cwd and --cache --overwrite.
       await fs.rm(nCwdP3Dir, { recursive: true, force: true });
@@ -214,7 +214,7 @@ export async function suiteN(ctx: SmokeContext): Promise<SuiteResult> {
         assert(await fileExists(nCwdPushBlobPending), 'push.blob.pending should be retained for --cache retry under --cwd');
 
         // Fix p3 and resume from cache via --cwd. Spawn cwd is
-        // PROJECT_ROOT (unrelated) — only --cwd points BFS at the vault.
+        // PROJECT_ROOT (unrelated) - only --cwd points BFS at the vault.
         await fs.unlink(nCwdP3Dir).catch(() => {});
         await fs.mkdir(nCwdP3Dir, { recursive: true });
 
@@ -222,6 +222,16 @@ export async function suiteN(ctx: SmokeContext): Promise<SuiteResult> {
         assert(resume.status === 0, `expected exit 0 on resume, got ${resume.status}\nstdout: ${resume.stdout}\nstderr: ${resume.stderr}`);
         assert(!(await fileExists(nCwdPushLock)), 'push.lock should be cleared after successful --cache --overwrite resume');
         assert(!(await fileExists(nCwdPushBlobPending)), 'push.blob.pending should be cleared after successful resume');
+
+        // This vault compresses (the default), and the figures `bfs versions`
+        // prints come from the blob's file table. Zero is not "unknown" - the
+        // table renders `?` for that - so a zero here states that a version
+        // holding files is empty, and nothing corrects it afterwards.
+        const state = await readJson<{ working_version: number }>(path.join(nCwdVaultDir, '.bfs', 'state.json'));
+        const manifestName = `v${String(state.working_version).padStart(3, '0')}.json`;
+        const manifest = await readJson<{ file_count: Nullable<number>; total_size: Nullable<number> }>(path.join(nCwdVaultDir, '.bfs', 'manifests', manifestName));
+        assert(manifest.file_count !== 0, 'resumed version must not report 0 files for a directory that has them');
+        assert(manifest.total_size !== 0, 'resumed version must not report 0 bytes for a directory that has them');
       } finally {
         await fs.unlink(nCwdP3Dir).catch(() => {});
         await fs.mkdir(nCwdP3Dir, { recursive: true });
@@ -229,5 +239,57 @@ export async function suiteN(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  return { name: 'Suite N — push partial-commit + lockfile (PR1)', tests };
+  tests.push(
+    await runTest('N8', 'bfs push --cache with a rotted cache - refuses, names the cache, uploads nothing', async () => {
+      // The resume path is the one push that uploads bytes nobody just read
+      // from the source directory. A cache damaged between the two runs is
+      // therefore the only corruption that reaches the media sealed and
+      // self-consistent, invisible until a restore unpacks the blob.
+      await fs.rm(nCwdP3Dir, { recursive: true, force: true });
+      await fs.writeFile(nCwdP3Dir, 'sabotage');
+
+      try {
+        const partial = runBfs(['push'], nCwdVaultDir, undefined, nEnv, true);
+        assert(partial.status !== 0, `expected non-zero exit for degraded push, got ${partial.status}`);
+        assert(await fileExists(nCwdPushBlobPending), 'push.blob.pending should be retained for --cache retry');
+        // The lock records which version the interrupted push was building, so
+        // the part filenames below follow the run instead of a hardcoded number.
+        const { version: partialVersion } = await readJson<{ version: number }>(nCwdPushLock);
+
+        await fs.unlink(nCwdP3Dir).catch(() => {});
+        await fs.mkdir(nCwdP3Dir, { recursive: true });
+
+        // Rot one byte of the data section (offsets per the BFS blob header),
+        // leaving the header and file table parseable so the resume accepts the
+        // cache as usable.
+        const blob = await fs.readFile(nCwdPushBlobPending);
+        const dataStart = Number(blob.readBigUInt64LE(0x36));
+        const dataLength = Number(blob.readBigUInt64LE(0x3e));
+        assert(dataLength > 0, 'cached blob should have a non-empty data section');
+        const pos = dataStart + Math.floor(dataLength / 2);
+        blob.writeUInt8(blob.readUInt8(pos) ^ 0x01, pos);
+        await fs.writeFile(nCwdPushBlobPending, blob);
+
+        // An overwrite resume rewrites the parts that did land, so their bytes
+        // are what proves nothing was sent before the refusal.
+        const survivor = path.join(nCwdP1Dir, 'n-cwd-vault', `shard_0.bfs.${partialVersion}`);
+        const survivorBefore = await fs.readFile(survivor);
+
+        const r = runBfs(['push', '--cache', '--overwrite'], nCwdVaultDir, undefined, nEnv, true);
+        assert(r.status !== 0, `expected non-zero exit for a rotted cache, got ${r.status}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+        const out = r.stdout + r.stderr;
+        assert(/no longer matches its checksum/i.test(out), `expected the refusal to state the checksum mismatch: ${out.slice(0, 400)}`);
+        // Naming the cache is what stops the operator from hunting a fault on
+        // the storage that is in fact local.
+        assert(/push\.blob\.pending/.test(out), `expected the refusal to name the cache file: ${out.slice(0, 400)}`);
+        assert(survivorBefore.equals(await fs.readFile(survivor)), 'a part already on a medium must not be rewritten by a refused resume');
+        assert(!(await fileExists(path.join(nCwdP3Dir, 'n-cwd-vault', `shard_2.bfs.${partialVersion}`))), 'the medium that missed the partial push must receive nothing');
+      } finally {
+        await fs.unlink(nCwdP3Dir).catch(() => {});
+        await fs.mkdir(nCwdP3Dir, { recursive: true });
+      }
+    }),
+  );
+
+  return { name: 'Suite N - push partial-commit + lockfile (PR1)', tests };
 }

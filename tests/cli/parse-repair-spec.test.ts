@@ -8,7 +8,7 @@ import { createCliProviderIO } from '../../src/providers/provider.js';
 
 const CWD = process.cwd();
 const existing = ['local-1', 'local-2', 'ftp-1'];
-// Non-interactive IO (workDir = CWD) — parseRepairSpec forwards it to each
+// Non-interactive IO (workDir = CWD) - parseRepairSpec forwards it to each
 // adapter's configureFromFlags; the spec parsing itself issues no prompts.
 const io = createCliProviderIO(CWD, false);
 

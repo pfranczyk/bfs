@@ -1,7 +1,7 @@
 {
   "name": "bfs-vault",
-  "version": "0.13.0",
-  "description": "Backup File System — distributed backup with Reed-Solomon erasure coding",
+  "version": "0.14.0",
+  "description": "Encrypted CLI backup split across local, FTP and SSH storages with Reed-Solomon parity - any N of N+K parts restore everything",
   "type": "module",
   "preferGlobal": true,
   "bin": {
@@ -31,17 +31,33 @@
     "prepare": "npm run build",
     "smoke": "tsx scripts/smoke.ts",
     "smoke:ftp": "tsx scripts/ftp-test-server.ts",
-    "smoke:ssh": "tsx scripts/ssh-test-server.ts"
+    "smoke:ssh": "tsx scripts/ssh-test-server.ts",
+    "clean:temp": "tsx scripts/clean-temp.ts"
   },
   "keywords": [
     "backup",
+    "backup-tool",
+    "backup-cli",
+    "restore",
+    "disaster-recovery",
+    "offsite-backup",
+    "self-hosted",
+    "cli",
     "reed-solomon",
     "erasure-coding",
-    "cli",
-    "encryption",
+    "redundancy",
+    "fault-tolerance",
     "distributed",
+    "encryption",
+    "client-side-encryption",
     "aes-256-gcm",
-    "disaster-recovery"
+    "argon2",
+    "ftp",
+    "sftp",
+    "ssh",
+    "data-integrity",
+    "bit-rot",
+    "versioning"
   ],
   "author": "Paweł Franczyk",
   "repository": {

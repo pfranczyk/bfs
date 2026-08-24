@@ -36,7 +36,7 @@ export function registerConfig(program: Command): void {
         return;
       }
 
-      // ── --on / --off <feature> ────────────────────────────────────────────
+      // -- --on / --off <feature> --------------------------------------------
       if (opts.on !== undefined || opts.off !== undefined) {
         const featureArg = opts.on ?? opts.off ?? '';
         const featureKey = FEATURE_MAP[featureArg.toLowerCase()];

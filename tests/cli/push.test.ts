@@ -1,12 +1,35 @@
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LockConcurrentActiveError, LockPartialStatePushError, PushCacheNoLockError, PushSkippedError } from '../../src/core/errors.js';
+import { LockConcurrentActiveError, LockPartialStatePushError, PushCacheCorruptedError, PushCacheNoLockError, PushSkippedError } from '../../src/core/errors.js';
+import { setLang } from '../../src/i18n/index.js';
 import type { PushResult } from '../../src/types/index.js';
 import { PushMode, VersionHealth } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
 function okResult(overrides: Partial<PushResult> = {}): PushResult {
   return { version: 1, file_count: 2, total_size: 100, skipped: [], excluded: [], uploaded_count: 3, failed: [], health: VersionHealth.Healthy, ...overrides };
+}
+
+/**
+ * Runs `fn` as if a terminal were attached. The command builds its ProviderIO
+ * from `process.stdin.isTTY`, and under Vitest stdin is never a TTY - so without
+ * this the IO declines to prompt at all, which is a different case than the one
+ * a prompt-wiring test is about.
+ */
+async function withTty<T>(fn: () => Promise<T>): Promise<T> {
+  const originalIsTty = process.stdin.isTTY;
+  const originalSetRawMode = process.stdin.setRawMode;
+  process.stdin.isTTY = true;
+  // Claiming a TTY also puts the IO on its raw-mode restore path, which a real
+  // non-TTY stdin refuses - stub it so the test exercises the prompt, not the
+  // terminal.
+  process.stdin.setRawMode = ((): typeof process.stdin => process.stdin) as typeof process.stdin.setRawMode;
+  try {
+    return await fn();
+  } finally {
+    process.stdin.isTTY = originalIsTty;
+    process.stdin.setRawMode = originalSetRawMode;
+  }
 }
 
 vi.mock('../../src/vault/vault-manager.js', () => ({ push: vi.fn() }));
@@ -37,10 +60,11 @@ describe('push', () => {
 
   afterEach(() => {
     capture.restore();
+    setLang('en');
     vi.clearAllMocks();
   });
 
-  // ─── Success ───────────────────────────────────────────────────────────────
+  // --- Success ---------------------------------------------------------------
 
   it('should call push and print healthy completion message with shard count', async () => {
     mockPush.mockResolvedValue(okResult());
@@ -86,7 +110,7 @@ describe('push', () => {
     expect(mockPush).toHaveBeenCalledWith(expect.any(String), expect.not.objectContaining({ mode: expect.anything() }));
   });
 
-  // ─── Errors ───────────────────────────────────────────────────────────────
+  // --- Errors ---------------------------------------------------------------
 
   it('should abort and print error when push throws', async () => {
     mockPush.mockRejectedValue(new Error('Brak konfiguracji'));
@@ -140,7 +164,7 @@ describe('push', () => {
     expect(mockPush).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ cacheDir: '/custom/cache' }));
   });
 
-  // ─── --cwd × cache flows ──────────────────────────────────────────────────
+  // --- --cwd x cache flows --------------------------------------------------
   // Guard against regressions where any path in the push pipeline silently
   // falls back to process.cwd() instead of respecting `--cwd`. The cache
   // dir, push.lock, push.blob.pending and shard files all live under
@@ -170,10 +194,10 @@ describe('push', () => {
     expect(mockPush).toHaveBeenCalledWith(path.resolve('/some/vault'), expect.objectContaining({ cacheDir: '/custom/cache' }));
   });
 
-  // ─── Prompt ask (push_mode=ask) ───────────────────────────────────────────
+  // --- Prompt ask (push_mode=ask) -------------------------------------------
 
   it('should call io.choose when push_mode=ask and pass user answer to push', async () => {
-    // push() itself calls io.choose internally — we verify the io passed
+    // push() itself calls io.choose internally - we verify the io passed
     // has a working choose() method backed by Inquirer
     mockPrompt.mockResolvedValue({ value: 'New version (v1)' } as never);
     mockPush.mockImplementation(async (_dir, opts) => {
@@ -183,7 +207,7 @@ describe('push', () => {
       return okResult({ file_count: 0, total_size: 0 });
     });
 
-    const result = await runCmd(['push']);
+    const result = await withTty(() => runCmd(['push']));
 
     expect(result).toBe('ok');
     expect(mockPrompt).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ type: 'rawlist', name: 'value' })]));
@@ -197,7 +221,7 @@ describe('push', () => {
       return okResult({ file_count: 0, total_size: 0 });
     });
 
-    const result = await runCmd(['push']);
+    const result = await withTty(() => runCmd(['push']));
     expect(result).toBe('ok');
   });
 
@@ -209,12 +233,29 @@ describe('push', () => {
       return okResult({ file_count: 0, total_size: 0 });
     });
 
-    const result = await runCmd(['push']);
+    const result = await withTty(() => runCmd(['push']));
     expect(result).toBe('ok');
     expect(mockPrompt).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ type: 'password', name: 'value' })]));
   });
 
-  // ─── Health-based result dispatch ─────────────────────────────────────────
+  it('should refuse the password prompt instead of issuing it when no terminal is attached', async () => {
+    // A scheduled push (cron, CI, closed stdin) that reaches the password prompt
+    // must end with a message naming what is missing. Issuing the prompt anyway
+    // would never settle: the event loop empties and the process dies mid-push,
+    // and whatever the error path meant to print or write never happens.
+    mockPush.mockImplementation(async (_dir, opts) => {
+      await opts.io.askSecret('Enter encryption password:');
+      return okResult();
+    });
+
+    const result = await runCmd(['push']);
+
+    expect(result).toBe('abort');
+    expect(mockPrompt).not.toHaveBeenCalled();
+    expect(capture.errors.some((l) => /no terminal/i.test(l))).toBe(true);
+  });
+
+  // --- Health-based result dispatch -----------------------------------------
 
   it('should warn and abort when health is degraded', async () => {
     mockPush.mockResolvedValue(
@@ -256,6 +297,23 @@ describe('push', () => {
 
     expect(result).toBe('abort');
     expect(capture.errors.some((e) => /missing: .bfs\/push\.lock, .bfs\/cache\/push\.blob\.pending/.test(e))).toBe(true);
+  });
+
+  // The generic fallback prints `err.message`, whose English wording matches
+  // `push_cache_corrupted` in en.ts word for word. Asserting English therefore
+  // proves nothing - the message survives removing the branch. Polish output can
+  // only come from the dedicated branch, so the language is the discriminator.
+  it('should route PushCacheCorruptedError through i18n rather than the raw message', async () => {
+    setLang('pl');
+    mockPush.mockRejectedValue(new PushCacheCorruptedError('.bfs/cache/push.blob.pending'));
+
+    const result = await runCmd(['push', '--cache']);
+
+    expect(result).toBe('abort');
+    expect(capture.errors.some((e) => /Dane kopii w cache \(\.bfs\/cache\/push\.blob\.pending\) nie zgadzają się/.test(e))).toBe(true);
+    // The advice is ordered, not a choice - both commands, `bfs clear` first.
+    expect(capture.errors.some((e) => /`bfs clear`.*`bfs push`/.test(e))).toBe(true);
+    expect(capture.errors.some((e) => /The cached backup data in/.test(e))).toBe(false);
   });
 
   it('should print LockConcurrentActiveError message with PID and timestamp', async () => {

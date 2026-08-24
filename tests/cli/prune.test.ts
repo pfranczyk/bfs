@@ -52,7 +52,7 @@ describe('prune', () => {
     vi.clearAllMocks();
   });
 
-  // ─── No versions ──────────────────────────────────────────────────────────
+  // --- No versions ----------------------------------------------------------
 
   it('should show message when no versions exist', async () => {
     mockListVersions.mockResolvedValue([]);
@@ -63,7 +63,7 @@ describe('prune', () => {
     expect(mockPrune).not.toHaveBeenCalled();
   });
 
-  // ─── Range as an argument ─────────────────────────────────────────────────
+  // --- Range as an argument -------------------------------------------------
 
   it('should prune single version', async () => {
     mockListVersions.mockResolvedValue(makeManifests([1, 2, 3]) as never);
@@ -120,7 +120,7 @@ describe('prune', () => {
     expect(result).toBe('abort');
   });
 
-  // ─── --keep-last ──────────────────────────────────────────────────────────
+  // --- --keep-last ----------------------------------------------------------
 
   it('should keep last 2 versions and prune the rest', async () => {
     mockListVersions.mockResolvedValue(makeManifests([1, 2, 3, 4, 5]) as never);
@@ -149,7 +149,7 @@ describe('prune', () => {
     expect(result).toBe('abort');
   });
 
-  // ─── --yes (CI mode) ──────────────────────────────────────────────────────
+  // --- --yes (CI mode) ------------------------------------------------------
 
   it('should skip confirmation with --yes flag', async () => {
     mockListVersions.mockResolvedValue(makeManifests([1, 2, 3]) as never);
@@ -171,7 +171,7 @@ describe('prune', () => {
     expect(capture.logs.some((l) => l.includes('Cancelled'))).toBe(true);
   });
 
-  // ─── Without an argument — interactive list ──────────────────────────────────
+  // --- Without an argument - interactive list ----------------------------------
 
   it('should show checkbox list when no argument provided', async () => {
     mockListVersions.mockResolvedValue(makeManifests([1, 2, 3]) as never);
@@ -206,7 +206,7 @@ describe('prune', () => {
     expect(mockPrune).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ versions: [1, 2] }));
   });
 
-  // ─── Cancellation ───────────────────────────────────────────────────────────
+  // --- Cancellation -----------------------------------------------------------
 
   it('should treat ExitPromptError as empty selection during checkbox', async () => {
     mockListVersions.mockResolvedValue(makeManifests([1, 2, 3]) as never);
@@ -229,7 +229,7 @@ describe('prune', () => {
     expect(capture.logs.some((l) => l.includes('Cancelled') || l.includes('Anulowano'))).toBe(true);
   });
 
-  // ─── Guard on the last restorable version ─────────────────────────────────
+  // --- Guard on the last restorable version ---------------------------------
 
   it('should pass --force through to the prune call', async () => {
     mockListVersions.mockResolvedValue(makeManifests([1, 2]) as never);

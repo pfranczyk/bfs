@@ -1,13 +1,13 @@
 # shellcheck shell=bash
 # Sidecar detection (verify), local: a BROKEN hdr_ sidecar (non-BFSH bytes) next
 # to a shard whose payload and in-shard header are intact. `bfs verify` must stay
-# exit 0 and keep the version healthy — data availability/identity is read from
-# the in-shard header, so a corrupt sidecar must NOT reduce availability — while
+# exit 0 and keep the version healthy - data availability/identity is read from
+# the in-shard header, so a corrupt sidecar must NOT reduce availability - while
 # surfacing an advisory that a header sidecar is broken and can be restored with
 # `bfs repair --restore-headers`.
 #
 # Two assertions carry this scenario: the version stays healthy (a broken sidecar
-# never reduces availability — identity is read from the in-shard header), and the
+# never reduces availability - identity is read from the in-shard header), and the
 # `--restore-headers` hint appears in the report.
 
 SCENARIO_NAME="verify: broken hdr_ sidecar stays healthy + advises --restore-headers"

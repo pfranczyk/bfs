@@ -44,7 +44,7 @@ describe('provider remove', () => {
     vi.restoreAllMocks();
   });
 
-  // ─── No configuration ────────────────────────────────────────────────────
+  // --- No configuration ----------------------------------------------------
 
   it('should abort when no vault config', async () => {
     mockReadConfig.mockResolvedValue(null);
@@ -55,7 +55,7 @@ describe('provider remove', () => {
     expect(capture.errors.some((l) => l.includes('bfs init'))).toBe(true);
   });
 
-  // ─── ID / index resolution ───────────────────────────────────────────
+  // --- ID / index resolution -------------------------------------------
 
   it('should accept provider by string ID', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -63,7 +63,7 @@ describe('provider remove', () => {
 
     await runCmd(['provider', 'remove', 'dysk-1']);
 
-    // Prompt was shown (strategy selection) — no "nie istnieje" error
+    // Prompt was shown (strategy selection) - no "nie istnieje" error
     expect(capture.errors.some((l) => l.includes('nie istnieje'))).toBe(false);
   });
 
@@ -103,7 +103,7 @@ describe('provider remove', () => {
     expect(capture.errors.some((l) => l.includes('does not exist'))).toBe(true);
   });
 
-  // ─── Without an argument — interactive list ──────────────────────────────────
+  // --- Without an argument - interactive list ----------------------------------
 
   it('should show interactive list when no argument given', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -126,7 +126,7 @@ describe('provider remove', () => {
     expect(capture.errors.some((l) => l.includes('No providers'))).toBe(true);
   });
 
-  // ─── Strategy: cancel ────────────────────────────────────────────────────
+  // --- Strategy: cancel ----------------------------------------------------
 
   it('should return ok (not abort) when cancel strategy chosen', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -139,7 +139,7 @@ describe('provider remove', () => {
     expect(capture.logs.some((l) => l.includes('Cancelled'))).toBe(true);
   });
 
-  // ─── Strategy: remove ────────────────────────────────────────────────────
+  // --- Strategy: remove ----------------------------------------------------
 
   it('should call removeProvider with strategy=remove after confirmation', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -160,7 +160,7 @@ describe('provider remove', () => {
     expect(mockRemoveProvider).not.toHaveBeenCalled();
   });
 
-  // ─── Strategy: relocate (pass-through) ──────────────────────────────────
+  // --- Strategy: relocate (pass-through) ----------------------------------
   // Contract: BFS knows only --strategy, --new-type, --password. Everything else
   // goes to the adapter as rawArgs; the adapter collects its config itself via
   // configureFromFlags / configureInteractive.
@@ -264,7 +264,7 @@ describe('provider remove', () => {
     });
   });
 
-  // ─── Strategy: rebuild ───────────────────────────────────────────────────
+  // --- Strategy: rebuild ---------------------------------------------------
 
   describe('rebuild strategy', () => {
     beforeEach(() => {
@@ -285,7 +285,7 @@ describe('provider remove', () => {
       expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'dysk-1', expect.objectContaining({ strategy: 'rebuild', targetProviderId: 'dysk-2', rebuildScope: 'all' }));
     });
 
-    it('CI: existing target id — targetProviderId resolved, no configureFromFlags call', async () => {
+    it('CI: existing target id - targetProviderId resolved, no configureFromFlags call', async () => {
       const spy = vi.mocked(LocalFsProvider.prototype.configureFromFlags);
       mockReadConfig.mockResolvedValue(makeConfig() as never);
 
@@ -369,7 +369,7 @@ describe('provider remove', () => {
     });
   });
 
-  // ─── CI mode ──────────────────────────────────────────────────────────────
+  // --- CI mode --------------------------------------------------------------
 
   it('CI: --strategy remove --yes skips all prompts', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -397,9 +397,9 @@ describe('provider remove', () => {
     expect(result).toBe('abort');
   });
 
-  // ─── Effect on versions ──────────────────────────────────────────────────────
+  // --- Effect on versions ------------------------------------------------------
 
-  // ─── Cancellation ───────────────────────────────────────────────────────────
+  // --- Cancellation -----------------------------------------------------------
 
   it('should cancel when __cancel__ selected in provider list', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -422,7 +422,7 @@ describe('provider remove', () => {
     expect(mockRemoveProvider).not.toHaveBeenCalled();
   });
 
-  // ─── Effect on versions ──────────────────────────────────────────────────────
+  // --- Effect on versions ------------------------------------------------------
 
   it('should show affected versions warning when provider used in manifests', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);

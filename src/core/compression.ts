@@ -7,7 +7,7 @@ import * as zlib from 'node:zlib';
 
 import { BfsError } from './errors.js';
 
-// ─── ZIP format constants ──────────────────────────────────────────────────────
+// --- ZIP format constants ------------------------------------------------------
 
 const SIG_LFH = 0x04034b50; // Local File Header signature
 const SIG_DD = 0x08074b50; // Data Descriptor signature
@@ -25,12 +25,12 @@ const MARKER_16 = 0xffff;
 // Unix -rw-r--r-- (0o100644 << 16, forced unsigned via >>> 0 to avoid signed-int overflow)
 const EXT_ATTR_UNIX = (0o100644 << 16) >>> 0;
 
-// ─── Decompression bomb guard ──────────────────────────────────────────────────
+// --- Decompression bomb guard --------------------------------------------------
 
 /**
  * Maximum expansion ratio a single raw-DEFLATE stream can physically achieve.
  * Real deflate output never exceeds compressedBytes * MAX_DEFLATE_RATIO, so the
- * total decompressed size of a ZIP is bounded by zipSize * MAX_DEFLATE_RATIO —
+ * total decompressed size of a ZIP is bounded by zipSize * MAX_DEFLATE_RATIO -
  * a trusted ceiling, since the ZIP size is validated against the real blob size
  * upstream and cannot be inflated by an attacker.
  */
@@ -43,7 +43,7 @@ const MAX_DEFLATE_RATIO = 1032;
  */
 const INFLATE_RAM_FRACTION = 0.5;
 
-// ─── Public interfaces ────────────────────────────────────────────────────────
+// --- Public interfaces --------------------------------------------------------
 
 /** Entry returned by extractZip() for each file in the archive. */
 export interface ZipExtractResult {
@@ -60,7 +60,7 @@ export interface ExtractZipOptions {
   maxTotalOutput?: number;
 }
 
-// ─── Internal types ───────────────────────────────────────────────────────────
+// --- Internal types -----------------------------------------------------------
 
 interface CdEntry {
   filename: Buffer;
@@ -72,7 +72,7 @@ interface CdEntry {
   dosDate: number;
 }
 
-// ─── DOS time conversion ──────────────────────────────────────────────────────
+// --- DOS time conversion ------------------------------------------------------
 
 function _toDosDateTime(): { dosTime: number; dosDate: number } {
   const now = new Date();
@@ -81,7 +81,7 @@ function _toDosDateTime(): { dosTime: number; dosDate: number } {
   return { dosTime, dosDate };
 }
 
-// ─── ZIP64 extra fields ──────────────────────────────────────────────────────
+// --- ZIP64 extra fields ------------------------------------------------------
 
 function _buildZip64ExtraLfh(compressedSize: number, uncompressedSize: number): Buffer {
   const buf = Buffer.alloc(20);
@@ -150,7 +150,7 @@ function _buildEocdZip64Marker(): Buffer {
   return buf;
 }
 
-// ─── ZIP building blocks (always ZIP64) ───────────────────────────────────────
+// --- ZIP building blocks (always ZIP64) ---------------------------------------
 
 /** Fields for an always-ZIP64 Local File Header. */
 interface Zip64LfhFields {
@@ -202,7 +202,7 @@ function _buildLfh(fields: Zip64LfhFields): Buffer {
 }
 
 function _buildDataDescriptor(crc32: number, compressedSize: number, uncompressedSize: number): Buffer {
-  const buf = Buffer.alloc(24); // ZIP64: 4+4+8+8 = 24 (was 16)
+  const buf = Buffer.alloc(24); // ZIP64 data descriptor: 4+4+8+8 = 24
   buf.writeUInt32LE(SIG_DD, 0);
   buf.writeUInt32LE(crc32, 4);
   buf.writeBigUInt64LE(BigInt(compressedSize), 8);
@@ -254,7 +254,7 @@ function _buildCde(entry: CdEntry): Buffer {
   return buf;
 }
 
-// ─── ZIP packer ───────────────────────────────────────────────────────────────
+// --- ZIP packer ---------------------------------------------------------------
 
 interface ZipPackerInternal {
   addFile(filename: string, data: Buffer): void;
@@ -263,8 +263,9 @@ interface ZipPackerInternal {
 
 /**
  * Creates a synchronous ZIP packer using deflate compression.
- * Writes compressed_size into both the Local File Header and Data Descriptor,
- * so extractZip() can read sizes directly from the LFH without scanning for signatures.
+ * Writes the real sizes into the Local File Header's ZIP64 extra field (the
+ * 32-bit base fields carry the 0xFFFFFFFF marker) and into the Data Descriptor,
+ * so extractZip() reads sizes from the LFH without scanning for signatures.
  * @returns Object with addFile() and finalize() methods
  */
 export function createZipPacker(): ZipPackerInternal {
@@ -301,9 +302,9 @@ export function createZipPacker(): ZipPackerInternal {
   return { addFile, finalize };
 }
 
-// ─── Streaming ZIP packer (writes directly to disk) ─────────────────────────
+// --- Streaming ZIP packer (writes directly to disk) -------------------------
 
-/** Streaming ZIP packer — writes ZIP entries directly to a FileHandle. */
+/** Streaming ZIP packer - writes ZIP entries directly to a FileHandle. */
 export interface StreamingZipPacker {
   /** Compresses data and writes LFH + compressed data + DD to the file handle. */
   addFile(filename: string, data: Buffer): Promise<void>;
@@ -364,7 +365,7 @@ export function createStreamingZipPacker(handle: FileHandle): StreamingZipPacker
   return { addFile, finalize };
 }
 
-// ─── ZIP64 extra field parser ────────────────────────────────────────────────
+// --- ZIP64 extra field parser ------------------------------------------------
 
 /** Parses ZIP64 extra field from LFH extra area to get real sizes. */
 function _parseZip64ExtraLfh(extraBuf: Buffer): { compressedSize: number; uncompressedSize: number } {
@@ -400,7 +401,7 @@ function _computeInflateCap(zipSize: number, override?: number): number {
   return Math.min(zipSize * MAX_DEFLATE_RATIO, Math.floor(os.totalmem() * INFLATE_RAM_FRACTION));
 }
 
-// ─── ZIP extractor (dual-mode: legacy + ZIP64) ──────────────────────────────
+// --- ZIP extractor (dual-mode: legacy + ZIP64) ------------------------------
 
 /**
  * Extracts all files from a ZIP buffer using sequential Local File Header scan.
@@ -508,11 +509,11 @@ export function extractZip(zipBuffer: Buffer, options?: ExtractZipOptions): ZipE
   return results;
 }
 
-// ─── Compressibility estimation ──────────────────────────────────────────────
+// --- Compressibility estimation ----------------------------------------------
 
 /**
  * File extensions that are already compressed and won't benefit from deflate.
- * `.ts` is intentionally excluded — TypeScript files are compressible.
+ * `.ts` is intentionally excluded - TypeScript files are compressible.
  */
 const INCOMPRESSIBLE_EXTS = new Set([
   // Images
@@ -572,7 +573,7 @@ export interface CompressibilityResult {
   totalBytes: number;
   compressibleBytes: number;
   incompressibleBytes: number;
-  /** Fraction incompressibleBytes / totalBytes (0–1). 0 when totalBytes === 0. */
+  /** Fraction incompressibleBytes / totalBytes (0-1). 0 when totalBytes === 0. */
   ratio: number;
   /** Top 3 extensions by incompressible byte count, for user display. */
   topIncompressible: string[];
@@ -628,7 +629,7 @@ export async function estimateCompressibility(rootDir: string): Promise<Compress
   return { totalBytes, compressibleBytes, incompressibleBytes, ratio, topIncompressible };
 }
 
-// ─── Detection ────────────────────────────────────────────────────────────────
+// --- Detection ----------------------------------------------------------------
 
 /**
  * Returns true if the buffer starts with ZIP Local File Header magic (PK\x03\x04).

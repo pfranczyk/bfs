@@ -5,11 +5,11 @@
 # Path selection lives in src/vault/push-pipeline.ts (_packFreshBlob): with
 # compression off, `useRamPath = estimated < computeRamThreshold(maxRamMb,N,K)`.
 # `--max-ram 1` drives resolveRamBudget to 1 MiB; computeRamThreshold subtracts
-# the RS overhead ((N+K) × 256 MiB) and clamps at 0, so the threshold is 0 and
-# no blob can take the RAM path — packBlobToFile is chosen for any input.
+# the RS overhead ((N+K) x 256 MiB) and clamps at 0, so the threshold is 0 and
+# no blob can take the RAM path - packBlobToFile is chosen for any input.
 #
 # This is a GREEN guard: it proves the disk/no-compress pack path does a clean
-# init→push→pull SHA-256 roundtrip, so a later TOCTOU fix on that path cannot
+# init->push->pull SHA-256 roundtrip, so a later TOCTOU fix on that path cannot
 # silently regress it.
 
 SCENARIO_NAME="local 2/1 disk pack (no-compress, forced --max-ram)"

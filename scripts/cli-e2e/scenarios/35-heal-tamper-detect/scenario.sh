@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Heal metadata cross-validation (S4).
 #
-# With encryption off, a shard header (blob_hash, vault_name, …) is guarded only
+# With encryption off, a shard header (blob_hash, vault_name, ...) is guarded only
 # by an UNKEYED trailing SHA-256: an attacker who can rewrite ONE shard can plant
 # divergent metadata and re-seal it byte-valid (checksum recomputed).
 #
@@ -9,7 +9,7 @@
 # Reed-Solomon repair over the remaining siblings, taking blob_hash / vault_name /
 # format / scheme metadata from the FIRST available sibling it reads. If a
 # different available sibling carries forged metadata, heal must NOT silently
-# trust the first shard — it must cross-validate the available siblings and abort
+# trust the first shard - it must cross-validate the available siblings and abort
 # on divergence.
 #
 # Layout: 4 LOCAL providers, 3 data + 1 parity. Remove p0 by rebuilding its shard
@@ -23,7 +23,7 @@
 # attacker-planted metadata.
 #
 # RED contract (today): extractShardMeta takes the first sibling's metadata and
-# `break`s — no cross-validation — so rebuild completes exit 0 and reports the
+# `break`s - no cross-validation - so rebuild completes exit 0 and reports the
 # version healthy, having silently trusted a vault with a forged shard header.
 
 SCENARIO_NAME="heal metadata tamper detect (forged sibling blob_hash)"
@@ -63,11 +63,11 @@ $BFS_OUT"
     --strategy rebuild --target p4 --new-type local \
     --path "$(winpath "$newdir")" --scope all --yes
 
-  # ── RED assertion: rebuild must NOT silently succeed against forged metadata ─
+  # -- RED assertion: rebuild must NOT silently succeed against forged metadata -
   # GREEN aborts (exit != 0). Today the rebuild trusts the first sibling, ignores
-  # the divergent shard_1, and exits 0 — that is the RED failure.
+  # the divergent shard_1, and exits 0 - that is the RED failure.
   if [ "${BFS_EXIT:-1}" = "0" ]; then
-    _fail "rebuild succeeded despite a forged sibling header — metadata divergence not detected. Output:
+    _fail "rebuild succeeded despite a forged sibling header - metadata divergence not detected. Output:
 $BFS_OUT"
   fi
 

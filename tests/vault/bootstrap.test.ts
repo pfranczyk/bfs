@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { deriveKey, generateSalt } from '../../src/core/crypto.js';
 import { TamperDetectedError } from '../../src/core/errors.js';
 import { serializeShardHeader } from '../../src/core/shard-io.js';
 import { createMockProviderIO, providerRegistry } from '../../src/providers/provider.js';
 import type { ProviderConfig, ProviderIO, RemoteRef, ShardHeader, ShardLocation, StorageProvider } from '../../src/types/index.js';
 import { bootstrapFromProvider } from '../../src/vault/bootstrap.js';
 
-// ─── Contract under test (RED) ──────────────────────────────────────────────
+// --- Contract under test (RED) ----------------------------------------------
 //
 // The recovery credential-phishing fix introduces an OPTIONAL provider hook:
 //
@@ -13,8 +14,8 @@ import { bootstrapFromProvider } from '../../src/vault/bootstrap.js';
 //     Promise<Nullable<string>>;
 //
 // `connectProvidersFromMap` (private, in src/vault/bootstrap.ts) must dispatch
-// to this hook whenever the provider implements it — INDEPENDENT of the
-// entry's `required_inputs` — and only fall back to the legacy
+// to this hook whenever the provider implements it - INDEPENDENT of the
+// entry's `required_inputs` - and only fall back to the legacy
 // `connectWithInputs` / `io.askSecret` path when the provider does NOT.
 //
 // `connectProvidersFromMap` is private, so these tests drive dispatch through
@@ -32,7 +33,7 @@ import { bootstrapFromProvider } from '../../src/vault/bootstrap.js';
 const VAULT_ID = '550e8400-e29b-41d4-a716-446655440000';
 const VAULT_NAME = 'bootstrap-test';
 
-/** Spy recording every connectForRecovery dispatch (provider id → io + pool). */
+/** Spy recording every connectForRecovery dispatch (provider id -> io + pool). */
 type RecoverySpy = ReturnType<typeof vi.fn>;
 
 /** Provider type whose factory builds an instance implementing connectForRecovery. */
@@ -46,7 +47,7 @@ let askSecretPrompts: string[];
 let recoverySpies: Map<string, RecoverySpy>;
 
 /**
- * Base of a connected StorageProvider — every method is a no-op stub except the
+ * Base of a connected StorageProvider - every method is a no-op stub except the
  * ones bootstrap actually touches on a non-bootstrap provider (authenticate,
  * setVaultName). connectForRecovery is layered on top by the with-hook factory.
  */
@@ -210,7 +211,7 @@ describe('connectProvidersFromMap dispatch to connectForRecovery', () => {
   });
 
   it('should fall back to askSecret for a provider WITHOUT connectForRecovery', async () => {
-    // p0 = bootstrap. p1 = no hook with a stripped secret → legacy prompt path.
+    // p0 = bootstrap. p1 = no hook with a stripped secret -> legacy prompt path.
     const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_NO_HOOK, ['password']), loc(2, TYPE_NO_HOOK, [])];
     const bootstrap = makeBootstrapProvider(0, map);
     const io = recordingIo();
@@ -238,11 +239,11 @@ describe('connectProvidersFromMap dispatch to connectForRecovery', () => {
   });
 });
 
-// ─── S2 — consensus compares location_map contents (RED) ─────────────────────
+// --- S2 - consensus compares location_map contents (RED) ---------------------
 //
 // Today `runConsensusCheck` (src/vault/bootstrap.ts) compares only HEADER fields
 // (vault_id / blob_hash / version / data_shards / parity_shards / encrypted)
-// between the bootstrap shard and ONE reachable sibling — it never compares the
+// between the bootstrap shard and ONE reachable sibling - it never compares the
 // CONTENTS of the location_map. With encryption off, the map is raw JSON guarded
 // only by an unkeyed trailing checksum: an attacker who rewrites a single shard
 // can redirect a sibling provider's connection coordinates (host/port/path/user,
@@ -267,7 +268,7 @@ describe('runConsensusCheck location_map cross-check (S2)', () => {
     honestMaps = new Map();
     // A reachable sibling provider that authenticates (so it joins the connected
     // pool that runConsensusCheck cross-checks against) and serves its OWN header
-    // — carrying the honest location_map — when consensus calls downloadHeader.
+    // - carrying the honest location_map - when consensus calls downloadHeader.
     providerRegistry.register(HONEST_TYPE, {
       lang: 'en',
       displayName: 'Mock (honest map)',
@@ -313,7 +314,7 @@ describe('runConsensusCheck location_map cross-check (S2)', () => {
     // Bootstrap shard_0 carries a FORGED map: shard_1 host = "attacker".
     // Reachable sibling shard_2 carries an HONEST map: shard_1 host = "honest".
     // Header fields are identical between the two maps, so today's header-only
-    // consensus does NOT fire — yet the maps disagree on shard_1's host.
+    // consensus does NOT fire - yet the maps disagree on shard_1's host.
     const forgedMap = [honestLoc(0, 'honest'), honestLoc(1, 'attacker'), honestLoc(2, 'honest')];
     const honestSiblingMap = [honestLoc(0, 'honest'), honestLoc(1, 'honest'), honestLoc(2, 'honest')];
 
@@ -332,7 +333,7 @@ describe('runConsensusCheck location_map cross-check (S2)', () => {
   });
 });
 
-// ─── consensus must not fire a doomed auth on a secret-less sibling ──────────
+// --- consensus must not fire a doomed auth on a secret-less sibling ----------
 //
 // runConsensusCheck (src/vault/bootstrap.ts) cross-checks siblings built from the
 // STRIPPED connection_config: the secret named in required_inputs is NOT in the
@@ -340,11 +341,11 @@ describe('runConsensusCheck location_map cross-check (S2)', () => {
 // required_inputs is non-empty is therefore unreachable at consensus time and
 // must be skipped BEFORE any authenticate() call. This matters for a transport
 // that authenticates WITH the secret (SSH password auth): a bare authenticate()
-// there is a full, doomed credential attempt, and on a real OpenSSH server ≥9.8 a
+// there is a full, doomed credential attempt, and on a real OpenSSH server >=9.8 a
 // burst of such failures from one source trips PerSourcePenalties and poisons the
 // following recovery connection.
 //
-// This test asserts the observable TRIGGER — that no credentialed authenticate()
+// This test asserts the observable TRIGGER - that no credentialed authenticate()
 // is fired at the secret-less sibling. The mock registry does not model
 // PerSourcePenalties, so the full storm is exercised end-to-end only against a
 // real penalizing server via scripts/cli-e2e/scenarios/80-ssh-all.
@@ -357,7 +358,7 @@ describe('runConsensusCheck must not attempt a doomed auth on a secret-less sibl
   beforeEach(() => {
     secretlessAuths = [];
     // A plain sibling/bootstrap type that connects with no secret (no stripped
-    // input) — models a guest/anon provider whose secret-less authenticate is
+    // input) - models a guest/anon provider whose secret-less authenticate is
     // legitimate, so it must not be counted as a doomed attempt.
     providerRegistry.register(PLAIN_TYPE, {
       lang: 'en',
@@ -401,12 +402,82 @@ describe('runConsensusCheck must not attempt a doomed auth on a secret-less sibl
     const bootstrap = makeBootstrapProvider(0, map);
 
     const { io } = createMockProviderIO({});
-    // The credentialed connect phase (after consensus) supplies the secret — that
+    // The credentialed connect phase (after consensus) supplies the secret - that
     // authenticate carries a password and is legitimate, so it is not recorded.
     io.askSecret = async (): Promise<string> => 'the-password';
 
     await bootstrapFromProvider(bootstrap, { vaultName: VAULT_NAME, io, targetVersion: 1 });
 
     expect(secretlessAuths).toEqual([]);
+  });
+});
+
+// --- Recovery on a machine with nobody at the keyboard -----------------------
+//
+// `--bootstrap`, cron and a closed stdin all mark the run non-interactive
+// (`io.interactive === false`). A prompt issued there never settles: the event
+// loop empties, the process dies where it stands, and recovery leaves a
+// half-written .bfs/ behind a zero exit code. Both prompting points of the
+// bootstrap path must therefore decide without asking - the transport secret of
+// a sibling degrades to a skip, and the missing vault password ends the run
+// with a message naming how to supply one.
+describe('bootstrapFromProvider with no one to answer a prompt', () => {
+  beforeEach(() => {
+    askSecretPrompts = [];
+    recoverySpies = new Map();
+    registerMockProviders();
+  });
+
+  afterEach(() => {
+    unregisterMockProviders();
+    vi.restoreAllMocks();
+  });
+
+  it('should skip a sibling whose stripped secret cannot be asked for', async () => {
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_NO_HOOK, ['password']), loc(2, TYPE_NO_HOOK, [])];
+    const bootstrap = makeBootstrapProvider(0, map);
+    const { io } = createMockProviderIO({}, process.cwd(), false);
+    const askSecret = vi.spyOn(io, 'askSecret').mockResolvedValue('would-be-answered');
+
+    const result = await bootstrapFromProvider(bootstrap, { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(askSecret).not.toHaveBeenCalled();
+    expect(result.providers.some((p) => p.id === 'p1')).toBe(false);
+  });
+
+  it('should refuse an encrypted backup with no password instead of prompting for one', async () => {
+    const salt = generateSalt();
+    const key = await deriveKey('the-password', salt);
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_NO_HOOK, [])];
+    const bootstrap = baseProvider('p0', TYPE_NO_HOOK);
+    (bootstrap.list as ReturnType<typeof vi.fn>).mockResolvedValue([{ provider_id: 'p0', path: 'shard_0.bfs.1' }] as RemoteRef[]);
+    (bootstrap.downloadHeader as ReturnType<typeof vi.fn>).mockResolvedValue(
+      serializeShardHeader(
+        {
+          magic: 'BFSS',
+          format_version: 2,
+          vault_id: VAULT_ID,
+          vault_name: VAULT_NAME,
+          blob_size: 256n,
+          blob_hash: 'b'.repeat(64),
+          data_shards: 2,
+          parity_shards: 1,
+          shard_index: 0,
+          version: 1,
+          encrypted: true,
+          kdf_salt: salt,
+          rs_stripe_size: 64 * 1024,
+          map_length: 0,
+          location_map: map,
+        },
+        key,
+      ),
+    );
+    const { io } = createMockProviderIO({}, process.cwd(), false);
+    const askSecret = vi.spyOn(io, 'askSecret').mockResolvedValue('the-password');
+
+    await expect(bootstrapFromProvider(bootstrap, { vaultName: VAULT_NAME, io, targetVersion: 1 })).rejects.toThrow(/--password/);
+
+    expect(askSecret).not.toHaveBeenCalled();
   });
 });

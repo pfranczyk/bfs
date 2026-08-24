@@ -20,10 +20,10 @@ export interface RecoveryBootstrapSpec {
  *
  * Grammar: `type:name [adapter-flags]` tokenized shell-style. The first token
  * holds `type:name`; remaining tokens are forwarded verbatim as `rawArgs` to
- * `StorageProvider.configureFromFlags`. BFS never inspects adapter-flags —
+ * `StorageProvider.configureFromFlags`. BFS never inspects adapter-flags -
  * each adapter defines its own flag grammar.
  *
- * @param spec - raw value of a single `--provider` flag (e.g. `bfs init --ci`)
+ * @param spec - raw value of a single `--provider` flag (e.g. `local:usb1 --path /mnt/usb`)
  * @param io   - ProviderIO from the calling command; carries `workDir` and the
  *               resolved interactive mode, so `--ci` reaches `configureFromFlags`
  * @returns     a `ProviderConfig` ready to drop into `VaultConfig.providers`
@@ -46,7 +46,7 @@ export async function parseInitProviderSpec(spec: string, io: ProviderIO): Promi
   }
 
   // After the first colon the entire head is the id. The charset regex
-  // forbids further `:`, whitespace, or quote chars — multi-segment forms
+  // forbids further `:`, whitespace, or quote chars - multi-segment forms
   // like `local:id:/path` fail validation with init_provider_format_invalid.
   const id = head.slice(firstColon + 1);
   validateProviderId(id);
@@ -54,7 +54,7 @@ export async function parseInitProviderSpec(spec: string, io: ProviderIO): Promi
 }
 
 /**
- * Asserts that provider ids are unique — both within `newIds` and against any
+ * Asserts that provider ids are unique - both within `newIds` and against any
  * already-registered `existingConfigIds`. Shared by every command that
  * introduces a provider id (init, add, edit) so a duplicate cannot reach
  * `.bfs/config.json`, where a lookup silently resolves to the first match and
@@ -79,12 +79,12 @@ export function validateProviderIdsUnique(newIds: string[], existingConfigIds: s
 }
 
 /**
- * Parses a recovery-style bootstrap spec — adapter flags only, with no
+ * Parses a recovery-style bootstrap spec - adapter flags only, with no
  * type or id embedded. Provider type comes from the separate `--provider
  * <type>` flag; id is hardcoded (`recovery-bootstrap`) because the bootstrap
  * provider exists only for the duration of the recovery and never persists.
  *
- * Grammar: `[adapter-flags]` tokenized shell-style — the entire spec is the
+ * Grammar: `[adapter-flags]` tokenized shell-style - the entire spec is the
  * `rawArgs` array passed to `configureFromFlags`. Empty spec, unknown
  * provider type, or adapter rejection raise distinct localized errors.
  *
@@ -145,7 +145,7 @@ export async function parseRepairSpec(positional: string[], existingConfigIds: s
 
   const draft = classifyRepairPairs(positional, existingConfigIds);
   // Reject migration-target id collisions (with existing ids or between pairs)
-  // before any adapter config is built — the cheap structural checks fail fast.
+  // before any adapter config is built - the cheap structural checks fail fast.
   validateProviderIdsUnique(
     draft.flatMap((d) => (d.migration ? [d.migration.name] : [])),
     existingConfigIds,

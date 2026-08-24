@@ -78,7 +78,7 @@ async function cleanup(dirs: string[]): Promise<void> {
  * Reed-Solomon, V1 shard headers. Current `push` only emits V2, so a legacy V1
  * backup can only be produced synthetically. Creates `providerDirs.length` =
  * N+K+1 directories (the last one a spare for a rebuild target) but registers
- * only N+K providers in config — the spare is absent from the manifest.
+ * only N+K providers in config - the spare is absent from the manifest.
  */
 async function synthesizeV1Vault(opts: { N: number; K: number; vaultName: string }): Promise<{ root: string; providerDirs: string[] }> {
   const { N, K, vaultName } = opts;
@@ -168,8 +168,8 @@ async function synthesizeV1Vault(opts: { N: number; K: number; vaultName: string
 // A legacy FORMAT_VERSION 1 backup must survive heal and disaster recovery on a
 // modern BFS that itself only writes V2. The heal/recovery code dispatches on the
 // format read from existing shards, so these guard that a V1 version stays V1 and
-// still decodes — neither silently upgraded to V2 nor mis-read as the wrong format.
-// L7 — relocate must surface WHY the new address is unusable (e.g. a rejected
+// still decodes - neither silently upgraded to V2 nor mis-read as the wrong format.
+// L7 - relocate must surface WHY the new address is unusable (e.g. a rejected
 // host key) instead of masking every failure behind a generic "not accessible"
 // that sends the operator debugging connectivity when they need --known-host /
 // --accept-new-host-key.
@@ -235,7 +235,7 @@ describe('legacy V1 vault heal + recovery', () => {
     await writeConfig(root, { ...cfg, providers: [...cfg.providers, localProvider('p3', providerDirs[3] ?? '')] });
     await rebuildVersion(root, 1, { removedProviderId: 'p2', targetProviderId: 'p3', io });
 
-    // The rebuilt shard must stay FORMAT_VERSION 1 — matching its siblings.
+    // The rebuilt shard must stay FORMAT_VERSION 1 - matching its siblings.
     const rebuilt = await fs.readFile(path.join(providerDirs[3] ?? '', 'legacy-v1', 'shard_2.bfs.1'));
     const { header, payloadStream } = await parseShardHeaderFromStream(Readable.from(rebuilt));
     payloadStream.on('error', () => {}).destroy();
@@ -323,7 +323,7 @@ describe('rebuildVersion (RS heal)', () => {
   // A rebuilt shard must be byte-compatible with the V2 striped + per-shard-GCM
   // format the rest of the version uses, so a later pull can reconstruct from it.
   // verifyVersion only inspects the header window, so it cannot catch a broken
-  // payload — this drives the rebuilt shard to be load-bearing and decodes it.
+  // payload - this drives the rebuilt shard to be load-bearing and decodes it.
   it('should rebuild an encrypted shard that still decodes when it is load-bearing', async () => {
     const password = 'correct horse battery staple';
     const setup = await setupVault({ encrypted: true, password });
@@ -338,7 +338,7 @@ describe('rebuildVersion (RS heal)', () => {
     await writeConfig(setup.root, { ...config, providers: config.providers.filter((p) => p.id !== 'p2') });
 
     // Make the rebuilt shard_2 load-bearing: drop one healthy original (shard_0
-    // on p0). Reaching N=2 now requires the rebuilt shard — a correct heal still
+    // on p0). Reaching N=2 now requires the rebuilt shard - a correct heal still
     // restores byte-for-byte; the buggy heal produces an undecryptable shard.
     await fs.rm(path.join(setup.providerDirs[0], 'heal-test', 'shard_0.bfs.1'));
 
@@ -457,7 +457,7 @@ describe('recovery after relocate', () => {
     await fs.cp(path.join(setup.providerDirs[1], 'heal-test'), path.join(relocatedDir, 'heal-test'), { recursive: true });
     await relocateProvider(setup.root, 'p1', { newConnectionConfig: { path: relocatedDir }, io: setup.io, password });
 
-    // Sanity: manifest-driven pull still works — not the failure under test.
+    // Sanity: manifest-driven pull still works - not the failure under test.
     await pull(setup.root, { io: setup.io, password, force: true });
     expect(await fs.readFile(path.join(setup.root, 'a.txt'), 'utf-8')).toBe('aaa');
 
@@ -513,8 +513,8 @@ describe('relocateProvider version scoping', () => {
       return header.location_map.find((l) => l.provider_id === 'p0')?.connection_config.path;
     };
 
-    expect(await p0PathInHeader(1)).toBe(relocatedDir); // in scope → rewritten
-    expect(await p0PathInHeader(2)).toBe(setup.providerDirs[0]); // out of scope → untouched
+    expect(await p0PathInHeader(1)).toBe(relocatedDir); // in scope -> rewritten
+    expect(await p0PathInHeader(2)).toBe(setup.providerDirs[0]); // out of scope -> untouched
   });
 });
 
@@ -556,7 +556,7 @@ describe('relocateProvider secret stripping', () => {
     await relocateProvider(root, 'p1', { newConnectionConfig: { path: newDir, password: 'pw-p1' }, io });
 
     // The relocated shard (p1, index 1, now under newDir) and an untouched
-    // shard (p0, index 0) must both carry a stripped map — including the
+    // shard (p0, index 0) must both carry a stripped map - including the
     // relocated provider's freshly supplied secret.
     for (const [shardIndex, dir] of [
       [1, newDir],
@@ -574,11 +574,11 @@ describe('relocateProvider secret stripping', () => {
   });
 });
 
-// ─── S4 — heal cross-validates metadata between shards (RED) ──────────────────
+// --- S4 - heal cross-validates metadata between shards (RED) ------------------
 //
 // Today `extractShardMeta` (src/vault/heal.ts) takes blob_hash / vault_name /
 // kdf_salt / rsStripeSize / blob_size / vault_id / format_version from the FIRST
-// available shard binary and `break`s — zero cross-validation against the other
+// available shard binary and `break`s - zero cross-validation against the other
 // available siblings. So an attacker who rewrites a single sibling's header (the
 // `--no-enc` header is guarded only by an unkeyed trailing checksum, which
 // buildShardV2 recomputes on forge) can feed heal divergent metadata that it
@@ -632,7 +632,7 @@ describe('extractShardMeta cross-validation (S4)', () => {
     });
 
     // Rebuild shard_2 (removed p2) onto the spare p3. extractShardMeta scans the
-    // available shards (shard_0, shard_1) — they now disagree on blob_hash.
+    // available shards (shard_0, shard_1) - they now disagree on blob_hash.
     await expect(rebuildVersion(setup.root, 1, { removedProviderId: 'p2', targetProviderId: 'p3', io: setup.io })).rejects.toThrow(BfsError);
   });
 
@@ -710,7 +710,7 @@ function shardPath(providerDir: string, shardIndex: number): string {
   return path.join(providerDir, 'heal-test', `shard_${shardIndex}.bfs.1`);
 }
 
-/** Flips one payload bit and leaves the trailing checksum stale — plain bit-rot. */
+/** Flips one payload bit and leaves the trailing checksum stale - plain bit-rot. */
 async function rotShardPayload(file: string): Promise<void> {
   const data = await fs.readFile(file);
   const pos = computeShardHeaderSize(data);
@@ -720,7 +720,7 @@ async function rotShardPayload(file: string): Promise<void> {
 
 /**
  * Flips one bit inside the header (vault_id, fixed offset 6) and leaves the
- * trailing checksum stale — bit-rot in the region the sibling cross-check reads.
+ * trailing checksum stale - bit-rot in the region the sibling cross-check reads.
  */
 async function rotShardHeader(file: string): Promise<void> {
   const data = await fs.readFile(file);
@@ -730,7 +730,7 @@ async function rotShardHeader(file: string): Promise<void> {
 
 /**
  * Rewrites a shard's vault_id (fixed offset 6) and re-seals the trailing
- * checksum, so the shard stays byte-valid — the shape of a deliberate forgery
+ * checksum, so the shard stays byte-valid - the shape of a deliberate forgery
  * rather than of medium damage.
  */
 async function forgeShardVaultId(file: string): Promise<void> {
@@ -745,7 +745,7 @@ async function forgeShardVaultId(file: string): Promise<void> {
 // header must not seed the version's metadata and its payload must not enter the
 // RS decode, or the repair either refuses a recoverable version or bakes the
 // damage into the rebuilt shard. A shard whose header diverges while its own
-// checksum verifies was rewritten deliberately and must still stop the repair —
+// checksum verifies was rewritten deliberately and must still stop the repair -
 // the checksum is what tells the two apart.
 describe('rebuildVersion with a damaged sibling', () => {
   let dirs: string[];
@@ -822,7 +822,7 @@ describe('rebuildVersion with a damaged sibling', () => {
 
   it('should rebuild a part that is present but rotted, not only a missing one', async () => {
     // `bfs repair --rebuild` is what the CLI points operators at when data is
-    // damaged, so it must replace rotted bytes in place — the part is there, it
+    // damaged, so it must replace rotted bytes in place - the part is there, it
     // is simply no longer readable.
     const setup = await setupVault({ encrypted: false, scheme: { data_shards: 2, parity_shards: 2 } });
     dirs = [setup.root, ...setup.providerDirs];
@@ -850,5 +850,111 @@ describe('rebuildVersion with a damaged sibling', () => {
     await forgeShardVaultId(shardPath(setup.providerDirs[1], 1));
 
     await expect(rebuildVersion(setup.root, 1, { removedProviderId: 'p0', targetProviderId: 'p4', io: setup.io })).rejects.toThrow(TamperDetectedError);
+  });
+});
+
+// The repair replaces one part; a sibling that rotted on its own medium is still
+// rotted afterwards, so the version carries N+K-1 sound parts. Stamping it
+// healthy contradicts what `bfs verify --deep` reads off the media and hides the
+// second medium that needs attention behind a success message.
+describe('health stamped after a repair that skipped a damaged sibling', () => {
+  let dirs: string[];
+
+  beforeEach(() => {
+    dirs = [];
+  });
+
+  afterEach(async () => {
+    await cleanup(dirs);
+  });
+
+  it('should stamp the version degraded when a sibling stayed damaged', async () => {
+    const setup = await setupVault({ encrypted: false, scheme: { data_shards: 2, parity_shards: 2 } });
+    dirs = [setup.root, ...setup.providerDirs];
+    await rotShardPayload(shardPath(setup.providerDirs[1], 1));
+
+    await rebuildVersion(setup.root, 1, { removedProviderId: 'p0', targetProviderId: 'p4', io: setup.io });
+
+    const manifest = await readManifest(setup.root, 1);
+    expect(manifest?.health).toBe(VersionHealth.Degraded);
+  });
+
+  it('should stamp the version healthy when every sibling read cleanly', async () => {
+    const setup = await setupVault({ encrypted: false, scheme: { data_shards: 2, parity_shards: 2 } });
+    dirs = [setup.root, ...setup.providerDirs];
+
+    await rebuildVersion(setup.root, 1, { removedProviderId: 'p0', targetProviderId: 'p4', io: setup.io });
+
+    const manifest = await readManifest(setup.root, 1);
+    expect(manifest?.health).toBe(VersionHealth.Healthy);
+  });
+
+  it('should stamp the version degraded when an in-place rebuild left a sibling damaged', async () => {
+    const setup = await setupVault({ encrypted: false, scheme: { data_shards: 2, parity_shards: 2 } });
+    dirs = [setup.root, ...setup.providerDirs];
+    await fs.rm(shardPath(setup.providerDirs[2], 2));
+    await rotShardPayload(shardPath(setup.providerDirs[1], 1));
+
+    await rebuildShardInPlace(setup.root, 1, { providerId: 'p2', io: setup.io });
+
+    const manifest = await readManifest(setup.root, 1);
+    expect(manifest?.health).toBe(VersionHealth.Degraded);
+  });
+
+  it('should stamp the version healthy when the rebuilt part was the only rotted one', async () => {
+    // The rotted part is the one being replaced, so nothing damaged survives the
+    // repair - the count must not mistake the repair target for a sibling.
+    const setup = await setupVault({ encrypted: false, scheme: { data_shards: 2, parity_shards: 2 } });
+    dirs = [setup.root, ...setup.providerDirs];
+    await rotShardPayload(shardPath(setup.providerDirs[2], 2));
+
+    await rebuildShardInPlace(setup.root, 1, { providerId: 'p2', io: setup.io });
+
+    const manifest = await readManifest(setup.root, 1);
+    expect(manifest?.health).toBe(VersionHealth.Healthy);
+  });
+
+  it('should stamp the version degraded when a sibling yielded nothing at all', async () => {
+    // A sibling that could not be read is one part short just as a rotted one is;
+    // what differs is that nothing was established about its bytes.
+    const setup = await setupVault({ encrypted: false, scheme: { data_shards: 2, parity_shards: 2 } });
+    dirs = [setup.root, ...setup.providerDirs];
+    await fs.rm(shardPath(setup.providerDirs[1], 1));
+
+    await rebuildVersion(setup.root, 1, { removedProviderId: 'p0', targetProviderId: 'p4', io: setup.io });
+
+    const manifest = await readManifest(setup.root, 1);
+    expect(manifest?.health).toBe(VersionHealth.Degraded);
+    expect(manifest?.health_deep_rot).not.toBe(true);
+  });
+
+  it('should record that a degraded verdict rests on rot read off the media', async () => {
+    const setup = await setupVault({ encrypted: false, scheme: { data_shards: 2, parity_shards: 2 } });
+    dirs = [setup.root, ...setup.providerDirs];
+    await rotShardPayload(shardPath(setup.providerDirs[1], 1));
+
+    await rebuildVersion(setup.root, 1, { removedProviderId: 'p0', targetProviderId: 'p4', io: setup.io });
+
+    const manifest = await readManifest(setup.root, 1);
+    expect(manifest?.health_deep_rot).toBe(true);
+  });
+
+  it('should keep the degraded verdict through a later shallow verify', async () => {
+    // The repair streams every sibling in full and checks its trailing SHA-256,
+    // so it observes rot at the same depth `verify --deep` does. Without that
+    // provenance on record, the next routine `bfs verify` - blind to payload rot
+    // by construction - would read N+K parts present and stamp healthy again.
+    const setup = await setupVault({ encrypted: false, scheme: { data_shards: 2, parity_shards: 2 } });
+    dirs = [setup.root, ...setup.providerDirs];
+    await rotShardPayload(shardPath(setup.providerDirs[1], 1));
+
+    await rebuildVersion(setup.root, 1, { removedProviderId: 'p0', targetProviderId: 'p4', io: setup.io });
+    const config = await readConfig(setup.root);
+    if (!config) throw new Error('config missing after rebuild');
+    await writeConfig(setup.root, { ...config, providers: config.providers.filter((p) => p.id !== 'p0') });
+
+    const status = await verifyVersion(setup.root, 1, setup.io);
+
+    expect(status.health).toBe(VersionHealth.Degraded);
   });
 });

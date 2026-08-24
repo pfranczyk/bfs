@@ -5,24 +5,24 @@
 // Driven entirely by environment variables so credentials never appear in the
 // process argument list:
 //   FC_HOST FC_PORT FC_USER FC_PASS FC_SECURE FC_BASE   connection + base path
-//   FC_MODE   'mkdir' → ensureDir each path in FC_PATHS ('|'-separated). BFS
+//   FC_MODE   'mkdir' -> ensureDir each path in FC_PATHS ('|'-separated). BFS
 //                       init lists a provider's base path and fails if absent,
 //                       so the harness must create it first (like a local
 //                       provider's `mkdir -p`).
-//             'file'  → upload a 1-byte regular file at FC_FILE (parent dir
+//             'file'  -> upload a 1-byte regular file at FC_FILE (parent dir
 //                       ensured first). Used to plant a "path segment is a file"
 //                       obstacle so a directory op nested under it fails 550 on
 //                       any compliant server, regardless of write permissions.
-//             'rename'→ move FC_FROM → FC_TO (the parent of FC_TO is ensured
+//             'rename'-> move FC_FROM -> FC_TO (the parent of FC_TO is ensured
 //                       first). Simulates a storage relocation an operator then
 //                       points a provider at with `bfs provider edit`.
-//             'put'   → upload the local file FC_LOCAL to the remote path FC_FILE
+//             'put'   -> upload the local file FC_LOCAL to the remote path FC_FILE
 //                       (parent ensured first). Pre-places identical shard bytes
 //                       on a new-type provider before a no-rebuild repair
 //                       repoints to it (cross-type canonical-layout migration).
-//             'run'   → remove FC_BASE/bfs-e2e-<FC_RUN> only.
-//             'all'   → remove every FC_BASE/bfs-e2e-* directory.
-//             'sha'   → download FC_FILE, print its SHA-256 (hex) to stdout.
+//             'run'   -> remove FC_BASE/bfs-e2e-<FC_RUN> only.
+//             'all'   -> remove every FC_BASE/bfs-e2e-* directory.
+//             'sha'   -> download FC_FILE, print its SHA-256 (hex) to stdout.
 //                       Exit 3 when the file is absent (550) so callers can
 //                       distinguish "not there" from a real transport error.
 //                       Read-only; used by e2e to prove a repair did NOT
@@ -92,7 +92,7 @@ async function main(): Promise<void> {
       if (local && remote) {
         const dir = remote.replace(/\/[^/]*$/, '') || '/';
         await client.ensureDir(dir);
-        // uploadFrom(localPath) streams via Node's 64 KB createReadStream — the
+        // uploadFrom(localPath) streams via Node's 64 KB createReadStream - the
         // chunked path.
         await client.uploadFrom(local, remote);
       }
@@ -101,7 +101,7 @@ async function main(): Promise<void> {
       try {
         entries = await client.list(base);
       } catch {
-        return; // base path does not exist → nothing to clean
+        return; // base path does not exist -> nothing to clean
       }
       for (const item of entries) {
         if (item.isDirectory && item.name.startsWith('bfs-e2e-')) {
@@ -134,7 +134,7 @@ async function main(): Promise<void> {
       try {
         await client.downloadTo(sink, file);
       } catch {
-        // 550 (missing) or any transport failure → signal "absent" distinctly.
+        // 550 (missing) or any transport failure -> signal "absent" distinctly.
         process.exit(3);
       }
       process.stdout.write(`${createHash('sha256').update(Buffer.concat(chunks)).digest('hex')}\n`);

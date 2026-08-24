@@ -11,7 +11,7 @@ import { readManifest } from '../../src/vault/manifest.js';
 import { init, prune, push } from '../../src/vault/vault-manager.js';
 
 // prune deletes a pruned version's remote data best-effort. A genuine delete
-// failure (permissions, unreachable medium — distinct from the host-key gate
+// failure (permissions, unreachable medium - distinct from the host-key gate
 // fixed separately) is swallowed by the loop's catch, so the data is orphaned on
 // the medium with NO signal to the operator. This guards that prune surfaces such
 // a failure through its ProviderIO instead of failing silently.
@@ -66,7 +66,7 @@ describe('prune surfaces a best-effort delete failure', () => {
       io: setupIo,
     });
     await push(root, { io: setupIo }); // v1
-    await push(root, { io: setupIo }); // v2 — a version survives after pruning v1
+    await push(root, { io: setupIo }); // v2 - a version survives after pruning v1
 
     // Prune v1 with an observable IO. p2's delete throws; the loop keeps going
     // (best-effort) but must not swallow the failure silently.

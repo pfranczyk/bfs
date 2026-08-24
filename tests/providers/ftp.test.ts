@@ -10,18 +10,31 @@ import { FtpProvider } from '../../src/providers/ftp.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
 import type { CliProviderInput, ProviderConfig, ProviderIO, ShardHeader, ShardLocation } from '../../src/types/index.js';
 
+/**
+ * Scratch directories handed out by writeJsonConfig, emptied after every test -
+ * so a path it returns must not be used outside the test that asked for it.
+ */
+const configDirs: string[] = [];
+
+afterEach(async () => {
+  // Swallow removal errors: a test that already passed must not turn red because
+  // something else on the machine still held the file for a moment.
+  await Promise.all(configDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }).catch(() => {})));
+});
+
 async function writeJsonConfig(content: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-ftp-cfg-'));
+  configDirs.push(dir);
   const file = path.join(dir, 'ftp.json');
   await fs.writeFile(file, content, 'utf8');
   return file;
 }
 
 function cliInput(overrides: Partial<CliProviderInput> = {}): CliProviderInput {
-  return { name: overrides.name ?? 'test', rawArgs: overrides.rawArgs ?? [] };
+  return { name: overrides.name ?? 'test', rawArgs: overrides.rawArgs ?? [], ...(overrides.offline !== undefined ? { offline: overrides.offline } : {}) };
 }
 
-// ─── In-memory FTP mock ──────────────────────────────────────────────────────
+// --- In-memory FTP mock ------------------------------------------------------
 
 const mockState: {
   files: Map<string, Buffer>;
@@ -117,7 +130,7 @@ vi.mock('basic-ftp', () => {
   class MockFtpContext {
     readonly timeout = 0;
     // TLS-upgraded control socket, always present so the secure path
-    // (connect → useTLS → readPeerCertificate) resolves against the in-memory
+    // (connect -> useTLS -> readPeerCertificate) resolves against the in-memory
     // mock exactly as it would over a real TLS socket.
     readonly socket = new MockTlsSocket();
   }
@@ -127,7 +140,7 @@ vi.mock('basic-ftp', () => {
 
     // Secure-path connection primitives (secure:true). No-ops like access(): the
     // mock performs no real networking. login() must never throw so the
-    // certificate-trust decision — not a fake auth failure — governs the outcome
+    // certificate-trust decision - not a fake auth failure - governs the outcome
     // of the secure path.
     async connect(_host: string, _port: number): Promise<void> {
       // no-op: the mock does not open a real socket
@@ -136,7 +149,7 @@ vi.mock('basic-ftp', () => {
       // no-op: the fixture cert double is already on ftp.socket
     }
     async login(_user: string, _password: string): Promise<void> {
-      // no-op: never throws — trust is decided before login on the real path
+      // no-op: never throws - trust is decided before login on the real path
     }
     async useDefaultSettings(): Promise<void> {
       // no-op: no control-channel state to negotiate in the mock
@@ -281,7 +294,7 @@ vi.mock('basic-ftp', () => {
   return { Client: MockClient };
 });
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// --- Helpers -----------------------------------------------------------------
 
 function makeConfig(overrides: Partial<Record<string, unknown>> = {}, id = 'test-ftp'): ProviderConfig {
   return { id, type: 'ftp', adapterPackage: null, config: { host: 'localhost', port: 21, user: 'testuser', password: 'testpass', path: '/backup', secure: false, ...overrides } };
@@ -329,7 +342,7 @@ async function downloadBuf(provider: FtpProvider, ref: { provider_id: string; pa
   return streamToBuffer(await provider.download(ref));
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
+// --- Tests -------------------------------------------------------------------
 
 describe('FtpProvider', () => {
   let provider: FtpProvider;
@@ -357,7 +370,7 @@ describe('FtpProvider', () => {
     vi.restoreAllMocks();
   });
 
-  // ─── hardening (L2 path traversal, L6 idempotent delete) — parity with SSH ──
+  // --- hardening (L2 path traversal, L6 idempotent delete) - parity with SSH --
   describe('hardening', () => {
     it('should reject a download whose ref.path contains a traversal segment', async () => {
       await expect(provider.download({ provider_id: 'test-ftp', path: '../../evil' })).rejects.toThrow(UnsafePathError);
@@ -373,7 +386,7 @@ describe('FtpProvider', () => {
       await expect(provider.delete({ provider_id: 'test-ftp', path: 'shard_9.bfs.1' })).resolves.toBeUndefined();
     });
 
-    // F1 — delete removes the header sidecar together with the shard, so prune
+    // F1 - delete removes the header sidecar together with the shard, so prune
     // (which calls delete) leaves no orphaned hdr_ file behind on the medium.
     it('should remove the header sidecar together with the shard on delete', async () => {
       mockState.files.set('/backup/testvault/shard_0.bfs.1', Buffer.from('shard'));
@@ -386,14 +399,14 @@ describe('FtpProvider', () => {
     });
   });
 
-  // ─── constructor (lazy init — config validation via validateConfig) ─────
+  // --- constructor (lazy init - config validation via validateConfig) -----
 
-  it('should NOT throw when host is missing — config validation is lazy', () => {
+  it('should NOT throw when host is missing - config validation is lazy', () => {
     const { io } = createMockProviderIO();
     expect(() => new FtpProvider(makeConfig({ host: '' }), io)).not.toThrow();
   });
 
-  it('should NOT throw when path is missing — config validation is lazy', () => {
+  it('should NOT throw when path is missing - config validation is lazy', () => {
     const { io } = createMockProviderIO();
     expect(() => new FtpProvider(makeConfig({ path: '' }), io)).not.toThrow();
   });
@@ -403,7 +416,7 @@ describe('FtpProvider', () => {
     expect(() => new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io)).not.toThrow();
   });
 
-  // ─── diagnostic logging (gated by `bfs --debug`) ─────────────────────────
+  // --- diagnostic logging (gated by `bfs --debug`) -------------------------
 
   // Regression: `bfs verify` against an FTP provider used to emit "FTP
   // connecting to host:port" three times per shard via io.info(), polluting
@@ -424,7 +437,7 @@ describe('FtpProvider', () => {
     expect(logs.find((l) => l.level === 'info' && l.message.includes('FTP connecting'))).toBeUndefined();
   });
 
-  // ─── plaintext-FTP warning (secure=false) ────────────────────────────────
+  // --- plaintext-FTP warning (secure=false) --------------------------------
 
   // A plain (non-FTPS) connection sends the password and shard bytes in the
   // clear; the user must be warned. The warning fires once per provider
@@ -457,7 +470,7 @@ describe('FtpProvider', () => {
     expect(warns).toHaveLength(0);
   });
 
-  // ─── control-character rejection in path / vault name ────────────────────
+  // --- control-character rejection in path / vault name --------------------
 
   // CR/LF or NUL in a path sent over the FTP control channel could inject extra
   // FTP commands. Reject at config-validation time and again before any path is
@@ -491,7 +504,7 @@ describe('FtpProvider', () => {
     await expect(uploadBuf(p, 'shard_0.bfs.1', Buffer.alloc(8, 1))).rejects.toThrow(UnsafePathError);
   });
 
-  // ─── upload / download roundtrip ─────────────────────────────────────────
+  // --- upload / download roundtrip -----------------------------------------
 
   it('should upload and download identical binary data', async () => {
     const data = Buffer.alloc(512);
@@ -513,7 +526,7 @@ describe('FtpProvider', () => {
     expect(ref.hash).toHaveLength(64);
   });
 
-  // ─── post-upload verification (defense against silent FTP corruption) ─────
+  // --- post-upload verification (defense against silent FTP corruption) -----
 
   it('should throw ProviderError with size diff when the server stored fewer bytes than uploaded', async () => {
     mockState.corruptOnUpload = (buf) => buf.subarray(0, buf.length - 1);
@@ -586,7 +599,7 @@ describe('FtpProvider', () => {
     expect(maxChunk).toBeLessThanOrEqual(64 * 1024);
   });
 
-  // ─── list ────────────────────────────────────────────────────────────────
+  // --- list ----------------------------------------------------------------
 
   it('should list all uploaded files', async () => {
     await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('a'));
@@ -613,7 +626,7 @@ describe('FtpProvider', () => {
     expect(refs).toEqual([]);
   });
 
-  // ─── delete ──────────────────────────────────────────────────────────────
+  // --- delete --------------------------------------------------------------
 
   it('should delete a file', async () => {
     const ref = await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('data'));
@@ -623,10 +636,10 @@ describe('FtpProvider', () => {
     expect(refs.map((r) => r.path)).not.toContain('shard_0.bfs.1');
   });
 
-  // Deleting an already-absent shard is idempotent (success), not an error — see
+  // Deleting an already-absent shard is idempotent (success), not an error - see
   // the "hardening" block (L6). It must not raise a false prune orphan warning.
 
-  // ─── healthCheck ─────────────────────────────────────────────────────────
+  // --- healthCheck ---------------------------------------------------------
 
   it('should return true when connection succeeds', async () => {
     expect(await provider.healthCheck()).toBe(true);
@@ -637,7 +650,7 @@ describe('FtpProvider', () => {
     expect(await provider.healthCheck()).toBe(false);
   });
 
-  // ─── authenticate ────────────────────────────────────────────────────────
+  // --- authenticate --------------------------------------------------------
 
   it('should not throw when connection succeeds', async () => {
     await expect(provider.authenticate()).resolves.toBeUndefined();
@@ -648,7 +661,7 @@ describe('FtpProvider', () => {
     await expect(provider.authenticate()).rejects.toThrow(ProviderError);
   });
 
-  // ─── rename ──────────────────────────────────────────────────────────────
+  // --- rename --------------------------------------------------------------
 
   it('should rename a file and make old path unavailable', async () => {
     const ref = await uploadBuf(provider, 'shard_0.bfs.1.tmp', Buffer.from('payload'));
@@ -665,7 +678,7 @@ describe('FtpProvider', () => {
     expect(names).toContain('shard_0.bfs.1');
   });
 
-  // ─── updateShardHeader ───────────────────────────────────────────────────
+  // --- updateShardHeader ---------------------------------------------------
 
   it('should update shard header, keep payload intact, and recompute checksum', async () => {
     const payload = Buffer.alloc(256, 0xab);
@@ -732,7 +745,7 @@ describe('FtpProvider', () => {
     expect(h.location_map[0].remote_path).toBe('/new/path/shard_0.bfs.1');
   });
 
-  // ─── listVaults ──────────────────────────────────────────────────────────
+  // --- listVaults ----------------------------------------------------------
 
   it('should list vault directories from basePath', async () => {
     mockState.dirs.add('/backup/vault-a');
@@ -745,7 +758,7 @@ describe('FtpProvider', () => {
     expect(vaults.sort()).toEqual(['vault-a', 'vault-b']);
   });
 
-  // ─── getSize ──────────────────────────────────────────────────────────────
+  // --- getSize --------------------------------------------------------------
 
   describe('getSize', () => {
     it('should return shard size via SIZE without transferring the payload', async () => {
@@ -764,7 +777,7 @@ describe('FtpProvider', () => {
     });
   });
 
-  // ─── downloadHeader ───────────────────────────────────────────────────────
+  // --- downloadHeader -------------------------------------------------------
 
   describe('downloadHeader', () => {
     it('should pull the whole file when size <= maxBytes', async () => {
@@ -789,7 +802,7 @@ describe('FtpProvider', () => {
 
       expect(head.length).toBe(8192);
       expect(Buffer.compare(head, data.subarray(0, 8192))).toBe(0);
-      // Transferred ≤ one extra chunk past maxBytes — never the whole file.
+      // Transferred <= one extra chunk past maxBytes - never the whole file.
       expect(mockState.lastDownloadBytesWritten).toBeLessThanOrEqual(8192 + 4096);
       expect(mockState.lastDownloadBytesWritten).toBeLessThan(data.length);
     });
@@ -803,13 +816,13 @@ describe('FtpProvider', () => {
     });
   });
 
-  // ─── configureInteractive ─────────────────────────────────────────────────
+  // --- configureInteractive -------------------------------------------------
 
   describe('configureInteractive', () => {
     it('should prompt for all fields and return a complete config', async () => {
       // This test focuses on prompting for every base field. It answers the FTPS
       // prompt with 'false' so it does NOT enter the secure=true TOFU cert-capture
-      // branch (connect → useTLS → cert-trust confirm) — that branch is covered by
+      // branch (connect -> useTLS -> cert-trust confirm) - that branch is covered by
       // the real-TLS 'TOFU-captures the presented cert...' case in
       // ftp-tls-pin.test.ts, so exercising it here would only duplicate coverage
       // and depend on the cert-trust confirm answer.
@@ -833,7 +846,7 @@ describe('FtpProvider', () => {
     });
   });
 
-  // ─── configureFromFlags ───────────────────────────────────────────────────
+  // --- configureFromFlags ---------------------------------------------------
 
   describe('configureFromFlags', () => {
     it('should throw ProviderError when no config source is given', async () => {
@@ -857,7 +870,7 @@ describe('FtpProvider', () => {
       await expect(p.configureFromFlags(cliInput({ rawArgs: ['--host', 'nas'] }))).rejects.toThrow(/--provider "ftp:nas --path/);
     });
 
-    // ─── Inline flags ───────────────────────────────────────────────────────
+    // --- Inline flags -------------------------------------------------------
 
     it('should accept full inline FTP spec', async () => {
       const { io } = createMockProviderIO();
@@ -875,7 +888,7 @@ describe('FtpProvider', () => {
       const config = await p.configureFromFlags(cliInput({ rawArgs: ['--host', 'h', '--path', '/b'] }));
 
       expect(config.port).toBe(21);
-      // The secure default (now true — secure-by-default) is owned by the
+      // The secure default (now true - secure-by-default) is owned by the
       // dedicated 'FTPS cert pinning + TOFU + secure-by-default' suite below,
       // so this port-default test no longer asserts on it.
     });
@@ -999,7 +1012,144 @@ describe('FtpProvider', () => {
     });
   });
 
-  // ─── validateConfig ───────────────────────────────────────────────────────
+  // --- Conflicting instructions: no trust source in an unattended run --------
+  //
+  // FTPS is the default, and trust in a server's certificate has to come from
+  // somewhere: a pinned fingerprint, an opt-in to the one presented on first
+  // connect, or a human at the prompt. A run that states nobody is watching and
+  // supplies neither flag has asked for two incompatible things, and that is
+  // decidable from the flags alone - before a socket is opened. The password is
+  // safe either way (the certificate decision already precedes login), so what
+  // refusing here buys is different: it works when the storage cannot be
+  // reached at all, costs no connect timeout, and answers with the reason
+  // instead of a transport error that names the wrong culprit.
+  //
+  // Three independent conditions gate the refusal, and each of the three checks
+  // below removes exactly one of them, so a rule that drops any single condition
+  // turns one of them red.
+
+  describe('configureFromFlags - unattended run without a way to trust the server', () => {
+    const SECURE_ARGS = ['--host', 'nas.example.com', '--user', 'backup', '--password', 'pw', '--path', '/backup'];
+    const PINNED_FP = 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99';
+
+    /** An FTP provider whose IO reports the given interactivity. */
+    function providerWith(interactive: boolean): FtpProvider {
+      const { io } = createMockProviderIO({}, process.cwd(), interactive);
+      return new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+    }
+
+    it('should refuse when nothing says how to trust the server', async () => {
+      const p = providerWith(false);
+
+      await expect(p.configureFromFlags(cliInput({ rawArgs: SECURE_ARGS }))).rejects.toThrow(ProviderError);
+    });
+
+    it('should name both ways out, so the refusal can be acted on', async () => {
+      const p = providerWith(false);
+
+      // Advice that cannot be carried out is worse than none - the operator has
+      // to leave with the two flags that resolve exactly this state.
+      await expect(p.configureFromFlags(cliInput({ rawArgs: SECURE_ARGS }))).rejects.toThrow(/--cert-fingerprint/);
+      await expect(p.configureFromFlags(cliInput({ rawArgs: SECURE_ARGS }))).rejects.toThrow(/--accept-new-cert/);
+    });
+
+    it('should accept a pinned fingerprint', async () => {
+      const p = providerWith(false);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: [...SECURE_ARGS, '--cert-fingerprint', 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99'] }));
+
+      expect(config.secure).toBe(true);
+      expect(typeof config.cert_fingerprint).toBe('string');
+    });
+
+    it('should accept an opt-in to the certificate presented on first connect', async () => {
+      const p = providerWith(false);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: [...SECURE_ARGS, '--accept-new-cert'] }));
+
+      expect(config.accept_new_cert).toBe(true);
+    });
+
+    it('should accept a plain-FTP server, which has no certificate to trust', async () => {
+      const p = providerWith(false);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: [...SECURE_ARGS, '--secure', 'false'] }));
+
+      expect(config.secure).toBe(false);
+    });
+
+    it('should leave an offline edit alone, which never reaches the server', async () => {
+      // `bfs provider edit --ci` marks its input offline and is guaranteed to
+      // finish with the medium absent; a config without a pin is legal there,
+      // and the trust decision falls to whoever connects later.
+      const p = providerWith(false);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: SECURE_ARGS, offline: true }));
+
+      expect(config.host).toBe('nas.example.com');
+    });
+
+    it('should leave an attended run alone, where the operator can be asked', async () => {
+      const p = providerWith(true);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: SECURE_ARGS }));
+
+      expect(config.host).toBe('nas.example.com');
+    });
+
+    // A JSON file is the documented way to keep credentials off the command
+    // line, and it carries the trust fields too. A refusal that inspected the
+    // raw flags instead of the config it just assembled would pass every case
+    // above and break this documented CI shape.
+
+    it('should accept a fingerprint pinned in a --config-file', async () => {
+      const file = await writeJsonConfig(JSON.stringify({ host: 'nas.example.com', user: 'backup', password: 'pw', path: '/backup', secure: true, cert_fingerprint: PINNED_FP }));
+      const p = providerWith(false);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }));
+
+      expect(config.cert_fingerprint).toBe(PINNED_FP);
+    });
+
+    it('should accept an opt-in declared in a --config-file', async () => {
+      const file = await writeJsonConfig(JSON.stringify({ host: 'nas.example.com', user: 'backup', password: 'pw', path: '/backup', secure: true, accept_new_cert: true }));
+      const p = providerWith(false);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }));
+
+      expect(config.accept_new_cert).toBe(true);
+    });
+
+    it('should accept plain FTP declared in a --config-file', async () => {
+      const file = await writeJsonConfig(JSON.stringify({ host: 'nas.example.com', user: 'backup', password: 'pw', path: '/backup', secure: false }));
+      const p = providerWith(false);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }));
+
+      expect(config.secure).toBe(false);
+    });
+
+    // A missing required field is the operator's typo and has its own message
+    // pointing at the --provider spec syntax. Deciding trust ahead of it would
+    // answer a question nobody asked and bury the real one.
+    it('should still report a missing host before weighing trust at all', async () => {
+      const p = providerWith(false);
+
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--path', '/backup'] }))).rejects.toThrow(/--provider "ftp:nas --host/);
+    });
+
+    // The whole point is that this costs no connection: a storage that cannot be
+    // reached must refuse just as fast, and nothing may be sent to find out.
+    it('should refuse without touching the transport', async () => {
+      const p = providerWith(false);
+
+      await expect(p.configureFromFlags(cliInput({ rawArgs: SECURE_ARGS }))).rejects.toThrow(ProviderError);
+
+      expect(mockState.sentCommands).toEqual([]);
+    });
+  });
+
+  // --- validateConfig -------------------------------------------------------
 
   describe('validateConfig', () => {
     it('should return [] for a valid config', () => {
@@ -1035,7 +1185,7 @@ describe('FtpProvider', () => {
     });
   });
 
-  // ─── describeConfig ───────────────────────────────────────────────────────
+  // --- describeConfig -------------------------------------------------------
 
   describe('describeConfig', () => {
     it('should include host, port, user, path, secure', () => {
@@ -1050,7 +1200,7 @@ describe('FtpProvider', () => {
       expect(desc).toContain('/backup');
     });
 
-    it('should mask the password field — no plaintext, asterisks present', () => {
+    it('should mask the password field - no plaintext, asterisks present', () => {
       const { io } = createMockProviderIO();
       const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
 
@@ -1061,7 +1211,7 @@ describe('FtpProvider', () => {
     });
   });
 
-  // ─── getSecretFields ──────────────────────────────────────────────────────
+  // --- getSecretFields ------------------------------------------------------
 
   describe('getSecretFields', () => {
     it('should return ["password"]', () => {
@@ -1071,10 +1221,10 @@ describe('FtpProvider', () => {
     });
   });
 
-  // ─── probeConnection ──────────────────────────────────────────────────────
+  // --- probeConnection ------------------------------------------------------
 
   describe('probeConnection', () => {
-    it('should upload, download, compare, and clean up — leaving no residue', async () => {
+    it('should upload, download, compare, and clean up - leaving no residue', async () => {
       await provider.probeConnection();
 
       const refs = await provider.list();
@@ -1087,7 +1237,7 @@ describe('FtpProvider', () => {
     });
   });
 
-  // ─── usesSidecar / verifyShard / sidecar methods ───────────────────────────
+  // --- usesSidecar / verifyShard / sidecar methods ---------------------------
 
   describe('header storage strategy + verifyShard', () => {
     const IDENTITY = { vault_id: '550e8400-e29b-41d4-a716-446655440000', shard_index: 0, version: 1 };
@@ -1113,7 +1263,7 @@ describe('FtpProvider', () => {
 
     // Regression: a transport failure with no recognized reply code (here a
     // transient 421, but equally a code-less ECONNREFUSED/TLS error) must be
-    // reported as unverifiable, not thrown — so one offline host never aborts a
+    // reported as unverifiable, not thrown - so one offline host never aborts a
     // whole multi-provider verification. Mirrors LocalFsProvider.
     it('should report unverifiable on a transport error without a recognized reply code', async () => {
       mockState.accessErrorCode = 421;
@@ -1140,7 +1290,7 @@ describe('FtpProvider', () => {
     });
   });
 
-  // ─── connectForRecovery — show the host BEFORE collecting the secret ────────
+  // --- connectForRecovery - show the host BEFORE collecting the secret --------
   //
   // The recovery credential-phishing defence is an optional provider hook:
   //   connectForRecovery(io, pool): Promise<Nullable<string>>
@@ -1216,8 +1366,8 @@ describe('FtpProvider', () => {
       expect(hostShown).toBe(true);
     });
 
-    // Decline path: confirm → false must throw before askSecret is reached, so
-    // the secret is never collected — a forged host cannot phish the password.
+    // Decline path: confirm -> false must throw before askSecret is reached, so
+    // the secret is never collected - a forged host cannot phish the password.
     it('should refuse and collect no secret when the operator declines the host', async () => {
       const order: string[] = [];
       let askSecretCalled = false;
@@ -1250,7 +1400,7 @@ describe('FtpProvider', () => {
       ftpProvider.setVaultName('testvault');
 
       // The host:port is shown in the confirm prompt, the call rejects with a
-      // ProviderError, and askSecret is never invoked — no secret leaves the box.
+      // ProviderError, and askSecret is never invoked - no secret leaves the box.
       await expect(ftpProvider.connectForRecovery(io, [])).rejects.toBeInstanceOf(ProviderError);
       expect(askSecretCalled).toBe(false);
       const declinedAt = order.findIndex((e) => e.startsWith('confirm:') && e.includes('203.0.113.7'));
@@ -1258,15 +1408,15 @@ describe('FtpProvider', () => {
     });
   });
 
-  // ─── FTPS cert pinning + TOFU + secure-by-default ──────────────────────────
+  // --- FTPS cert pinning + TOFU + secure-by-default --------------------------
   //
   // GREEN contract this suite pins (the field / flag names GREEN must adopt):
   //   - config field `cert_fingerprint`: uppercase colon-hex SHA-256 of the DER
-  //     certificate — 32 hex pairs joined by ':' (e.g. "AB:CD:…:EF"). Non-secret.
+  //     certificate - 32 hex pairs joined by ':' (e.g. "AB:CD:...:EF"). Non-secret.
   //   - config field `cert_self_signed`: optional boolean marker of the cert kind.
   //   - config field `accept_new_cert`: boolean, set true by the presence of the
   //     inline `--accept-new-cert` flag (TOFU: trust-on-first-use). This snake_case
-  //     name is the chosen contract — GREEN must read/write exactly this key.
+  //     name is the chosen contract - GREEN must read/write exactly this key.
   //   - `secure` defaults to TRUE (secure-by-default): a missing key => true, an
   //     explicit `false` => false. Applies to both the constructor and
   //     configureFromFlags.
@@ -1277,20 +1427,20 @@ describe('FtpProvider', () => {
   //     EN rendering (mock IO lang is 'en') includes the literal "self-signed".
   //
   // Assertions target config values and thrown error types, never translated
-  // strings — the i18n keys this feature needs do not exist yet (GREEN adds them).
+  // strings - the i18n keys this feature needs do not exist yet (GREEN adds them).
   //
   // GREEN contract (runtime, exercised by cli-e2e / a live TLS handshake, not
   // asserted in this unit suite): withClient must re-throw TamperDetectedError
-  // (extends BfsError, NOT ProviderError) instead of wrapping it — otherwise the
+  // (extends BfsError, NOT ProviderError) instead of wrapping it - otherwise the
   // mismatch/verify assertions fail even after GREEN, because the fingerprint
   // mismatch would surface as a generic ProviderError.
   describe('FTPS cert pinning + TOFU + secure-by-default', () => {
     // Valid uppercase colon-hex SHA-256: 32 hex pairs joined by ':'.
     const GOOD_FP = 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99';
-    // Not colon-hex at all — must be rejected as a malformed fingerprint.
+    // Not colon-hex at all - must be rejected as a malformed fingerprint.
     const BAD_FP = 'zzz';
 
-    // 1a — configureFromFlags stores a well-formed --cert-fingerprint.
+    // 1a - configureFromFlags stores a well-formed --cert-fingerprint.
     it('should accept a valid --cert-fingerprint and store it in config', async () => {
       const { io } = createMockProviderIO();
       const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
@@ -1300,7 +1450,7 @@ describe('FtpProvider', () => {
       expect(config.cert_fingerprint).toBe(GOOD_FP);
     });
 
-    // 1b — a malformed --cert-fingerprint is rejected at flag-parse time.
+    // 1b - a malformed --cert-fingerprint is rejected at flag-parse time.
     it('should reject a malformed --cert-fingerprint with ProviderError', async () => {
       const { io } = createMockProviderIO();
       const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
@@ -1308,7 +1458,7 @@ describe('FtpProvider', () => {
       await expect(p.configureFromFlags(cliInput({ rawArgs: ['--host', 'h', '--path', '/b', '--cert-fingerprint', BAD_FP] }))).rejects.toThrow(ProviderError);
     });
 
-    // 1c — a fingerprint copied with surrounding whitespace (e.g. from openssl
+    // 1c - a fingerprint copied with surrounding whitespace (e.g. from openssl
     // output) is stored trimmed, so it still matches the presented cert at connect.
     it('should trim surrounding whitespace from --cert-fingerprint', async () => {
       const { io } = createMockProviderIO();
@@ -1319,7 +1469,7 @@ describe('FtpProvider', () => {
       expect(config.cert_fingerprint).toBe(GOOD_FP);
     });
 
-    // 2 — the presence of --accept-new-cert (a boolean flag with no value) sets
+    // 2 - the presence of --accept-new-cert (a boolean flag with no value) sets
     // the `accept_new_cert` config field (TOFU opt-in).
     it('should set accept_new_cert=true when the --accept-new-cert flag is present', async () => {
       const { io } = createMockProviderIO();
@@ -1330,7 +1480,7 @@ describe('FtpProvider', () => {
       expect(config.accept_new_cert).toBe(true);
     });
 
-    // 3a — secure-by-default: no --secure flag means secure:true.
+    // 3a - secure-by-default: no --secure flag means secure:true.
     it('should default secure to true when --secure is omitted (secure-by-default)', async () => {
       const { io } = createMockProviderIO();
       const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
@@ -1340,7 +1490,7 @@ describe('FtpProvider', () => {
       expect(config.secure).toBe(true);
     });
 
-    // 3b — an explicit --secure false still disables TLS (opt-out preserved).
+    // 3b - an explicit --secure false still disables TLS (opt-out preserved).
     it('should keep secure=false when --secure false is given explicitly', async () => {
       const { io } = createMockProviderIO();
       const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
@@ -1350,12 +1500,12 @@ describe('FtpProvider', () => {
       expect(config.secure).toBe(false);
     });
 
-    // 4 — the constructor also defaults secure to true. Observable property: a
+    // 4 - the constructor also defaults secure to true. Observable property: a
     // secure connection emits NO plaintext-FTP warning. A config with no `secure`
-    // key must therefore stay quiet (today it defaults to false and warns → RED).
+    // key must therefore stay quiet (today it defaults to false and warns -> RED).
     it('should treat a config without the secure key as secure=true (no plaintext warning)', async () => {
       const { io, logs } = createMockProviderIO();
-      // No `secure` key → constructor defaults it to true (secure-by-default).
+      // No `secure` key -> constructor defaults it to true (secure-by-default).
       // accept_new_cert lets the unpinned secure connection trust the presented
       // cert without a prompt, so the upload completes over the secure path and
       // the plaintext-warning branch is never reached.
@@ -1368,7 +1518,7 @@ describe('FtpProvider', () => {
       expect(insecureWarnings).toHaveLength(0);
     });
 
-    // 5a — validateConfig rejects a malformed cert_fingerprint.
+    // 5a - validateConfig rejects a malformed cert_fingerprint.
     it('validateConfig should reject a malformed cert_fingerprint', () => {
       const { io } = createMockProviderIO();
       const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
@@ -1378,7 +1528,7 @@ describe('FtpProvider', () => {
       expect(errors.length).toBeGreaterThan(0);
     });
 
-    // 5b — validateConfig rejects a cert_fingerprint pinned with secure:false —
+    // 5b - validateConfig rejects a cert_fingerprint pinned with secure:false -
     // a certificate pin is meaningless without TLS.
     it('validateConfig should reject cert_fingerprint set together with secure:false', () => {
       const { io } = createMockProviderIO();
@@ -1389,7 +1539,7 @@ describe('FtpProvider', () => {
       expect(errors.length).toBeGreaterThan(0);
     });
 
-    // 6 — describeConfig surfaces the fingerprint and the self-signed marker.
+    // 6 - describeConfig surfaces the fingerprint and the self-signed marker.
     it('describeConfig should surface the cert fingerprint and the self-signed marker', () => {
       const { io } = createMockProviderIO();
       const p = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
@@ -1402,9 +1552,9 @@ describe('FtpProvider', () => {
       expect(desc).toMatch(/self-signed/i);
     });
 
-    // 7 — POSITIVE validateConfig: a well-formed cert_fingerprint with secure:true
+    // 7 - POSITIVE validateConfig: a well-formed cert_fingerprint with secure:true
     // is accepted (no errors). Guards against an over-strict GREEN validator that
-    // rejects EVERY fingerprint — the negative validateConfig tests above would not
+    // rejects EVERY fingerprint - the negative validateConfig tests above would not
     // catch that failure mode. (Note: today's validator ignores cert_fingerprint,
     // so this already passes; it is a forward guard, not a RED.)
     it('validateConfig should accept a well-formed cert_fingerprint with secure:true', () => {
@@ -1416,7 +1566,7 @@ describe('FtpProvider', () => {
       expect(errors).toEqual([]);
     });
 
-    // 8 — configureFromFlags reads cert_fingerprint AND accept_new_cert from a
+    // 8 - configureFromFlags reads cert_fingerprint AND accept_new_cert from a
     // --config-file JSON (same temp-JSON pattern as the other config-file tests).
     it('should read cert_fingerprint and accept_new_cert from a --config-file JSON', async () => {
       const file = await writeJsonConfig(JSON.stringify({ host: 'ftp.example.com', port: 21, user: 'alice', password: 'secret', path: '/backup', secure: true, cert_fingerprint: GOOD_FP, accept_new_cert: true }));
@@ -1429,7 +1579,7 @@ describe('FtpProvider', () => {
       expect(config.accept_new_cert).toBe(true);
     });
 
-    // 9 — --accept-new-cert is presence-only: it must NOT swallow the following
+    // 9 - --accept-new-cert is presence-only: it must NOT swallow the following
     // token as its value. GREEN must detect presence (not via findStringFlag, which
     // would consume '--host' and leave accept_new_cert a string, failing the strict
     // `.toBe(true)`). --path is supplied so configureFromFlags returns instead of
@@ -1449,10 +1599,10 @@ describe('FtpProvider', () => {
 
 // Header sidecar (BFSH): FTP uploads a relocated shard's updated header as a
 // small remote `hdr_i.bfs.V` file instead of downloading + re-uploading the
-// whole shard (FTP has no partial write) — a `bfs repair` location change costs
+// whole shard (FTP has no partial write) - a `bfs repair` location change costs
 // KB over the wire, not the full multi-* payload. The `hdr_` prefix keeps it out
 // of every `list('shard_')` scan structurally.
-describe('FtpProvider — header sidecar (BFSH)', () => {
+describe('FtpProvider - header sidecar (BFSH)', () => {
   let provider: FtpProvider;
   const shardRef = { provider_id: 'test-ftp', path: 'shard_0.bfs.1' };
   const SIDECAR_KEY = '/backup/testvault/hdr_0.bfs.1';

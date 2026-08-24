@@ -24,7 +24,7 @@ describe('versions', () => {
     vi.clearAllMocks();
   });
 
-  // ─── No versions ──────────────────────────────────────────────────────────
+  // --- No versions ----------------------------------------------------------
 
   it('should show "no versions" message when list is empty', async () => {
     mockListVersions.mockResolvedValue([]);
@@ -36,7 +36,7 @@ describe('versions', () => {
     expect(output).toContain('push');
   });
 
-  // ─── Versions table ────────────────────────────────────────────────────────
+  // --- Versions table --------------------------------------------------------
 
   it('should display version numbers in output', async () => {
     mockListVersions.mockResolvedValue([makeManifest(1), makeManifest(5)] as never);
@@ -77,12 +77,14 @@ describe('versions', () => {
     expect(output).toContain('?');
   });
 
-  it('should display "—" for pushed_at when null (manifest from recovery)', async () => {
+  it('should display "-" for pushed_at when null (manifest from recovery)', async () => {
     mockListVersions.mockResolvedValue([makeManifest(1, { pushed_at: null })] as never);
 
     await runCmd(['versions']);
 
-    expect(capture.logs.some((l) => l.includes('—'))).toBe(true);
+    // Match a table cell holding exactly "-", not the "+---+" separator rows:
+    // a bare includes('-') passes on every table and would protect nothing.
+    expect(capture.logs.some((l) => /\|\s+-\s+\|/.test(l))).toBe(true);
   });
 
   it('should include all column headers in table', async () => {
@@ -98,7 +100,7 @@ describe('versions', () => {
     expect(output).toContain('Size');
   });
 
-  // ─── Errors ───────────────────────────────────────────────────────────────
+  // --- Errors ---------------------------------------------------------------
 
   it('should abort when listVersions throws', async () => {
     mockListVersions.mockRejectedValue(new Error('No vault config found'));

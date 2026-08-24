@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# run_bfs_pty — like run_bfs, but drives `bfs` through a pseudo-terminal so
+# run_bfs_pty - like run_bfs, but drives `bfs` through a pseudo-terminal so
 # real inquirer prompts (e.g. interactive `bfs recovery` on a stripped vault)
 # can be answered. Backed by lib/pty-run.mjs + @lydell/node-pty (devDependency).
 #
@@ -31,7 +31,7 @@ run_bfs_pty() {
   BFS_OUT="$BFS_STDOUT"
 
   if [ "${VERBOSE:-0}" = "1" ]; then
-    printf '    \033[2m→ exit %s\033[0m\n' "$BFS_EXIT"
+    printf '    \033[2m-> exit %s\033[0m\n' "$BFS_EXIT"
     [ -n "$BFS_OUT" ] && printf '%s\n' "$BFS_OUT" | sed 's/^/      | /'
   fi
 

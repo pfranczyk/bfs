@@ -16,7 +16,7 @@ on:
 # .bfs directory ships in the artifact.
 
 jobs:
-  # ── Linux creates → Windows restores ────────────────────────────────────────
+  # -- Linux creates -> Windows restores ----------------------------------------
   create-linux:
     runs-on: ubuntu-latest
     steps:
@@ -52,7 +52,7 @@ jobs:
         shell: bash
         run: bash scripts/cross-os/restore.sh "$PWD/xos-artifact" "$PWD/xos-ws"
 
-  # ── Windows creates → Linux restores ────────────────────────────────────────
+  # -- Windows creates -> Linux restores ----------------------------------------
   create-windows:
     runs-on: windows-latest
     steps:

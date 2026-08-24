@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Extreme scheme sanity check: 3/3 (6 providers, local-only for speed). Confirms
 # a high parity count pushes, verifies, loses a shard, and restores. Light by
-# design — deep loss-tolerance is covered by the 01/02/25 scenarios.
+# design - deep loss-tolerance is covered by the 01/02/25 scenarios.
 
 SCENARIO_NAME="extreme 3/3 (6 providers)"
 SCENARIO_DESC="high-parity roundtrip + single-shard repair"

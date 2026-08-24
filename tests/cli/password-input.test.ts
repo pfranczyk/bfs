@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { readPasswordFiles } from '../../src/cli/commands/repair.js';
+import { readPasswordFiles } from '../../src/cli/password-input.js';
 
 describe('readPasswordFiles', () => {
   let dir: string;
@@ -51,5 +51,23 @@ describe('readPasswordFiles', () => {
     const [password] = await readPasswordFiles([file]);
 
     expect(password).toBe('two words  spaced');
+  });
+
+  it('should refuse a file that holds no password', async () => {
+    const file = join(dir, 'pw-empty.txt');
+    await writeFile(file, '\n', 'utf-8');
+
+    // An empty read would become an empty password, which is falsy - and would
+    // then degrade into the interactive prompt, i.e. a hang on the closed stdin
+    // of a scheduled run. The point of the file is to supply a password.
+    await expect(readPasswordFiles([file])).rejects.toThrow(file);
+  });
+
+  it('should name the file it could not read', async () => {
+    const missing = join(dir, 'pw-absent.txt');
+
+    // Continuing without a password would resurface much later as a failed
+    // decryption on a storage device, pointing at the data instead of the typo.
+    await expect(readPasswordFiles([missing])).rejects.toThrow(missing);
   });
 });

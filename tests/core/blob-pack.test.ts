@@ -14,18 +14,18 @@ import { BLOB_ENTRY_KIND, BLOB_FLAGS } from '../../src/types/index.js';
 
 // Shared, hoisted TOCTOU target: when armed, the mocked fs.open below performs a
 // real on-disk rewrite of a source file the moment the output handle is opened
-// for writing — reproducing an external process mutating a file between
+// for writing - reproducing an external process mutating a file between
 // packBlobToFile's hash pass and its write pass. Null = pure call-through.
 const toctou = vi.hoisted(() => ({ target: null as Nullable<{ outputPath: string; sourceFile: string; replacement: Buffer }> }));
 
 // Shared, hoisted mid-stream read failure: when armed, the mocked fs.open wraps
-// the source file's read stream so it emits one chunk and then errors —
+// the source file's read stream so it emits one chunk and then errors -
 // simulating an I/O fault (bad sector, unplugged medium) partway through reading
 // a file during the write pass, after some of its bytes were already written.
 const streamFail = vi.hoisted(() => ({ target: null as Nullable<{ path: string }> }));
 
 // Mock at the module boundary so blob-pack (writer) and blob-unpack (reader)
-// share one mocked module — an ESM namespace export cannot be spied in place.
+// share one mocked module - an ESM namespace export cannot be spied in place.
 // Default behaviour is a faithful call-through; only an armed target triggers
 // the rewrite / fault, so every other test in this file sees the real fs.
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -34,7 +34,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     const handle = await actual.open(p, flags, mode);
     const t = toctou.target;
     if (t && p === t.outputPath && String(flags) === 'w') {
-      await actual.writeFile(t.sourceFile, t.replacement); // real fs.writeFile — bypasses the mocked open, no recursion
+      await actual.writeFile(t.sourceFile, t.replacement); // real fs.writeFile - bypasses the mocked open, no recursion
     }
     const sf = streamFail.target;
     if (sf && p === sf.path && String(flags) === 'r') {
@@ -311,7 +311,7 @@ describe('packBlobToFile', () => {
     expect(fileCount).toBe(2);
     expect(blobSize).toBe(diskBlob.length);
 
-    // The two blobs differ in timestamp (header offset 0x1A) — compare everything except bytes 26-33
+    // The two blobs differ in timestamp (header offset 0x1A) - compare everything except bytes 26-33
     // Instead, verify both unpack to the same files
     const outDir1 = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-cmp1-'));
     const outDir2 = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-cmp2-'));
@@ -336,23 +336,23 @@ describe('packBlobToFile', () => {
     const outputPath = path.join(tmpDir, 'out2.blob');
 
     const { fileCount, skipped } = await packBlobToFile(srcDir, outputPath, ignoreFilter);
-    // No unreadable files in this test — skipped should be empty
+    // No unreadable files in this test - skipped should be empty
     expect(skipped).toHaveLength(0);
     expect(fileCount).toBe(1);
   });
 });
 
-// ─── packBlobToFile TOCTOU (file mutated between hash pass and write pass) ─────
+// --- packBlobToFile TOCTOU (file mutated between hash pass and write pass) -----
 
 // packBlobToFile hashes and stats every file in pass 1, builds the file table
 // from those hashes + sizes, then re-reads and streams each file to disk in
 // pass 2 without re-stat or re-hash. If a file changes on disk between the two
-// passes — exactly like an external process writing during a push — the file
+// passes - exactly like an external process writing during a push - the file
 // table records the OLD hash/size while the data section holds the NEW bytes,
 // producing a silently corrupt blob that fails to restore. The spy calls the
 // real fs.open and, the moment the OUTPUT handle is opened for writing (which
 // happens after pass 1 completes and before any pass-2 read), performs a real
-// on-disk rewrite of the source file — reproducing the race deterministically.
+// on-disk rewrite of the source file - reproducing the race deterministically.
 describe('packBlobToFile TOCTOU (file changes between hash and write pass)', () => {
   let srcDir: string;
   let tmpDir: string;
@@ -391,7 +391,7 @@ describe('packBlobToFile TOCTOU (file changes between hash and write pass)', () 
 
     // Integrity invariant: a backup packBlobToFile wrote must restore without a
     // corruption error, and every unmutated file must come back byte-for-byte.
-    // RED today — the file table carries hash(A) while the data section holds B,
+    // RED today - the file table carries hash(A) while the data section holds B,
     // so unpackBlobFromFile rejects with "File hash mismatch for: data.bin"
     // before any file is restored.
     await unpackBlobFromFile(outputPath, destDir);
@@ -401,7 +401,7 @@ describe('packBlobToFile TOCTOU (file changes between hash and write pass)', () 
   it('should restore a backup whose file shrank mid-pack (offset/length skew)', async () => {
     const A = Buffer.alloc(2048, 0xaa);
     const B = Buffer.alloc(512, 0xbb); // shorter: data section ends before the file table claims
-    const keep = Buffer.alloc(512, 0xcc); // control file after data.bin — its offset skews when data.bin shrinks
+    const keep = Buffer.alloc(512, 0xcc); // control file after data.bin - its offset skews when data.bin shrinks
     const sourceFile = path.join(srcDir, 'data.bin');
     await fs.writeFile(sourceFile, A);
     await fs.writeFile(path.join(srcDir, 'keep.bin'), keep);
@@ -420,7 +420,7 @@ describe('packBlobToFile TOCTOU (file changes between hash and write pass)', () 
     // Integrity invariant: shrinking data.bin between passes skews the data_offset
     // of every later entry. keep.bin sorts after data.bin, so its recorded window
     // runs past the real bytes. A correct pack must still restore keep.bin
-    // byte-for-byte. RED today — unpackBlobFromFile rejects with
+    // byte-for-byte. RED today - unpackBlobFromFile rejects with
     // "Data section out of bounds for file: data.bin".
     await unpackBlobFromFile(outputPath, destDir);
     expect(await fs.readFile(path.join(destDir, 'keep.bin'))).toEqual(keep);
@@ -428,7 +428,7 @@ describe('packBlobToFile TOCTOU (file changes between hash and write pass)', () 
 
   it('should restore remaining files when one file errors mid-stream during the write pass', async () => {
     const aData = Buffer.alloc(2000, 0xaa); // a.bin faults partway through the write pass
-    const bData = Buffer.alloc(1000, 0xbb); // control file (sorts after a.bin) — must survive
+    const bData = Buffer.alloc(1000, 0xbb); // control file (sorts after a.bin) - must survive
     const aPath = path.join(srcDir, 'a.bin');
     await fs.writeFile(aPath, aData);
     await fs.writeFile(path.join(srcDir, 'b.bin'), bData);
@@ -447,7 +447,7 @@ describe('packBlobToFile TOCTOU (file changes between hash and write pass)', () 
 
     // a.bin's partial bytes must not corrupt the blob: b.bin has to restore
     // byte-for-byte and the trailing checksum must stay valid. RED before the fix
-    // — orphaned partial bytes of a.bin shift b.bin's offset and misplace the
+    // - orphaned partial bytes of a.bin shift b.bin's offset and misplace the
     // checksum, so unpackBlobFromFile rejects the whole restore.
     await unpackBlobFromFile(outputPath, destDir);
     expect(await fs.readFile(path.join(destDir, 'b.bin'))).toEqual(bData);
@@ -455,7 +455,7 @@ describe('packBlobToFile TOCTOU (file changes between hash and write pass)', () 
   });
 });
 
-// ─── packBlob (compressed) ────────────────────────────────────────────────────
+// --- packBlob (compressed) ----------------------------------------------------
 
 describe('packBlob (compressed=true)', () => {
   let tmpDir: string;
@@ -530,7 +530,7 @@ describe('packBlob (compressed=true)', () => {
   });
 });
 
-// ─── packBlobToFileZipped ─────────────────────────────────────────────────────
+// --- packBlobToFileZipped -----------------------------------------------------
 
 describe('packBlobToFileZipped', () => {
   let tmpDir: string;
@@ -616,7 +616,7 @@ describe('packBlobToFileZipped', () => {
   });
 });
 
-// ─── Security: path-traversal guard + bound allocation ───────────────────────
+// --- Security: path-traversal guard + bound allocation -----------------------
 
 /** Recomputes the blob's trailing SHA-256 so a tampered body still verifies. */
 function recomputeTrailingChecksum(blob: Buffer): void {
@@ -707,7 +707,7 @@ describe('blob-unpack path-traversal guard', () => {
 });
 
 describe('blob-unpack bound allocation', () => {
-  const HUGE = 2 ** 40; // 1 TiB — would OOM / crash if allocated from a tampered header
+  const HUGE = 2 ** 40; // 1 TiB - would OOM / crash if allocated from a tampered header
 
   let srcDir: string;
   let outDir: string;
@@ -778,14 +778,14 @@ describe('blob-unpack bound allocation', () => {
   });
 });
 
-// ─── File metadata restore (mode + mtime) ─────────────────────────────────────
+// --- File metadata restore (mode + mtime) -------------------------------------
 
-// A pack → unpack round-trip must return each file's POSIX permission bits
+// A pack -> unpack round-trip must return each file's POSIX permission bits
 // (mode) and modification time (mtime), not just its bytes. These tests guard
 // against a restore path writing files with the umask-default mode and the
 // current time instead of the originals:
 //   - mtime is checked on every OS (a dropped mtime surfaces as "restored now").
-//   - mode is checked on POSIX only — Windows has no POSIX mode and chmod is a
+//   - mode is checked on POSIX only - Windows has no POSIX mode and chmod is a
 //     no-op there, so the mode assertion is guarded out.
 // Do not delete without a replacement: metadata fidelity is a restore promise,
 // and the compressed path (the default) is the one that currently drops both.
@@ -793,7 +793,7 @@ describe('file metadata restore (mode + mtime)', () => {
   const KNOWN_MTIME = new Date('2021-06-15T12:00:00.000Z');
   // Distinct POSIX modes spanning owner/group/other, exec and read-only bits.
   // Every value differs from the umask default (0o644) so a dropped mode is
-  // always observable — a restore that ignores mode lands on 0o644, which would
+  // always observable - a restore that ignores mode lands on 0o644, which would
   // falsely match if any case used it. 0o660 (group-write) additionally guards
   // against a umask-masking restore (writeFile({mode}) instead of chmod), which
   // would silently downgrade it to 0o640.
@@ -894,12 +894,12 @@ describe('file metadata restore (mode + mtime)', () => {
   });
 });
 
-// ─── File-table entry format (v2 kind/created_at + v1 backward-compat) ────────
+// --- File-table entry format (v2 kind/created_at + v1 backward-compat) --------
 
 // Direct coverage of the binary file-table entry: that pack emits parseable v2
 // entries (kind=NEW_FILE + created_at) for both the raw and compressed paths,
 // that a reserved kind is rejected (the increment door, closed until implemented),
-// and that a legacy v1 blob (no kind/created_at) still restores. Do not delete —
+// and that a legacy v1 blob (no kind/created_at) still restores. Do not delete -
 // this is the format's regression net independent of the round-trip tests above.
 describe('file-table entry format', () => {
   // Builds a legacy v1 raw blob by hand (v1 entry: no kind, no created_at) so the
@@ -986,7 +986,7 @@ describe('file-table entry format', () => {
     try {
       await writeFile(srcDir, 'x.txt', 'data');
       const { blob } = await packBlob(srcDir, createIgnoreFilter(srcDir), undefined, false);
-      // Single entry starts at HEADER_SIZE (70): pathLen(2) + 'x.txt'(5) → kind byte at 77.
+      // Single entry starts at HEADER_SIZE (70): pathLen(2) + 'x.txt'(5) -> kind byte at 77.
       const kindPos = 70 + 2 + Buffer.byteLength('x.txt');
       blob.writeUInt8(BLOB_ENTRY_KIND.DELETED, kindPos);
       expect(() => parseBlobFileTable(blob)).toThrow(BfsError);
@@ -995,7 +995,7 @@ describe('file-table entry format', () => {
     }
   });
 
-  it('should restore a legacy v1 blob (no kind/created_at) — content and mtime intact', async () => {
+  it('should restore a legacy v1 blob (no kind/created_at) - content and mtime intact', async () => {
     const mtimeMs = Date.parse('2020-03-03T03:03:03.000Z');
     const blob = buildV1RawBlob('legacy.txt', Buffer.from('old format payload'), 0o644, mtimeMs);
     const outDir = await makeTempDir();

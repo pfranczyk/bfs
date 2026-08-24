@@ -23,10 +23,12 @@ import { registerPrune } from '../../src/cli/commands/prune.js';
 import { registerPull } from '../../src/cli/commands/pull.js';
 import { registerPush } from '../../src/cli/commands/push.js';
 import { registerRecovery } from '../../src/cli/commands/recovery.js';
+import { registerRepair } from '../../src/cli/commands/repair.js';
 import { registerScheme } from '../../src/cli/commands/scheme.js';
 import { registerStatus } from '../../src/cli/commands/status.js';
 import { registerVerify } from '../../src/cli/commands/verify.js';
 import { registerVersions } from '../../src/cli/commands/versions.js';
+import { registerCiModeHook } from '../../src/cli/interactive-mode.js';
 import { CommandAbort } from '../../src/cli/ui.js';
 import { PushMode } from '../../src/types/index.js';
 
@@ -45,7 +47,12 @@ export function buildTestProgram(): Command {
     // Mirrors the global flags registered in src/index.ts:buildProgram so
     // that command tests can exercise `--cwd` / `--lang` paths.
     .option('--cwd <dir>', 'override working directory')
-    .option('--lang <code>', 'language code');
+    .option('--lang <code>', 'language code')
+    .option('--ci', 'never prompt');
+  // Mirrors src/index.ts:buildProgram - the prompt helper reads the declaration
+  // from module state this hook fills, so without it every command test would
+  // run as if `--ci` had never been typed.
+  registerCiModeHook(program);
 
   registerInit(program);
   registerClear(program);
@@ -57,6 +64,7 @@ export function buildTestProgram(): Command {
   registerPrune(program);
   registerVerify(program);
   registerRecovery(program);
+  registerRepair(program);
   registerScheme(program);
 
   const providerCmd = program.command('provider').description('Zarządzaj providerami');
@@ -72,7 +80,7 @@ export function buildTestProgram(): Command {
 /**
  * Runs a CLI command and returns the exit code it would leave the process with.
  * A command that completes without aborting yields 0; otherwise the code carried
- * by its CommandAbort. Use when the code itself is the contract — the outcome
+ * by its CommandAbort. Use when the code itself is the contract - the outcome
  * strings from {@link runCmd} cannot tell 1 from 4 or 5.
  *
  * @param tokens - argv tokens after `bfs`
@@ -91,7 +99,7 @@ export async function runCmdExitCode(tokens: string[]): Promise<number> {
 
 /**
  * Runs a CLI command string and returns whether it threw CommandAbort.
- * Logs and errors are captured via spies — assert on them in tests.
+ * Logs and errors are captured via spies - assert on them in tests.
  *
  * @returns 'abort' | 'ok' | 'commander' | 'cancelled'
  */

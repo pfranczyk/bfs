@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # REAL disk failure at the SAME location. The sshd holding shard_2 is killed and
 # its data volume WIPED (data gone, fresh host keys), then restarted on the SAME
-# port. Host and port are unchanged, but the shard is gone — so `bfs repair
+# port. Host and port are unchanged, but the shard is gone - so `bfs repair
 # --rebuild` must Reed-Solomon-reconstruct shard_2 from the survivors and
 # re-upload it to the original location. Distinct from an address change: here
 # the data is genuinely lost, not merely moved.
@@ -39,7 +39,7 @@ scenario_run() {
   local sshshard="${PV_SSH_REMOTE[2]}/${name}/shard_2.bfs.1"
   [ -n "$(ssh_sha "$se" "$sshshard")" ] || _fail "shard_2 missing on the server after push"
 
-  # ── Disk failure: same host:port, data GONE (volume wiped → fresh host keys) ──
+  # -- Disk failure: same host:port, data GONE (volume wiped -> fresh host keys) --
   docker_sshd_down "$ctr"
   docker_volume_reset "$vol"
   docker_sshd_up "$ctr" "$port" "$vol" || _fail "could not restart sshd after disk wipe"

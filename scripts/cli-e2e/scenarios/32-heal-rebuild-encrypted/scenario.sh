@@ -7,15 +7,15 @@
 # UNENCRYPTED, single-stripe backup, where the heal path's V1/flat/plaintext
 # output happens to coincide with what pull expects. This scenario uses the
 # encrypted default, where the rebuilt shard is produced unencrypted with a V1
-# header over an RS-of-ciphertext payload — incompatible with the V2 decrypt +
+# header over an RS-of-ciphertext payload - incompatible with the V2 decrypt +
 # striped decode path.
 #
 # To expose it, the rebuilt shard is made load-bearing: after rebuild we drop
 # one healthy original shard, so reaching N data shards REQUIRES the rebuilt
 # one. With a correct heal the pull restores byte-for-byte; with the current
 # heal the rebuilt shard is undecryptable, pull falls short of N, and the
-# restore fails. verify reports the version Healthy regardless — it inspects
-# only the header window — which is the masking part of the finding.
+# restore fails. verify reports the version Healthy regardless - it inspects
+# only the header window - which is the masking part of the finding.
 
 SCENARIO_NAME="heal: rebuild on encrypted backup is decodable"
 SCENARIO_DESC="rebuilt shard must reconstruct an encrypted V2 backup at pull"

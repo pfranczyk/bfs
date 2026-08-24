@@ -1,5 +1,5 @@
 /**
- * Default content for .bfsignore — system and OS-generated files to exclude from backups.
+ * Default content for .bfsignore - system and OS-generated files to exclude from backups.
  * Inlined to avoid runtime path issues with bundlers (tsup, etc.).
  */
 export const DEFAULT_BFSIGNORE_CONTENT = `# macOS

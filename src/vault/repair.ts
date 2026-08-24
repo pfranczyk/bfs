@@ -22,8 +22,6 @@ export interface RepairOptions {
   readonly io: ProviderIO;
   /** Vault passwords for encrypted backups, tried in MRU order. */
   readonly passwords: string[];
-  /** Non-interactive: never prompt; an unresolved password fails fast. */
-  readonly isCi: boolean;
   /** Reed-Solomon-reconstruct a lost shard instead of only rewriting headers. */
   readonly rebuild: boolean;
   /** Continue a migration when a destination shard is unverifiable (not when it is missing or mismatched). */
@@ -32,7 +30,7 @@ export interface RepairOptions {
   readonly restoreHeaders?: boolean;
 }
 
-/** Outcome of {@link repairVault} — surviving pairs committed, failed pairs/shards left for retry. */
+/** Outcome of {@link repairVault} - surviving pairs committed, failed pairs/shards left for retry. */
 export interface RepairResult {
   readonly succeeded: RepairLockSucceededPair[];
   readonly failed_pairs: RepairLockFailedPair[];
@@ -52,12 +50,15 @@ export interface RepairResult {
  *
  * @param rootDir  vault root directory
  * @param options  see {@link RepairOptions}
- * @returns committed and failed pairs; a non-empty `failed_pairs` means exit ≠ 0
- * @throws BfsError on missing config, empty scope, or an unsupported migration
- * @throws TamperDetectedError on a foreign shard; DecryptionError on password failure
+ * @returns committed and failed pairs; a non-empty `failed_pairs` means exit != 0
+ * @throws BfsError on missing config or an empty version scope
+ * @throws TamperDetectedError on a foreign shard; ShardCorruptedError when a
+ *         probed header names another version; DecryptionError on password failure
+ * @throws LockConcurrentActiveError when a live push or repair holds the vault
+ * @throws LockReservationUnreadableError when repair.lock stays reserved without a readable owner
  */
 export async function repairVault(rootDir: string, options: RepairOptions): Promise<RepairResult> {
-  const { pairs, versions, io, passwords, isCi, rebuild, forceUnverified, restoreHeaders } = options;
+  const { pairs, versions, io, passwords, rebuild, forceUnverified, restoreHeaders } = options;
   const config = await readConfig(rootDir);
   if (!config) throw new BfsError(t('no_config'));
 
@@ -65,11 +66,11 @@ export async function repairVault(rootDir: string, options: RepairOptions): Prom
 
   const scoped = (await listManifests(rootDir)).filter((m) => versions.includes(m.version));
 
-  // ── Phase 2a — plaintext integrity pre-check + vault-password resolution ──
+  // -- Phase 2a - plaintext integrity pre-check + vault-password resolution --
   const passwordPool = [...passwords];
-  const vaultPassword = await precheckAndResolvePassword(config, scoped, passwordPool, io, isCi);
+  const vaultPassword = await precheckAndResolvePassword(config, scoped, passwordPool, io);
 
-  // ── Lock ── (secrets in each "<params>" are redacted for the forensic file) ──
+  // -- Lock -- (secrets in each "<params>" are redacted for the forensic file) --
   // acquireRepairLock is the atomic acquisition point: it writes repair.lock
   // via an exclusive create, so two overlapping repairs cannot both proceed.
   const redacted = new Map(pairs.map((p) => [p.oldName, redactPairParams(p, config, io)]));
@@ -212,7 +213,7 @@ async function applyRebuildConfigChange(rootDir: string, config: VaultConfig, pa
 
 /**
  * Migration commit: move a provider's shard to a new provider id/type. Without
- * `--rebuild` the payload is expected already at the destination — Phase A
+ * `--rebuild` the payload is expected already at the destination - Phase A
  * verifyShard confirms it, then the config, every manifest and the scoped
  * headers are swapped to the new provider. With `--rebuild` the lost shard is
  * Reed-Solomon-reconstructed onto the new provider via {@link rebuildVersion}.
@@ -243,7 +244,7 @@ async function commitMigrationPairs(ctx: CommitContext, rebuild: boolean): Promi
 }
 
 /**
- * Phase A — verifies the migrated shard is present and identical at the new
+ * Phase A - verifies the migrated shard is present and identical at the new
  * provider for every in-scope version. Clean-exclusion verdict: a missing /
  * mismatched / corrupted / auth failure fails the pair; an unverifiable result
  * passes only under `forceUnverified`.
@@ -260,7 +261,7 @@ async function verifyPairAtDestination(ctx: CommitContext, pair: RepairPair, new
   for (const manifest of ctx.scoped) {
     // The part is looked up under either name this pair can carry. Restoring a
     // name the backup records but the configuration lost means no manifest ever
-    // mentions `oldName` — matching on it alone would leave the identity gate
+    // mentions `oldName` - matching on it alone would leave the identity gate
     // with nothing to check and wave a foreign part of the same filename through.
     const ms = manifest.shards.find((s) => s.provider_id === pair.oldName) ?? manifest.shards.find((s) => s.provider_id === newConfig.id);
     if (!ms) continue; // this version does not use the migrated provider
@@ -315,7 +316,7 @@ async function migrateWithRebuild(ctx: CommitContext, pair: RepairPair, newConfi
 
 /**
  * Renames a provider (id + type) in every manifest that references it. The
- * config/manifest identity change is global — independent of `--version`.
+ * config/manifest identity change is global - independent of `--version`.
  */
 async function renameProviderInManifests(rootDir: string, oldName: string, newConfig: ProviderConfig, vaultName: string): Promise<void> {
   const manifests = await listManifests(rootDir);
@@ -337,11 +338,11 @@ async function renameProviderInManifests(rootDir: string, oldName: string, newCo
  * @returns the working password, or null when no version in scope is encrypted
  * @throws TamperDetectedError on a foreign shard; DecryptionError when no password works
  */
-async function precheckAndResolvePassword(config: VaultConfig, scoped: VersionManifest[], passwordPool: string[], io: ProviderIO, isCi: boolean): Promise<Nullable<string>> {
+async function precheckAndResolvePassword(config: VaultConfig, scoped: VersionManifest[], passwordPool: string[], io: ProviderIO): Promise<Nullable<string>> {
   let resolved: Nullable<string> = null;
   for (const manifest of scoped) {
     const probe = await probeShardHeader(config, manifest, io);
-    if (!probe) continue; // no reachable shard for this version — nothing to check
+    if (!probe) continue; // no reachable shard for this version - nothing to check
 
     if (probe.header.vault_id !== config.vault_id) {
       throw new TamperDetectedError(fmt('repair_foreign_shard_detected', String(manifest.version)));
@@ -353,7 +354,13 @@ async function precheckAndResolvePassword(config: VaultConfig, scoped: VersionMa
         ask: fmt('repair_ask_vault_password', String(manifest.version)),
         retry: fmt('repair_wrong_vault_password_retry', String(manifest.version)),
       });
-      if (!result) throw new DecryptionError(fmt(isCi ? 'repair_password_required_ci' : 'repair_password_exhausted', String(manifest.version)));
+      // "Attempts exhausted" is only true where attempts were possible. A run
+      // with no terminal never gets to try, whether it declared `--ci` or simply
+      // has nobody watching, so it hears which flag supplies more passwords.
+      // Both reach here as the same signal: `--ci` is what makes the caller build
+      // a ProviderIO that reports itself non-interactive on a terminal too.
+      const noOperator = io.interactive === false;
+      if (!result) throw new DecryptionError(fmt(noOperator ? 'repair_password_required_ci' : 'repair_password_exhausted', String(manifest.version)));
       resolved = result.password;
     }
   }
@@ -384,7 +391,7 @@ async function probeShardHeader(config: VaultConfig, manifest: VersionManifest, 
       return { header: parsed.header, headerBytes: bytes };
     } catch (err) {
       if (err instanceof TamperDetectedError || err instanceof ShardCorruptedError) throw err;
-      // provider unreachable or header unreadable — try the next sibling
+      // provider unreachable or header unreadable - try the next sibling
     }
   }
   return null;
@@ -425,8 +432,8 @@ export function redactPairParams(pair: RepairPair, config: VaultConfig, io: Prov
 
 /**
  * Secret field names to mask in a pair's params. Unions the current provider's
- * secret fields with the migration target type's — a migration's params carry
- * the NEW type's flags (e.g. `local`→`ftp` with `--password`), so masking must
+ * secret fields with the migration target type's - a migration's params carry
+ * the NEW type's flags (e.g. `local`->`ftp` with `--password`), so masking must
  * use the target type's declaration, not the source's.
  */
 function pairSecretFields(pair: RepairPair, config: VaultConfig, io: ProviderIO): string[] {
@@ -439,7 +446,7 @@ function pairSecretFields(pair: RepairPair, config: VaultConfig, io: ProviderIO)
 
 /**
  * Masks the value after each secret flag so the forensic `repair.lock` never
- * stores a plaintext credential. BFS-core stays blind to field semantics — the
+ * stores a plaintext credential. BFS-core stays blind to field semantics - the
  * provider declares which fields are secret via `getSecretFields()`.
  */
 function redactParams(rawParams: string[], secretFields: readonly string[]): string {

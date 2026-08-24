@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# run_bfs — invokes the bfs CLI in a given working directory and captures the
+# run_bfs - invokes the bfs CLI in a given working directory and captures the
 # result. Never aborts the caller (always returns 0) so it is safe under
 # `set -e`; scenarios inspect the outcome through assertions.
 #
@@ -32,7 +32,7 @@ run_bfs() {
 $BFS_STDERR"
 
   if [ "${VERBOSE:-0}" = "1" ]; then
-    printf '    \033[2m→ exit %s\033[0m\n' "$BFS_EXIT"
+    printf '    \033[2m-> exit %s\033[0m\n' "$BFS_EXIT"
     [ -n "$BFS_OUT" ] && printf '%s\n' "$BFS_OUT" | sed 's/^/      | /'
   fi
 

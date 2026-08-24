@@ -5,15 +5,15 @@ import { fmt } from '../i18n/index.js';
  * existing version numbers.
  *
  * Grammar:
- *  - `latest`         → the single highest existing version (empty if none)
- *  - `all`            → every existing version
- *  - `5`              → version 5 (when it exists)
- *  - `1-10`           → versions 1..10 (existing subset)
- *  - `1-10,15,20-25`  → union of the parts (existing subset)
+ *  - `latest`         -> the single highest existing version (empty if none)
+ *  - `all`            -> every existing version
+ *  - `5`              -> version 5 (when it exists)
+ *  - `1-10`           -> versions 1..10 (existing subset)
+ *  - `1-10,15,20-25`  -> union of the parts (existing subset)
  *
  * The result is always intersected with `allVersions` and sorted ascending, so
  * a caller never operates on a version that isn't present. The `all` / `latest`
- * keywords (case-insensitive) are accepted only when `allowKeywords` is set —
+ * keywords (case-insensitive) are accepted only when `allowKeywords` is set -
  * `bfs prune` leaves them off so its numeric-only grammar is unchanged, while
  * `bfs repair` opts in.
  *

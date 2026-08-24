@@ -6,7 +6,7 @@
 # sidecar is missing and can be restored with `bfs repair --restore-headers`.
 #
 # The advisory line is the load-bearing assertion: a missing sidecar falls back
-# to the in-shard header, so the version stays healthy regardless — what proves
+# to the in-shard header, so the version stays healthy regardless - what proves
 # detection is the `--restore-headers` hint appearing in the report.
 
 SCENARIO_NAME="verify: missing hdr_ sidecar surfaces --restore-headers advisory"

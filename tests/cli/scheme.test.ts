@@ -78,7 +78,7 @@ describe('scheme set', () => {
   });
 
   it('should show old and new scheme in success message', async () => {
-    // makeConfig() has scheme 2/1 and 3 providers — set 2/1 again (same count)
+    // makeConfig() has scheme 2/1 and 3 providers - set 2/1 again (same count)
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
     await runCmd(['scheme', 'set', '2', '1']);
@@ -99,7 +99,7 @@ describe('scheme set', () => {
   it('should abort when N+K mismatch and hint how many to remove', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never); // 3 providers
 
-    await runCmd(['scheme', 'set', '2', '-1']); // K < 1 — triggers K validation first
+    await runCmd(['scheme', 'set', '2', '-1']); // K < 1 - triggers K validation first
     // just ensure it aborts
     // (negative K handled before provider count check)
     expect(mockWriteConfig).not.toHaveBeenCalled();

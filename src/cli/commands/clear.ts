@@ -16,7 +16,7 @@ import { CommandAbort, error, info, success } from '../ui.js';
  *   <rootDir>/.bfs/push.lock
  *   <rootDir>/.bfs/repair.lock
  *
- * Cache directory resolution: --cache-dir flag → config.cache_dir →
+ * Cache directory resolution: --cache-dir flag -> config.cache_dir ->
  * {rootDir}/.bfs/cache. Per-file info is emitted for every file actually
  * removed. ENOENT is tolerated; any other failure (e.g. EPERM) is rethrown.
  *

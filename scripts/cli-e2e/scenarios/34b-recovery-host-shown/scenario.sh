@@ -1,22 +1,22 @@
 # shellcheck shell=bash
-# Recovery credential-phishing — PROCEDURAL-GATE path (no honest sibling
+# Recovery credential-phishing - PROCEDURAL-GATE path (no honest sibling
 # reachable, so the consensus cross-check cannot save the operator).
 #
 # Layout: 3 LOCAL providers (2 data + 1 parity). shard_0 (bootstrap) is forged
 # to redirect its entry for shard_1 at the FTP trap. The honest siblings are
 # then made UNREACHABLE (their provider directories removed) so recovery has
-# nothing to cross-check against — consensus is skipped and the only remaining
+# nothing to cross-check against - consensus is skipped and the only remaining
 # defence is procedural: prove the connection target to the operator BEFORE
 # asking for or sending any secret.
 #
 # GREEN contract: before collecting/sending the transport secret, recovery must
 # surface the destination host:port to the operator. So the trap target
 # "127.0.0.1:<trap_port>" MUST appear in recovery output before the secret is
-# sent. (Positive assertion — proof the host was shown.)
+# sent. (Positive assertion - proof the host was shown.)
 #
 # RED contract (today): the secret prompt only names the field + provider id
-# (recovery_ask_transport_password) and never the host — so 127.0.0.1:<port>
-# does NOT appear in the output → RED. Asserting on the host coordinate (not the
+# (recovery_ask_transport_password) and never the host - so 127.0.0.1:<port>
+# does NOT appear in the output -> RED. Asserting on the host coordinate (not the
 # i18n wording, which lands in GREEN) keeps the test robust.
 
 SCENARIO_NAME="recovery host shown before secret (procedural gate, no honest sibling)"
@@ -45,7 +45,7 @@ scenario_run() {
   run_bfs "$vault" push --new
   assert_ok
 
-  # ── Start the attacker trap server on an ephemeral 127.0.0.1 port ──────────
+  # -- Start the attacker trap server on an ephemeral 127.0.0.1 port ----------
   : >"$trap_log"
   node "$(winpath "$trap_driver")" "$(winpath "$trap_log")" 0 >"$trap_out" 2>&1 &
   local trap_pid=$!
@@ -65,7 +65,7 @@ $(cat "$trap_out" 2>/dev/null)"
   # scenario_run returns (a local read there comes back empty). See ftp_trap_stop.
   trap "ftp_trap_stop '$trap_port' '$trap_pid'" EXIT
 
-  # ── Forge shard_0 (bootstrap): redirect its entry for shard_1 to the trap ──
+  # -- Forge shard_0 (bootstrap): redirect its entry for shard_1 to the trap --
   local shard0
   shard0="$(shard_file 0 1)"
   assert_file "$shard0"
@@ -75,7 +75,7 @@ $BFS_OUT"
 
   # Make the honest siblings UNREACHABLE so consensus is skipped: drop p1's and
   # p2's vault directories. The bootstrap shard on p0 survives; the only sibling
-  # named in the forged map (shard_1 → trap) is what recovery tries to reach.
+  # named in the forged map (shard_1 -> trap) is what recovery tries to reach.
   rm -rf "${PV_LOCALDIR[1]:?}/$name" "${PV_LOCALDIR[2]:?}/$name"
 
   # Catastrophe: local metadata gone. Recovery must rebuild from the forged
@@ -90,7 +90,7 @@ $BFS_OUT"
   PTY_TIMEOUT=12000 run_bfs_pty "$vault" "$answers" --lang en recovery --provider local --name "$name" \
     --bootstrap "--path $(winpath "${PV_LOCALDIR[0]}")"
 
-  # ── RED assertion (positive): the redirected host MUST be shown to the ─────
+  # -- RED assertion (positive): the redirected host MUST be shown to the -----
   # operator. Match on the host coordinate, not the i18n wording (which is
   # written in GREEN), so the test is robust to message phrasing.
   local target="127.0.0.1:${trap_port}"

@@ -29,6 +29,7 @@ import { registerScheme } from './cli/commands/scheme.js';
 import { registerStatus } from './cli/commands/status.js';
 import { registerVerify } from './cli/commands/verify.js';
 import { registerVersions } from './cli/commands/versions.js';
+import { registerCiModeHook } from './cli/interactive-mode.js';
 import { buildProviderHelpSection } from './cli/provider-help.js';
 import { startRepl } from './cli/repl.js';
 import { CommandAbort } from './cli/ui.js';
@@ -49,6 +50,30 @@ function applyExitOverride(cmd: Command): void {
   }
 }
 
+/**
+ * Filters a token list down to candidate sub-command names - everything that is
+ * neither a flag nor the value belonging to `--cwd`.
+ */
+function nonOptionTokens(tokens: string[]): string[] {
+  return tokens.filter((a, i, arr) => {
+    if (a === '--cwd') return false;
+    if (i > 0 && arr[i - 1] === '--cwd') return false;
+    return !a.startsWith('-');
+  });
+}
+
+/**
+ * Tells whether a token list asks for the program version - `--version` standing
+ * alone, with no sub-command beside it. The flag cannot be registered on the
+ * program itself: `repair` takes `--version <range>` and `pull` takes
+ * `--version <n>` as their own arguments, and a program-level long form swallows
+ * theirs - `bfs repair --version all ...` would print the version and do nothing.
+ * Answering it before Commander keeps both meanings, each where it belongs.
+ */
+function isBareVersionRequest(tokens: string[]): boolean {
+  return tokens.includes('--version') && nonOptionTokens(tokens).length === 0;
+}
+
 // Build Commander program
 function buildProgram(): Command {
   const program = new Command();
@@ -61,7 +86,18 @@ function buildProgram(): Command {
     .allowUnknownOption(false)
     .option('--cwd <dir>', t('cmd_cwd_desc'))
     .optionsGroup(t('global_settings_group'))
-    .option('--lang <code>', t('cmd_lang_desc'));
+    .option('--lang <code>', t('cmd_lang_desc'))
+    // Declaring the mode belongs to the program, not to individual commands:
+    // every command and every adapter reads it the same way, and no command has
+    // to infer it from whichever of its own flags happens to be present. The
+    // commands that already carry their own `--ci` keep it, so existing
+    // invocations and scripts are unaffected.
+    .option('--ci', t('cmd_ci_desc'));
+
+  // The declaration has to be readable from the prompt helper, which sits far
+  // below any action handler and has no Command to ask. One hook on the program
+  // covers every command and sub-command.
+  registerCiModeHook(program);
 
   // Register all commands
   registerInit(program);
@@ -125,17 +161,18 @@ async function main(): Promise<void> {
     return;
   }
 
-  // If no sub-command given → start interactive REPL.
+  // If no sub-command given -> start interactive REPL.
   // Filter out --cwd and its value before checking for subcommand tokens.
-  // Also treat --help/-h and --version/-V as "has subcommand" so Commander handles them.
+  // Also treat --help/-h and -V as "has subcommand" so Commander handles them.
+  // --version is answered below instead, before Commander ever sees it.
   const argv = process.argv.slice(2);
-  const nonOptionArgs = argv.filter((a, i, arr) => {
-    if (a === '--cwd') return false;
-    if (i > 0 && arr[i - 1] === '--cwd') return false;
-    return !a.startsWith('-');
-  });
-  const hasGlobalFlag = argv.some((a) => a === '--help' || a === '-h' || a === '--version' || a === '-V');
-  const hasSubcommand = nonOptionArgs.length > 0 || hasGlobalFlag;
+  const hasGlobalFlag = argv.some((a) => a === '--help' || a === '-h' || a === '-V');
+  const hasSubcommand = nonOptionTokens(argv).length > 0 || hasGlobalFlag;
+
+  if (isBareVersionRequest(argv)) {
+    process.stdout.write(`${PKG_VERSION}\n`);
+    return;
+  }
 
   if (!hasSubcommand) {
     // Pre-scan --cwd from argv to set REPL rootDir without full Commander parsing.
@@ -144,11 +181,17 @@ async function main(): Promise<void> {
     const rootDir = cwdValue ? path.resolve(cwdValue) : process.cwd();
 
     await startRepl(rootDir, async (tokens) => {
+      // The prompt answers `--version` the same way the command line does; the
+      // tokens never reach Commander, which knows only the short `-V` form.
+      if (isBareVersionRequest(tokens)) {
+        console.log(PKG_VERSION);
+        return;
+      }
       // Re-parse each REPL command as if it were argv.
       const replProgram = buildProgram();
       // exitOverride must be applied recursively: sub-commands copy _exitCallback
       // only at creation time, so calling it on the root after buildProgram() would
-      // leave sub-commands (e.g. `provider`) with _exitCallback=null → process.exit()
+      // leave sub-commands (e.g. `provider`) with _exitCallback=null -> process.exit()
       applyExitOverride(replProgram);
       // Propagate --cwd into REPL commands so resolveCwd() uses the correct rootDir.
       const augmented = rootDir !== process.cwd() ? ['--cwd', rootDir, ...tokens] : tokens;

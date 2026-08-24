@@ -3,7 +3,7 @@
 # LOCAL provider (which carries no transport secret), so the FTP providers'
 # password is NOT in the seed pool and `bfs recovery` must prompt the operator
 # for it via inquirer (askSecret). Driven through a real pseudo-terminal
-# (run_bfs_pty / @lydell/node-pty) — the only way to answer a genuine inquirer
+# (run_bfs_pty / @lydell/node-pty) - the only way to answer a genuine inquirer
 # prompt rendered by real `bfs`, which `run_bfs`'s </dev/null path cannot.
 #
 # Closes the e2e gap left by K2 (Issue 8): credentials are stripped from shard
@@ -13,7 +13,7 @@
 # pooled secret. Guards that all prompts fire (PROMPTS_FED=3/3) and the restore
 # is byte-for-byte correct after the operator supplies the secret.
 
-SCENARIO_NAME="interactive recovery prompt (local bootstrap → FTP password)"
+SCENARIO_NAME="interactive recovery prompt (local bootstrap -> FTP password)"
 SCENARIO_DESC="stripped vault, recovery prompts for FTP secret via PTY, restore"
 REQUIRES_LOCAL=1
 REQUIRES_FTP=1
@@ -36,10 +36,10 @@ scenario_run() {
   rm -rf "$vault/.bfs"
   assert_no_file "$vault/.bfs/config.json"
 
-  # Bootstrap from the LOCAL provider p0 → its config has no secret, so the seed
+  # Bootstrap from the LOCAL provider p0 -> its config has no secret, so the seed
   # pool is empty and recovery must reconnect each FTP sibling interactively.
   # connectForRecovery() confirms the destination host BEFORE asking for the
-  # password: confirm host (y) → FTP password. The typed password is pooled, so
+  # password: confirm host (y) -> FTP password. The typed password is pooled, so
   # the second FTP sibling still confirms its host but reuses the pooled secret
   # without a second password prompt. Hence the prompt sequence for two FTP
   # siblings is: confirm, password, confirm.
@@ -49,7 +49,7 @@ scenario_run() {
     --bootstrap "--path $(winpath "${PV_LOCALDIR[0]}")"
   assert_ok
   # All three prompts (confirm, password, confirm) must have rendered and been
-  # answered — not bypassed.
+  # answered - not bypassed.
   assert_out_contains "PROMPTS_FED=3/3"
   assert_file "$vault/.bfs/config.json"
   assert_file "$vault/.bfs/manifests/v001.json"

@@ -1,11 +1,13 @@
 /**
  * Shared gate for the "unconfirmed config after recovery" defense.
  *
- * `recover()` rebuilds .bfs/config.json from a `--no-enc` shard's UNKEYED
- * location map and marks state.locations_confirmed=false. Every write path that
+ * `recover()` rebuilds .bfs/config.json from a shard's location map - unkeyed on
+ * a `--no-enc` backup - and marks state.locations_confirmed=false, unless the
+ * operator pre-approved those locations with `bfs recovery --trust-locations`,
+ * which records them as already confirmed. Every write path that
  * authenticates to providers from that config (push, and the heal strategies in
  * removeProvider) must show the operator where data will go and require
- * confirmation BEFORE contacting any host — defending against a recovered config
+ * confirmation BEFORE contacting any host - defending against a recovered config
  * pointing at an attacker host.
  */
 
@@ -29,10 +31,16 @@ export async function confirmRecoveredLocations(config: VaultConfig, io: Provide
     try {
       where = providerRegistry.create(pc, io).describeConfig(pc.config);
     } catch {
-      // unknown adapter — fall back to the provider type alone
+      // unknown adapter - fall back to the provider type alone
     }
     io.info(fmt('push_recovered_location', pc.id, where));
   }
+  // With nobody there the confirmation answers itself with "no", and reporting
+  // that as a refusal dead-ends the operator: retrying changes nothing, because
+  // only a confirmed write or a fresh recovery with --trust-locations clears the
+  // flag. Say which of those it takes instead - and say it only here, since an
+  // operator who did refuse must not be handed the command that overrides them.
+  if (io.interactive === false) throw new BfsError(t('push_recovered_locations_no_operator'));
   const ok = await io.confirm(t('push_confirm_recovered_locations'));
   if (!ok) throw new BfsError(t('push_recovered_locations_declined'));
 }

@@ -1,14 +1,14 @@
-// PTY driver for cli-e2e — runs the real `bfs` CLI inside a pseudo-terminal so
+// PTY driver for cli-e2e - runs the real `bfs` CLI inside a pseudo-terminal so
 // inquirer sees a true TTY (process.stdin.isTTY === true) and renders N
 // sequential interactive prompts exactly as a human operator would see them.
 // A piped stdin only feeds the FIRST inquirer prompt per process (inquirer
 // closes stdin after the first resolve), so multi-prompt flows such as
 // `bfs recovery` on a stripped vault cannot be driven through `run_bfs`'s
-// </dev/null path — this driver exists for that gap.
+// </dev/null path - this driver exists for that gap.
 //
 // Invocation (from run_bfs_pty):
 //   node pty-run.mjs <bfs-entry> <vault-cwd> <bfs-args...>
-//   env PTY_ANSWERS  = JSON [{ "anchor": "<substring>", "value": "<secret>" }, …]
+//   env PTY_ANSWERS  = JSON [{ "anchor": "<substring>", "value": "<secret>" }, ...]
 //                      answers are fed in order: the i-th value is written + Enter
 //                      the first time its anchor appears in the terminal output.
 //   env PTY_TIMEOUT  = max ms before the child is killed (default 90000).
@@ -34,7 +34,7 @@ const repoRoot = path.dirname(path.dirname(entry));
 // Wide terminal so inquirer never wraps a long prompt line. At a narrow width
 // (Linux pty honours `cols`; Windows ConPTY does not), inquirer hard-wraps the
 // message to the column count, which can split an answer anchor across a line
-// break so indexOf() never matches — the driver then times out. A column count
+// break so indexOf() never matches - the driver then times out. A column count
 // far beyond any prompt avoids the wrap entirely.
 const child = spawn(process.execPath, ['--import', 'tsx', entry, '--cwd', vaultCwd, ...bfsArgs], { name: 'xterm-color', cols: 1000, rows: 40, cwd: repoRoot, env: process.env });
 

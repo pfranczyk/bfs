@@ -3,7 +3,7 @@
 #
 # A scheduled check is the main way an operator learns a backup rotted. Today
 # registerVerify (src/cli/commands/verify.ts) prints the table and returns, so a
-# damaged backup exits 0 and cron sees a success — the one signal automation can
+# damaged backup exits 0 and cron sees a success - the one signal automation can
 # act on says nothing is wrong.
 #
 # Codes are distinct from the generic failure (CommandAbort default 1, used for
@@ -44,7 +44,7 @@ scenario_run() {
   assert_exit 4
   assert_manifest_health "$vault" 1 degraded
 
-  # A second rotted part drops the version below N — unrecoverable.
+  # A second rotted part drops the version below N - unrecoverable.
   BFS_OUT="$("$TSX" "$(winpath "$corrupt_driver")" "$(winpath "$(shard_file 1 1)")" 2>&1)" || true
   printf '%s' "$BFS_OUT" | grep -qF "CORRUPTED" || _fail "corrupt driver failed on shard_1: $BFS_OUT"
 

@@ -5,7 +5,7 @@
 # src/vault/lockfile.ts.
 
 SCENARIO_NAME="stale push.lock blocks push, clear unblocks"
-SCENARIO_DESC="dead-PID lock → PartialState error → bfs clear → fresh push ok"
+SCENARIO_DESC="dead-PID lock -> PartialState error -> bfs clear -> fresh push ok"
 REQUIRES_LOCAL=4
 REQUIRES_FTP=0
 
@@ -50,7 +50,7 @@ scenario_run() {
   write_fake_push_lock "$vault" 999999 2
   assert_lock_exists "$vault"
 
-  # Fresh push must refuse — partial-state requires explicit cleanup.
+  # Fresh push must refuse - partial-state requires explicit cleanup.
   run_bfs "$vault" push --new
   assert_fail
   assert_out_contains "push.lock exists from partial-state push"

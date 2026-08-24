@@ -1,4 +1,3 @@
-import fs from 'node:fs/promises';
 import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO } from '../../providers/provider.js';
@@ -6,8 +5,10 @@ import { readConfig } from '../../vault/config.js';
 import { listManifests } from '../../vault/manifest.js';
 import { repairVault } from '../../vault/repair.js';
 import { resolveCwd } from '../cwd.js';
+import { isCiRun } from '../interactive-mode.js';
 import { parseRepairSpec } from '../parse-provider-spec.js';
 import { parseVersionRange } from '../parse-version-range.js';
+import { readPasswordFiles } from '../password-input.js';
 import { isPromptCancellation } from '../prompt.js';
 import { CommandAbort, error, success, warn } from '../ui.js';
 
@@ -24,12 +25,16 @@ interface RepairOpts {
 /**
  * Registers the `bfs repair` command.
  *
- * Repairs a provider whose payload is intact but whose coordinates drifted
- * (cross-OS path change, rotated credential). Rewrites `.bfs/config.json`
- * (global) and the sibling shards' location maps for the selected versions, so
- * a fresh recovery finds the provider at its new address.
+ * Repairs a provider whose coordinates drifted (cross-OS path change, rotated
+ * credential). Rewrites `.bfs/config.json` (global) and the sibling shards'
+ * location maps for the selected versions, so a fresh recovery finds the
+ * provider at its new address. With `--rebuild` it also reconstructs a lost
+ * shard from RS parity; with `--restore-headers` it rebuilds the missing header
+ * sidecars instead and takes no pair at all.
  *
- * Usage: `bfs repair [--version <range>] [--password <p>]... [--ci] <name> "<params>" ...`
+ * Usage: `bfs repair [--version <range>] [--password <p>]... [--password-file <path>]...
+ *                    [--ci] [--rebuild] [--force-unverified] <name> "<params>" ...`
+ *    or: `bfs repair [--version <range>] --restore-headers`
  * Each `<params>` is one quoted string of the adapter's own flags (full
  * replacement of the connection config, mirroring `bfs provider edit`).
  *
@@ -60,7 +65,12 @@ export function registerRepair(program: Command): void {
       // --ci disables prompts: a missing provider path is then auto-created
       // instead of asking, so relocating to a machine where the source paths
       // don't exist (cross-OS restore) doesn't abort on an unanswerable prompt.
-      const io = createCliProviderIO(rootDir, opts.ci !== true);
+      // Anything else defers to the TTY check inside createCliProviderIO - the
+      // other half of the contract at `ProviderIO.interactive`. This command has
+      // no prompts of its own, so a run from cron without --ci would otherwise
+      // reach an adapter claiming a terminal that is not there.
+      const isCi = isCiRun(cmd, opts.ci);
+      const io = createCliProviderIO(rootDir, isCi ? false : undefined);
 
       const config = await readConfig(rootDir);
       if (!config) {
@@ -89,7 +99,7 @@ export function registerRepair(program: Command): void {
         const versions = parseVersionRange(opts.version ?? (restoreHeaders ? 'all' : 'latest'), allVersions, { allowKeywords: true });
         const passwords = [...opts.password, ...(await readPasswordFiles(opts.passwordFile))];
 
-        const result = await repairVault(rootDir, { pairs, versions, io, passwords, isCi: opts.ci === true, rebuild: opts.rebuild === true, forceUnverified: opts.forceUnverified === true, restoreHeaders });
+        const result = await repairVault(rootDir, { pairs, versions, io, passwords, rebuild: opts.rebuild === true, forceUnverified: opts.forceUnverified === true, restoreHeaders });
 
         if (result.failed_pairs.length > 0 || result.failed_shards.length > 0) {
           const failed = [...result.failed_pairs.map((f) => f.name), ...result.failed_shards.map((f) => `${f.pair_name} v${f.version}`)];
@@ -107,19 +117,4 @@ export function registerRepair(program: Command): void {
         throw new CommandAbort();
       }
     });
-}
-
-/**
- * Reads each password file as UTF-8, trimming a single trailing newline (LF or
- * CRLF). The CRLF case matters on Windows, where an editor-saved password file
- * ends in `\r\n`; stripping only `\n` would leave a stray `\r` in the password
- * and reject an otherwise-correct credential.
- */
-export async function readPasswordFiles(paths: string[]): Promise<string[]> {
-  const out: string[] = [];
-  for (const p of paths) {
-    const content = await fs.readFile(p, 'utf-8');
-    out.push(content.replace(/\r?\n$/, ''));
-  }
-  return out;
 }

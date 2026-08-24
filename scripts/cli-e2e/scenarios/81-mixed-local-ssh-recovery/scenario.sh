@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Hybrid vault (local, ssh, local, ssh) where disaster recovery bootstraps from
 # an SSH provider that is NOT shard_0. Confirms an SSH shard's header carries the
-# full location map and can rebuild .bfs/ for a mixed vault — the case grouped
+# full location map and can rebuild .bfs/ for a mixed vault - the case grouped
 # layouts (always bootstrapping from a local shard_0) never reach.
 
 SCENARIO_NAME="hybrid recovery via SSH bootstrap"
@@ -25,7 +25,7 @@ scenario_run() {
   rm -rf "$vault/.bfs"
   assert_no_file "$vault/.bfs/config.json"
 
-  # Recover by bootstrapping from the SSH provider p1 (shard_1) — not shard_0.
+  # Recover by bootstrapping from the SSH provider p1 (shard_1) - not shard_0.
   # Unattended (CI) recovery: --trust-locations pre-approves the recovered hosts
   # so the per-host credential confirmation does not block a non-interactive run.
   run_bfs "$vault" recovery --provider ssh --name "$name" \

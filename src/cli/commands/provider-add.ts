@@ -5,6 +5,7 @@ import type { CliProviderInput, ProviderConfig } from '../../types/index.js';
 import { readConfig, writeConfig } from '../../vault/config.js';
 import { assertNoForeignVault } from '../../vault/vault-collision.js';
 import { resolveCwd } from '../cwd.js';
+import { isCiRun } from '../interactive-mode.js';
 import { validateProviderIdsUnique } from '../parse-provider-spec.js';
 import { promptWithRawMode } from '../prompt.js';
 import { probeProviderWithRecovery } from '../provider-probe.js';
@@ -22,10 +23,10 @@ interface ProviderAddOpts {
  * CLI surface is intentionally minimal: BFS recognizes only --ci, --name,
  * and --type. Every other CLI token (e.g. `--config-file`, `--private-key`,
  * `--bucket`) is forwarded verbatim to the provider as `rawArgs`. This keeps
- * BFS blind to provider-specific configuration — adapters define their own
+ * BFS blind to provider-specific configuration - adapters define their own
  * flag grammar and decide how to interpret it.
  *
- * Adding a provider changes the N+K scheme — user must run `bfs push`
+ * Adding a provider changes the N+K scheme - user must run `bfs push`
  * afterwards to rebalance the remote shards.
  *
  * @param providerCmd - The `bfs provider` sub-command to attach to
@@ -39,7 +40,7 @@ export function registerProviderAdd(providerCmd: Command): void {
     // allowExcessArguments: Commander otherwise rejects the value tokens that
     // follow an unknown flag (e.g. `--private-key /path`) as excess positional
     // arguments. Together these two calls enable the minimalistic pass-through
-    // CLI model described in the provider-cli plan.
+    // CLI model - the contract at `CliProviderInput` in src/types/index.ts.
     .allowUnknownOption(true)
     .allowExcessArguments(true)
     .option('--ci', t('provider_add_opt_ci'))
@@ -47,7 +48,7 @@ export function registerProviderAdd(providerCmd: Command): void {
     .option('--type <type>', t('provider_add_opt_type'))
     .action(async (opts: ProviderAddOpts, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
-      const isCi = opts.ci === true;
+      const isCi = isCiRun(cmd, opts.ci);
 
       const config = await readConfig(rootDir);
       if (!config) {
@@ -126,7 +127,9 @@ export function registerProviderAdd(providerCmd: Command): void {
         throw new CommandAbort();
       }
 
-      const io = createCliProviderIO(rootDir, !isCi);
+      // Without --ci the answer belongs to the TTY check inside
+      // createCliProviderIO rather than to the flag alone.
+      const io = createCliProviderIO(rootDir, isCi ? false : undefined);
 
       // adapterPackage: null for built-in, "pkg@ver" for external adapters
       // that registered with AdapterRegistrationMeta. Persisted in the new
@@ -141,7 +144,7 @@ export function registerProviderAdd(providerCmd: Command): void {
           const input: CliProviderInput = {
             name,
             // allowUnknownOption(true) parks every token BFS didn't bind
-            // (including --config-file, --private-key, …) in cmd.args.
+            // (including --config-file, --private-key, ...) in cmd.args.
             // The adapter parses them itself.
             rawArgs: [...cmd.args],
           };
@@ -173,7 +176,7 @@ export function registerProviderAdd(providerCmd: Command): void {
       }
 
       // Refuse to add a provider whose location already holds a DIFFERENT backup
-      // (foreign vault_id) — otherwise the next push would silently overwrite it.
+      // (foreign vault_id) - otherwise the next push would silently overwrite it.
       try {
         const guardInstance = factory.create({ id: name, type, adapterPackage, config: providerConfig }, io);
         await assertNoForeignVault(guardInstance, config.vault_name, config.vault_id, io);

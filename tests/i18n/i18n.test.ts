@@ -26,17 +26,17 @@ describe('setLang / getLang', () => {
 
 describe('t()', () => {
   it('should return English by default', () => {
-    expect(t('health_healthy')).toBe('✓ healthy');
+    expect(t('health_healthy')).toBe('OK healthy');
   });
 
   it('should return Polish after setLang("pl")', () => {
     setLang('pl');
-    expect(t('health_healthy')).toBe('✓ zdrowy');
+    expect(t('health_healthy')).toBe('OK zdrowy');
   });
 
   it('should return English after setLang("unknown")', () => {
     setLang('xyz');
-    expect(t('health_damaged')).toBe('✗ damaged');
+    expect(t('health_damaged')).toBe('X damaged');
   });
 });
 
@@ -85,12 +85,12 @@ describe('translation completeness', () => {
     }
   });
 
-  // naming.md: "shard" is an internal term and must never appear in a
+  // "shard" is an internal term and must never appear in a
   // user-facing string as a concept noun. Key names may contain it (they are
   // internal); only the displayed values are checked here. The CLI flags
   // --data-shards/--parity-shards and the config fields data_shards/parity_shards
   // are literal identifiers the user types, so messages that name them are
-  // exempt — strip those tokens before checking. User-facing wording for a shard
+  // exempt - strip those tokens before checking. User-facing wording for a shard
   // is "piece" / "część" (or "copy" / "kopia" for the N/K scheme).
   const stripFlagNames = (s: string): string => s.replace(/(data|parity)[-_]shards?/gi, '');
 
@@ -104,7 +104,7 @@ describe('translation completeness', () => {
     expect(offenders).toEqual([]);
   });
 
-  // naming.md: "manifest" is an internal term (per-version snapshot metadata)
+  // "manifest" is an internal term (per-version snapshot metadata)
   // and must never appear in a user-facing string. Unlike "shard" there is no
   // CLI flag or config field the user types that contains it, so the check is
   // unconditional. User-facing wording for a manifest's contents is "version".

@@ -10,15 +10,27 @@ import net from 'node:net';
 
 const CONTAINER_NAME = 'bfs-ftp-test';
 const FTP_PORT = 21;
-const PASV_PORTS = '21000-21010';
+const PASV_MIN_PORT = 21000;
+const PASV_MAX_PORT = 21010;
+const PASV_PORTS = `${PASV_MIN_PORT}-${PASV_MAX_PORT}`;
 const FTP_USER = 'bfsuser';
 const FTP_PASS = 'bfspass';
 const IMAGE = 'delfer/alpine-ftp-server';
 const STARTUP_TIMEOUT_MS = 15_000;
 const POLL_INTERVAL_MS = 500;
 
+/**
+ * Container command running vsftpd in the FOREGROUND. Left to itself the image
+ * backgrounds vsftpd, guesses its pid with `pgrep vsftpd | tail -n 1`, and hands
+ * that guess to a watchdog which takes the whole container down when the pid it
+ * watches turns out to be a short-lived startup process. The `-o` flags must
+ * follow the config path: vsftpd applies arguments in order and the config sets
+ * background=YES, so a leading -obackground=NO is overridden.
+ */
+const FOREGROUND_COMMAND = `exec vsftpd /etc/vsftpd/vsftpd.conf -obackground=NO -opasv_min_port=${PASV_MIN_PORT} -opasv_max_port=${PASV_MAX_PORT}`;
+
 function dockerRun(): void {
-  const result = spawnSync('docker', ['run', '-d', '--name', CONTAINER_NAME, '-p', `${FTP_PORT}:21`, '-p', `${PASV_PORTS}:${PASV_PORTS}`, '-e', `USERS=${FTP_USER}|${FTP_PASS}`, IMAGE]);
+  const result = spawnSync('docker', ['run', '-d', '--name', CONTAINER_NAME, '-p', `${FTP_PORT}:21`, '-p', `${PASV_PORTS}:${PASV_PORTS}`, '-e', `USERS=${FTP_USER}|${FTP_PASS}`, IMAGE, 'sh', '-c', FOREGROUND_COMMAND]);
   if (result.status !== 0) {
     throw new Error(`docker run failed: ${result.stderr?.toString() ?? 'unknown error'}`);
   }

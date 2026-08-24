@@ -3,7 +3,7 @@ import { shellParse } from '../../src/cli/shell-parse.js';
 import { BfsError } from '../../src/core/errors.js';
 
 describe('shellParse', () => {
-  // ─── Plain whitespace splitting ──────────────────────────────────────────
+  // --- Plain whitespace splitting ------------------------------------------
 
   it('should split tokens on whitespace', () => {
     expect(shellParse('ftp:nas --config-file ./ftp.json')).toEqual(['ftp:nas', '--config-file', './ftp.json']);
@@ -21,7 +21,7 @@ describe('shellParse', () => {
     expect(shellParse('   \t\n ')).toEqual([]);
   });
 
-  // ─── Quoted strings ──────────────────────────────────────────────────────
+  // --- Quoted strings ------------------------------------------------------
 
   it('should preserve whitespace inside double quotes', () => {
     expect(shellParse('--path "C:/Program Files/bfs/ftp.json"')).toEqual(['--path', 'C:/Program Files/bfs/ftp.json']);
@@ -43,16 +43,16 @@ describe('shellParse', () => {
     expect(shellParse('"a b" c')).toEqual(['a b', 'c']);
   });
 
-  // ─── Backslash handling ──────────────────────────────────────────────────
+  // --- Backslash handling --------------------------------------------------
 
   it('should treat backslash as literal outside quotes', () => {
     // Anchors the rule that Windows paths inline (`--path D:\backup\p1`)
-    // are tokenized verbatim — including the `\b` and `\v` sequences.
+    // are tokenized verbatim - including the `\b` and `\v` sequences.
     expect(shellParse('--path D:\\backup\\p1')).toEqual(['--path', 'D:\\backup\\p1']);
   });
 
   it('should keep backslash literal even before a space outside quotes', () => {
-    // Backslash has no special meaning outside quotes — the space still
+    // Backslash has no special meaning outside quotes - the space still
     // splits the input into two tokens. To preserve a space inside a
     // single value, use single or double quotes.
     expect(shellParse('path\\ split')).toEqual(['path\\', 'split']);
@@ -67,7 +67,7 @@ describe('shellParse', () => {
     expect(shellParse('"a\\b"')).toEqual(['a\\b']);
   });
 
-  // ─── Error surface ───────────────────────────────────────────────────────
+  // --- Error surface -------------------------------------------------------
 
   it('should throw BfsError on unclosed double quote', () => {
     expect(() => shellParse('foo "unterminated')).toThrow(BfsError);
@@ -77,7 +77,7 @@ describe('shellParse', () => {
     expect(() => shellParse("foo 'bar")).toThrow(BfsError);
   });
 
-  // ─── Realistic provider spec ─────────────────────────────────────────────
+  // --- Realistic provider spec ---------------------------------------------
 
   it('should tokenize a full pass-through provider spec', () => {
     const spec = "ftp:nas-prod --jakis-parametr 'wartosc ze spacja' " + "-inna_forma-propsa --config-file './katalog ze spacja/ftp.json'";
@@ -85,7 +85,7 @@ describe('shellParse', () => {
   });
 
   it('should tokenize a colon-rich token as a single token', () => {
-    // Colons have no special meaning in shellParse — `local:usb1:/mnt/usb`
+    // Colons have no special meaning in shellParse - `local:usb1:/mnt/usb`
     // is one literal token. The provider-spec dispatcher splits on the
     // first colon afterwards, but the tokenizer itself does not.
     expect(shellParse('local:usb1:/mnt/usb')).toEqual(['local:usb1:/mnt/usb']);

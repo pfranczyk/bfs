@@ -4,7 +4,7 @@
 # binary blob, which is snapshotted as a baseline right after creation), so the
 # byte-for-byte roundtrip check is meaningful.
 
-# make_fixtures <dir> — populate a fresh source tree.
+# make_fixtures <dir> - populate a fresh source tree.
 make_fixtures() {
   local d="$1"
   mkdir -p "$d/data" "$d/nested/deep" "$d/assets"
@@ -18,7 +18,7 @@ make_fixtures() {
   head -c 4096 /dev/urandom >"$d/assets/blob.bin"
 }
 
-# make_large_file <dir> <bytes> — add a larger binary file (integrity / chunking
+# make_large_file <dir> <bytes> - add a larger binary file (integrity / chunking
 # coverage, e.g. over FTP). Uses /dev/urandom; baseline snapshot captures it.
 make_large_file() {
   local d="$1" bytes="$2"
@@ -26,7 +26,7 @@ make_large_file() {
   head -c "$bytes" /dev/urandom >"$d/assets/large.bin"
 }
 
-# mutate_fixtures <dir> — change an existing file and add a new one, to produce
+# mutate_fixtures <dir> - change an existing file and add a new one, to produce
 # a distinct next version.
 mutate_fixtures() {
   local d="$1"

@@ -6,7 +6,7 @@ import { afterEach, assert, beforeEach, describe, expect, it } from 'vitest';
 import { createZipPacker, estimateCompressibility, extractZip, isZipBuffer } from '../../src/core/compression.js';
 import { BfsError } from '../../src/core/errors.js';
 
-// ─── createZipPacker + extractZip roundtrip ───────────────────────────────────
+// --- createZipPacker + extractZip roundtrip -----------------------------------
 
 describe('createZipPacker + extractZip', () => {
   it('should roundtrip a single file byte-for-byte', () => {
@@ -64,7 +64,7 @@ describe('createZipPacker + extractZip', () => {
 
   it('should handle large compressible data', () => {
     const packer = createZipPacker();
-    const data = Buffer.alloc(64 * 1024, 0x41); // 64 KiB of 'A' — highly compressible
+    const data = Buffer.alloc(64 * 1024, 0x41); // 64 KiB of 'A' - highly compressible
     packer.addFile('large.bin', data);
     const zip = packer.finalize();
 
@@ -125,7 +125,7 @@ describe('createZipPacker + extractZip', () => {
   });
 });
 
-// ─── extractZip error handling ────────────────────────────────────────────────
+// --- extractZip error handling ------------------------------------------------
 
 describe('extractZip', () => {
   it('should throw BfsError on bad ZIP signature', () => {
@@ -165,7 +165,7 @@ describe('extractZip', () => {
   });
 });
 
-// ─── extractZip decompression bomb guard ──────────────────────────────────────
+// --- extractZip decompression bomb guard --------------------------------------
 
 // extractZip caps total decompressed output so a crafted archive cannot expand
 // into an out-of-memory condition. The cap is exercised via the maxTotalOutput
@@ -207,7 +207,7 @@ describe('extractZip decompression bomb guard', () => {
   });
 });
 
-// ─── ZIP64 / legacy compatibility ────────────────────────────────────────────
+// --- ZIP64 / legacy compatibility --------------------------------------------
 
 describe('ZIP64 format', () => {
   it('should extract legacy (non-ZIP64) archives', () => {
@@ -415,7 +415,7 @@ describe('ZIP64 format', () => {
   });
 });
 
-// ─── isZipBuffer ─────────────────────────────────────────────────────────────
+// --- isZipBuffer -------------------------------------------------------------
 
 describe('isZipBuffer', () => {
   it('should return true for valid ZIP magic', () => {
@@ -437,7 +437,7 @@ describe('isZipBuffer', () => {
   });
 });
 
-// ─── estimateCompressibility ──────────────────────────────────────────────────
+// --- estimateCompressibility --------------------------------------------------
 
 describe('estimateCompressibility', () => {
   let tmpDir: string;

@@ -1,6 +1,7 @@
 /**
  * Undocumented debug mode for diagnosing stdin/Inquirer issues.
- * Enabled by passing --debug as the first argument.
+ * Enabled by passing --debug anywhere on the command line; the token is stripped
+ * from argv before Commander parses it.
  * Writes to stderr to avoid interfering with Inquirer's stdout rendering.
  */
 
@@ -29,7 +30,7 @@ export function dbg(label: string, data?: Record<string, unknown>): void {
   process.stderr.write(`\x1b[2m[DBG ${ts}] ${label}${suffix}\x1b[0m\n`);
 }
 
-/** Snapshot of process.stdin state — useful for diagnosing Inquirer hangs. */
+/** Snapshot of process.stdin state - useful for diagnosing Inquirer hangs. */
 export function stdinState(): Record<string, unknown> {
   return { paused: process.stdin.isPaused(), ended: process.stdin.readableEnded, destroyed: process.stdin.destroyed, listeners_data: process.stdin.listenerCount('data'), listeners_readable: process.stdin.listenerCount('readable') };
 }

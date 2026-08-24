@@ -18,13 +18,13 @@ scenario_run() {
 
   snapshot_hashes "$vault" "$base"
 
-  # v1 — compression enabled by config.
+  # v1 - compression enabled by config.
   run_bfs "$vault" push --new
   assert_ok
   assert_manifest_contains "$vault" 1 '"compressed": true'
   assert_manifest_contains "$vault" 1 'blob_size_uncompressed'
 
-  # v2 — per-push override disables compression.
+  # v2 - per-push override disables compression.
   run_bfs "$vault" push --new --no-compress
   assert_ok
   assert_manifest_absent "$vault" 2 '"compressed": true'

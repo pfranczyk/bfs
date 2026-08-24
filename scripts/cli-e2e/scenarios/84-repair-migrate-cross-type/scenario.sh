@@ -1,13 +1,13 @@
 # shellcheck shell=bash
-# Cross-type migration of one shard through THREE provider types — local → FTP →
-# SSH — reusing the SAME shard bytes each hop (no --rebuild). Exercises the
+# Cross-type migration of one shard through THREE provider types - local -> FTP ->
+# SSH - reusing the SAME shard bytes each hop (no --rebuild). Exercises the
 # architecture claim that the built-in providers (local/ftp/ssh) share ONE
 # canonical on-medium layout ({base}/{vault}/shard_i.bfs.V + hdr_i.bfs.V), so raw
 # bytes are portable between them and `bfs repair` only has to repoint config +
 # manifests + sibling location maps. Proves the migrated bytes are byte-for-byte
 # the original push AND that restore keeps working after each hop.
 
-SCENARIO_NAME="repair: cross-type migration local→FTP→SSH (same bytes)"
+SCENARIO_NAME="repair: cross-type migration local->FTP->SSH (same bytes)"
 SCENARIO_DESC="3L 2/1; pre-place shard bytes on FTP then SSH, repair (no rebuild) each hop, restore + prove bytes unchanged"
 REQUIRES_LOCAL=3
 REQUIRES_FTP=1
@@ -33,7 +33,7 @@ scenario_run() {
   local before
   before="$(sha256sum "$shard" | cut -d' ' -f1)"
 
-  # ── Hop 1: local → FTP, same bytes (no --rebuild) ──────────────────────────
+  # -- Hop 1: local -> FTP, same bytes (no --rebuild) --------------------------
   local fe=0
   local f9remote="${FTP_BASE[$fe]%/}/bfs-e2e-${RUN_ID}/f9-${name}"
   ftp_mkdir "$fe" "$f9remote"
@@ -56,7 +56,7 @@ scenario_run() {
   assert_ok
   assert_restored "$vault" "$base"
 
-  # ── Hop 2: FTP → SSH, same bytes (no --rebuild) ────────────────────────────
+  # -- Hop 2: FTP -> SSH, same bytes (no --rebuild) ----------------------------
   local se=0
   local s9remote="${SSH_BASE[$se]%/}/bfs-e2e-${RUN_ID}/s9-${name}"
   ssh_mkdir "$se" "$s9remote"
@@ -66,7 +66,7 @@ scenario_run() {
     "${SSH_HOST[$se]}" "${SSH_PORT[$se]}" "${SSH_USER[$se]}" "${SSH_PASS[$se]}" \
     "$s9remote" >"$sshjson"
 
-  # --ci so the new-host TOFU (--accept-new-host-key) is honoured non-interactively.
+  # --ci for an unattended run; --accept-new-host-key authorizes the new host's key.
   run_bfs "$vault" repair --ci --version all f9 "ssh:s9 --config-file $(winpath "$sshjson") --accept-new-host-key"
   assert_ok
   assert_manifest_contains "$vault" 1 '"provider_id": "s9"'
@@ -80,7 +80,7 @@ scenario_run() {
   assert_ok
   assert_restored "$vault" "$base"
 
-  # The shard now living on SSH is byte-for-byte the one pushed to local — the
+  # The shard now living on SSH is byte-for-byte the one pushed to local - the
   # canonical layout carried the raw bytes across all three provider types. (The
   # no-rebuild guarantee itself is enforced by BFS: commitMigrationPairs verifies
   # the shard identity at the destination before committing the manifest swap.)
@@ -90,7 +90,7 @@ scenario_run() {
 
   # Force the migrated shard into the reconstruction path: shard_2 (now on SSH as
   # s9) is the PARITY shard, so with both local data shards present a pull never
-  # needs it. Drop a local DATA shard (shard_0) — now pull MUST download the
+  # needs it. Drop a local DATA shard (shard_0) - now pull MUST download the
   # migrated parity from SSH and RS-rebuild the missing data. Proves the migrated
   # shard is not just present and byte-identical, but functionally usable.
   rm "$(shard_file 0 1)"

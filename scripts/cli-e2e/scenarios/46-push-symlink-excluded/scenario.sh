@@ -5,7 +5,7 @@
 # `bfs push`. Because a symlink / special file can never be represented in a blob
 # (a link may be a loop; a device is not a file), push MUST refuse in
 # non-interactive mode with a dedicated exit code (3), list the offending paths,
-# and suggest .bfsignore — instead of silently excluding them (the pre-fix bug).
+# and suggest .bfsignore - instead of silently excluding them (the pre-fix bug).
 # `--allow-excluded` waives the refusal: the backup is created without them and a
 # SHA-256 roundtrip of the regular files still holds.
 #
@@ -13,7 +13,7 @@
 # the scenario self-skips (returns PASS) when symlinks are unavailable.
 
 SCENARIO_NAME="push aborts on symlink/special (exit 3) unless --allow-excluded"
-SCENARIO_DESC="symlink in source → push exit 3 + list; --allow-excluded → roundtrip without it"
+SCENARIO_DESC="symlink in source -> push exit 3 + list; --allow-excluded -> roundtrip without it"
 REQUIRES_LOCAL=3
 REQUIRES_FTP=0
 

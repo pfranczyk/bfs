@@ -26,10 +26,9 @@ import { VersionHealth } from '../types/index.js';
 import { readConfig, writeConfig } from './config.js';
 import { splitLocationSecrets } from './location-map.js';
 import { applyHealthChange, listManifests, readManifest, writeManifest } from './manifest.js';
-import { readState } from './state.js';
 import { buildRemotePath, extractShardPayload } from './vault-manager.js';
 
-// ─── Report types ─────────────────────────────────────────────────────────────
+// --- Report types -------------------------------------------------------------
 
 export interface HealReport {
   repaired: number;
@@ -38,21 +37,23 @@ export interface HealReport {
   versions_degraded: number[];
 }
 
-// ─── Private helpers for rebuildVersion ───────────────────────────────────────
+// --- Private helpers for rebuildVersion ---------------------------------------
 
 /**
  * Downloads the shard payloads available for a version, skipping the removed
- * provider and any shard that fails its own trailing checksum — a shard damaged
+ * provider and any shard that fails its own trailing checksum - a shard damaged
  * on its medium must not seed the version's metadata nor enter the RS decode.
  *
- * @returns a slots array (null where a shard is unavailable or damaged) and a map
- *          of the accepted raw shard binaries for header inspection
+ * @returns a slots array (null where a shard is unavailable or damaged), a map
+ *          of the accepted raw shard binaries for header inspection, and how many
+ *          siblings were rejected for failing their own checksum
  */
-async function downloadAvailableShards(config: VaultConfig, manifest: VersionManifest, removedProviderId: string, io: ProviderIO): Promise<{ shardSlots: Nullable<Buffer>[]; shardDataMap: Map<number, Buffer> }> {
+async function downloadAvailableShards(config: VaultConfig, manifest: VersionManifest, removedProviderId: string, io: ProviderIO): Promise<{ shardSlots: Nullable<Buffer>[]; shardDataMap: Map<number, Buffer>; damagedSiblings: number }> {
   const { data_shards: N, parity_shards: K } = manifest.scheme;
   const version = manifest.version;
   const shardSlots: Nullable<Buffer>[] = new Array(N + K).fill(null);
   const shardDataMap = new Map<number, Buffer>();
+  let damagedSiblings = 0;
 
   for (const ms of manifest.shards) {
     if (ms.provider_id === removedProviderId) continue;
@@ -72,6 +73,7 @@ async function downloadAvailableShards(config: VaultConfig, manifest: VersionMan
       // between the surviving shards meaningful: a header that disagrees while
       // its own checksum verifies was rewritten deliberately, not corrupted.
       if (!shardChecksumMatches(data)) {
+        damagedSiblings++;
         io.warn(fmt('heal_shard_corrupt_skip', ms.provider_id));
         continue;
       }
@@ -81,14 +83,39 @@ async function downloadAvailableShards(config: VaultConfig, manifest: VersionMan
       // skip unavailable shard
     }
   }
-  return { shardSlots, shardDataMap };
+  return { shardSlots, shardDataMap, damagedSiblings };
+}
+
+/** How the repaired version's health is recorded once the new shard is in place. */
+interface RepairVerdict {
+  health: VersionHealth;
+  deepRot: boolean;
+}
+
+/**
+ * Works out the verdict a finished repair leaves behind. The repair replaces one
+ * part; every other part is exactly as the media held it, so a sibling that could
+ * not be read - rotted or unreachable - still costs the version its redundancy
+ * and must not be stamped healthy. Rot is the stronger finding of the two: it was
+ * read off the bytes, so it carries provenance, while an unreachable sibling
+ * establishes nothing and retires as soon as the medium is back.
+ *
+ * @param soundSiblings   - Siblings that yielded a shard passing its own checksum
+ * @param manifest        - Manifest of the version being repaired (for the scheme)
+ * @param damagedSiblings - Siblings rejected for failing their own checksum
+ * @returns the health to stamp and whether it rests on rot read off the media
+ */
+function verdictAfterRepair(soundSiblings: number, manifest: VersionManifest, damagedSiblings: number): RepairVerdict {
+  const expectedSiblings = manifest.scheme.data_shards + manifest.scheme.parity_shards - 1;
+  const health = soundSiblings >= expectedSiblings ? VersionHealth.Healthy : VersionHealth.Degraded;
+  return { health, deepRot: damagedSiblings > 0 };
 }
 
 /**
  * Extracts and cross-validates shard metadata across ALL available raw shards.
  * Every shard of a version carries the same vault_id, vault_name, blob_hash,
  * blob_size, rs_stripe_size and kdf_salt, so any divergence between siblings
- * means a tampered (unencrypted) header — heal refuses rather than silently
+ * means a tampered (unencrypted) header - heal refuses rather than silently
  * adopting a forged field from whichever shard happened to be read first. Also
  * validates vault_name as a safe path segment (it drives the remote shard path)
  * and derives the AES-256-GCM key when the vault is encrypted.
@@ -146,7 +173,7 @@ async function extractShardMeta(
   if (manifest.encrypted && password && !encKey) {
     throw new BfsError('Could not retrieve kdf_salt from available shards.');
   }
-  // vault_name becomes a directory segment on every medium — reject traversal
+  // vault_name becomes a directory segment on every medium - reject traversal
   // before it reaches buildRemotePath (the provider chokepoint guards too).
   assertSafeVaultName(vaultName);
   return { encKey, kdf_salt, blobSize, blobHash, formatVersion, vaultId, vaultName, rsStripeSize };
@@ -180,7 +207,7 @@ async function uploadRepairedShard(options: UploadRepairedShardOptions): Promise
   targetProvider.setVaultName(vaultName);
   // A rebuild target is a possibly-fresh or wiped medium (lost disk / replaced
   // server), so its base directory may not exist yet. probeConnection provisions
-  // it — exactly as init does — and validates connectivity; a bare authenticate()
+  // it - exactly as init does - and validates connectivity; a bare authenticate()
   // would instead list the base path and hard-fail on a provider (SSH) that lists
   // strictly, leaving the reconstructed shard unwritten.
   await targetProvider.probeConnection();
@@ -208,7 +235,7 @@ interface RepairShardPayloadOptions {
  * then per-shard AES-GCM re-encryption with the deterministic nonce. V1 legacy:
  * flat RS repair, payload stored verbatim (V1 encrypts the whole blob before RS,
  * so shard payloads are ciphertext slices that RS-repair directly). Returns the
- * final stored payload plus the SHA-256 of the plaintext payload — the value
+ * final stored payload plus the SHA-256 of the plaintext payload - the value
  * push records as shard_hash.
  *
  * @param options - shard slots, scheme, removed index, encryption context
@@ -235,12 +262,15 @@ function _repairShardPayload(options: RepairShardPayloadOptions): { finalPayload
   return { finalPayload, plaintextHash: hashBuffer(plaintext) };
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// --- Public API ---------------------------------------------------------------
 
 /**
  * Updates the location map embedded in all available shards of the given version.
  * For encrypted vaults, decrypts the old location map, replaces it, and re-encrypts.
- * Uses provider.updateShardHeader() for each available shard.
+ * Each provider decides how the updated header is stored: `usesSidecar() === true`
+ * (what all built-ins do) writes it to the `hdr_` sidecar next to the shard,
+ * leaving the payload untouched; `false` rewrites it in place via
+ * `updateShardHeader()`.
  *
  * @param rootDir  - Vault root directory
  * @param version  - Version number to update
@@ -261,13 +291,13 @@ export async function updateLocationMaps(rootDir: string, version: number, optio
 
   for (const ms of manifest.shards) {
     const pc = config.providers.find((p) => p.id === ms.provider_id);
-    if (!pc) continue; // provider removed from config — skip
+    if (!pc) continue; // provider removed from config - skip
 
     const provider = providerRegistry.create(pc, io);
     try {
       await provider.authenticate();
     } catch {
-      // Provider unreachable — skip; it will need a separate heal later.
+      // Provider unreachable - skip; it will need a separate heal later.
       continue;
     }
 
@@ -316,7 +346,7 @@ export async function updateLocationMaps(rootDir: string, version: number, optio
         await provider.updateShardHeader(ref, buildHeaderBytes(newHeader, encKey));
       }
     } catch {
-      // The provider is reachable but the header rewrite failed — this shard's
+      // The provider is reachable but the header rewrite failed - this shard's
       // location map is now stale. Surface it instead of hiding it behind the
       // "unavailable" skip; the operator can heal or repair that provider.
       io.warn(fmt('heal_locationmap_update_failed', ms.provider_id));
@@ -332,6 +362,8 @@ export async function updateLocationMaps(rootDir: string, version: number, optio
  * @param version  - Version to repair
  * @param options  - removedProviderId, targetProviderId, io, and optional password
  * @throws BfsError if not enough shards available or password missing for encrypted vault
+ * @throws TamperDetectedError if the surviving shard headers disagree on identity fields
+ * @throws UnsafePathError if the recorded vault_name is not a safe path segment
  */
 export async function rebuildVersion(rootDir: string, version: number, options: RebuildVersionOptions): Promise<void> {
   const { removedProviderId, targetProviderId, io, password } = options;
@@ -349,7 +381,7 @@ export async function rebuildVersion(rootDir: string, version: number, options: 
 
   // Find which shard index belongs to the removed provider
   const removedShard = manifest.shards.find((s) => s.provider_id === removedProviderId);
-  if (!removedShard) return; // this version doesn't use the removed provider — nothing to do
+  if (!removedShard) return; // this version doesn't use the removed provider - nothing to do
 
   const targetProviderConfig = config.providers.find((p) => p.id === targetProviderId);
   if (!targetProviderConfig) {
@@ -363,15 +395,15 @@ export async function rebuildVersion(rootDir: string, version: number, options: 
   }
 
   // Download all available shards (skip the removed provider)
-  const { shardSlots, shardDataMap } = await downloadAvailableShards(config, manifest, removedProviderId, io);
+  const { shardSlots, shardDataMap, damagedSiblings } = await downloadAvailableShards(config, manifest, removedProviderId, io);
 
   const available = shardSlots.filter((s) => s !== null).length;
   if (available < N) {
     throw new BfsError(`Not enough shards to repair version ${version}: need ${N}, got ${available}.`);
   }
 
-  // Extract metadata and key from the first available shard — needed to choose
-  // the V1 vs V2 repair path before rebuilding the payload.
+  // Cross-validate metadata across every available shard and derive the key -
+  // needed to choose the V1 vs V2 repair path before rebuilding the payload.
   const shardMeta = await extractShardMeta(shardDataMap, manifest, password);
   const { encKey, kdf_salt, blobSize, blobHash, formatVersion, vaultId, vaultName, rsStripeSize } = shardMeta;
 
@@ -380,7 +412,7 @@ export async function rebuildVersion(rootDir: string, version: number, options: 
   // the value push records as shard_hash (SHA-256 of the plaintext payload).
   const { finalPayload, plaintextHash } = _repairShardPayload({ shardSlots, formatVersion, dataShards: N, parityShards: K, removedIndex: removedShard.shard_index, encrypted: manifest.encrypted, encKey, version, rsStripeSize });
 
-  // Build new location map: swap removedProvider → targetProvider
+  // Build new location map: swap removedProvider -> targetProvider
   const newLocationMap: ShardLocation[] = manifest.shards.map((ms) => {
     if (ms.provider_id === removedProviderId) {
       const split = splitLocationSecrets(targetProviderConfig.type, targetProviderConfig.config, io);
@@ -447,12 +479,13 @@ export async function rebuildVersion(rootDir: string, version: number, options: 
     return ms;
   });
 
-  await writeManifest(rootDir, applyHealthChange({ ...manifest, shards: updatedShards }, VersionHealth.Healthy));
+  const verdict = verdictAfterRepair(available, manifest, damagedSiblings);
+  await writeManifest(rootDir, applyHealthChange({ ...manifest, shards: updatedShards }, verdict.health, verdict.deepRot));
 }
 
 /**
  * Reconstructs a provider's LOST shard for one version with Reed-Solomon and
- * re-uploads it to the SAME provider (id unchanged) — the `bfs repair --rebuild`
+ * re-uploads it to the SAME provider (id unchanged) - the `bfs repair --rebuild`
  * counterpart to {@link rebuildVersion}'s move-to-a-new-provider model. Unlike
  * rebuildVersion there is no provider swap and no "target already holds a shard"
  * invariant, because the provider keeps its own index. Optionally targets a new
@@ -475,12 +508,12 @@ export async function rebuildShardInPlace(rootDir: string, version: number, opti
   if (manifest.encrypted && !password) throw new BfsError('Password required for RS repair in an encrypted vault.');
 
   const shard = manifest.shards.find((s) => s.provider_id === providerId);
-  if (!shard) return; // this version doesn't use this provider — nothing to rebuild
+  if (!shard) return; // this version doesn't use this provider - nothing to rebuild
   const existing = config.providers.find((p) => p.id === providerId);
   if (!existing) throw new BfsError(`Provider "${providerId}" not found in config.`);
   const targetProviderConfig: ProviderConfig = newConnectionConfig ? { ...existing, config: newConnectionConfig } : existing;
 
-  const { finalPayload, plaintextHash, meta } = await reconstructLostShard(config, manifest, shard, password, io);
+  const { finalPayload, plaintextHash, meta, soundSiblings, damagedSiblings } = await reconstructLostShard(config, manifest, shard, password, io);
 
   const filename = `shard_${shard.shard_index}.bfs.${version}`;
   const newRemotePath = buildRemotePath(targetProviderConfig, config.vault_name, filename);
@@ -490,19 +523,21 @@ export async function rebuildShardInPlace(rootDir: string, version: number, opti
   await updateLocationMaps(rootDir, version, { newLocationMap, io, ...(password !== undefined ? { password } : {}) });
 
   const updatedShards = manifest.shards.map((ms) => (ms.provider_id === providerId ? { ...ms, remote_path: newRemotePath, shard_hash: plaintextHash } : ms));
-  await writeManifest(rootDir, applyHealthChange({ ...manifest, shards: updatedShards }, VersionHealth.Healthy));
+  const verdict = verdictAfterRepair(soundSiblings, manifest, damagedSiblings);
+  await writeManifest(rootDir, applyHealthChange({ ...manifest, shards: updatedShards }, verdict.health, verdict.deepRot));
 }
 
 /**
  * Downloads the surviving shards, Reed-Solomon-reconstructs the lost shard's
- * payload, and verifies it against the manifest hash.
+ * payload, and verifies it against the manifest hash. Also reports what the
+ * siblings looked like, which is what decides the repaired version's health.
  *
  * @throws BfsError when fewer than N shards remain
  * @throws ShardCorruptedError when the rebuilt payload's hash mismatches the manifest
  */
 async function reconstructLostShard(config: VaultConfig, manifest: VersionManifest, shard: ManifestShard, password: string | undefined, io: ProviderIO) {
   const { data_shards: N, parity_shards: K } = manifest.scheme;
-  const { shardSlots, shardDataMap } = await downloadAvailableShards(config, manifest, shard.provider_id, io);
+  const { shardSlots, shardDataMap, damagedSiblings } = await downloadAvailableShards(config, manifest, shard.provider_id, io);
   const available = shardSlots.filter((s) => s !== null).length;
   if (available < N) {
     throw new BfsError(`Not enough shards to rebuild version ${manifest.version}: need ${N}, got ${available}.`);
@@ -522,7 +557,7 @@ async function reconstructLostShard(config: VaultConfig, manifest: VersionManife
   if (shard.shard_hash && shard.shard_hash !== plaintextHash) {
     throw new ShardCorruptedError(`RS rebuild produced a mismatched payload for version ${manifest.version} shard ${shard.shard_index}.`);
   }
-  return { finalPayload, plaintextHash, meta };
+  return { finalPayload, plaintextHash, meta, soundSiblings: available, damagedSiblings };
 }
 
 /** Assembles the rebuilt shard's header from the reconstructed metadata and new location map. */
@@ -588,10 +623,11 @@ function buildRebuiltLocationMap(config: VaultConfig, manifest: VersionManifest,
  * @param rootDir  - Vault root directory
  * @param options  - removedProviderId, targetProviderId, scope, io, and optional password
  * @returns HealReport
+ * @throws TamperDetectedError when a version's surviving shard headers disagree -
+ *         a security event, never absorbed into the degraded report
  */
 export async function rebuildAllVersions(rootDir: string, options: RebuildAllVersionsOptions): Promise<HealReport> {
   const { removedProviderId, targetProviderId, scope, io, password } = options;
-  const state = await readState(rootDir);
   const manifests = await listManifests(rootDir);
 
   const affectedManifests = manifests.filter((m) => m.shards.some((s) => s.provider_id === removedProviderId));
@@ -600,7 +636,13 @@ export async function rebuildAllVersions(rootDir: string, options: RebuildAllVer
   if (scope === 'all') {
     targetVersions = affectedManifests.map((m) => m.version);
   } else if (scope === 'latest') {
-    targetVersions = affectedManifests.filter((m) => m.version === state.latest_version).map((m) => m.version);
+    // "Latest" means the newest version this copy can act on, not the newest
+    // number the storage holds: after a recovery that met a version it could not
+    // open, `state.latest_version` names a version with no manifest, and matching
+    // on it would rebuild nothing while the provider is removed from the config
+    // anyway - leaving the newest version that DOES have a manifest short a part.
+    const newest = Math.max(0, ...manifests.map((m) => m.version));
+    targetVersions = affectedManifests.filter((m) => m.version === newest).map((m) => m.version);
   } else {
     targetVersions = scope;
   }
@@ -637,7 +679,8 @@ export async function rebuildAllVersions(rootDir: string, options: RebuildAllVer
  *
  * @param rootDir    - Vault root directory
  * @param providerId - Existing provider id to relocate
- * @param options    - newConnectionConfig, io, optional password and newType
+ * @param options    - newConnectionConfig, io, optional password, newType and
+ *                     versions (scope of the header rewrite; the config change is always global)
  * @throws BfsError if provider is unreachable at new address or shards are missing
  */
 export async function relocateProvider(rootDir: string, providerId: string, options: RelocateProviderOptions): Promise<void> {
@@ -649,7 +692,7 @@ export async function relocateProvider(rootDir: string, providerId: string, opti
   if (!existingProvider) throw new BfsError(`Provider "${providerId}" not found in config.`);
 
   const resolvedType = newType ?? existingProvider.type;
-  // When the type changes the adapter may also change — refresh the package
+  // When the type changes the adapter may also change - refresh the package
   // metadata from the registry so the probed provider advertises the correct
   // provenance. When the type is unchanged, keep the persisted adapterPackage.
   const updatedMeta = providerRegistry.getMeta(resolvedType);
@@ -660,7 +703,7 @@ export async function relocateProvider(rootDir: string, providerId: string, opti
   const tempProvider = providerRegistry.create(updatedProviderConfig, io);
 
   // Verify accessibility. healthCheck() only yields a boolean, which would mask
-  // WHY the address is unusable behind a generic "not accessible" — sending the
+  // WHY the address is unusable behind a generic "not accessible" - sending the
   // operator to debug connectivity when the real cause is often a rejected host
   // key. Drive authenticate() and forward its classified error so the message
   // tells them whether they need --known-host / --accept-new-host-key.

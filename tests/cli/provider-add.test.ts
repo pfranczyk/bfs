@@ -30,8 +30,21 @@ const mockReadConfig = vi.mocked(readConfig);
 const mockWriteConfig = vi.mocked(writeConfig);
 const mockPrompt = vi.mocked(inquirer.prompt);
 
+/**
+ * Scratch directories handed out by writeConfigFile, emptied after every test -
+ * so a path it returns must not be used outside the test that asked for it.
+ */
+const configDirs: string[] = [];
+
+afterEach(async () => {
+  // Swallow removal errors: a test that already passed must not turn red because
+  // something else on the machine still held the file for a moment.
+  await Promise.all(configDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }).catch(() => {})));
+});
+
 async function writeConfigFile(obj: unknown): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-add-cfg-'));
+  configDirs.push(dir);
   const file = path.join(dir, 'cfg.json');
   await fs.writeFile(file, JSON.stringify(obj), 'utf8');
   return file;
@@ -43,7 +56,7 @@ describe('provider add', () => {
   beforeEach(() => {
     capture = captureConsole();
     mockWriteConfig.mockResolvedValue(undefined);
-    // Unit tests — skip real fs probe and interactive path prompt.
+    // Unit tests - skip real fs probe and interactive path prompt.
     // Integration of probeConnection + configureInteractive is covered by
     // tests/providers/local-fs.test.ts.
     vi.spyOn(LocalFsProvider.prototype, 'probeConnection').mockResolvedValue(undefined);
@@ -59,7 +72,7 @@ describe('provider add', () => {
     vi.restoreAllMocks();
   });
 
-  // ─── No configuration ────────────────────────────────────────────────────
+  // --- No configuration ----------------------------------------------------
 
   it('should abort when vault config is missing', async () => {
     mockReadConfig.mockResolvedValue(null);
@@ -71,7 +84,7 @@ describe('provider add', () => {
     expect(capture.errors.some((e) => e.includes('bfs init'))).toBe(true);
   });
 
-  // ─── CI mode ──────────────────────────────────────────────────────────────
+  // --- CI mode --------------------------------------------------------------
 
   it('CI: should add provider and write updated config', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -84,8 +97,8 @@ describe('provider add', () => {
     expect(writtenConfig.providers.some((p: { id: string }) => p.id === 'dysk-4')).toBe(true);
   });
 
-  it('CI: should increment parity_shards by 1 after adding provider (pipeline krok 6)', async () => {
-    // Pipeline: new provider = dodatkowy parity shard; data_shards bez zmian
+  it('CI: should increment parity_shards by 1 after adding provider', async () => {
+    // A new provider adds one parity shard; data_shards stays unchanged
     mockReadConfig.mockResolvedValue(makeConfig() as never); // starts with parity_shards: 1
     const cfg = await writeConfigFile({ path: '/mnt/d4' });
 
@@ -169,7 +182,7 @@ describe('provider add', () => {
     expect(mockWriteConfig).not.toHaveBeenCalled();
   });
 
-  // ─── --config-file: path resolution (provider uses io.workDir) ────────────
+  // --- --config-file: path resolution (provider uses io.workDir) ------------
 
   it('CI: should let the provider resolve relative --config-file against io.workDir', async () => {
     // BFS exposes its working directory on `io.workDir`; the LocalFS
@@ -203,7 +216,7 @@ describe('provider add', () => {
 
   it('CI: should treat empty --config-file "" as omitted', async () => {
     // Commander leaves an explicit --config-file "" as empty string. The CLI
-    // guard (length > 0) must treat it the same as missing flag — i.e. let
+    // guard (length > 0) must treat it the same as missing flag - i.e. let
     // the provider fall back to its default (no readability check fires).
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
@@ -216,7 +229,7 @@ describe('provider add', () => {
     expect(added?.config.path).toBe(path.join(os.homedir(), '.bfs-local', 'empty-flag'));
   });
 
-  // ─── --config-file: data propagation to writeConfig ──────────────────────
+  // --- --config-file: data propagation to writeConfig ----------------------
 
   it('CI: should persist path parsed from --config-file into saved provider config', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -234,7 +247,7 @@ describe('provider add', () => {
 
   it('CI: should abort with human-readable error when --config-file JSON fails provider validation', async () => {
     // Local adapter requires a non-empty "path". An object literal {} should
-    // bubble up as "Configuration failed: …" from the CLI wrapper instead of
+    // bubble up as "Configuration failed: ..." from the CLI wrapper instead of
     // silently writing a broken provider config.
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     vi.mocked(LocalFsProvider.prototype.configureInteractive).mockRestore?.();
@@ -267,23 +280,46 @@ describe('provider add', () => {
     }
   });
 
-  // ─── --config-file: FTP provider end-to-end (CLI layer) ──────────────────
+  // --- --config-file: FTP provider end-to-end (CLI layer) ------------------
 
   it('CI: should load FTP provider config from --config-file and persist it', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
-    // FTP probeConnection would try a real TCP connection — mock it out.
+    // FTP probeConnection would try a real TCP connection - mock it out.
     vi.spyOn(FtpProvider.prototype, 'probeConnection').mockResolvedValue(undefined);
     // The add-time collision guard lists the target sub-directory over FTP; stub it.
     vi.spyOn(FtpProvider.prototype, 'list').mockResolvedValue([]);
 
-    const cfg = await writeConfigFile({ host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true });
+    // `accept_new_cert` is part of a usable FTPS config here: the run is
+    // non-interactive, so without it - or a pinned fingerprint - there is no
+    // way to trust the server and the adapter refuses (see the test below).
+    const cfg = await writeConfigFile({ host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true, accept_new_cert: true });
 
     await runCmd(['provider', 'add', '--ci', '--name', 'ftp-remote', '--type', 'ftp', '--config-file', cfg]);
 
     expect(mockWriteConfig).toHaveBeenCalledOnce();
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
     const added = writtenConfig.providers.find((p: { id: string }) => p.id === 'ftp-remote');
-    expect(added).toMatchObject({ id: 'ftp-remote', type: 'ftp', config: { host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true } });
+    expect(added).toMatchObject({ id: 'ftp-remote', type: 'ftp', config: { host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true, accept_new_cert: true } });
+  });
+
+  // An FTPS storage with no way to trust it is refused from the settings, before
+  // the probe runs. The refusal itself is not new - the probe would have reached
+  // the same verdict at the server - but it now arrives without a connection and
+  // names the missing instruction instead of the failed handshake.
+  it('CI: should refuse an FTPS provider with no way to trust the server', async () => {
+    mockReadConfig.mockResolvedValue(makeConfig() as never);
+    const probeSpy = vi.spyOn(FtpProvider.prototype, 'probeConnection').mockResolvedValue(undefined);
+    vi.spyOn(FtpProvider.prototype, 'list').mockResolvedValue([]);
+
+    const cfg = await writeConfigFile({ host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true });
+
+    const result = await runCmd(['provider', 'add', '--ci', '--name', 'ftp-untrusted', '--type', 'ftp', '--config-file', cfg]);
+
+    expect(result).toBe('abort');
+    expect(mockWriteConfig).not.toHaveBeenCalled();
+    // Decided from the configuration, before anything reaches the storage.
+    expect(probeSpy).not.toHaveBeenCalled();
+    expect(capture.errors.join('\n')).toContain('--accept-new-cert');
   });
 
   it('CI: should abort when FTP --type provider is invoked without --config-file', async () => {
@@ -299,7 +335,7 @@ describe('provider add', () => {
     expect(capture.errors.some((e) => e.includes('Configuration failed'))).toBe(true);
   });
 
-  // ─── CI validation ────────────────────────────────────────────────────────
+  // --- CI validation --------------------------------------------------------
 
   it('CI: should abort when --name is missing', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -329,7 +365,7 @@ describe('provider add', () => {
     expect(mockWriteConfig).not.toHaveBeenCalled();
   });
 
-  // ─── Interactive mode ────────────────────────────────────────────────────
+  // --- Interactive mode ----------------------------------------------------
 
   it('interactive: should prompt for name and type (path goes through configureInteractive)', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -353,7 +389,7 @@ describe('provider add', () => {
     expect([...capture.logs, ...capture.errors].some((l) => l.includes('push'))).toBe(true);
   });
 
-  // ─── Provider name charset validation ────────────────────────────────────
+  // --- Provider name charset validation ------------------------------------
 
   it('CI: should abort when --name contains whitespace', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -377,31 +413,31 @@ describe('provider add', () => {
   });
 });
 
-// Interactive `bfs provider add` — connectivity probe + recovery loop.
+// Interactive `bfs provider add` - connectivity probe + recovery loop.
 //
 // Mirrors interactive `bfs init`: right after configureInteractive() returns,
 // the command validates the medium with a full storage round-trip via
 // probeConnection() inside a retry loop. On a ProviderError it warns via
 // io.warn and asks io.choose with three options in a fixed order:
-//   [0] RETRY    — re-probe the same config
-//   [1] RE-ENTER — re-run configureInteractive for that provider
-//   [2] ABORT    — clean cancellation (CommandAbort); provider NOT saved
-// This keeps a connection failure — transient, or a typo in host/port/
-// password/path — recoverable in place, instead of aborting the whole command
+//   [0] RETRY    - re-probe the same config
+//   [1] RE-ENTER - re-run configureInteractive for that provider
+//   [2] ABORT    - clean cancellation (CommandAbort); provider NOT saved
+// This keeps a connection failure - transient, or a typo in host/port/
+// password/path - recoverable in place, instead of aborting the whole command
 // (and discarding the operator's input) on the first probe error.
 //
 // The recovery option is selected by INDEX in the offered list (documented
 // order RETRY/RE-ENTER/ABORT), so these tests stay independent of the prompt's
 // i18n wording. The CI path (configureFromFlags) deliberately has NO recovery
-// loop — these tests only exercise the interactive path.
+// loop - these tests only exercise the interactive path.
 const PROBE_TYPE = 'mockaddprobe';
 
 interface AddProbeState {
   /** One outcome consumed per probeConnection() call: 'fail' throws, 'ok' resolves. */
   attempts: string[];
-  /** Count of probeConnection() invocations — the acceptance gate. */
+  /** Count of probeConnection() invocations - the acceptance gate. */
   probeCalls: number;
-  /** Count of configureInteractive() invocations — proves RE-ENTER re-ran it. */
+  /** Count of configureInteractive() invocations - proves RE-ENTER re-ran it. */
   configCalls: number;
   /** Vault names passed to setVaultName(), in call order. */
   setVaultNames: string[];
@@ -438,7 +474,7 @@ function registerAddProbeProvider(state: AddProbeState): void {
         validateConfig(): string[] {
           return [];
         },
-        // The add-time collision guard lists the target sub-directory — empty for
+        // The add-time collision guard lists the target sub-directory - empty for
         // a new provider location, so no foreign vault is detected.
         async list(): Promise<never[]> {
           return [];
@@ -454,7 +490,7 @@ function registerAddProbeProvider(state: AddProbeState): void {
 
 /**
  * Installs a ProviderIO (via spying on createCliProviderIO) whose `choose`
- * returns the option at `pickIndex` — picking the recovery action by its
+ * returns the option at `pickIndex` - picking the recovery action by its
  * documented position (0=RETRY, 1=RE-ENTER, 2=ABORT) rather than its
  * not-yet-translated text. Records warn() lines and every choose() call.
  */
@@ -482,7 +518,7 @@ function installAddProbeIO(pickIndex: number): { warns: string[]; chooseCalls: A
   return { warns, chooseCalls };
 }
 
-describe('interactive provider add — connectivity probe + recovery', () => {
+describe('interactive provider add - connectivity probe + recovery', () => {
   let capture: ReturnType<typeof captureConsole>;
 
   beforeEach(() => {
@@ -512,7 +548,7 @@ describe('interactive provider add — connectivity probe + recovery', () => {
     expect(chooseCalls.length).toBeGreaterThanOrEqual(1);
     expect(state.probeCalls).toBeGreaterThanOrEqual(2); // fail + retry
     expect(state.configCalls).toBe(1); // no re-entry on RETRY
-    // The probe gate wired the vault name before probing — a dropped
+    // The probe gate wired the vault name before probing - a dropped
     // setVaultName() would leave probeConnection() unable to resolve its path.
     expect(state.setVaultNames).toContain('test-vault');
     expect(result).toBe('ok');
@@ -547,14 +583,14 @@ describe('interactive provider add — connectivity probe + recovery', () => {
     const result = await runCmd(['provider', 'add']);
 
     expect(chooseCalls.length).toBeGreaterThanOrEqual(1);
-    // Clean cancellation — CommandAbort (abort) or a prompt cancellation
+    // Clean cancellation - CommandAbort (abort) or a prompt cancellation
     // (cancelled), never an uncaught error type.
     expect(['abort', 'cancelled']).toContain(result);
     expect(mockWriteConfig).not.toHaveBeenCalled();
   });
 
   // Message-agnosticism: the recovery loop must fire for ANY ProviderError,
-  // regardless of the failure text — every real connection failure surfaces the
+  // regardless of the failure text - every real connection failure surfaces the
   // same recoverable prompt, not a special-cased symptom.
   const FAILURE_MESSAGES: Array<{ field: string; message: string }> = [
     { field: 'wrong host (ENOTFOUND-style)', message: 'getaddrinfo ENOTFOUND no-such-host.invalid' },
@@ -563,7 +599,7 @@ describe('interactive provider add — connectivity probe + recovery', () => {
     { field: 'wrong path (550 no such directory)', message: '550 No such file or directory.' },
   ];
 
-  it.each(FAILURE_MESSAGES)('RE-ENTER recovery fires for any ProviderError — $field', async ({ message }) => {
+  it.each(FAILURE_MESSAGES)('RE-ENTER recovery fires for any ProviderError - $field', async ({ message }) => {
     const state: AddProbeState = { attempts: ['fail', 'ok'], probeCalls: 0, configCalls: 0, setVaultNames: [], failMessage: message };
     registerAddProbeProvider(state);
     const { chooseCalls } = installAddProbeIO(1); // pick RE-ENTER (index 1)

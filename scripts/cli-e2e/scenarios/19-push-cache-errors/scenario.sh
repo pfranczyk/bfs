@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # `bfs push --cache` requires BOTH .bfs/push.lock and the cached blob to be
-# present — it's a forensic resume, not a fresh push path. Every combination
+# present - it's a forensic resume, not a fresh push path. Every combination
 # of missing artifact must emit PushCacheNoLockError naming exactly what is
 # missing. Covers vault-manager.ts:943-952 (_initPushLock fromCache branch)
 # and src/core/errors.ts:115-120.
@@ -14,7 +14,7 @@ write_live_push_lock() {
   local vault="$1" version="$2"
   mkdir -p "$vault/.bfs"
   local now; now="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
-  # blob_pending_path mirrors what a real BFS push would write — `_initPushLock`
+  # blob_pending_path mirrors what a real BFS push would write - `_initPushLock`
   # reports exactly this string in `PushCacheNoLockError.missing` when the file
   # itself does not exist, so the asserts on "push.blob.pending" hit the path
   # literal rather than a placeholder.
@@ -45,14 +45,14 @@ scenario_run() {
   assert_ok
   assert_lock_absent "$vault"
 
-  # Variant 1: neither lock nor cache present → both listed as missing.
+  # Variant 1: neither lock nor cache present -> both listed as missing.
   run_bfs "$vault" push --cache
   assert_fail
   assert_out_contains '`--cache` requires both'
   assert_out_contains 'push.lock'
   assert_out_contains 'push.blob.pending'
 
-  # Variant 2: lock present, cache blob missing → only the blob is missing.
+  # Variant 2: lock present, cache blob missing -> only the blob is missing.
   write_live_push_lock "$vault" 1
   rm -f "$vault/.bfs/cache/push.blob.pending"
   run_bfs "$vault" push --cache
@@ -67,7 +67,7 @@ scenario_run() {
   fi
   rm -f "$vault/.bfs/push.lock"
 
-  # Variant 3: cache blob present, lock missing → only the lock is missing.
+  # Variant 3: cache blob present, lock missing -> only the lock is missing.
   mkdir -p "$vault/.bfs/cache"
   : >"$vault/.bfs/cache/push.blob.pending"
   run_bfs "$vault" push --cache
@@ -82,7 +82,7 @@ scenario_run() {
   fi
 }
 
-# _missing_list <bfs-output> — extracts the comma-separated list of missing
+# _missing_list <bfs-output> - extracts the comma-separated list of missing
 # artifacts that PushCacheNoLockError appends after "missing:". Isolates the
 # list from the surrounding "requires both .bfs/push.lock and cached blob"
 # template, so per-variant assertions only inspect what is actually missing.

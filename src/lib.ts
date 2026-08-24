@@ -20,7 +20,7 @@
  * integer; see {@link ./version.ts} for history.
  */
 
-// Error classes — adapters throw these so CLI surfaces them consistently.
+// Error classes - adapters throw these so CLI surfaces them consistently.
 export {
   BfsError,
   DecryptionError,
@@ -35,18 +35,23 @@ export {
   ProviderRegistry,
   providerRegistry,
 } from './providers/provider.js';
-// Types & interfaces — the provider contract. `Nullable<T>` is re-exported here
+// Types & interfaces - the provider contract. `Nullable<T>` is re-exported here
 // (not only a global ambient) because tsup's .d.ts bundler drops global
 // ambients: the contract types below reference `Nullable`, so its definition
 // must travel into dist/lib.d.ts for external adapters to compile.
 export type {
   AdapterRegistrationMeta,
   CliProviderInput,
+  // Parameter types of the optional StorageProvider members
+  // (configureInteractiveForEdit, connectForRecovery): an adapter cannot
+  // implement a signature whose types it has no way to name.
+  ConfigureEditContext,
   Nullable,
   ProviderConfig,
   ProviderHelp,
   ProviderHelpFlag,
   ProviderIO,
+  RecoverySecret,
   RemoteRef,
   ShardIdentity,
   StorageProvider,

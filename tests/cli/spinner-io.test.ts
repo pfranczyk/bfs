@@ -14,7 +14,7 @@ interface FakeSpinner {
  * Minimal ora double. Records each start/stop together with the number of
  * delegated io log entries observed at that moment, so a test can prove that a
  * delegated call (io.warn / io.ask) fired strictly between a stop and the
- * following start — i.e. the spinner was paused for the call's duration.
+ * following start - i.e. the spinner was paused for the call's duration.
  *
  * Returns both the `Ora`-typed handle (passed to createSpinnerIo) and the
  * mutable `fake` (Ora's `isSpinning` is readonly, so the test drives state here).
@@ -43,7 +43,7 @@ describe('createSpinnerIo', () => {
     vi.restoreAllMocks();
   });
 
-  // ─── warn ───────────────────────────────────────────────────────────────
+  // --- warn ---------------------------------------------------------------
 
   it('should pause and resume the spinner around warn when spinning', () => {
     const { io, logs } = createMockProviderIO();
@@ -75,7 +75,7 @@ describe('createSpinnerIo', () => {
     expect(fake.isSpinning).toBe(false);
   });
 
-  // ─── prompts ──────────────────────────────────────────────────────────────
+  // --- prompts --------------------------------------------------------------
 
   it('should pause and resume the spinner around ask and return the answer', async () => {
     const { io } = createMockProviderIO({ 'Vault name?': 'picture' });
@@ -138,7 +138,7 @@ describe('createSpinnerIo', () => {
     expect(fake.isSpinning).toBe(false);
   });
 
-  // ─── info / progress ──────────────────────────────────────────────────────
+  // --- info / progress ------------------------------------------------------
 
   it('should write info text onto the spinner line instead of delegating', () => {
     const { io, logs } = createMockProviderIO();
@@ -163,7 +163,7 @@ describe('createSpinnerIo', () => {
     expect(fake.text).toContain('50%');
   });
 
-  // ─── passthrough ──────────────────────────────────────────────────────────
+  // --- passthrough ----------------------------------------------------------
 
   it('should preserve non-overridden io fields (lang, workDir, debug)', () => {
     const baseIo = createCliProviderIO('/tmp/vault');
@@ -172,6 +172,22 @@ describe('createSpinnerIo', () => {
 
     expect(wrapped.lang).toBe(baseIo.lang);
     expect(wrapped.workDir).toBe('/tmp/vault');
-    expect(typeof wrapped.debug).toBe('function');
+    // Identity, not shape: a wrapper that routed debug through the spinner would
+    // still be a function, and connection chatter meant to stay silent without
+    // `--debug` would start rewriting the spinner line.
+    expect(wrapped.debug).toBe(baseIo.debug);
+  });
+
+  // `bfs recovery --bootstrap` decides its mode by passing `!isCi` here and only
+  // then wraps, so a wrapper that dropped `interactive` would put a scripted
+  // restore back to prompting. Both values are pinned - carrying one through is
+  // not proof of carrying the other.
+  it.each([true, false])('should carry the interactive flag through the wrapper (%s)', (interactive) => {
+    const baseIo = createCliProviderIO('/tmp/vault', interactive);
+    const { spinner } = makeFakeSpinner({ length: 0 });
+
+    const wrapped = createSpinnerIo(baseIo, spinner);
+
+    expect(wrapped.interactive).toBe(interactive);
   });
 });

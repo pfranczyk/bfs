@@ -1,22 +1,22 @@
 # shellcheck shell=bash
-# S3 — "unconfirmed config after recovery" gate, exercised through a HEAL
+# S3 - "unconfirmed config after recovery" gate, exercised through a HEAL
 # (`bfs provider remove --strategy relocate`) instead of a push.
 #
 # Same root cause as scenario 36: with encryption off a shard's location_map is
 # raw JSON guarded only by an UNKEYED trailing SHA-256, so `bfs recovery` can
 # rebuild .bfs/config.json with an attacker-controlled provider coordinate. The
 # plan promises the unconfirmed-config gate fires on the FIRST write op after
-# recovery — "push OR heal, whichever comes first".
+# recovery - "push OR heal, whichever comes first".
 #
 # Escalation under test: a heal write path. `provider remove --strategy relocate`
 # runs updateLocationMaps(), which authenticates to EVERY provider in the
-# recovered config to rewrite shard headers — including the redirected one. After
+# recovered config to rewrite shard headers - including the redirected one. After
 # a disaster recovery from a forged map, the heal therefore logs in to the
 # attacker's host without the operator ever confirming the locations.
 #
 # Setup models the net effect: a clean recovery rebuilds config from the remote
 # headers, then one recovered provider entry (p1) is rewritten to point at the
-# FTP trap — the untrusted coordinate an attacker would have planted. p0's shard
+# FTP trap - the untrusted coordinate an attacker would have planted. p0's shard
 # is copied to a fresh dir so the relocate of p0 reaches updateLocationMaps.
 #
 # GREEN contract: recovery marks the config UNCONFIRMED
@@ -26,7 +26,7 @@
 # the trap. Therefore the trap log stays EMPTY.
 #
 # RED contract (today): removeProvider has no gate, so relocate runs
-# updateLocationMaps and logs in to the redirected p1 — the trap captures the
+# updateLocationMaps and logs in to the redirected p1 - the trap captures the
 # USER/PASS handshake. A non-empty trap log after the heal is the RED FAIL.
 
 SCENARIO_NAME="heal after recovery gate (untrusted recovered host must not leak during relocate)"
@@ -54,7 +54,7 @@ scenario_run() {
   run_bfs "$vault" push --new
   assert_ok
 
-  # ── Start the attacker trap server on an ephemeral 127.0.0.1 port ──────────
+  # -- Start the attacker trap server on an ephemeral 127.0.0.1 port ----------
   : >"$trap_log"
   node "$(winpath "$trap_driver")" "$(winpath "$trap_log")" 0 >"$trap_out" 2>&1 &
   local trap_pid=$!
@@ -106,19 +106,19 @@ $(cat "$cfg")"
   mkdir -p "$reldir"
   cp -r "${PV_LOCALDIR[0]}/$name" "$reldir/$name"
 
-  # ── HEAL after recovery (non-interactive: no TTY for confirmation) ─────────
+  # -- HEAL after recovery (non-interactive: no TTY for confirmation) ---------
   run_bfs "$vault" provider remove p0 --strategy relocate --path "$(winpath "$reldir")" --yes
 
   # Give the trap a beat to flush any captured handshake to disk.
   sleep 0.3
 
-  # ── RED assertion: the heal must NOT reach the attacker host ───────────────
+  # -- RED assertion: the heal must NOT reach the attacker host ---------------
   # GREEN gate (unconfirmed config) forces a confirmation the non-interactive
-  # heal cannot satisfy → relocate aborts before any FTP login → trap log empty.
+  # heal cannot satisfy -> relocate aborts before any FTP login -> trap log empty.
   # RED today: relocate runs updateLocationMaps and logs in to the redirected
-  # provider → USER/PASS land in the trap log.
+  # provider -> USER/PASS land in the trap log.
   if [ -s "$trap_log" ]; then
-    _fail "heal (relocate) after recovery reached the attacker host without confirmation — trap captured:
+    _fail "heal (relocate) after recovery reached the attacker host without confirmation - trap captured:
 $(cat "$trap_log")"
   fi
 

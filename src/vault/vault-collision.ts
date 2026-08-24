@@ -25,10 +25,10 @@ async function tryReadHeader(provider: StorageProvider, ref: RemoteRef): Promise
  * collides.
  *
  * `expectedVaultId === null` (a fresh `init`, which has no vault_id yet): ANY
- * shard present is foreign — abort on presence. Otherwise (`push` /
+ * shard present is foreign - abort on presence. Otherwise (`push` /
  * `provider add`): only a readable header whose `vault_id` differs from
  * `expectedVaultId` is a collision. A location holding our OWN shards (matching
- * vault_id) is ours and passes — this is the normal versioned re-push. When
+ * vault_id) is ours and passes - this is the normal versioned re-push. When
  * shards exist but no header is readable, there is no proof of foreignness, so
  * the write proceeds: the owner may be overwriting a damaged copy of their own
  * backup rather than being locked out of it.
@@ -47,18 +47,18 @@ export async function assertNoForeignVault(provider: StorageProvider, vaultName:
   } catch (err) {
     // The location cannot be listed (path missing, not a directory, transport
     // error). That is not proof of a foreign vault, so let the operation proceed
-    // — its own error handling stays intact (e.g. a failing upload → degraded
+    // - its own error handling stays intact (e.g. a failing upload -> degraded
     // push, which the collision guard must not pre-empt). LocalFsProvider.list()
     // returns [] on ENOENT but throws on ENOTDIR (a vault path that is a file),
     // and that throw must not abort the caller.
-    io.debug(`vault collision guard: cannot list provider "${provider.id}" (${err instanceof Error ? err.message : String(err)}) — proceeding, no proof of a foreign vault`);
+    io.debug(`vault collision guard: cannot list provider "${provider.id}" (${err instanceof Error ? err.message : String(err)}) - proceeding, no proof of a foreign vault`);
     return;
   }
   if (shardRefs.length === 0) return;
 
   if (expectedVaultId === null) {
     // Fresh init: any real shard in the freshly-named sub-directory belongs to
-    // another backup — abort on presence. The header read is best-effort and
+    // another backup - abort on presence. The header read is best-effort and
     // only enriches the debug diagnostic.
     const header = await tryReadHeader(provider, shardRefs[0]);
     io.debug(`vault collision at provider "${provider.id}": ${shardRefs.length} shard(s) present, foreign vault_id=${header?.vault_id ?? 'unreadable'}`);
@@ -67,11 +67,11 @@ export async function assertNoForeignVault(provider: StorageProvider, vaultName:
 
   for (const ref of shardRefs) {
     const header = await tryReadHeader(provider, ref);
-    if (header === null) continue; // unreadable — no proof of foreignness from this shard
-    if (header.vault_id === expectedVaultId) return; // our own shard — this location is ours
+    if (header === null) continue; // unreadable - no proof of foreignness from this shard
+    if (header.vault_id === expectedVaultId) return; // our own shard - this location is ours
     io.debug(`vault collision at provider "${provider.id}": foreign vault_id=${header.vault_id}`);
     throw new VaultCollisionError(fmt('vault_collision_detected', provider.id), provider.id);
   }
   // Every shard header was unreadable: no proof of a foreign vault, so let the
-  // owner proceed — they may be overwriting a damaged copy of their own backup.
+  // owner proceed - they may be overwriting a damaged copy of their own backup.
 }

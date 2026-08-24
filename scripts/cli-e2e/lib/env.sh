@@ -2,8 +2,8 @@
 # Environment setup: workspace, isolated global settings, path translation.
 # Sourced by run.sh. Relies on $REPO_ROOT being exported by run.sh.
 
-# winpath <posix-path> — converts a path for consumption by the native Windows
-# node.exe when running under MSYS/Git Bash (cygpath -m → mixed form C:/foo,
+# winpath <posix-path> - converts a path for consumption by the native Windows
+# node.exe when running under MSYS/Git Bash (cygpath -m -> mixed form C:/foo,
 # forward slashes so it survives shellParse inside --provider specs). On
 # Linux/WSL (no cygpath) it is the identity function.
 if command -v cygpath >/dev/null 2>&1; then
@@ -12,7 +12,7 @@ else
   winpath() { printf '%s' "$1"; }
 fi
 
-# env_init — creates the per-run workspace and isolates global BFS settings so
+# env_init - creates the per-run workspace and isolates global BFS settings so
 # the harness never touches the user's real ~/.config/bfs. Sets:
 #   RUN_ID        unique id for this invocation (timestamp + pid)
 #   RUN_WS        root workspace dir (auto-removed unless --keep)
@@ -31,13 +31,13 @@ env_init() {
   TSX="$REPO_ROOT/node_modules/.bin/tsx"
   BFS_ENTRY="$REPO_ROOT/src/index.ts"
   if [ ! -x "$TSX" ] && [ ! -f "$TSX" ]; then
-    echo "FATAL: tsx not found at $TSX — run 'npm install' in $REPO_ROOT" >&2
+    echo "FATAL: tsx not found at $TSX - run 'npm install' in $REPO_ROOT" >&2
     exit 2
   fi
   export TSX BFS_ENTRY
 }
 
-# env_cleanup — removes the local workspace AND this run's remote FTP/SSH
+# env_cleanup - removes the local workspace AND this run's remote FTP/SSH
 # namespace unless KEEP_WS=1. Registered as an EXIT trap by run.sh, so it also
 # fires on Ctrl+C and on failure. Never touches anything outside RUN_WS locally,
 # or anything but `bfs-e2e-<RUN_ID>` remotely.

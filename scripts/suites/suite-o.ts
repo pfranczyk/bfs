@@ -10,7 +10,7 @@ import { assert, runBfs, runTest } from '../smoke-runner.js';
 import type { SmokeContext, SuiteResult, TestResult } from '../smoke-types.js';
 import { readJson, sha256 } from '../smoke-vault.js';
 
-// ─── Suite O — pull --allow-missing-adapters with a missing external adapter ──
+// --- Suite O - pull --allow-missing-adapters with a missing external adapter --
 //
 // Verifies the CHANGELOG [0.5.0] promise: `bfs pull --allow-missing-adapters`
 // lets Reed-Solomon decoding proceed with whichever providers remain reachable.
@@ -20,7 +20,7 @@ import { readJson, sha256 } from '../smoke-vault.js';
 // provider, RS-decode from the remaining N=2, exit 0 and restore the files.
 //
 // Bug guarded: providerRegistry.create() on the unregistered type was invoked
-// outside the download try/catch → BfsError("Unknown provider type") crashed the
+// outside the download try/catch -> BfsError("Unknown provider type") crashed the
 // whole pull instead of degrading gracefully.
 
 export async function suiteO(ctx: SmokeContext): Promise<SuiteResult> {
@@ -30,7 +30,7 @@ export async function suiteO(ctx: SmokeContext): Promise<SuiteResult> {
   const oP1Dir = path.join(oTmpDir, 'p1');
   const oP2Dir = path.join(oTmpDir, 'p2');
   const oP3Dir = path.join(oTmpDir, 'p3');
-  // Isolated XDG_CONFIG_HOME → no global settings → default lang 'en'.
+  // Isolated XDG_CONFIG_HOME -> no global settings -> default lang 'en'.
   const oLangDir = path.join(oTmpDir, 'lang-config');
   const oEnv: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: oLangDir };
 
@@ -39,7 +39,7 @@ export async function suiteO(ctx: SmokeContext): Promise<SuiteResult> {
   const helloContent = 'Hello, missing adapter!';
   const helloHash = sha256(Buffer.from(helloContent));
 
-  // ── O0: Setup vault 2/1, push v1, then mutate config to external-missing ──
+  // -- O0: Setup vault 2/1, push v1, then mutate config to external-missing --
 
   tests.push(
     await runTest('O0', 'setup: vault O + push + mutate config (external-missing)', async () => {
@@ -78,10 +78,10 @@ export async function suiteO(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── O1: pull WITHOUT the flag → preflight aborts (contrast, already works) ─
+  // -- O1: pull WITHOUT the flag -> preflight aborts (contrast, already works) -
 
   tests.push(
-    await runTest('O1', 'bfs pull (no flag) — aborts on missing external adapter', async () => {
+    await runTest('O1', 'bfs pull (no flag) - aborts on missing external adapter', async () => {
       const r = runBfs(['pull', '--force'], oVaultDir, undefined, oEnv);
       assert(r.status !== 0, `expected non-zero exit without --allow-missing-adapters, got ${r.status}`);
       const out = r.stdout + r.stderr;
@@ -90,10 +90,10 @@ export async function suiteO(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── O2: pull WITH the flag → skip missing provider, restore from N=2 ──────
+  // -- O2: pull WITH the flag -> skip missing provider, restore from N=2 ------
 
   tests.push(
-    await runTest('O2', 'bfs pull --allow-missing-adapters — restores from remaining N', async () => {
+    await runTest('O2', 'bfs pull --allow-missing-adapters - restores from remaining N', async () => {
       const r = runBfs(['pull', '--force', '--allow-missing-adapters'], oVaultDir, undefined, oEnv);
       const out = r.stdout + r.stderr;
       // The bug surfaced as "Unknown provider type" crashing the whole pull.
@@ -106,5 +106,5 @@ export async function suiteO(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  return { name: 'Suite O — pull --allow-missing-adapters (external-missing)', tests };
+  return { name: 'Suite O - pull --allow-missing-adapters (external-missing)', tests };
 }

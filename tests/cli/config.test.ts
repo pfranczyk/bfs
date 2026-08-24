@@ -34,7 +34,7 @@ describe('config', () => {
     vi.clearAllMocks();
   });
 
-  // ─── Display (no args) ────────────────────────────────────────────────────
+  // --- Display (no args) ----------------------------------------------------
 
   it('should display current settings when no args given', async () => {
     mockReadConfig.mockResolvedValue(makeConfig({ cache_dir: '/custom/cache', temp_dir: '/custom/tmp' }) as never);
@@ -66,7 +66,7 @@ describe('config', () => {
     expect(all.toLowerCase()).toMatch(/no backup|brak/i);
   });
 
-  // ─── Set cache_dir ────────────────────────────────────────────────────────
+  // --- Set cache_dir --------------------------------------------------------
 
   it('should set cache_dir and call writeConfig when --cache-dir given', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -86,7 +86,7 @@ describe('config', () => {
     expect(all.toLowerCase()).toMatch(/updated|zaktualizowane/i);
   });
 
-  // ─── Set temp_dir ─────────────────────────────────────────────────────────
+  // --- Set temp_dir ---------------------------------------------------------
 
   it('should set temp_dir and call writeConfig when --temp-dir given', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -96,7 +96,7 @@ describe('config', () => {
     expect(mockWriteConfig).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ temp_dir: '/custom/tmp' }));
   });
 
-  // ─── Reset cache_dir ──────────────────────────────────────────────────────
+  // --- Reset cache_dir ------------------------------------------------------
 
   it('should reset cache_dir to null when --cache-dir --reset given', async () => {
     mockReadConfig.mockResolvedValue(makeConfig({ cache_dir: '/old/cache' }) as never);
@@ -116,7 +116,7 @@ describe('config', () => {
     expect(all.toLowerCase()).toMatch(/reset|default|domyśln/i);
   });
 
-  // ─── Reset temp_dir ───────────────────────────────────────────────────────
+  // --- Reset temp_dir -------------------------------------------------------
 
   it('should reset temp_dir to null when --temp-dir --reset given', async () => {
     mockReadConfig.mockResolvedValue(makeConfig({ temp_dir: '/old/tmp' }) as never);
@@ -126,7 +126,7 @@ describe('config', () => {
     expect(mockWriteConfig).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ temp_dir: null }));
   });
 
-  // ─── No writeConfig when nothing changes ──────────────────────────────────
+  // --- No writeConfig when nothing changes ----------------------------------
 
   it('should not call writeConfig when displaying settings (no args)', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -136,7 +136,7 @@ describe('config', () => {
     expect(mockWriteConfig).not.toHaveBeenCalled();
   });
 
-  // ─── Validation: reject nonexistent directories ──────────────────────────
+  // --- Validation: reject nonexistent directories --------------------------
 
   it('should reject --cache-dir when parent directory does not exist', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);

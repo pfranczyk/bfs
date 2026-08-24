@@ -13,12 +13,11 @@ export interface GlobalSettings {
 export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = { language: null };
 
 /**
- * Returns the platform-appropriate path to the global BFS settings file.
- * Priority:
- *   Linux/macOS — $XDG_CONFIG_HOME/bfs/settings.json (if set)
- *   Linux/macOS — ~/.config/bfs/settings.json
- *   Windows     — %APPDATA%\bfs\settings.json
- *   Fallback    — ~/.bfs/settings.json
+ * Returns the path to the user-level BFS settings file, in
+ * priority order:
+ *   $XDG_CONFIG_HOME/bfs/settings.json  - whenever the variable is set
+ *   %APPDATA%\bfs\settings.json         - whenever APPDATA is set (Windows)
+ *   ~/.config/bfs/settings.json         - everything else
  */
 export function getGlobalSettingsPath(): string {
   const xdg = process.env.XDG_CONFIG_HOME;

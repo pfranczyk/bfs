@@ -5,7 +5,7 @@ import { assert, runBfs, runTest } from '../smoke-runner.js';
 import type { SuiteResult, TestResult } from '../smoke-types.js';
 import { buildInitArgs, readJson } from '../smoke-vault.js';
 
-// ─── Suite K — Smart compression detection ───────────────────────────────────
+// --- Suite K - Smart compression detection -----------------------------------
 
 export async function suiteK(): Promise<SuiteResult> {
   const tests: TestResult[] = [];
@@ -16,10 +16,10 @@ export async function suiteK(): Promise<SuiteResult> {
   const p2Dir = path.join(tmpBase, 'p2');
   const p3Dir = path.join(tmpBase, 'p3');
 
-  // ── K0 — init --ci with a .jpg directory → compression.enabled=false ─────────
+  // -- K0 - init --ci with a .jpg directory -> compression.enabled=false ---------
 
   tests.push(
-    await runTest('K0', 'bfs init --ci w katalogu .jpg → compression.enabled=false', async () => {
+    await runTest('K0', 'bfs init --ci in a .jpg directory -> compression.enabled=false', async () => {
       await Promise.all([vaultDir, p1Dir, p2Dir, p3Dir].map((d) => fs.mkdir(d, { recursive: true })));
       // Create fake JPEG files (just .jpg extension, content irrelevant)
       for (let i = 1; i <= 3; i++) {
@@ -35,37 +35,37 @@ export async function suiteK(): Promise<SuiteResult> {
       );
       assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
       const cfg = await readJson<{ compression?: { enabled: boolean } }>(path.join(vaultDir, '.bfs', 'config.json'));
-      assert(cfg.compression?.enabled === false, `oczekiwano compression.enabled=false dla katalogu z .jpg, got: ${JSON.stringify(cfg.compression)}`);
+      assert(cfg.compression?.enabled === false, `expected compression.enabled=false for a directory of .jpg files, got: ${JSON.stringify(cfg.compression)}`);
     }),
   );
 
-  // ── K1 — bfs config --off compress → compression.enabled=false ───────────
+  // -- K1 - bfs config --off compress -> compression.enabled=false -----------
 
   tests.push(
-    await runTest('K1', 'bfs config --off compress → compression.enabled=false', async () => {
+    await runTest('K1', 'bfs config --off compress -> compression.enabled=false', async () => {
       const r = runBfs(['config', '--off', 'compress'], vaultDir);
       assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
 
       const cfg = await readJson<{ compression?: { enabled: boolean } }>(path.join(vaultDir, '.bfs', 'config.json'));
-      assert(cfg.compression?.enabled === false, `oczekiwano compression.enabled=false po --off compress, got: ${JSON.stringify(cfg.compression)}`);
+      assert(cfg.compression?.enabled === false, `expected compression.enabled=false after --off compress, got: ${JSON.stringify(cfg.compression)}`);
     }),
   );
 
-  // ── K2 — bfs config --on compress → compression.enabled=true ────────────
+  // -- K2 - bfs config --on compress -> compression.enabled=true ------------
 
   tests.push(
-    await runTest('K2', 'bfs config --on compress → compression.enabled=true', async () => {
+    await runTest('K2', 'bfs config --on compress -> compression.enabled=true', async () => {
       const r = runBfs(['config', '--on', 'compress'], vaultDir);
       assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
 
       const cfg = await readJson<{ compression?: { enabled: boolean } }>(path.join(vaultDir, '.bfs', 'config.json'));
-      assert(cfg.compression?.enabled === true, `oczekiwano compression.enabled=true po --on compress, got: ${JSON.stringify(cfg.compression)}`);
+      assert(cfg.compression?.enabled === true, `expected compression.enabled=true after --on compress, got: ${JSON.stringify(cfg.compression)}`);
     }),
   );
 
-  // ── Cleanup ────────────────────────────────────────────────────────────────
+  // -- Cleanup ----------------------------------------------------------------
 
   await fs.rm(tmpBase, { recursive: true, force: true }).catch(() => {});
 
-  return { name: 'Suite K — Smart compression detection', tests };
+  return { name: 'Suite K - Smart compression detection', tests };
 }

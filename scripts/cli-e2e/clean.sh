@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Remove leftover BFS CLI e2e test data — both the local temp workspaces
+# Remove leftover BFS CLI e2e test data - both the local temp workspaces
 # (bfs-cli-e2e.*) and, when --ftp/--ssh endpoints are given, every remote
 # bfs-e2e-* directory on those servers. Leftovers accumulate only from runs
 # invoked with --keep, or from a run interrupted before its cleanup trap fired;
@@ -33,7 +33,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# ── Local temp workspaces ────────────────────────────────────────────────────
+# -- Local temp workspaces ----------------------------------------------------
 bases="$(printf '%s\n' "${TMPDIR:-/tmp}" "/tmp" | LC_ALL=C sort -u)"
 found=0
 total_kb=0
@@ -68,7 +68,7 @@ else
   printf 'local: %d workspace(s), %s ~%d MB.\n' "$found" "$verb" "$((total_kb / 1024))"
 fi
 
-# ── Remote FTP/SSH test directories ──────────────────────────────────────────
+# -- Remote FTP/SSH test directories ------------------------------------------
 if [ "${#FTP_SPECS[@]}" -gt 0 ] || [ "${#SSH_SPECS[@]}" -gt 0 ]; then
   TSX="$REPO_ROOT/node_modules/.bin/tsx"
   export TSX
@@ -84,7 +84,7 @@ if [ "${#FTP_SPECS[@]}" -gt 0 ] || [ "${#SSH_SPECS[@]}" -gt 0 ]; then
     if [ "$dry" = "1" ]; then
       echo "remote: would remove all bfs-e2e-* under $(ftp_count) FTP endpoint(s) (dry-run: skipped)."
     else
-      echo "remote: removing all bfs-e2e-* from $(ftp_count) FTP endpoint(s)…"
+      echo "remote: removing all bfs-e2e-* from $(ftp_count) FTP endpoint(s)..."
       ftp_clean_all
     fi
   fi
@@ -92,14 +92,14 @@ if [ "${#FTP_SPECS[@]}" -gt 0 ] || [ "${#SSH_SPECS[@]}" -gt 0 ]; then
     if [ "$dry" = "1" ]; then
       echo "remote: would remove all bfs-e2e-* under $(ssh_count) SSH endpoint(s) (dry-run: skipped)."
     else
-      echo "remote: removing all bfs-e2e-* from $(ssh_count) SSH endpoint(s)…"
+      echo "remote: removing all bfs-e2e-* from $(ssh_count) SSH endpoint(s)..."
       ssh_clean_all
     fi
   fi
 fi
 
-# ── Docker-managed scenario leftovers (containers + volumes named bfs-e2e-*) ──
-# A --keep run of a docker-managed scenario (85–87, 89…) leaves its container and
+# -- Docker-managed scenario leftovers (containers + volumes named bfs-e2e-*) --
+# A --keep run of a docker-managed scenario (85-87, 89...) leaves its container and
 # volume behind (env_cleanup keeps them alongside the workspace). Sweep them here.
 # shellcheck source=lib/docker-endpoint.sh
 . "$SCRIPT_DIR/lib/docker-endpoint.sh"
@@ -110,7 +110,7 @@ if docker_available; then
     if [ "$dry" = "1" ]; then
       echo "docker: would remove bfs-e2e-* containers/volumes (dry-run: skipped)."
     else
-      echo "docker: removing bfs-e2e-* containers/volumes…"
+      echo "docker: removing bfs-e2e-* containers/volumes..."
       # shellcheck disable=SC2086
       [ -n "$dctr" ] && docker rm -f $dctr >/dev/null 2>&1
       # shellcheck disable=SC2086

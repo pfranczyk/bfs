@@ -8,7 +8,7 @@ import { BfsError } from './errors.js';
 import { resolveSafeChildPath } from './fs-utils.js';
 import { hashBuffer, SHA256_BYTES } from './hash.js';
 
-// Blob header size — 70 bytes for both v1 and v2 (the version bump lives in the
+// Blob header size - 70 bytes for both v1 and v2 (the version bump lives in the
 // file-table entry, which gains a `kind` byte and a `created_at` field in v2).
 const HEADER_SIZE = 70;
 const CHECKSUM_SIZE = SHA256_BYTES;
@@ -84,7 +84,7 @@ function _parseEntriesFromBuffer(buf: Buffer, fileCount: number, end: number, fo
 
 /**
  * Reapplies a restored file's metadata. mtime is always restored (portable via
- * fs.utimes). mode is reapplied only for v2 blobs (`applyMode`) — v1 blobs keep
+ * fs.utimes). mode is reapplied only for v2 blobs (`applyMode`) - v1 blobs keep
  * the legacy behaviour where mode was never restored. `created_at` is carried in
  * the entry but not reapplied: no portable API sets a file's birth time. Every
  * call is best-effort, so failing to set mode/mtime never fails the byte restore.
@@ -98,8 +98,11 @@ async function applyFileMetadata(targetPath: string, entry: FileEntry, applyMode
 }
 
 /**
- * Parses the file table from a BFS blob — pure logic, no I/O. Dispatches on the
+ * Parses the file table from a BFS blob - pure logic, no I/O. Dispatches on the
  * header's format_version so v1 and v2 entry shapes are both read correctly.
+ *
+ * @throws BfsError if the blob is too short, the magic is invalid, or the file
+ *         table is truncated
  */
 export function parseBlobFileTable(blob: Buffer): FileEntry[] {
   if (blob.length < HEADER_SIZE + CHECKSUM_SIZE) {
@@ -134,7 +137,10 @@ export function parseBlobFileTable(blob: Buffer): FileEntry[] {
  * @param blob      - Full BFS blob buffer (including trailing SHA-256)
  * @param targetDir - Directory to write files into
  * @param filter    - Optional: unpack only entries where filter returns true (raw path only)
- * @returns         - `{ extracted, skipped }` — written entries and any that could not be written
+ * @returns         - `{ extracted, skipped }` - written entries and any that could not be written
+ * @throws BfsError on data corruption (checksum / hash mismatch)
+ * @throws UnsafePathError when an entry path escapes targetDir - this aborts the
+ *         restore rather than being collected as skipped
  */
 export async function unpackBlob(blob: Buffer, targetDir: string, filter?: (entry: FileEntry) => boolean): Promise<{ extracted: FileEntry[]; skipped: SkippedFile[] }> {
   if (blob.length < HEADER_SIZE + CHECKSUM_SIZE) {
@@ -146,7 +152,7 @@ export async function unpackBlob(blob: Buffer, targetDir: string, filter?: (entr
   const blobBody = blob.subarray(0, blob.length - CHECKSUM_SIZE);
   const computedChecksum = Buffer.from(hashBuffer(blobBody), 'hex');
   if (!storedChecksum.equals(computedChecksum)) {
-    throw new BfsError('Blob checksum mismatch — data is corrupted or tampered');
+    throw new BfsError('Blob checksum mismatch - data is corrupted or tampered');
   }
 
   // 2. Header: version, flags, data-section window
@@ -165,7 +171,7 @@ export async function unpackBlob(blob: Buffer, targetDir: string, filter?: (entr
     return _extractZipToDir(zipBuffer, targetDir, entries, formatVersion);
   }
 
-  // 4. Raw path — slice each file out of the data section
+  // 4. Raw path - slice each file out of the data section
   const extracted: FileEntry[] = [];
   const skipped: SkippedFile[] = [];
 
@@ -175,7 +181,7 @@ export async function unpackBlob(blob: Buffer, targetDir: string, filter?: (entr
     const start = dataSectionOffset + Number(entry.data_offset);
     const end = start + Number(entry.size);
 
-    // Data-corruption checks still throw — these are not permission issues
+    // Data-corruption checks still throw - these are not permission issues
     if (end > blob.length - CHECKSUM_SIZE) {
       throw new BfsError(`Data section out of bounds for file: ${entry.path}`);
     }
@@ -187,7 +193,7 @@ export async function unpackBlob(blob: Buffer, targetDir: string, filter?: (entr
 
     // resolveSafeChildPath runs before the try so an UnsafePathError (path
     // escaping targetDir) propagates and aborts the restore instead of being
-    // demoted to a skipped entry — consistent with the hash-mismatch throw above.
+    // demoted to a skipped entry - consistent with the hash-mismatch throw above.
     const targetPath = resolveSafeChildPath(targetDir, entry.path);
     try {
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -216,6 +222,10 @@ export async function parseBlobFileTableFromFile(blobPath: string): Promise<File
   const fh = await fs.open(blobPath, 'r');
   try {
     const { size: fileSize } = await fh.stat();
+    // A blob is never smaller than its header plus the trailing checksum. The
+    // buffer-based parser rejects that up front; without the same floor here a
+    // header-only leftover from an interrupted pack would read as a valid blob.
+    if (fileSize < HEADER_SIZE + CHECKSUM_SIZE) throw new BfsError('Blob file too short to be a valid blob');
     const header = Buffer.alloc(HEADER_SIZE);
     const { bytesRead: hRead } = await fh.read(header, 0, HEADER_SIZE, 0);
     if (hRead < HEADER_SIZE) throw new BfsError('Blob file too short to contain header');
@@ -245,14 +255,16 @@ export async function parseBlobFileTableFromFile(blobPath: string): Promise<File
 
 /**
  * Unpacks a BFS blob from a file path using random-access I/O.
- * Works for blobs of any size — does not load the full blob into memory (raw path).
+ * Works for blobs of any size - does not load the full blob into memory (raw path).
  * Files are read in 4 MiB chunks; per-file and whole-blob checksums are verified.
  *
  * @param blobPath  - Path to the blob file on disk
  * @param targetDir - Directory to write extracted files into
  * @param filter    - Optional: unpack only entries where filter returns true (raw path only)
- * @returns `{ extracted, skipped }` — written entries and any that could not be written
+ * @returns `{ extracted, skipped }` - written entries and any that could not be written
  * @throws BfsError on data corruption (checksum / hash mismatch)
+ * @throws UnsafePathError when an entry path escapes targetDir - this aborts the
+ *         restore rather than being collected as skipped
  */
 export async function unpackBlobFromFile(blobPath: string, targetDir: string, filter?: (entry: FileEntry) => boolean): Promise<{ extracted: FileEntry[]; skipped: SkippedFile[] }> {
   const fileStat = await fs.stat(blobPath);
@@ -260,7 +272,7 @@ export async function unpackBlobFromFile(blobPath: string, targetDir: string, fi
 
   const fh = await fs.open(blobPath, 'r');
   try {
-    // ── 1. Read header (version, offsets, counts) ──────────────────────────
+    // -- 1. Read header (version, offsets, counts) --------------------------
     const header = Buffer.alloc(HEADER_SIZE);
     await fh.read(header, 0, HEADER_SIZE, 0);
 
@@ -279,12 +291,12 @@ export async function unpackBlobFromFile(blobPath: string, targetDir: string, fi
     assertSectionWithinFile({ offset: fileTableOffset, length: fileTableLength }, fileStat.size, 'file table');
     assertFileCountFits(fileCount, fileTableLength);
 
-    // ── 2. Read + parse file table ─────────────────────────────────────────
+    // -- 2. Read + parse file table -----------------------------------------
     const ftBuf = Buffer.alloc(fileTableLength);
     await fh.read(ftBuf, 0, fileTableLength, fileTableOffset);
     const entries = _parseEntriesFromBuffer(ftBuf, fileCount, ftBuf.length, formatVersion);
 
-    // ── 3. Verify trailing SHA-256 checksum (streaming, 4 MiB chunks) ──────
+    // -- 3. Verify trailing SHA-256 checksum (streaming, 4 MiB chunks) ------
     const hashLen = fileStat.size - CHECKSUM_SIZE;
     const checksumHash = createHash('sha256');
     let readPos = 0;
@@ -301,10 +313,10 @@ export async function unpackBlobFromFile(blobPath: string, targetDir: string, fi
     const storedChecksum = Buffer.alloc(CHECKSUM_SIZE);
     await fh.read(storedChecksum, 0, CHECKSUM_SIZE, fileStat.size - CHECKSUM_SIZE);
     if (!computedChecksum.equals(storedChecksum)) {
-      throw new BfsError('Blob checksum mismatch — data is corrupted or tampered');
+      throw new BfsError('Blob checksum mismatch - data is corrupted or tampered');
     }
 
-    // ── 4. Compressed data section → ZIP (loaded into RAM to extract) ──────
+    // -- 4. Compressed data section -> ZIP (loaded into RAM to extract) ------
     const flags = header.readUInt32LE(0x16);
     const isCompressed = (flags & BLOB_FLAGS.COMPRESSED) !== 0;
     const dataSectionLength = Number(header.readBigUInt64LE(0x3e));
@@ -316,7 +328,7 @@ export async function unpackBlobFromFile(blobPath: string, targetDir: string, fi
       return _extractZipToDir(zipBuffer, targetDir, entries, formatVersion);
     }
 
-    // ── 5. Raw path — extract each file using random-access reads ──────────
+    // -- 5. Raw path - extract each file using random-access reads ----------
     const extracted: FileEntry[] = [];
     const skipped: SkippedFile[] = [];
 
@@ -359,7 +371,7 @@ export async function unpackBlobFromFile(blobPath: string, targetDir: string, fi
         await applyFileMetadata(targetPath, entry, applyMode);
         extracted.push(entry);
       } catch (e: unknown) {
-        if (e instanceof BfsError) throw e; // data corruption — propagate
+        if (e instanceof BfsError) throw e; // data corruption - propagate
         skipped.push({ path: entry.path, reason: e instanceof Error ? e.message : String(e) });
       }
     }
@@ -370,7 +382,7 @@ export async function unpackBlobFromFile(blobPath: string, targetDir: string, fi
   }
 }
 
-// ─── Private helpers ──────────────────────────────────────────────────────────
+// --- Private helpers ----------------------------------------------------------
 
 /** A byte window inside a blob file, declared by the (untrusted) header. */
 interface FileWindow {
@@ -381,7 +393,7 @@ interface FileWindow {
 /**
  * Validates a header-declared (offset, length) window against the actual blob
  * file size before a buffer is allocated for it. A tampered header could
- * declare a multi-GiB length and crash the process at Buffer.alloc — long
+ * declare a multi-GiB length and crash the process at Buffer.alloc - long
  * before the bounds-checked parsing loop would reject it.
  *
  * @throws BfsError if offset/length are not safe integers, are negative, or
@@ -417,13 +429,13 @@ function assertFileCountFits(fileCount: number, fileTableLength: number): void {
  * Extracts a compressed (ZIP) data section to targetDir. CRC-32 is verified by
  * extractZip() for each entry. Dispatches on format_version:
  *  - v1: the file table held only the "bfs.pack.zip" pseudo-entry, so per-file
- *    identity is the ZIP entry names — each is restored directly, with no mode or
- *    mtime (the legacy behaviour, unchanged).
+ *    identity is the ZIP entry names - each is restored directly, with no mode or
+ *    mtime.
  *  - v2: the file table lists one entry per user file carrying mode/mtime plus the
  *    uncompressed size/hash; the ZIP provides content. Entries drive the restore,
  *    content is matched by path, size/hash are verified (per-file integrity on top
  *    of the ZIP CRC), and mode/mtime are reapplied.
- * I/O errors (permission denied, disk full) are collected as skipped — not thrown.
+ * I/O errors (permission denied, disk full) are collected as skipped - not thrown.
  */
 async function _extractZipToDir(zipBuffer: Buffer, targetDir: string, entries: FileEntry[], formatVersion: number): Promise<{ extracted: FileEntry[]; skipped: SkippedFile[] }> {
   const zipEntries = extractZip(zipBuffer); // throws BfsError on corrupt ZIP

@@ -17,7 +17,7 @@ import { readState } from '../../src/vault/state.js';
 import { _classifyUploadError, init, listVersions, prune, pull, push, removeProvider } from '../../src/vault/vault-manager.js';
 import { verifyAll } from '../../src/vault/verify.js';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// --- Helpers ------------------------------------------------------------------
 
 async function tmp(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'bfs-vault-'));
@@ -52,7 +52,7 @@ async function listUserFiles(dir: string): Promise<string[]> {
   return results.sort();
 }
 
-// ─── init ─────────────────────────────────────────────────────────────────────
+// --- init ---------------------------------------------------------------------
 
 describe('init', () => {
   let root: string;
@@ -138,7 +138,7 @@ describe('init', () => {
       }),
     ).rejects.toThrow(/Unknown provider type/);
 
-    // Config must NOT have been written — the fix ensures validation precedes writeConfig
+    // Config must NOT have been written - the fix ensures validation precedes writeConfig
     const config = await readConfig(root);
     expect(config).toBeNull();
   });
@@ -172,7 +172,7 @@ describe('init', () => {
   });
 });
 
-// ─── push ─────────────────────────────────────────────────────────────────────
+// --- push ---------------------------------------------------------------------
 
 describe('push', () => {
   let root: string;
@@ -205,7 +205,7 @@ describe('push', () => {
     expect(m?.file_count).toBeGreaterThanOrEqual(2); // hello.txt + subdir/nested.txt (+ .bfsignore if default was copied)
   });
 
-  it('push × 2 → listVersions returns 2 manifests', async () => {
+  it('push x 2 -> listVersions returns 2 manifests', async () => {
     await createTestFiles(root);
     const io = mockIO();
     await push(root, { io });
@@ -226,7 +226,7 @@ describe('push', () => {
 
   // POSIX-only: state.json and manifests carry backup metadata (incl. the
   // provider coordinates in each manifest), and .bfs/cache/ holds transient
-  // plaintext during a push — all owner-only. Windows NTFS ignores POSIX mode
+  // plaintext during a push - all owner-only. Windows NTFS ignores POSIX mode
   // bits, so the assertion would be a false signal there.
   it.skipIf(process.platform === 'win32')('should write state.json + manifest 0600 and cache dir 0700 after push', async () => {
     await createTestFiles(root);
@@ -250,11 +250,11 @@ describe('push', () => {
     }
   });
 
-  it('push → prune → manifest deleted from disk', async () => {
+  it('push -> prune -> manifest deleted from disk', async () => {
     await createTestFiles(root);
     await push(root, { io: mockIO() });
     // v1 is the only restorable version, so wiping the backup is a deliberate
-    // act that goes through `force` — the guard protects routine housekeeping.
+    // act that goes through `force` - the guard protects routine housekeeping.
     await prune(root, { versions: [1], force: true });
     expect(await readManifest(root, 1)).toBeNull();
   });
@@ -271,7 +271,7 @@ describe('push', () => {
 
   it('should reject corrupted scheme BEFORE reaching Reed-Solomon encoder', async () => {
     // The technical RS message ("dataShards must be >= 2, got null") must NOT
-    // surface — the user gets a scheme-level message with remediation hint.
+    // surface - the user gets a scheme-level message with remediation hint.
     const cfg = await readConfig(root);
     if (!cfg) throw new Error('test setup: config missing');
     await writeConfig(root, { ...cfg, scheme: { data_shards: null as unknown as number, parity_shards: 1 } });
@@ -281,12 +281,12 @@ describe('push', () => {
   });
 });
 
-// ─── push — partial commit ───────────────────────────────────────────────────
+// --- push - partial commit ---------------------------------------------------
 // Verifies that shard upload failures are captured per-shard in .bfs/push.lock
 // and the manifest is written with whichever shards succeeded (health derived
 // from uploaded count vs N+K). Pre-existing happy-path tests above stay green.
 
-describe('push — partial commit', () => {
+describe('push - partial commit', () => {
   let root: string;
   let pdirs: string[];
 
@@ -430,7 +430,7 @@ describe('push — partial commit', () => {
   it('should persist RAM-path blob to cache on first upload failure', async () => {
     // Force RAM pack path (small fixture + no compression). Then make one
     // upload fail so the emergency dump kicks in. After push, cache must be
-    // on disk and the lock must point at it — exactly the state that makes
+    // on disk and the lock must point at it - exactly the state that makes
     // `bfs push --cache --overwrite` resume cleanly.
     const cfg = await readConfig(root);
     if (!cfg) throw new Error('test setup: config missing');
@@ -457,7 +457,7 @@ describe('push — partial commit', () => {
 
   it('should set blob_pending_path=null when emergency cache write fails', async () => {
     // RAM pack path again, plus fs.writeFile mocked to reject for cachePath.
-    // This exercises the "even the safety net is gone" branch — lock must
+    // This exercises the "even the safety net is gone" branch - lock must
     // explicitly record that resume is impossible (null) instead of leaving
     // a dangling string that misleads `bfs push --cache`.
     const cfg = await readConfig(root);
@@ -547,18 +547,83 @@ describe('push — partial commit', () => {
     // Act: retry with --cache. All providers OK this time.
     const result = await push(root, { io: mockIO(), fromCache: true });
 
-    // Assert: full success → lock removed, blob removed, healthy.
+    // Assert: full success -> lock removed, blob removed, healthy.
     expect(result.health).toBe(VersionHealth.Healthy);
     expect(existsSync(pushLockPath(root))).toBe(false);
     expect(existsSync(cachePath)).toBe(false);
   });
+
+  it('should stream the cached blob on --cache instead of reading it into memory', async () => {
+    // Arrange: a partial push leaves the lock and the cached blob behind.
+    const cachePath = path.join(root, '.bfs', 'cache', 'push.blob.pending');
+    const original = LocalFsProvider.prototype.upload;
+    let n = 0;
+    const uploadSpy = vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(async function (this: LocalFsProvider, ...args: Parameters<typeof original>) {
+      n++;
+      if (n >= 2) throw new ProviderError('Simulated outage');
+      return original.apply(this, args);
+    });
+    await push(root, { io: mockIO() }).catch(() => {});
+    uploadSpy.mockRestore();
+    expect(existsSync(cachePath)).toBe(true);
+
+    const readFileSpy = vi.spyOn(fs, 'readFile');
+
+    const result = await push(root, { io: mockIO(), fromCache: true });
+
+    // The rest of the pipeline streams the blob in stripes and honours a RAM
+    // budget; the resume path must not be the one exception. It runs precisely
+    // when the blob was large enough that a push could not finish in one go, so
+    // buffering it whole is worst exactly where it hurts most. Everything this
+    // branch needs is a prefix - the flags word and the file table - plus the
+    // size, which fs.stat already gives it.
+    const wholeFileReads = readFileSpy.mock.calls.filter((call) => String(call[0]) === cachePath && call[1] === undefined);
+    expect(wholeFileReads, `push --cache read the whole cached blob into a Buffer (${wholeFileReads.length}x) instead of streaming it from disk`).toEqual([]);
+    expect(result.health).toBe(VersionHealth.Healthy);
+  });
+
+  it('should resume from a cached blob too large for a single read', async () => {
+    // Arrange: same partial push, then make a whole-file read of the cache fail
+    // the way Node does past its 2 GiB single-read ceiling (ERR_FS_FILE_TOO_LARGE).
+    const cachePath = path.join(root, '.bfs', 'cache', 'push.blob.pending');
+    const original = LocalFsProvider.prototype.upload;
+    let n = 0;
+    const uploadSpy = vi.spyOn(LocalFsProvider.prototype, 'upload').mockImplementation(async function (this: LocalFsProvider, ...args: Parameters<typeof original>) {
+      n++;
+      if (n >= 2) throw new ProviderError('Simulated outage');
+      return original.apply(this, args);
+    });
+    await push(root, { io: mockIO() }).catch(() => {});
+    uploadSpy.mockRestore();
+    expect(existsSync(cachePath)).toBe(true);
+
+    const realReadFile = fs.readFile.bind(fs);
+    vi.spyOn(fs, 'readFile').mockImplementation(async (target: Parameters<typeof fs.readFile>[0], opts?: unknown) => {
+      if (String(target) === cachePath) throw new Error('File size (3221225472) is greater than 2 GiB');
+      return realReadFile(target, opts as Parameters<typeof realReadFile>[1]);
+    });
+
+    const { io, logs } = createMockProviderIO({});
+    const result = await push(root, { io, fromCache: true });
+
+    // A blob that cannot be slurped in one call is exactly the blob a resume
+    // exists for. Falling back here re-packs the directory from scratch and
+    // unlinks the cache on the way - destroying the only copy of the work the
+    // interrupted push had already done, while BFS itself advised `--cache` to
+    // avoid re-packing. Pinning the outcome, not the call, keeps a fix that
+    // merely swaps fs.readFile for another whole-file read from passing.
+    const messages = logs.map((entry) => entry.message).join('\n');
+    expect(messages).toContain('Using cached backup data');
+    expect(messages).not.toContain('No cached backup data found');
+    expect(result.health).toBe(VersionHealth.Healthy);
+  });
 });
 
-// ─── _classifyUploadError unit tests ─────────────────────────────────────────
+// --- _classifyUploadError unit tests -----------------------------------------
 
 describe('_classifyUploadError', () => {
   it('should classify ProviderError with auth keywords as auth_failed', () => {
-    const result = _classifyUploadError(new ProviderError('530 Login incorrect — bad password'));
+    const result = _classifyUploadError(new ProviderError('530 Login incorrect - bad password'));
 
     expect(result.reason).toBe('auth_failed');
     expect(result.detail).toContain('530');
@@ -614,7 +679,7 @@ describe('_classifyUploadError', () => {
   });
 });
 
-// ─── pull (roundtrip) ─────────────────────────────────────────────────────────
+// --- pull (roundtrip) ---------------------------------------------------------
 
 describe('pull (roundtrip)', () => {
   let root: string;
@@ -637,7 +702,7 @@ describe('pull (roundtrip)', () => {
     for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
-  it('should restore identical files after push → delete → pull', async () => {
+  it('should restore identical files after push -> delete -> pull', async () => {
     await createTestFiles(root);
     const before = await listUserFiles(root);
     await push(root, { io: mockIO() });
@@ -737,15 +802,15 @@ describe('pull (roundtrip)', () => {
       expect(result.version).toBe(1);
       expect(await fs.readFile(path.join(root, 'hello.txt'), 'utf-8')).toBe('Hello, World!');
       const updated = await readManifest(root, 1);
-      // The backup holds two files — hello.txt and the .bfsignore that init created
-      // (only .bfs/ is excluded, not .bfsignore) — so the recovery-case recompute
+      // The backup holds two files - hello.txt and the .bfsignore that init created
+      // (only .bfs/ is excluded, not .bfsignore) - so the recovery-case recompute
       // reports 2. (A compressed blob's file table now lists one entry per user
       // file, not a single "bfs.pack.zip" pseudo-entry.)
       expect(updated?.file_count).toBe(2);
     });
 
     it('should restore files and return version when interactive retry succeeds and file_count is already set', async () => {
-      // Arrange — same as above but file_count stays set (no patch)
+      // Arrange - same as above but file_count stays set (no patch)
       await fs.writeFile(path.join(root, 'hello.txt'), 'Hello, World!');
       await push(root, { io: mockIO() });
 
@@ -771,15 +836,15 @@ describe('pull (roundtrip)', () => {
 
       await setupBlocker(root, 'hello.txt');
 
-      // Act + Assert — non-interactive: PullSkippedError thrown before _interactiveUnpackRetry
+      // Act + Assert - non-interactive: PullSkippedError thrown before _interactiveUnpackRetry
       await expect(pull(root, { yes: true, io: mockIO() })).rejects.toBeInstanceOf(PullSkippedError);
     });
   });
 });
 
-// ─── removeProvider — strategy: remove ────────────────────────────────────────
+// --- removeProvider - strategy: remove ----------------------------------------
 
-describe('removeProvider — strategy: remove', () => {
+describe('removeProvider - strategy: remove', () => {
   let root: string;
   let pdirs: string[];
 
@@ -833,9 +898,9 @@ describe('removeProvider — strategy: remove', () => {
   });
 });
 
-// ─── removeProvider — strategy: rebuild ───────────────────────────────────────
+// --- removeProvider - strategy: rebuild ---------------------------------------
 
-describe('removeProvider — strategy: rebuild', () => {
+describe('removeProvider - strategy: rebuild', () => {
   let root: string;
   let pdirs: string[];
   let p4dir: string;
@@ -882,9 +947,9 @@ describe('removeProvider — strategy: rebuild', () => {
   });
 });
 
-// ─── removeProvider — strategy: relocate ─────────────────────────────────────
+// --- removeProvider - strategy: relocate -------------------------------------
 
-describe('removeProvider — strategy: relocate', () => {
+describe('removeProvider - strategy: relocate', () => {
   let root: string;
   let pdirs: string[];
   let p0newDir: string;
@@ -926,8 +991,8 @@ describe('removeProvider — strategy: relocate', () => {
   });
 
   it('should throw when shards do not exist at the new provider address', async () => {
-    // p0newDir is empty — no shard files were copied there
-    // Spec: "Check that shards exist (list). If they don't → error"
+    // p0newDir is empty - no shard files were copied there
+    // Spec: "Check that shards exist (list). If they don't -> error"
     const emptyDir = await tmp();
     try {
       await expect(removeProvider(root, 'p0', { strategy: 'relocate', newConnectionConfig: { path: emptyDir }, io: mockIO() })).rejects.toThrow();
@@ -956,15 +1021,15 @@ describe('removeProvider — strategy: relocate', () => {
   });
 });
 
-// ─── scheme (per-version preservation) ───────────────────────────────────────
+// --- scheme (per-version preservation) ---------------------------------------
 
-describe('scheme — manifests preserve original per-version scheme', () => {
+describe('scheme - manifests preserve original per-version scheme', () => {
   let root: string;
   let pdirs: string[];
 
   beforeEach(async () => {
     root = await tmp();
-    // 4 providers → scheme 2/2 (N+K = 4) or 3/1
+    // 4 providers -> scheme 2/2 (N+K = 4) or 3/1
     pdirs = [await tmp(), await tmp(), await tmp(), await tmp()];
   });
 
@@ -986,13 +1051,13 @@ describe('scheme — manifests preserve original per-version scheme', () => {
     await push(root, { io: mockIO() });
 
     // Change scheme to 2/2 directly in config (same 4 providers, N+K unchanged)
-    // Spec: "bfs scheme set zmienia jedynie config.json —
+    // Spec: "bfs scheme set zmienia jedynie config.json -
     //        existing versions keep their original scheme"
     const config = await readConfig(root);
     if (!config) throw new Error('no config');
     await writeConfig(root, { ...config, scheme: { data_shards: 2, parity_shards: 2 } });
 
-    // Push v2 — new manifest uses new scheme
+    // Push v2 - new manifest uses new scheme
     await push(root, { io: mockIO() });
 
     const manifests = await listManifests(root);
@@ -1004,7 +1069,7 @@ describe('scheme — manifests preserve original per-version scheme', () => {
   });
 });
 
-// ─── recovery ─────────────────────────────────────────────────────────────────
+// --- recovery -----------------------------------------------------------------
 
 describe('recovery', () => {
   let root: string;

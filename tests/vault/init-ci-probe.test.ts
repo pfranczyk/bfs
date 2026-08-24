@@ -12,7 +12,7 @@ import { init } from '../../src/vault/vault-manager.js';
 
 // Regression guard for the `bfs init --ci` provider-setup gap: init verifies
 // every provider BEFORE writing config, but its shared loop calls only the bare
-// authenticate() (a connectivity probe) — never probeConnection(), the real
+// authenticate() (a connectivity probe) - never probeConnection(), the real
 // setup check that creates the target directory and round-trips a write/read.
 // Against a provider whose base directory does not exist yet (e.g. SSH, whose
 // authenticate() is a plain readdir(basePath) that throws "No such file"),
@@ -25,7 +25,7 @@ const FAKE_TYPE = 'fake-missing-dir';
 
 /**
  * In-memory medium shared by every fake provider instance in a test. Models a
- * remote whose directories must be created before they can be listed — exactly
+ * remote whose directories must be created before they can be listed - exactly
  * the state a freshly-provisioned target is in before the first init.
  */
 interface FakeMedium {
@@ -74,12 +74,12 @@ class FakeMissingDirProvider implements StorageProvider {
   async probeConnection(): Promise<void> {
     // Mirrors SshProvider.vaultPath(): probing before setVaultName() is a
     // contract violation and throws. This forces the fix to order setVaultName()
-    // BEFORE probeConnection() — a wrong-order fix (probe first) would otherwise
+    // BEFORE probeConnection() - a wrong-order fix (probe first) would otherwise
     // pass this test yet break the real SSH provider (whose vaultPath() throws).
     if (this.vaultName === '') {
       throw new ProviderError('setVaultName() must be called before any file operation');
     }
-    // ensureDir(vaultDir) creates the base path as a parent — the setup step
+    // ensureDir(vaultDir) creates the base path as a parent - the setup step
     // init's authenticate()-only loop skips.
     medium.probeCalls.push(this.basePath);
     medium.createdDirs.add(this.basePath);
@@ -185,14 +185,14 @@ describe('init --ci provider setup (base directory does not exist)', () => {
       init(root, { vault_name: 'v', scheme: { data_shards: 2, parity_shards: 1 }, encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' }, providers, push_mode: PushMode.NewVersion, io }),
     ).resolves.toBeUndefined();
 
-    // The real setup check ran for every provider and created its directory —
+    // The real setup check ran for every provider and created its directory -
     // the step init's authenticate()-only loop skips.
     expect(medium.probeCalls.slice().sort()).toEqual(providerPaths.slice().sort());
     for (const p of providerPaths) {
       expect(medium.createdDirs.has(p)).toBe(true);
     }
 
-    // init completed fully — config persisted with all three providers.
+    // init completed fully - config persisted with all three providers.
     const config = await readConfig(root);
     expect(config?.providers.map((p) => p.id)).toEqual(['p0', 'p1', 'p2']);
   });

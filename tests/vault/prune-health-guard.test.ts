@@ -12,7 +12,7 @@ import { init, prune, push } from '../../src/vault/vault-manager.js';
 import { verifyVersion } from '../../src/vault/verify.js';
 
 // prune picks versions by number, so on its own it would happily remove the last
-// version that can still be restored — a routine `--keep-last 1` over a backup
+// version that can still be restored - a routine `--keep-last 1` over a backup
 // whose newest version rotted would drop the operator's good copy and keep the
 // unrecoverable one. The guard exists for exactly that case and stays out of the
 // way otherwise: damaged versions remain deletable, and so does everything once
@@ -28,7 +28,7 @@ function localProvider(id: string, dir: string): ProviderConfig {
   return { id, type: 'local', adapterPackage: null, config: { path: dir } };
 }
 
-/** Flips one payload byte, leaving the trailing checksum stale — bit-rot. */
+/** Flips one payload byte, leaving the trailing checksum stale - bit-rot. */
 async function rotShardPayload(file: string): Promise<void> {
   const buf = await fs.readFile(file);
   const pos = computeShardHeaderSize(buf);
@@ -93,6 +93,20 @@ describe('prune guards the last restorable version', () => {
     await prune(root, { versions: [1], io });
 
     expect(await readManifest(root, 1)).toBeNull();
+  });
+
+  // The guard reads health off every manifest it can list, and a file that parses
+  // but carries no fields answers `m.health !== Damaged` with true. Counted as a
+  // surviving restorable copy, such a record releases the guard and lets the
+  // operator's only good version go - so an incomplete manifest must not be listed
+  // at all.
+  it('should not count an incomplete manifest as the surviving restorable version', async () => {
+    await fs.writeFile(path.join(root, '.bfs', 'manifests', 'v003.json'), '{}', 'utf-8');
+
+    await expect(prune(root, { versions: [1], io })).rejects.toThrow(/still be restored/i);
+
+    expect(await readManifest(root, 1)).not.toBeNull();
+    await expect(fs.access(shardPath(pdirs[0], 0, 1))).resolves.toBeUndefined();
   });
 
   it('should delete a damaged version even while a restorable one remains', async () => {

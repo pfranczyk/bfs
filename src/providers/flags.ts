@@ -3,13 +3,13 @@ import { ProviderError } from '../core/errors.js';
 
 /**
  * Helpers for provider adapters that opt in to a `--flag value` style of
- * `CliProviderInput.rawArgs`. These are *convenience*, not a contract — BFS
+ * `CliProviderInput.rawArgs`. These are *convenience*, not a contract - BFS
  * never calls them, never inspects rawArgs itself. An adapter is free to
  * choose a different flag shape (repeated values, positional args, a JSON
- * blob on stdin, …) and ignore these helpers entirely.
+ * blob on stdin, ...) and ignore these helpers entirely.
  *
- * The built-in FTP and LocalFS adapters both accept `--config-file <path>`,
- * so factor the parsing + JSON loading out once to keep their
+ * All three built-in adapters (LocalFS, FTP, SSH) accept `--config-file <path>`,
+ * so the parsing + JSON loading is factored out once to keep their
  * configureFromFlags bodies readable.
  */
 

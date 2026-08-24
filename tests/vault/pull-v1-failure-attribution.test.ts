@@ -18,7 +18,7 @@ import { writeState } from '../../src/vault/state.js';
 import { pull } from '../../src/vault/vault-manager.js';
 
 // Backups written before the striped format are read by a separate path, and it
-// classifies a failed part exactly as the current one does — damage is damage,
+// classifies a failed part exactly as the current one does - damage is damage,
 // absence is absence. What it says out loud has to agree: a per-medium notice
 // claiming the data is gone, next to a closing sentence naming the same medium
 // as damaged, leaves the operator with two contradictory next moves for one run.
@@ -48,7 +48,7 @@ function mediumDir(dirs: string[], index: number): string {
 }
 
 /**
- * Flips one byte of the shard's magic — bit-rot inside the header, so the part
+ * Flips one byte of the shard's magic - bit-rot inside the header, so the part
  * is present and readable but its own description of itself no longer parses.
  */
 async function rotShardHeader(file: string): Promise<void> {

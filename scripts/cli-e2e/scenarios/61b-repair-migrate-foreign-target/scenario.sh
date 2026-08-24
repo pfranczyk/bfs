@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# bfs repair, migration form — the route a degraded restore recommends when a
+# bfs repair, migration form - the route a degraded restore recommends when a
 # storage the backup records is missing from the configuration. The first
 # argument is a storage the configuration HAS, the target is the name the backup
 # records. Because no manifest carries the first argument, the identity gate of
@@ -8,11 +8,11 @@
 #
 # A mistyped destination must not pass for a successful repair. Two mistypes,
 # separated only by that name-only probe:
-#   1. a folder holding no part at all — the negative control. The probe finds
+#   1. a folder holding no part at all - the negative control. The probe finds
 #      no file of that name, so the repair is refused. What it does on the way
 #      there is adopt the mistyped folder in the configuration before the
 #      refusal, and never put the configuration back.
-#   2. a folder holding a same-named part of a DIFFERENT backup — the probe is
+#   2. a folder holding a same-named part of a DIFFERENT backup - the probe is
 #      satisfied by the name alone. The refusal must instead be recorded as an
 #      identity mismatch, no address of the foreign storage may reach the
 #      configuration or the location maps a later recovery follows, and nothing
@@ -70,7 +70,7 @@ scenario_run() {
   sidecar0="${PV_LOCALDIR[0]}/$name/hdr_0.bfs.1"
   sha_before="$(sha256sum "$shard0" | cut -d' ' -f1)"
 
-  # ── Mistype 1: an existing folder that holds no part of this backup ──
+  # -- Mistype 1: an existing folder that holds no part of this backup --
   mkdir -p "$empty"
   run_bfs "$vault" repair --version all p2-away "local:p2 --path $(winpath "$empty")"
   assert_fail
@@ -104,12 +104,12 @@ $(cat "$cfg")"
   cp "$degraded" "$cfg"
   rm -f "$lock"
 
-  # ── Mistype 2: a folder holding a same-named part of ANOTHER backup ──
+  # -- Mistype 2: a folder holding a same-named part of ANOTHER backup --
   run_bfs "$vault" repair --version all p2-away "local:p2 --path $(winpath "$o2")"
   assert_fail
 
-  # The refusal has to name its cause. Failing for any other reason — a folder
-  # that cannot be reached, an argument that will not parse — satisfies an
+  # The refusal has to name its cause. Failing for any other reason - a folder
+  # that cannot be reached, an argument that will not parse - satisfies an
   # exit-code-only check while leaving a foreign backup an acceptable target.
   assert_file "$lock"
   grep -qF '"reason": "mismatch"' "$lock" ||
@@ -124,8 +124,8 @@ $(cat "$lock")"
   [ "$(sha256sum "$shard0" | cut -d' ' -f1)" = "$sha_before" ] ||
     _fail "the refused repair rewrote a sibling part: $shard0"
 
-  # Nothing BFS later follows — the configuration, the surviving parts and their
-  # location-header sidecars — may record the foreign storage.
+  # Nothing BFS later follows - the configuration, the surviving parts and their
+  # location-header sidecars - may record the foreign storage.
   local target f
   target="$(winpath "$o2")"
   if grep -aqF "$target" "$cfg"; then

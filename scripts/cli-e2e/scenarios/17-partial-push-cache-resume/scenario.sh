@@ -1,13 +1,13 @@
 # shellcheck shell=bash
 # Partial push (one provider's upload fails) leaves push.lock and the cached
-# pending blob in place as forensic state. The emergency RAM→disk dump in
+# pending blob in place as forensic state. The emergency RAM->disk dump in
 # vault-manager.ts kicks in on the first upload failure, so even tiny
 # fixtures that pack via the RAM path end up with push.blob.pending on disk
-# — `bfs push --cache --overwrite` then heals the degraded version without
+# - `bfs push --cache --overwrite` then heals the degraded version without
 # re-packing.
 
 SCENARIO_NAME="partial push leaves forensic state, --cache resumes"
-SCENARIO_DESC="one provider fails → degraded + push.lock kept → push --cache → healthy"
+SCENARIO_DESC="one provider fails -> degraded + push.lock kept -> push --cache -> healthy"
 REQUIRES_LOCAL=4
 REQUIRES_FTP=0
 
@@ -25,7 +25,7 @@ scenario_run() {
   # Break provider p2 between init and push: replace its base directory with
   # a regular file. local-fs upload() does fs.mkdir({recursive:true}) on
   # {basePath}/{vaultName}, which fails with ENOTDIR when basePath itself is
-  # a file. The other three uploads succeed → 3 of 4 → degraded.
+  # a file. The other three uploads succeed -> 3 of 4 -> degraded.
   local broken="${PV_LOCALDIR[2]}"
   rm -rf "$broken"
   : >"$broken"

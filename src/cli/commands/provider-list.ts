@@ -39,11 +39,11 @@ export function registerProviderList(providerCmd: Command): void {
         if (factory) {
           connInfo = factory.create(p, io).describeConfig(p.config);
         } else {
-          // Unknown type (e.g. plugin not loaded) — fall back to a minimal,
+          // Unknown type (e.g. plugin not loaded) - fall back to a minimal,
           // non-secret-aware dump so the row still renders.
           connInfo = `(unknown type "${p.type}")`;
         }
-        return [String(i), p.id, p.type, connInfo || '—'];
+        return [String(i), p.id, p.type, connInfo || '-'];
       });
 
       table([t('provider_list_col_num'), t('provider_list_col_id'), t('provider_list_col_type'), t('provider_list_col_config')], rows);

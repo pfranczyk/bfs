@@ -45,14 +45,14 @@ describe('repairVault guards', () => {
   it('should reject when the version range matches no versions', async () => {
     const { io } = createMockProviderIO();
 
-    await expect(repairVault(rootDir, { pairs: [editPair()], versions: [], io, passwords: [], isCi: true, rebuild: false, forceUnverified: false })).rejects.toThrow(BfsError);
+    await expect(repairVault(rootDir, { pairs: [editPair()], versions: [], io, passwords: [], rebuild: false, forceUnverified: false })).rejects.toThrow(BfsError);
   });
 
   it('should reject when the vault config is missing', async () => {
     await rm(join(rootDir, '.bfs', 'config.json'));
     const { io } = createMockProviderIO();
 
-    await expect(repairVault(rootDir, { pairs: [editPair()], versions: [1], io, passwords: [], isCi: true, rebuild: false, forceUnverified: false })).rejects.toThrow(BfsError);
+    await expect(repairVault(rootDir, { pairs: [editPair()], versions: [1], io, passwords: [], rebuild: false, forceUnverified: false })).rejects.toThrow(BfsError);
   });
 });
 
@@ -100,7 +100,7 @@ describe('repairVault integrity pre-check', () => {
       await writeFile(join(storageDir, 'v', 'shard_0.bfs.1'), buildShard(header, Buffer.from('payload')));
 
       const { io } = createMockProviderIO();
-      await expect(repairVault(rootDir, { pairs: [editPair()], versions: [1], io, passwords: [], isCi: true, rebuild: false, forceUnverified: false })).rejects.toThrow(TamperDetectedError);
+      await expect(repairVault(rootDir, { pairs: [editPair()], versions: [1], io, passwords: [], rebuild: false, forceUnverified: false })).rejects.toThrow(TamperDetectedError);
     } finally {
       await rm(rootDir, { recursive: true, force: true });
     }
@@ -109,7 +109,7 @@ describe('repairVault integrity pre-check', () => {
 
 describe('redactPairParams (repair.lock secret masking)', () => {
   it('should mask the migration target type secret even when the source type has none', () => {
-    // Regression: local (no secrets) → ftp migration must mask the ftp --password
+    // Regression: local (no secrets) -> ftp migration must mask the ftp --password
     // value in the forensic lock. Prior bug used only the source type's fields.
     const { io } = createMockProviderIO();
     const migration: RepairPair = {
@@ -151,7 +151,7 @@ const lockExists = (root: string): Promise<boolean> =>
     .then(() => true)
     .catch(() => false);
 
-describe('repairVault — precheck + lock lifecycle', () => {
+describe('repairVault - precheck + lock lifecycle', () => {
   const cleanupDirs: string[] = [];
 
   afterEach(async () => {
@@ -159,11 +159,35 @@ describe('repairVault — precheck + lock lifecycle', () => {
     cleanupDirs.length = 0;
   });
 
-  it('should fail fast with DecryptionError when an encrypted vault has no password in --ci', async () => {
+  it('should say the attempts ran out when an operator was asked and gave nothing', async () => {
+    // The A/B half where somebody IS at the keyboard: the prompt is put, a blank
+    // answer ends it, and "attempts exhausted" then describes what really
+    // happened. Naming a flag here would be advice for a run that had a shorter
+    // way out - typing the password. Paired with the test below, which puts the
+    // same shape of vault through a run nobody is watching.
     const { root, dirs, io } = await pushLocalVault({ encrypted: true, password: 'pw-ci-test' });
     cleanupDirs.push(root, ...dirs);
 
-    await expect(repairVault(root, { pairs: [editPair()], versions: [1], io, passwords: [], isCi: true, rebuild: false, forceUnverified: false })).rejects.toThrow(DecryptionError);
+    const failure = repairVault(root, { pairs: [editPair()], versions: [1], io, passwords: [], rebuild: false, forceUnverified: false });
+
+    await expect(failure).rejects.toThrow(DecryptionError);
+    await expect(failure).rejects.not.toThrow(/--password/);
+  });
+
+  it('should name the flag that supplies passwords when no terminal could be asked', async () => {
+    // A run with nobody at the keyboard makes no attempt at all, whether it
+    // declared `--ci` or simply has no terminal - both reach this layer as the
+    // same signal. "Attempts exhausted" would describe something that did not
+    // happen and would leave the operator without a way forward; the message has
+    // to name the flag instead.
+    const { root, dirs, io } = await pushLocalVault({ encrypted: true, password: 'pw-no-tty' });
+    cleanupDirs.push(root, ...dirs);
+    const noTtyIo = { ...io, interactive: false };
+
+    const failure = repairVault(root, { pairs: [editPair()], versions: [1], io: noTtyIo, passwords: [], rebuild: false, forceUnverified: false });
+
+    await expect(failure).rejects.toThrow(DecryptionError);
+    await expect(failure).rejects.toThrow(/--password/);
   });
 
   it('should retain repair.lock and record a failed pair when the new path has no shards', async () => {
@@ -172,7 +196,7 @@ describe('repairVault — precheck + lock lifecycle', () => {
     cleanupDirs.push(root, ...dirs, emptyDir);
 
     const pair: RepairPair = { oldName: 'p0', params: `--path ${emptyDir}`, rawParams: ['--path', emptyDir], isMigration: false, newConfig: null };
-    const result = await repairVault(root, { pairs: [pair], versions: [1], io, passwords: [], isCi: true, rebuild: false, forceUnverified: false });
+    const result = await repairVault(root, { pairs: [pair], versions: [1], io, passwords: [], rebuild: false, forceUnverified: false });
 
     expect(result.failed_pairs.length).toBe(1);
     expect(await lockExists(root)).toBe(true);
@@ -185,7 +209,7 @@ describe('repairVault — precheck + lock lifecycle', () => {
     await cp(join(dirs[0], 'repair-test'), join(movedDir, 'repair-test'), { recursive: true });
 
     const pair: RepairPair = { oldName: 'p0', params: `--path ${movedDir}`, rawParams: ['--path', movedDir], isMigration: false, newConfig: null };
-    const result = await repairVault(root, { pairs: [pair], versions: [1], io, passwords: [], isCi: true, rebuild: false, forceUnverified: false });
+    const result = await repairVault(root, { pairs: [pair], versions: [1], io, passwords: [], rebuild: false, forceUnverified: false });
 
     expect(result.failed_pairs.length).toBe(0);
     expect(await lockExists(root)).toBe(false);
@@ -200,15 +224,15 @@ function sidecarPath(providerDir: string, index: number, version = 1): string {
 }
 
 /**
- * Relocates provider p0 to a fresh copy of its storage via a normal repair edit
- * — the machinery that writes an hdr_ sidecar next to EVERY shard. Returns the
+ * Relocates provider p0 to a fresh copy of its storage via a normal repair edit -
+ * the machinery that writes an hdr_ sidecar next to EVERY shard. Returns the
  * new provider directory so the caller can register it for cleanup.
  */
 async function relocateP0(root: string, dirs: string[], io: ProviderIO, password?: string): Promise<string> {
   const movedDir = await mkdtemp(join(tmpdir(), 'bfs-moved-'));
   await cp(join(dirs[0], VAULT_NAME), join(movedDir, VAULT_NAME), { recursive: true });
   const pair: RepairPair = { oldName: 'p0', params: `--path ${movedDir}`, rawParams: ['--path', movedDir], isMigration: false, newConfig: null };
-  await repairVault(root, { pairs: [pair], versions: [1], io, passwords: password !== undefined ? [password] : [], isCi: true, rebuild: false, forceUnverified: false });
+  await repairVault(root, { pairs: [pair], versions: [1], io, passwords: password !== undefined ? [password] : [], rebuild: false, forceUnverified: false });
   return movedDir;
 }
 
@@ -231,7 +255,7 @@ describe('repairVault --restore-headers (sidecar reconstruction)', () => {
     expect(existsSync(hdr)).toBe(false);
     expect((await verifyVersion(root, 1, io)).header_advisory).toEqual({ missing: 1, broken: 0 });
 
-    await repairVault(root, { pairs: [], versions: [1], io, passwords: [], isCi: true, rebuild: false, forceUnverified: false, restoreHeaders: true });
+    await repairVault(root, { pairs: [], versions: [1], io, passwords: [], rebuild: false, forceUnverified: false, restoreHeaders: true });
 
     expect(existsSync(hdr)).toBe(true);
     expect((await verifyVersion(root, 1, io)).header_advisory).toBeNull();
@@ -247,7 +271,7 @@ describe('repairVault --restore-headers (sidecar reconstruction)', () => {
     await writeFile(hdr, Buffer.from('GARBAGE-NOT-BFSH'));
     expect(() => extractSidecarHeaderBytes(readFileSync(hdr))).toThrow();
 
-    await repairVault(root, { pairs: [], versions: [1], io, passwords: [], isCi: true, rebuild: false, forceUnverified: false, restoreHeaders: true });
+    await repairVault(root, { pairs: [], versions: [1], io, passwords: [], rebuild: false, forceUnverified: false, restoreHeaders: true });
 
     expect(() => extractSidecarHeaderBytes(readFileSync(hdr))).not.toThrow();
     expect((await verifyVersion(root, 1, io)).header_advisory).toBeNull();
@@ -263,7 +287,7 @@ describe('repairVault --restore-headers (sidecar reconstruction)', () => {
     await rm(hdr);
     expect(existsSync(hdr)).toBe(false);
 
-    await repairVault(root, { pairs: [], versions: [1], io, passwords: [password], isCi: true, rebuild: false, forceUnverified: false, restoreHeaders: true });
+    await repairVault(root, { pairs: [], versions: [1], io, passwords: [password], rebuild: false, forceUnverified: false, restoreHeaders: true });
 
     expect(existsSync(hdr)).toBe(true);
     expect(() => extractSidecarHeaderBytes(readFileSync(hdr))).not.toThrow();

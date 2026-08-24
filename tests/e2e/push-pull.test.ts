@@ -1,5 +1,5 @@
 /**
- * E2E tests — full pipeline: init → push → pull → verify.
+ * E2E tests - full pipeline: init -> push -> pull -> verify.
  *
  * Scenarios run one after another.
  */
@@ -24,7 +24,7 @@ import { readState } from '../../src/vault/state.js';
 import { init, listVersions, prune, pull, push, removeProvider } from '../../src/vault/vault-manager.js';
 import { verifyAll } from '../../src/vault/verify.js';
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// --- Helpers -----------------------------------------------------------------
 
 async function tmp(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'bfs-e2e-'));
@@ -42,7 +42,7 @@ function sha256(buf: Buffer): string {
   return crypto.createHash('sha256').update(buf).digest('hex');
 }
 
-/** ProviderIO that always accepts confirmations (confirm → true). */
+/** ProviderIO that always accepts confirmations (confirm -> true). */
 function yesIO(): ProviderIO {
   const base = createMockProviderIO();
   return { ...base.io, confirm: async () => true };
@@ -50,7 +50,7 @@ function yesIO(): ProviderIO {
 
 /**
  * Creates 10 test files: text, binary, nested directories.
- * Returns a map relativePath → SHA-256 for byte-for-byte comparison.
+ * Returns a map relativePath -> SHA-256 for byte-for-byte comparison.
  */
 async function createTestFiles(dir: string): Promise<Map<string, string>> {
   const hashes = new Map<string, string>();
@@ -78,7 +78,7 @@ async function createTestFiles(dir: string): Promise<Map<string, string>> {
 
 /**
  * Reads all user files (skips .bfs/ and .bfsignore)
- * and returns a map relativePath → SHA-256.
+ * and returns a map relativePath -> SHA-256.
  */
 async function hashAllFiles(dir: string): Promise<Map<string, string>> {
   const result = new Map<string, string>();
@@ -123,7 +123,7 @@ async function shardExists(providerDir: string, vaultName: string, shardIndex: n
 /**
  * Corrupts a shard file in place with a length-preserving bit-flip in the middle
  * of its payload. The trailing SHA-256 is deliberately NOT recomputed, so the
- * shard reads as corrupt — for an encrypted shard the flip also breaks the
+ * shard reads as corrupt - for an encrypted shard the flip also breaks the
  * per-shard GCM auth tag. Mirrors the cli-e2e corrupt-shard driver.
  */
 async function corruptShardPayload(shardPath: string): Promise<void> {
@@ -158,7 +158,7 @@ async function flipKdfSaltByte(shardPath: string): Promise<void> {
   await fs.writeFile(shardPath, shard);
 }
 
-// ─── Scenario 1: WITHOUT encryption, 3/1, 4 local providers ─────────────────
+// --- Scenario 1: WITHOUT encryption, 3/1, 4 local providers -----------------
 
 describe('Scenariusz 1: brak szyfrowania, schemat 3/1, RS repair z 3 z 4 shardów', () => {
   let root: string;
@@ -219,7 +219,7 @@ describe('Scenariusz 1: brak szyfrowania, schemat 3/1, RS repair z 3 z 4 shardó
   });
 });
 
-// ─── Scenario 2: Encrypted, 5/2 (7 providers), pull with 2 missing ─
+// --- Scenario 2: Encrypted, 5/2 (7 providers), pull with 2 missing -
 
 describe('Scenariusz 2: szyfrowanie, schemat 5/2, RS repair z 5 z 7 shardów', () => {
   let root: string;
@@ -282,7 +282,7 @@ describe('Scenariusz 2: szyfrowanie, schemat 5/2, RS repair z 5 z 7 shardów', (
   });
 });
 
-// ─── Scenario 3: Versioning and restoring versions ───────────────────────
+// --- Scenario 3: Versioning and restoring versions -----------------------
 
 describe('Scenariusz 3: wersjonowanie i przywracanie wersji', () => {
   let root: string;
@@ -327,7 +327,7 @@ describe('Scenariusz 3: wersjonowanie i przywracanie wersji', () => {
     expect(state.latest_version).toBe(2);
     expect(state.working_version).toBe(2);
 
-    // Pull --version 1 → original files
+    // Pull --version 1 -> original files
     await pull(root, { version: 1, io: mockIO(), force: true });
 
     state = await readState(root);
@@ -336,10 +336,10 @@ describe('Scenariusz 3: wersjonowanie i przywracanie wersji', () => {
 
     let files = await hashAllFiles(root);
     expect(files.get('hello.txt')).toBe(v1Hashes.get('hello.txt'));
-    // Spec (pipeline.md step 11): --force → remove EVERYTHING except .bfs/ before unpacking
+    // Spec: --force removes EVERYTHING except .bfs/ before unpacking
     expect(files.has('new-file.txt')).toBe(false);
 
-    // Pull bez --version → najnowsza (v2)
+    // Pull without --version resolves to the newest version (v2)
     await pull(root, { io: mockIO(), force: true });
 
     state = await readState(root);
@@ -350,8 +350,8 @@ describe('Scenariusz 3: wersjonowanie i przywracanie wersji', () => {
     expect(files.get('hello.txt')).toBe(v2HelloHash);
     expect(files.get('new-file.txt')).toBe(v2NewFileHash);
 
-    // Pull v1 → push → creates v3
-    // yesIO() because working_version(1) < latest_version(2) → push asks for confirmation
+    // Pull v1 -> push -> creates v3
+    // yesIO() because working_version(1) < latest_version(2) -> push asks for confirmation
     await pull(root, { version: 1, io: mockIO(), force: true });
     await push(root, { io: yesIO() });
 
@@ -362,7 +362,7 @@ describe('Scenariusz 3: wersjonowanie i przywracanie wersji', () => {
     const versions = await listVersions(root);
     expect(versions).toHaveLength(3);
 
-    // Prune v1 → v1 shards removed
+    // Prune v1 -> v1 shards removed
     await prune(root, { versions: [1] });
 
     expect(await readManifest(root, 1)).toBeNull();
@@ -376,9 +376,9 @@ describe('Scenariusz 3: wersjonowanie i przywracanie wersji', () => {
   });
 });
 
-// ─── Scenario 4: Pull with an existing .bfs/ (provider auto-discovery) ──────
+// --- Scenario 4: Pull with an existing .bfs/ (provider auto-discovery) ------
 
-describe('Scenariusz 4: pull z istniejącym .bfs/ — providery z config, bez pytań', () => {
+describe('Scenariusz 4: pull z istniejącym .bfs/ - providery z config, bez pytań', () => {
   let root: string;
   let pdirs: string[];
 
@@ -391,7 +391,7 @@ describe('Scenariusz 4: pull z istniejącym .bfs/ — providery z config, bez py
     for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
-  it('should pull without specifying providers — config knows them', async () => {
+  it('should pull without specifying providers - config knows them', async () => {
     await init(root, {
       vault_name: 'auto-vault',
       scheme: { data_shards: 3, parity_shards: 1 },
@@ -409,7 +409,7 @@ describe('Scenariusz 4: pull z istniejącym .bfs/ — providery z config, bez py
       await fs.rm(path.join(root, rel), { force: true });
     }
 
-    // Pull version 1 — without providing provider details
+    // Pull version 1 - without providing provider details
     await pull(root, { version: 1, io: mockIO(), force: true });
 
     await assertFilesMatch(root, originalHashes);
@@ -420,7 +420,7 @@ describe('Scenariusz 4: pull z istniejącym .bfs/ — providery z config, bez py
   });
 });
 
-// ─── Scenario 5: Large files (50 MB) ────────────────────────────────────────
+// --- Scenario 5: Large files (50 MB) ----------------------------------------
 
 describe('Scenariusz 5: duży plik 50 MB', () => {
   let root: string;
@@ -461,7 +461,7 @@ describe('Scenariusz 5: duży plik 50 MB', () => {
   });
 });
 
-// ─── Scenario 6: Verify + health check ─────────────────────────────────────
+// --- Scenario 6: Verify + health check -------------------------------------
 
 describe('Scenariusz 6: verify i health check', () => {
   let root: string;
@@ -476,7 +476,7 @@ describe('Scenariusz 6: verify i health check', () => {
     for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
-  it('should detect healthy → degraded → damaged after removing shards', async () => {
+  it('should detect healthy -> degraded -> damaged after removing shards', async () => {
     await init(root, {
       vault_name: 'health-vault',
       scheme: { data_shards: 3, parity_shards: 1 },
@@ -489,19 +489,19 @@ describe('Scenariusz 6: verify i health check', () => {
     await createTestFiles(root);
     await push(root, { io: mockIO() });
 
-    // All shards → healthy
+    // All shards -> healthy
     let report = await verifyAll(root, mockIO());
     expect(report.versions[0]?.health).toBe('healthy');
 
-    // Remove shard_0 → degraded (K=1 parity, tolerance: 0)
+    // Remove shard_0 -> degraded (K=1 parity, tolerance: 0)
     await fs.rm(path.join(pdirs[0] ?? '', 'health-vault', 'shard_0.bfs.1'));
 
     report = await verifyAll(root, mockIO());
     expect(report.versions[0]?.health).toBe('degraded');
-    // Spec: degraded → tolerance = available - N = 3 - 3 = 0
+    // Spec: degraded -> tolerance = available - N = 3 - 3 = 0
     expect(report.versions[0]?.tolerance).toBe(0);
 
-    // Remove shard_1 → damaged (more than K shards missing)
+    // Remove shard_1 -> damaged (more than K shards missing)
     await fs.rm(path.join(pdirs[1] ?? '', 'health-vault', 'shard_1.bfs.1'));
 
     report = await verifyAll(root, mockIO());
@@ -513,9 +513,9 @@ describe('Scenariusz 6: verify i health check', () => {
   });
 });
 
-// ─── Scenario 7: Provider remove + heal (strategy: rebuild) ────────────────
+// --- Scenario 7: Provider remove + heal (strategy: rebuild) ----------------
 
-describe('Scenariusz 7: provider remove + heal — verify healthy, pull poprawny', () => {
+describe('Scenariusz 7: provider remove + heal - verify healthy, pull poprawny', () => {
   let root: string;
   let pdirs: string[];
   let spareDir: string;
@@ -559,7 +559,7 @@ describe('Scenariusz 7: provider remove + heal — verify healthy, pull poprawny
       expect(vs.health).toBe('healthy');
     }
 
-    // Pull → files correct
+    // Pull -> files correct
     await pull(root, { io: mockIO(), force: true });
     await assertFilesMatch(root, originalHashes);
 
@@ -569,7 +569,7 @@ describe('Scenariusz 7: provider remove + heal — verify healthy, pull poprawny
   });
 });
 
-// ─── Scenario 8: Manifests with different schemes per version ─────────────────
+// --- Scenario 8: Manifests with different schemes per version -----------------
 
 describe('Scenariusz 8: różne schematy N/K per wersja', () => {
   let root: string;
@@ -599,7 +599,7 @@ describe('Scenariusz 8: różne schematy N/K per wersja', () => {
     const v1Hashes = await createTestFiles(root);
     await push(root, { io: mockIO() });
 
-    // Change scheme to 5/2 — add 3 providers
+    // Change scheme to 5/2 - add 3 providers
     const config = await readConfig(root);
     if (!config) throw new Error('Config missing');
     config.scheme = { data_shards: 5, parity_shards: 2 };
@@ -621,25 +621,25 @@ describe('Scenariusz 8: różne schematy N/K per wersja', () => {
     expect(m2?.scheme).toEqual({ data_shards: 5, parity_shards: 2 });
     expect(m2?.shards).toHaveLength(7);
 
-    // Pull v1 → uses the 3/1 scheme from the v1 manifest
+    // Pull v1 -> uses the 3/1 scheme from the v1 manifest
     await pull(root, { version: 1, io: mockIO(), force: true });
     const afterV1 = await hashAllFiles(root);
     expect(afterV1.get('hello.txt')).toBe(v1Hashes.get('hello.txt'));
-    // Spec (pipeline.md step 11): --force → remove EVERYTHING except .bfs/ before unpacking
+    // Spec: --force removes EVERYTHING except .bfs/ before unpacking
     expect(afterV1.has('new-v2.txt')).toBe(false);
 
     const state = await readState(root);
     expect(state.working_version).toBe(1);
     expect(state.latest_version).toBe(2);
 
-    // Pull latest (v2) → uses the 5/2 scheme
+    // Pull latest (v2) -> uses the 5/2 scheme
     await pull(root, { io: mockIO(), force: true });
     const afterV2 = await hashAllFiles(root);
     expect(afterV2.get('new-v2.txt')).toBe(v2ExtraHash);
   });
 });
 
-// ─── Scenario 9: Full disaster recovery ─────────────────────────────────────
+// --- Scenario 9: Full disaster recovery -------------------------------------
 
 describe('Scenariusz 9: full disaster recovery', () => {
   let root: string;
@@ -678,7 +678,7 @@ describe('Scenariusz 9: full disaster recovery', () => {
     await fs.rm(root, { recursive: true });
     await fs.mkdir(root);
 
-    // Recovery — bootstrap from p0
+    // Recovery - bootstrap from p0
     const { io: bsIO } = createMockProviderIO();
     const bootstrapProvider = new LocalFsProvider(localProvider('p0', pdirs[0] ?? ''), bsIO);
     await bootstrapProvider.authenticate();
@@ -710,7 +710,7 @@ describe('Scenariusz 9: full disaster recovery', () => {
     state = await readState(root);
     expect(state.working_version).toBe(3);
 
-    // Pull --version 1 → files from v1
+    // Pull --version 1 -> files from v1
     await pull(root, { version: 1, io: mockIO(), force: true });
     const afterV1Pull = await hashAllFiles(root);
     expect(afterV1Pull.get('hello.txt')).toBe(v1Hashes.get('hello.txt'));
@@ -721,7 +721,7 @@ describe('Scenariusz 9: full disaster recovery', () => {
   });
 });
 
-// ─── Scenario 9: ZIP compression — roundtrip without encryption ─────────────────
+// --- Scenario 9: ZIP compression - roundtrip without encryption -----------------
 
 describe('Scenariusz 9: kompresja ZIP, brak szyfrowania, 2/1', () => {
   let root: string;
@@ -840,7 +840,7 @@ describe('Scenariusz 9: kompresja ZIP, brak szyfrowania, 2/1', () => {
   });
 });
 
-// ─── Scenario 10: ZIP compression + encryption — roundtrip ──────────────────
+// --- Scenario 10: ZIP compression + encryption - roundtrip ------------------
 
 describe('Scenariusz 10: kompresja ZIP + szyfrowanie, 2/1', () => {
   const PASSWORD = 'zip-enc-pass-789';
@@ -885,9 +885,9 @@ describe('Scenariusz 10: kompresja ZIP + szyfrowanie, 2/1', () => {
   });
 });
 
-// ─── Scenario 11: Backward compatibility — blob without the COMPRESSED flag ──────
+// --- Scenario 11: Backward compatibility - blob without the COMPRESSED flag ------
 
-describe('Scenariusz 11: wsteczna kompatybilność — brak kompresji w konfiguracji', () => {
+describe('Scenariusz 11: wsteczna kompatybilność - brak kompresji w konfiguracji', () => {
   let root: string;
   let pdirs: string[];
 
@@ -928,7 +928,7 @@ describe('Scenariusz 11: wsteczna kompatybilność — brak kompresji w konfigur
   });
 });
 
-// ─── Scenario 8: --password override with encryption.enabled=false────────
+// --- Scenario 8: --password override with encryption.enabled=false--------
 
 describe('Scenariusz 8: --password override przy encryption.enabled=false', () => {
   const PASSWORD = 'override-pass-456';
@@ -965,7 +965,7 @@ describe('Scenariusz 8: --password override przy encryption.enabled=false', () =
     expect(manifest?.encrypted_per_shard).toBe(true);
   });
 
-  it('should roundtrip correctly: push --password (enc disabled) → pull --password', async () => {
+  it('should roundtrip correctly: push --password (enc disabled) -> pull --password', async () => {
     await init(root, {
       vault_name: 'pw-override',
       scheme: { data_shards: 2, parity_shards: 1 },
@@ -989,7 +989,7 @@ describe('Scenariusz 8: --password override przy encryption.enabled=false', () =
   });
 });
 
-// ─── Scenario 9: --password on an unencrypted vault = silent no-op───────────
+// --- Scenario 9: --password on an unencrypted vault = silent no-op-----------
 
 describe('Scenariusz 9: --password na unencrypted vault = silent no-op', () => {
   let root: string;
@@ -1035,7 +1035,7 @@ describe('Scenariusz 9: --password na unencrypted vault = silent no-op', () => {
   });
 });
 
-// ─── Scenario 10: pull without a password on an encrypted manifest fails clearly─
+// --- Scenario 10: pull without a password on an encrypted manifest fails clearly-
 
 describe('Scenariusz 10: pull bez password na encrypted manifest fails czytelnie', () => {
   const PASSWORD = 'enc-pass-789';
@@ -1067,7 +1067,7 @@ describe('Scenariusz 10: pull bez password na encrypted manifest fails czytelnie
     const dest = await tmp();
     try {
       await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
-      // mockIO without answers → askSecret returns '' → pull of an encrypted
+      // mockIO without answers -> askSecret returns '' -> pull of an encrypted
       // backup with no password rejects.
       await expect(pull(dest, { io: mockIO(), force: true })).rejects.toThrow(BfsError);
     } finally {
@@ -1076,9 +1076,9 @@ describe('Scenariusz 10: pull bez password na encrypted manifest fails czytelnie
   });
 });
 
-// ─── Scenario 11: mixed-version vault — per-version encryption dispatch ───
+// --- Scenario 11: mixed-version vault - per-version encryption dispatch ---
 
-describe('Scenariusz 11: mixed-version vault — pull respektuje per-version encryption', () => {
+describe('Scenariusz 11: mixed-version vault - pull respektuje per-version encryption', () => {
   const V2_PASSWORD = 'enc-v2-pwd';
   let root: string;
   let pdirs: string[];
@@ -1162,7 +1162,7 @@ describe('Scenariusz 11: mixed-version vault — pull respektuje per-version enc
     }
   });
 
-  it('should ignore --password on v1 (unencrypted) — deriveKey not called', async () => {
+  it('should ignore --password on v1 (unencrypted) - deriveKey not called', async () => {
     const { v1Hashes } = await setupMixedVault();
     const deriveKeySpy = vi.spyOn(cryptoModule, 'deriveKey');
     const dest = await tmp();
@@ -1177,21 +1177,21 @@ describe('Scenariusz 11: mixed-version vault — pull respektuje per-version enc
   });
 });
 
-// ─── Scenario 13: pull --allow-missing-adapters with a missing external adapter ─
+// --- Scenario 13: pull --allow-missing-adapters with a missing external adapter -
 //
 // Regression: `pull --allow-missing-adapters` with a missing EXTERNAL adapter
 // crashed the whole pull with BfsError("Unknown provider type: ...") instead of
 // skipping that shard and decoding from the remaining N providers. CHANGELOG [0.5.0]
-// promises the flag lets RS decode from providers that stay reachable — recovery
-// does this correctly (bootstrap connectOne: create in try/catch → null → skip), pull does not.
+// promises the flag lets RS decode from providers that stay reachable - recovery
+// does this correctly (bootstrap connectOne: create in try/catch -> null -> skip), pull does not.
 //
 // Setup mirrors the real situation: the adapter was present at push, uninstalled
-// before pull. Push 3 local → shards on disk. Then a config.json mutation: one
+// before pull. Push 3 local -> shards on disk. Then a config.json mutation: one
 // the provider gets a nonexistent external type (`ghost-ssh`) with a non-empty
 // adapterPackage (classified as external-missing in detectMissingAdapters);
 // its shard file stays untouched. pull --allow-missing-adapters must skip the
 // missing provider and restore from the 2 remaining local ones (N=2). Before the fix:
-// providerRegistry.create() on an unregistered type throws OUTSIDE the try → crash.
+// providerRegistry.create() on an unregistered type throws OUTSIDE the try -> crash.
 describe('Scenariusz 13: pull --allow-missing-adapters z brakującym external adapterem', () => {
   let root: string;
   let pdirs: string[];
@@ -1220,7 +1220,7 @@ describe('Scenariusz 13: pull --allow-missing-adapters z brakującym external ad
 
     // Mutate config AFTER a successful push: provider p2 becomes an external
     // type whose adapter is not registered. Its shard file stays on disk
-    // untouched — only the config classifies it as external-missing.
+    // untouched - only the config classifies it as external-missing.
     const cfg = await readConfig(root);
     if (!cfg) throw new Error('readConfig returned null after init');
     const ghost = cfg.providers.find((p) => p.id === 'p2');
@@ -1267,7 +1267,7 @@ describe('Scenariusz 13: pull --allow-missing-adapters z brakującym external ad
     try {
       await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
 
-      // Without the flag the preflight rejects cleanly with the install hint —
+      // Without the flag the preflight rejects cleanly with the install hint -
       // this path already works and proves the missing adapter is detected.
       await expect(pull(dest, { io: mockIO(), force: true })).rejects.toThrow(BfsError);
     } finally {
@@ -1276,12 +1276,12 @@ describe('Scenariusz 13: pull --allow-missing-adapters z brakującym external ad
   });
 });
 
-// ─── Scenario 12: pull with a wrong password on an encrypted vault ───────────
+// --- Scenario 12: pull with a wrong password on an encrypted vault -----------
 //
 // Regression: a wrong key raised DecryptionError in the `flush` of EVERY one of
 // the N+K parallel decrypting streams. Only the shard actively read by
 // rsDecodeStriped surfaced the error cleanly through the pipeline; the others
-// (siblings) emitted an 'error' event with no listener → Node threw an uncaught
+// (siblings) emitted an 'error' event with no listener -> Node threw an uncaught
 // exception (a stack dump to the user) instead of a clean message. The test forces
 // the V2 path with many shards (all present, wrong password): before the fix it
 // crashed the worker with an unhandled 'error', after the fix it rejects with a
@@ -1318,7 +1318,7 @@ describe('Scenariusz 12: pull ze złym hasłem na encrypted vault', () => {
     try {
       await fs.cp(path.join(root, '.bfs'), path.join(dest, '.bfs'), { recursive: true });
 
-      // All N+K shards present, but the wrong password → every shard's GCM
+      // All N+K shards present, but the wrong password -> every shard's GCM
       // check fails. Must surface as a single DecryptionError, never an
       // uncaught 'error' event from a sibling decrypt stream.
       await expect(pull(dest, { io: mockIO(), force: true, password: 'wrong-password' })).rejects.toThrow(DecryptionError);
@@ -1328,13 +1328,13 @@ describe('Scenariusz 12: pull ze złym hasłem na encrypted vault', () => {
   });
 });
 
-// Corrupt-but-present shard → reconstruct from parity.
+// Corrupt-but-present shard -> reconstruct from parity.
 //
 // Regression (critical bug): V2 pull tolerated a MISSING shard (reconstruct
-// from parity) but not a CORRUPT one — a single rotten-but-present shard sank
-// the whole restore (trailing SHA / GCM auth tag → output.destroy) even though
+// from parity) but not a CORRUPT one - a single rotten-but-present shard sank
+// the whole restore (trailing SHA / GCM auth tag -> output.destroy) even though
 // N healthy shards + parity were more than enough. Fix: pre-validate every
-// shard before decode → a corrupt shard is treated like a missing one and
+// shard before decode -> a corrupt shard is treated like a missing one and
 // erasure-decoded from the rest. The bit-flip preserves length, targeting the
 // corruption that got=0 (a missing shard) does NOT represent.
 describe('pull with a corrupt shard reconstructs from parity', () => {
@@ -1364,7 +1364,7 @@ describe('pull with a corrupt shard reconstructs from parity', () => {
     const originalHashes = await createTestFiles(root);
     await push(root, { io: mockIO(), password: PASSWORD });
 
-    // Corrupt data shard 0; shard 1 (data) + shard 2 (parity) stay healthy —
+    // Corrupt data shard 0; shard 1 (data) + shard 2 (parity) stay healthy -
     // exactly N=2 good shards, enough to reconstruct the excluded one.
     await corruptShardPayload(path.join(pdirs[0] ?? '', 'corrupt-data', 'shard_0.bfs.1'));
 
@@ -1433,15 +1433,15 @@ describe('pull with a corrupt shard reconstructs from parity', () => {
   });
 });
 
-// Corrupt kdf_salt in the FIRST shard → decrypt from a sibling's real salt.
+// Corrupt kdf_salt in the FIRST shard -> decrypt from a sibling's real salt.
 //
 // The kdf_salt is shared-per-version: every shard header carries the identical
-// 16 bytes. A bit-flip in shard_0's salt corrupts only that copy — shard_1 and
+// 16 bytes. A bit-flip in shard_0's salt corrupts only that copy - shard_1 and
 // shard_2 still hold the true salt, and RS reconstructs the ciphertext from the
 // two healthy shards (N=2). Pull derives the decryption key from the salt of the
 // first shard without checking that shard's health, so it derives the key from
-// the corrupt salt → DecryptionError, even though a healthy sibling carries the
-// real salt and ≤ K shards are damaged. Losing 1 of 3 media must not sink the
+// the corrupt salt -> DecryptionError, even though a healthy sibling carries the
+// real salt and <= K shards are damaged. Losing 1 of 3 media must not sink the
 // restore.
 describe('pull with a corrupt kdf_salt reconstructs from a sibling salt', () => {
   const PASSWORD = 'corrupt-salt-pass-654';
@@ -1471,7 +1471,7 @@ describe('pull with a corrupt kdf_salt reconstructs from a sibling salt', () => 
     await push(root, { io: mockIO(), password: PASSWORD });
 
     // Corrupt only shard_0's salt; shard_1 (data) + shard_2 (parity) keep the
-    // real, shared-per-version salt — exactly N=2 good shards to reconstruct the
+    // real, shared-per-version salt - exactly N=2 good shards to reconstruct the
     // excluded one, and a healthy salt to derive the key.
     await flipKdfSaltByte(path.join(pdirs[0] ?? '', 'corrupt-salt', 'shard_0.bfs.1'));
 

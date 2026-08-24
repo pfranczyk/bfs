@@ -1,4 +1,4 @@
-// Length-preserving shard corrupter for cli-e2e — flips one bit inside a
+// Length-preserving shard corrupter for cli-e2e - flips one bit inside a
 // shard's payload IN PLACE and does NOT re-seal the trailing SHA-256. This is
 // the deliberate opposite of tamper-shard.ts (which recomputes the checksum so
 // the forgery stays byte-valid): here we want the shard to read as CORRUPT.

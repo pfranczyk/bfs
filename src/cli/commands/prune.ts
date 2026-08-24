@@ -3,6 +3,7 @@ import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO } from '../../providers/provider.js';
 import { assertPruneKeepsARestorableVersion, listVersions, prune } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
+import { isCiRun } from '../interactive-mode.js';
 import { parseVersionRange } from '../parse-version-range.js';
 import { inquirer, isPromptCancellation, promptWithRawMode } from '../prompt.js';
 import { CommandAbort, error, success, warn } from '../ui.js';
@@ -11,10 +12,10 @@ import { CommandAbort, error, success, warn } from '../ui.js';
  * Registers the `bfs prune` command on the given Commander program.
  *
  * Usage:
- *   bfs prune 5               — delete version 5
- *   bfs prune 1-10            — delete versions 1 to 10
- *   bfs prune 1,3,5           — delete versions 1, 3 and 5
- *   bfs prune --keep-last 3   — keep 3 most recent, delete the rest
+ *   bfs prune 5               - delete version 5
+ *   bfs prune 1-10            - delete versions 1 to 10
+ *   bfs prune 1,3,5           - delete versions 1, 3 and 5
+ *   bfs prune --keep-last 3   - keep 3 most recent, delete the rest
  *
  * @param program - Commander program to attach the command to
  */
@@ -27,6 +28,21 @@ export function registerPrune(program: Command): void {
     .option('--force', t('prune_opt_force'))
     .action(async (range: string | undefined, opts: { keepLast?: string; yes?: boolean; force?: boolean }, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
+      const isCi = isCiRun(cmd);
+
+      // Checked against the command line alone, before a single version is read:
+      // what is missing here cannot be supplied later by anything on disk, and a
+      // refusal that arrives after the work reads as the tool changing its mind.
+      if (isCi) {
+        if (!range && opts.keepLast === undefined) {
+          error(t('prune_ci_selection_required'));
+          throw new CommandAbort();
+        }
+        if (opts.yes !== true) {
+          error(t('prune_ci_yes_required'));
+          throw new CommandAbort();
+        }
+      }
 
       try {
         const manifests = await listVersions(rootDir);
@@ -60,13 +76,13 @@ export function registerPrune(program: Command): void {
                 name: 'picked',
                 message: t('prune_select_prompt'),
                 choices,
-                theme: { style: { keysHelpTip: (keys: [key: string, action: string][]): string => [...keys, ['esc', t('cancel').toLowerCase()]].map(([k, a]) => `${k} ${a}`).join(' • ') } },
+                theme: { style: { keysHelpTip: (keys: [key: string, action: string][]): string => [...keys, ['esc', t('cancel').toLowerCase()]].map(([k, a]) => `${k} ${a}`).join(' * ') } },
               } as never,
             ]);
             picked = ans.picked;
           } catch (err) {
             if (!isPromptCancellation(err)) throw err;
-            // Esc / Ctrl+C → treat as empty selection
+            // Esc / Ctrl+C -> treat as empty selection
           }
           if (picked.includes('__manual__')) {
             try {
@@ -74,7 +90,7 @@ export function registerPrune(program: Command): void {
               toRemove = parseVersionRange(rangeInput.trim(), allVersions);
             } catch (err) {
               if (!isPromptCancellation(err)) throw err;
-              // Esc / Ctrl+C → treat as empty selection
+              // Esc / Ctrl+C -> treat as empty selection
             }
           } else {
             toRemove = picked
@@ -95,7 +111,7 @@ export function registerPrune(program: Command): void {
 
         // Check before asking for confirmation: a refusal after the operator has
         // picked versions and confirmed reads as the tool changing its mind.
-        // prune() re-checks — it is the gate for programmatic callers too.
+        // prune() re-checks - it is the gate for programmatic callers too.
         await assertPruneKeepsARestorableVersion(rootDir, { versions: toRemove, ...(opts.force === true ? { force: true } : {}) });
 
         warn(fmt('prune_versions_to_delete', toRemove.join(', ')));
@@ -107,7 +123,7 @@ export function registerPrune(program: Command): void {
             confirmed = ans.confirmed;
           } catch (err) {
             if (!isPromptCancellation(err)) throw err;
-            // Esc / Ctrl+C → treat as decline
+            // Esc / Ctrl+C -> treat as decline
           }
           if (!confirmed) {
             console.log(t('cancelled'));
@@ -115,7 +131,7 @@ export function registerPrune(program: Command): void {
           }
         }
 
-        await prune(rootDir, { versions: toRemove, io: createCliProviderIO(rootDir), ...(opts.force === true ? { force: true } : {}) });
+        await prune(rootDir, { versions: toRemove, io: createCliProviderIO(rootDir, isCi ? false : undefined), ...(opts.force === true ? { force: true } : {}) });
         success(fmt('prune_deleted', toRemove.join(', ')));
       } catch (err) {
         if (err instanceof CommandAbort) throw err;

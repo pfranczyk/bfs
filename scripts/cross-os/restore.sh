@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# Cross-OS restore proof — TARGET half.
+# Cross-OS restore proof - TARGET half.
 #
 # Takes an artifact staged by create.sh on the *other* OS and proves the backup
 # restores here byte-for-byte. The provider base paths recorded in the artifact
 # are from the source OS and do not exist on this machine, so both flows repoint
 # every device with `bfs repair --ci` to wherever the artifact was extracted:
 #
-#   1. repair-based  — copy the shipped .bfs, repair all devices to their new
+#   1. repair-based  - copy the shipped .bfs, repair all devices to their new
 #                      paths, pull.
-#   2. recovery-based — rebuild .bfs from a single device (disaster recovery),
+#   2. recovery-based - rebuild .bfs from a single device (disaster recovery),
 #                      repair to the new paths, pull.
 #
 # Each restore is compared to baseline.sha256 with `sha256sum -c`.
@@ -33,15 +33,15 @@ P2="$(winpath "$ART/providers/p2")"
 check_restored() {
   local dir="$1" label="$2"
   if ( cd "$dir" && sha256sum -c "$ART/baseline.sha256" ) >/dev/null; then
-    echo "[cross-os] $label — SHA-256 match ✓"
+    echo "[cross-os] $label - SHA-256 match OK"
   else
-    echo "[cross-os] $label — SHA-256 MISMATCH ✗" >&2
+    echo "[cross-os] $label - SHA-256 MISMATCH [[X]]" >&2
     ( cd "$dir" && sha256sum -c "$ART/baseline.sha256" ) >&2 || true
     exit 1
   fi
 }
 
-# ── Flow 1: repair-based restore ──────────────────────────────────────────────
+# -- Flow 1: repair-based restore ----------------------------------------------
 R1="$WS/repair-restore"
 mkdir -p "$R1"
 cp -r "$ART/vault/.bfs" "$R1/.bfs"
@@ -52,7 +52,7 @@ bfs --cwd "$(winpath "$R1")" verify
 bfs --cwd "$(winpath "$R1")" pull --force --yes
 check_restored "$R1" "repair-based restore"
 
-# ── Flow 2: recovery-based restore (disaster recovery) ────────────────────────
+# -- Flow 2: recovery-based restore (disaster recovery) ------------------------
 # Rebuild .bfs from one device, then repair to the new paths. recovery writes
 # the config from the shard's location map (source-OS paths), so the repair step
 # is required before pull can find the devices on this machine.

@@ -24,6 +24,6 @@ export interface SmokeContext {
   provider1Dir: string;
   provider2Dir: string;
   provider3Dir: string;
-  /** SHA-256 of every file before push: relativePath → hex */
+  /** SHA-256 of every file before push: relativePath -> hex */
   originalHashes: Map<string, string>;
 }

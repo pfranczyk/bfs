@@ -68,7 +68,7 @@ function okResult(overrides: Partial<PushResult> = {}): PushResult {
 // override: push must pause the ora spinner around a provider warn so the
 // warning does not interleave with the live spinner line. With the override
 // missing, io.warn writes straight to console.warn while the spinner keeps
-// running — no spinner.stop()/start() pair brackets the warn. pull.ts has the
+// running - no spinner.stop()/start() pair brackets the warn. pull.ts has the
 // correct override; this test pins the same behaviour for push.
 describe('push spinner warn', () => {
   let capture: ReturnType<typeof captureConsole>;

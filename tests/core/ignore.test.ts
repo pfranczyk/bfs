@@ -13,7 +13,7 @@ function makeTmpDir(content?: string): string {
   return dir;
 }
 
-describe('createIgnoreFilter — .bfs/ always ignored', () => {
+describe('createIgnoreFilter - .bfs/ always ignored', () => {
   let dir: string;
 
   beforeEach(() => {
@@ -34,7 +34,7 @@ describe('createIgnoreFilter — .bfs/ always ignored', () => {
   });
 });
 
-describe('createIgnoreFilter — pattern matching', () => {
+describe('createIgnoreFilter - pattern matching', () => {
   let dir: string;
 
   beforeEach(() => {
@@ -62,7 +62,7 @@ describe('createIgnoreFilter — pattern matching', () => {
   });
 });
 
-describe('createIgnoreFilter — negation', () => {
+describe('createIgnoreFilter - negation', () => {
   let dir: string;
 
   beforeEach(() => {
@@ -82,7 +82,7 @@ describe('createIgnoreFilter — negation', () => {
   });
 });
 
-describe('createIgnoreFilter — comments', () => {
+describe('createIgnoreFilter - comments', () => {
   let dir: string;
 
   beforeEach(() => {
@@ -102,7 +102,7 @@ describe('createIgnoreFilter — comments', () => {
   });
 });
 
-describe('createIgnoreFilter — no .bfsignore file', () => {
+describe('createIgnoreFilter - no .bfsignore file', () => {
   it('should not throw when .bfsignore does not exist', () => {
     const dir = makeTmpDir(); // no .bfsignore written
     expect(() => createIgnoreFilter(dir)).not.toThrow();
@@ -141,7 +141,7 @@ describe('appendToBfsignore', () => {
   it('should escape gitignore metacharacters so literal names match exactly', async () => {
     dir = makeTmpDir();
 
-    // A leading '#' would be a comment, '!' a negation, '[' '*' '?' globs — all
+    // A leading '#' would be a comment, '!' a negation, '[' '*' '?' globs - all
     // must be escaped so the exact file name is what gets ignored.
     await appendToBfsignore(dir, ['#hash.txt', '!bang.txt', 'a[1].txt', 'star*.txt']);
 

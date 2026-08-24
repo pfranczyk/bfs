@@ -3,7 +3,7 @@ import { pl } from './pl.js';
 
 /** All translatable strings used by the BFS CLI. */
 export interface Strings {
-  // ─── REPL ────────────────────────────────────────────────────────────────
+  // --- REPL ----------------------------------------------------------------
   repl_banner_title: string;
   repl_no_config: string;
   repl_banner_hint: string;
@@ -31,19 +31,20 @@ export interface Strings {
   /** %s = error message */
   repl_error_prefix: string;
 
-  // ─── Health ──────────────────────────────────────────────────────────────
+  // --- Health --------------------------------------------------------------
   health_healthy: string;
   health_degraded: string;
   health_damaged: string;
   health_unknown: string;
 
-  // ─── Command descriptions (bfs --help) ───────────────────────────────────
+  // --- Command descriptions (bfs --help) -----------------------------------
   cmd_bfs_desc: string;
   cmd_version_flag: string;
   cmd_help_flag: string;
   cmd_help_cmd: string;
   cmd_cwd_desc: string;
   cmd_lang_desc: string;
+  cmd_ci_desc: string;
   cmd_init_desc: string;
   cmd_push_desc: string;
   cmd_pull_desc: string;
@@ -60,7 +61,7 @@ export interface Strings {
   cmd_provider_remove_desc: string;
   cmd_provider_edit_desc: string;
 
-  // ─── Global / shared ─────────────────────────────────────────────────────
+  // --- Global / shared -----------------------------------------------------
   global_settings_group: string;
   lang_set: string;
   no_config: string;
@@ -72,7 +73,7 @@ export interface Strings {
   /** %s = path */
   dir_not_exist: string;
 
-  // ─── init ─────────────────────────────────────────────────────────────────
+  // --- init -----------------------------------------------------------------
   init_header: string;
   /** %s = provider number */
   init_provider_header: string;
@@ -107,7 +108,6 @@ export interface Strings {
   init_found_files: string;
   init_enc_prompt: string;
   init_compress_prompt: string;
-  /** %s = ratio%, %s = top extensions */
   init_compress_scanning: string;
   /** %s = ratio percent, %s = top extensions list */
   init_compress_skip_suggest: string;
@@ -133,6 +133,11 @@ export interface Strings {
   init_opt_max_ram: string;
   /** %s = vaultName */
   init_success: string;
+  /** %s = name of the backup already in this directory */
+  init_vault_exists: string;
+  init_vault_exists_unreadable: string;
+  /** %s = why the read failed (errno or message) */
+  init_vault_check_failed: string;
   init_ci_name_required: string;
   init_ci_scheme_required: string;
   /** %s = supplied value */
@@ -142,13 +147,13 @@ export interface Strings {
   /** %s = required total, %s = N, %s = K */
   init_ci_providers_required: string;
 
-  // ─── clear ────────────────────────────────────────────────────────────────
+  // --- clear ----------------------------------------------------------------
   cmd_clear_desc: string;
   clear_done: string;
   /** %s = filename (e.g. "push.lock") */
   clear_removed_file: string;
 
-  // ─── config ───────────────────────────────────────────────────────────────
+  // --- config ---------------------------------------------------------------
   cmd_config_desc: string;
   config_current_settings: string;
   config_updated: string;
@@ -160,9 +165,7 @@ export interface Strings {
   config_opt_temp_dir: string;
   config_opt_max_ram: string;
   config_opt_reset: string;
-  /** %s = feature name (compress, encryption) */
   config_opt_on: string;
-  /** %s = feature name (compress, encryption) */
   config_opt_off: string;
   /** %s = feature display name */
   config_feature_on: string;
@@ -178,7 +181,7 @@ export interface Strings {
   config_temp_default: string;
   config_ram_auto: string;
 
-  // ─── push ─────────────────────────────────────────────────────────────────
+  // --- push -----------------------------------------------------------------
   push_preparing: string;
   push_completed: string;
   push_success: string;
@@ -194,6 +197,7 @@ export interface Strings {
   push_damaged: string;
   push_opt_new: string;
   push_opt_overwrite: string;
+  push_opt_yes: string;
   push_opt_password: string;
   push_opt_cache: string;
   push_opt_max_ram: string;
@@ -230,7 +234,7 @@ export interface Strings {
   opt_temp_dir_desc: string;
   opt_cache_dir_desc: string;
 
-  // ─── lockfile / push partial ─────────────────────────────────────────────
+  // --- lockfile / push partial ---------------------------------------------
   /** %s = operation ('push' or 'repair'), %s = PID, %s = started_at ISO timestamp */
   lock_concurrent_active: string;
   /** %s = version */
@@ -240,8 +244,10 @@ export interface Strings {
   /** %s = error message from the failed write */
   push_cache_write_failed: string;
   push_cache_unavailable_in_lock: string;
+  /** %s = path of the cached blob that failed its own checksum */
+  push_cache_corrupted: string;
 
-  // ─── pull ─────────────────────────────────────────────────────────────────
+  // --- pull -----------------------------------------------------------------
   pull_preparing: string;
   pull_completed: string;
   pull_success: string;
@@ -259,7 +265,7 @@ export interface Strings {
   pull_opt_cache: string;
   pull_opt_allow_missing_adapters: string;
 
-  // ─── status ───────────────────────────────────────────────────────────────
+  // --- status ---------------------------------------------------------------
   status_header: string;
   status_name: string;
   status_latest: string;
@@ -274,8 +280,22 @@ export interface Strings {
   /** %s = data_shards, %s = parity_shards */
   status_scheme_breakdown: string;
 
-  // ─── versions ─────────────────────────────────────────────────────────────
+  // --- versions -------------------------------------------------------------
   versions_empty: string;
+  /** %s = comma-separated version labels present on the storage but not recovered */
+  versions_unrecovered: string;
+  /** %s = version recorded as present on the storage, none of whose parts were found */
+  pull_version_parts_missing: string;
+  /** %s = version whose parts were found but yielded no usable header */
+  pull_version_parts_unreadable: string;
+  /** %s = version the supplied password does not open */
+  pull_version_map_unopened: string;
+  /** %s = version that needs a password nobody supplied */
+  pull_version_password_required: string;
+  /** %s = newest restorable version (twice: in prose and in the command) */
+  pull_restorable_hint: string;
+  /** %s = newest recovered version, %s = comma-separated versions left unrecovered */
+  recovery_success_partial: string;
   versions_col_version: string;
   versions_col_status: string;
   versions_col_scheme: string;
@@ -284,7 +304,7 @@ export interface Strings {
   versions_col_size: string;
   versions_col_pushed_at: string;
 
-  // ─── prune ────────────────────────────────────────────────────────────────
+  // --- prune ----------------------------------------------------------------
   prune_opt_keep_last: string;
   prune_opt_force: string;
   /** %s = version number */
@@ -305,12 +325,14 @@ export interface Strings {
   prune_versions_to_delete: string;
   /** %s = count */
   prune_confirm: string;
+  prune_ci_selection_required: string;
+  prune_ci_yes_required: string;
   /** %s = versions list */
   prune_deleted: string;
   /** %s = version number, %s = provider/storage name */
   prune_orphan_warn: string;
 
-  // ─── verify ───────────────────────────────────────────────────────────────
+  // --- verify ---------------------------------------------------------------
   verify_spinner: string;
   verify_no_versions: string;
   verify_failed: string;
@@ -334,7 +356,7 @@ export interface Strings {
   verify_header_advisory: string;
   verify_opt_deep: string;
 
-  // ─── recovery ─────────────────────────────────────────────────────────────
+  // --- recovery -------------------------------------------------------------
   recovery_provider_type_prompt: string;
   recovery_path_prompt: string;
   recovery_opt_provider: string;
@@ -352,6 +374,7 @@ export interface Strings {
   recovery_provider_type_unknown: string;
   recovery_ci_provider_required: string;
   recovery_ci_name_required: string;
+  recovery_ci_bootstrap_required: string;
   recovery_connecting: string;
   recovery_scanning: string;
   /** %s = count */
@@ -362,7 +385,7 @@ export interface Strings {
   recovery_success: string;
   recovery_failed: string;
 
-  // ─── scheme ───────────────────────────────────────────────────────────────
+  // --- scheme ---------------------------------------------------------------
   scheme_data_shards_invalid: string;
   scheme_parity_shards_invalid: string;
   /** %s = N, %s = K, %s = required, %s = current */
@@ -382,7 +405,7 @@ export interface Strings {
   /** %s = required, %s = current */
   scheme_providers_mismatch: string;
 
-  // ─── provider: local-fs ──────────────────────────────────────────────────
+  // --- provider: local-fs --------------------------------------------------
   /** %s = basePath */
   provider_local_path_not_exist_confirm: string;
   /** %s = basePath */
@@ -390,8 +413,10 @@ export interface Strings {
   /** %s = basePath */
   provider_local_path_not_writable: string;
   local_path_prompt: string;
+  /** %s = basePath */
+  local_edit_path_missing_confirm: string;
 
-  // ─── provider add ─────────────────────────────────────────────────────────
+  // --- provider add ---------------------------------------------------------
   provider_add_opt_ci: string;
   provider_add_opt_name: string;
   provider_add_opt_type: string;
@@ -414,7 +439,7 @@ export interface Strings {
   /** %s = id, %s = data, %s = parity */
   provider_add_success: string;
 
-  // ─── provider list ────────────────────────────────────────────────────────
+  // --- provider list --------------------------------------------------------
   provider_list_empty: string;
   /** %s = vault_name, %s = data, %s = parity */
   provider_list_header: string;
@@ -423,7 +448,7 @@ export interface Strings {
   provider_list_col_type: string;
   provider_list_col_config: string;
 
-  // ─── provider remove ──────────────────────────────────────────────────────
+  // --- provider remove ------------------------------------------------------
   provider_remove_opt_password: string;
   provider_remove_opt_strategy: string;
   provider_remove_opt_new_type: string;
@@ -459,6 +484,9 @@ export interface Strings {
   provider_remove_rebuild_new_location: string;
   provider_remove_target_prompt: string;
   provider_remove_yes_required: string;
+  provider_remove_ci_id_required: string;
+  provider_remove_ci_strategy_required: string;
+  provider_remove_ci_password_required: string;
   /** %s = id */
   provider_remove_confirm: string;
   /** %s = scope */
@@ -474,11 +502,15 @@ export interface Strings {
   provider_remove_next_step_3: string;
   provider_remove_next_step_4: string;
   /** %s = id */
+  provider_remove_target_reverted: string;
+  /** %s = id */
+  provider_remove_target_kept: string;
+  /** %s = id */
   provider_relocate_success: string;
   /** %s = id */
   provider_rebuild_success: string;
 
-  // ─── provider edit ────────────────────────────────────────────────────────
+  // --- provider edit --------------------------------------------------------
   provider_edit_opt_ci: string;
   provider_edit_id_required: string;
   /** %s = id */
@@ -496,7 +528,7 @@ export interface Strings {
   provider_edit_success: string;
   provider_edit_synced_hint: string;
 
-  // ─── vault operations ────────────────────────────────────────────────────
+  // --- vault operations ----------------------------------------------------
   /** %s = version */
   vault_download_shards: string;
   /** %s = provider_id */
@@ -514,6 +546,9 @@ export interface Strings {
   vault_decrypting: string;
   /** %s = working_version, %s = latest_version, %s = targetVersion */
   vault_push_version_confirm: string;
+  /** %s = working_version, %s = latest_version, %s = targetVersion */
+  push_version_switch_no_operator: string;
+  vault_checking_cached_blob: string;
   vault_using_cached_blob: string;
   vault_no_cached_blob_push: string;
   /** %s = count, %s = file list */
@@ -529,6 +564,11 @@ export interface Strings {
   push_damaged_zero: string;
   push_cancelled: string;
   vault_password_required: string;
+  /** %s = the question that would have been asked */
+  prompt_no_operator: string;
+  /** %s = the question that would have been asked */
+  prompt_no_operator_ci: string;
+  bootstrap_password_required_noninteractive: string;
   vault_passwords_mismatch: string;
   push_no_config: string;
   push_recovered_locations_intro: string;
@@ -536,7 +576,8 @@ export interface Strings {
   push_recovered_location: string;
   push_confirm_recovered_locations: string;
   push_recovered_locations_declined: string;
-  // ─── vault — pull / versions / provider runtime ──────────────────────────
+  push_recovered_locations_no_operator: string;
+  // --- vault - pull / versions / provider runtime --------------------------
   /** %s = data count N (need), %s = available/found count (got) */
   pull_not_enough_shards: string;
   /** %s = comma-separated provider ids */
@@ -578,6 +619,8 @@ export interface Strings {
   vault_no_cached_blob_pull: string;
   /** %s = working_version, %s = targetVersion */
   vault_pull_overwrite_confirm: string;
+  /** %s = working_version, %s = targetVersion */
+  pull_overwrite_no_operator: string;
   vault_unpacking_files: string;
   /** %s = count, %s = file list */
   vault_pull_write_error_confirm: string;
@@ -588,21 +631,23 @@ export interface Strings {
   /** %s = comma-separated provider names recorded in the backup */
   vault_degraded_provider_not_configured: string;
 
-  // ─── recovery operations (vault layer) ──────────────────────────────────
+  // --- recovery operations (vault layer) ----------------------------------
   recovery_ask_version_password: string;
+  /** %s = version being restored; unlike recovery, a blank answer ends the command */
+  pull_ask_version_password: string;
   recovery_pool_password_failed: string;
   recovery_wrong_password_retry: string;
   recovery_decrypt_skip: string;
   recovery_ask_transport_password: string;
 
-  // ─── bootstrap operations ────────────────────────────────────────────────
+  // --- bootstrap operations ------------------------------------------------
   bootstrap_ask_password: string;
   bootstrap_wrong_password_retry: string;
   bootstrap_copy_integrity_failed: string;
   bootstrap_copy_integrity_failed_no_password: string;
   bootstrap_single_provider_warn: string;
 
-  // ─── provider: ftp ──────────────────────────────────────────────────────
+  // --- provider: ftp ------------------------------------------------------
   ftp_host_prompt: string;
   ftp_port_prompt: string;
   ftp_user_prompt: string;
@@ -611,7 +656,7 @@ export interface Strings {
   ftp_secure_prompt: string;
   provider_add_ftp_ci_not_supported: string;
 
-  // ─── provider help (bfs provider -h) ─────────────────────────────────────
+  // --- provider help (bfs provider -h) -------------------------------------
   // Frame strings (BFS-internal, used by provider-help.ts)
   provider_help_available_header: string;
   provider_help_usage_label: string;
@@ -620,12 +665,12 @@ export interface Strings {
   /** %s = install command (e.g. "npm install -g foo") */
   provider_help_install_hint: string;
 
-  // Built-in local provider — description + flag descriptions
+  // Built-in local provider - description + flag descriptions
   local_help_description: string;
   local_help_flag_path_desc: string;
   local_help_flag_config_file_desc: string;
 
-  // Built-in ftp provider — description + flag descriptions
+  // Built-in ftp provider - description + flag descriptions
   ftp_help_description: string;
   ftp_help_flag_host_desc: string;
   ftp_help_flag_port_desc: string;
@@ -637,13 +682,13 @@ export interface Strings {
   ftp_help_flag_accept_new_cert_desc: string;
   ftp_help_flag_config_file_desc: string;
 
-  // ─── Provider configuration errors ───────────────────────────────────────
+  // --- Provider configuration errors ---------------------------------------
   ftp_host_required: string;
   ftp_path_required: string;
   ftp_path_must_be_absolute: string;
   local_config_path_missing: string;
 
-  // ─── Adapter preflight (missing / version mismatch) ──────────────────────
+  // --- Adapter preflight (missing / version mismatch) ----------------------
   adapter_preflight_missing_header: string;
   adapter_preflight_install_label: string;
   adapter_preflight_retry_hint: string;
@@ -658,7 +703,7 @@ export interface Strings {
   /** %s = type, %s = recorded, %s = installed */
   adapter_version_mismatch_soft: string;
 
-  // ─── Generic provider errors (CLI side) ──────────────────────────────────
+  // --- Generic provider errors (CLI side) ----------------------------------
   /** %s = type */
   provider_type_unknown: string;
   /** %s = err.message */
@@ -669,7 +714,7 @@ export interface Strings {
   provider_add_probe_failed: string;
   provider_add_probe_unsaved: string;
 
-  // ─── Recovery (consensus + final) ────────────────────────────────────────
+  // --- Recovery (consensus + final) ----------------------------------------
   /** %s = version */
   recovery_consensus_vault_id_mismatch: string;
   /** %s = version */
@@ -682,7 +727,7 @@ export interface Strings {
   /** %s = version */
   recovery_manifest_unreadable: string;
 
-  // ─── Provider runtime errors (FTP + LocalFS shared shape) ────────────────
+  // --- Provider runtime errors (FTP + LocalFS shared shape) ----------------
   /** %s = path */
   provider_short_shard: string;
   /** %s = path, %s = err */
@@ -704,7 +749,7 @@ export interface Strings {
   /** %s = provider id, %s = path */
   verify_shard_unverifiable: string;
 
-  // ─── FTP — runtime errors ────────────────────────────────────────────────
+  // --- FTP - runtime errors ------------------------------------------------
   /** %s = host, %s = port, %s = err */
   ftp_operation_failed: string;
   /** %s = label, %s = attempt, %s = max, %s = sent, %s = reported */
@@ -722,8 +767,10 @@ export interface Strings {
   ftp_recovery_password: string;
   /** %s = host[:port] */
   ftp_recovery_declined: string;
+  /** %s = host[:port] */
+  ftp_recovery_no_operator: string;
 
-  // ─── FTP — configureFromFlags + validateConfig ───────────────────────────
+  // --- FTP - configureFromFlags + validateConfig ---------------------------
   ftp_config_port_invalid: string;
   ftp_inline_port_invalid: string;
   ftp_inline_secure_invalid: string;
@@ -743,6 +790,8 @@ export interface Strings {
   ftp_cert_pin_mismatch: string;
   /** %s = host:port, %s = presented fingerprint */
   ftp_cert_untrusted: string;
+  /** %s = host:port */
+  ftp_cert_trust_conflict: string;
   /** %s = host:port, %s = cert kind, %s = presented fingerprint */
   ftp_cert_confirm: string;
   /** %s = host:port */
@@ -751,8 +800,28 @@ export interface Strings {
   ftp_cert_pin_requires_secure: string;
   /** %s = host:port */
   ftp_tls_not_established: string;
+  /** %s = host:port, %s = certificate kind, %s = fingerprint */
+  ftp_cert_trust_menu: string;
+  trust_choice_accept: string;
+  trust_choice_back: string;
+  trust_choice_cancel: string;
+  configure_reenter_notice: string;
+  configure_restarts_exhausted: string;
+  /** %s = host:port, %s = fingerprint being removed */
+  ftp_edit_pin_dropped: string;
+  /** %s = host:port */
+  ftp_edit_connecting: string;
+  /** %s = host:port */
+  ftp_edit_offline_menu: string;
+  ftp_edit_offline_paste: string;
+  ftp_edit_paste_prompt: string;
+  ftp_edit_fingerprint_invalid: string;
+  ftp_edit_offline_no_pin: string;
+  ftp_edit_no_pin_warn: string;
+  ftp_edit_offline_exit: string;
+  ftp_edit_cancelled: string;
 
-  // ─── FTP — probeConnection ───────────────────────────────────────────────
+  // --- FTP - probeConnection -----------------------------------------------
   ftp_probe_incomplete: string;
   /** %s = err */
   ftp_probe_step_ensure_dir: string;
@@ -764,7 +833,7 @@ export interface Strings {
   /** %s = err */
   ftp_probe_step_cleanup: string;
 
-  // ─── provider: ssh ──────────────────────────────────────────────────────
+  // --- provider: ssh ------------------------------------------------------
   ssh_host_prompt: string;
   ssh_port_prompt: string;
   ssh_user_prompt: string;
@@ -816,6 +885,8 @@ export interface Strings {
   ssh_recovery_password: string;
   ssh_recovery_passphrase: string;
   ssh_recovery_declined: string;
+  /** %s = user@host:port */
+  ssh_recovery_no_operator: string;
   ssh_recovery_no_secret_noninteractive: string;
   ssh_recovery_unpinned: string;
   ssh_config_port_invalid: string;
@@ -840,7 +911,7 @@ export interface Strings {
   ssh_probe_step_compare_remote: string;
   ssh_probe_step_cleanup: string;
 
-  // ─── LocalFS — runtime errors ────────────────────────────────────────────
+  // --- LocalFS - runtime errors --------------------------------------------
   /** %s = path, %s = err */
   local_list_failed: string;
   /** %s = path, %s = err */
@@ -850,12 +921,12 @@ export interface Strings {
   /** %s = path, %s = err */
   local_read_shard_failed: string;
 
-  // ─── LocalFS — validateConfig + describeConfig ───────────────────────────
+  // --- LocalFS - validateConfig + describeConfig ---------------------------
   local_validate_path_required: string;
   /** %s = path */
   local_describe_config: string;
 
-  // ─── LocalFS — probeConnection ───────────────────────────────────────────
+  // --- LocalFS - probeConnection -------------------------------------------
   local_probe_incomplete: string;
   /** %s = err */
   local_probe_step_mkdir: string;
@@ -867,7 +938,7 @@ export interface Strings {
   /** %s = err */
   local_probe_step_cleanup: string;
 
-  // ─── repair (spec parsing) ─────────────────────────────────────────────────
+  // --- repair (spec parsing) -------------------------------------------------
   repair_spec_odd_args: string;
   /** %s = provider id */
   repair_unknown_provider: string;
@@ -881,11 +952,19 @@ export interface Strings {
   heal_locationmap_update_failed: string;
   heal_relocate_unreachable: string;
 
-  // ─── repair (command) ──────────────────────────────────────────────────────
+  // --- repair (command) ------------------------------------------------------
   cmd_repair_desc: string;
   repair_opt_version: string;
   repair_opt_password: string;
   repair_opt_password_file: string;
+  push_opt_password_file: string;
+  pull_opt_password_file: string;
+  recovery_opt_password_file: string;
+  provider_remove_opt_password_file: string;
+  /** %s = password file path */
+  password_file_unreadable: string;
+  /** %s = password file path */
+  password_file_empty: string;
   repair_opt_ci: string;
   repair_opt_rebuild: string;
   /** Multi-line syntax + examples block appended to `bfs repair --help`. */

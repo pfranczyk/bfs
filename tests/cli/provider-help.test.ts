@@ -13,8 +13,8 @@ describe('buildProviderHelpSection', () => {
 
   it('should render one section per built-in provider', () => {
     const help = buildProviderHelpSection();
-    expect(help).toMatch(/local — Local filesystem/);
-    expect(help).toMatch(/ftp — FTP\/FTPS/);
+    expect(help).toMatch(/local - Local filesystem/);
+    expect(help).toMatch(/ftp - FTP\/FTPS/);
   });
 
   it('should prepend the fixed BFS usage prefix before provider-specific suffix', () => {
@@ -34,10 +34,10 @@ describe('buildProviderHelpSection', () => {
 
   it('should not render install hint for built-in providers', () => {
     // Built-ins register without AdapterRegistrationMeta and leave
-    // ProviderHelp.installation undefined, so no "(install: …)" marker.
+    // ProviderHelp.installation undefined, so no "(install: ...)" marker.
     const help = buildProviderHelpSection();
-    expect(help).not.toMatch(/local — Local filesystem\s+\(install:/);
-    expect(help).not.toMatch(/ftp — FTP\/FTPS\s+\(install:/);
+    expect(help).not.toMatch(/local - Local filesystem\s+\(install:/);
+    expect(help).not.toMatch(/ftp - FTP\/FTPS\s+\(install:/);
   });
 
   it('should render Example section for providers with examples', () => {

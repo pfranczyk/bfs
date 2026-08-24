@@ -29,15 +29,28 @@ const mockReadConfig = vi.mocked(readConfig);
 const mockWriteConfig = vi.mocked(writeConfig);
 const mockPrompt = vi.mocked(inquirer.prompt);
 
+/**
+ * Scratch directories handed out by writeConfigFile, emptied after every test -
+ * so a path it returns must not be used outside the test that asked for it.
+ */
+const configDirs: string[] = [];
+
+afterEach(async () => {
+  // Swallow removal errors: a test that already passed must not turn red because
+  // something else on the machine still held the file for a moment.
+  await Promise.all(configDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }).catch(() => {})));
+});
+
 /** Writes a JSON config file to a temp dir and returns its absolute path. */
 async function writeConfigFile(obj: unknown): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-edit-cfg-'));
+  configDirs.push(dir);
   const file = path.join(dir, 'cfg.json');
   await fs.writeFile(file, JSON.stringify(obj), 'utf8');
   return file;
 }
 
-// `bfs provider edit <id>` — OFFLINE local-only edit of an existing provider's
+// `bfs provider edit <id>` - OFFLINE local-only edit of an existing provider's
 // connection-config in .bfs/config.json. Same provider type, same id; no medium
 // contact (no probeConnection / healthCheck). These tests are written RED before
 // the command exists: there is no src/cli/commands/provider-edit.ts and the
@@ -58,7 +71,7 @@ describe('provider edit', () => {
     vi.restoreAllMocks();
   });
 
-  // ─── CI happy path ────────────────────────────────────────────────────────
+  // --- CI happy path --------------------------------------------------------
 
   it('CI: should replace the provider connection-config and write updated config', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never); // dysk-1..3, scheme 2/1
@@ -101,7 +114,7 @@ describe('provider edit', () => {
     expect(writtenConfig.providers).toHaveLength(3);
   });
 
-  // ─── Non-existent id ──────────────────────────────────────────────────────
+  // --- Non-existent id ------------------------------------------------------
 
   it('CI: should abort when the provider id does not exist', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -112,7 +125,7 @@ describe('provider edit', () => {
     expect(mockWriteConfig).not.toHaveBeenCalled();
   });
 
-  // ─── Missing vault config ─────────────────────────────────────────────────
+  // --- Missing vault config -------------------------------------------------
 
   it('CI: should abort when vault config is missing', async () => {
     mockReadConfig.mockResolvedValue(null);
@@ -123,7 +136,7 @@ describe('provider edit', () => {
     expect(mockWriteConfig).not.toHaveBeenCalled();
   });
 
-  // ─── Failing validateConfig ───────────────────────────────────────────────
+  // --- Failing validateConfig -----------------------------------------------
 
   it('CI: should abort when adapter validateConfig returns errors', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -136,7 +149,7 @@ describe('provider edit', () => {
     expect(mockWriteConfig).not.toHaveBeenCalled();
   });
 
-  // ─── No-changes ───────────────────────────────────────────────────────────
+  // --- No-changes -----------------------------------------------------------
 
   it('CI: should not write config when the new config equals the current one', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never); // dysk-1 path /tmp/d1
@@ -149,7 +162,7 @@ describe('provider edit', () => {
     expect([...capture.logs, ...capture.errors].some((l) => /no.?change|bez zmian|nothing/i.test(l))).toBe(true);
   });
 
-  // ─── No network ───────────────────────────────────────────────────────────
+  // --- No network -----------------------------------------------------------
 
   it('CI: should never contact the medium (no probeConnection, no healthCheck)', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -160,19 +173,19 @@ describe('provider edit', () => {
     const result = await runCmd(['provider', 'edit', 'dysk-1', '--ci', '--config-file', cfg]);
 
     // Positive gate so this stays RED until the command exists (a missing
-    // command never calls probe/health either — that would be a false green).
+    // command never calls probe/health either - that would be a false green).
     expect(result).toBe('ok');
     expect(mockWriteConfig).toHaveBeenCalledOnce();
     expect(probeSpy).not.toHaveBeenCalled();
     expect(healthSpy).not.toHaveBeenCalled();
   });
 
-  // ─── Conditional resync hint ──────────────────────────────────────────────
+  // --- Conditional resync hint ----------------------------------------------
   // After a PLAINTEXT (non-secret) field changes (e.g. path), the output must
   // hint that the next push will resync shard headers. After ONLY a secret
   // field changes (password), there must be NO resync hint. We assert on a
   // stable, non-brittle fragment ("push"/"resync") rather than the full i18n
-  // phrase — the i18n key is created in GREEN.
+  // phrase - the i18n key is created in GREEN.
 
   it('CI: should hint header resync after a plaintext (path) field changes', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -209,7 +222,7 @@ describe('provider edit', () => {
     }
   });
 
-  // ─── Branch gaps: error / cancel paths ────────────────────────────────────
+  // --- Branch gaps: error / cancel paths ------------------------------------
 
   it('CI: should abort when no id is given', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
@@ -241,13 +254,15 @@ describe('provider edit', () => {
     expect([...capture.logs, ...capture.errors].some((l) => /cancel|anulow/i.test(l))).toBe(true);
   });
 
-  // ─── Interactive: provider picker when no id given ────────────────────────
+  // --- Interactive: provider picker when no id given ------------------------
 
   it('interactive: should edit the provider chosen from the picker when no id is given', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     // Picker returns dysk-2; the adapter then re-supplies a new path.
     mockPrompt.mockResolvedValue({ chosen: 'dysk-2' } as never);
-    vi.spyOn(LocalFsProvider.prototype, 'configureInteractive').mockResolvedValue({ path: '/mnt/picked' });
+    // The interactive edit routes through the adapter's edit-aware hook, so that
+    // is the method to stand in for - LocalFs implements it.
+    vi.spyOn(LocalFsProvider.prototype, 'configureInteractiveForEdit').mockResolvedValue({ path: '/mnt/picked' });
 
     const result = await runCmd(['provider', 'edit']);
 
@@ -258,7 +273,7 @@ describe('provider edit', () => {
     expect(edited?.config).toEqual({ path: '/mnt/picked' });
   });
 
-  // ─── Interactive: secret masking ──────────────────────────────────────────
+  // --- Interactive: secret masking ------------------------------------------
 
   it('interactive: should not print the current password in plaintext', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-edit-mask-'));
@@ -267,13 +282,13 @@ describe('provider edit', () => {
       const existing = secretProviderConfig('secret-1', dir); // password pw-secret-1
       mockReadConfig.mockResolvedValue(makeConfig({ providers: [existing] }) as never);
       // Interactive re-supply: keep path, supply a new password.
-      vi.spyOn(LocalFsProvider.prototype, 'configureInteractive').mockResolvedValue({ path: dir, password: 'pw-new' });
+      vi.spyOn(LocalFsProvider.prototype, 'configureInteractiveForEdit').mockResolvedValue({ path: dir, password: 'pw-new' });
       mockPrompt.mockResolvedValue({} as never);
 
       const result = await runCmd(['provider', 'edit', 'secret-1']);
 
       // Positive gate: the interactive edit must actually run (display current
-      // config + re-supply) — a missing command prints nothing, which would be
+      // config + re-supply) - a missing command prints nothing, which would be
       // a false green for the masking assertion.
       expect(result).toBe('ok');
       const out = [...capture.logs, ...capture.errors].join('\n');
@@ -289,7 +304,7 @@ describe('provider edit', () => {
 // A provider type whose edit-time host-key handling aborts by throwing
 // HostKeyDeclinedError (the SSH offline-edit contract: an operator who refuses
 // the presented host key must abort the edit, not persist a config). Its plain
-// `configureInteractive` returns a benign DIFFERENT config — so when the command
+// `configureInteractive` returns a benign DIFFERENT config - so when the command
 // wrongly takes the add-time path it would persist that, which the test forbids.
 const HOSTKEY_EDIT_TYPE = 'hostkey-decline-edit-test';
 
@@ -325,8 +340,8 @@ function unregisterHostKeyEditProvider(): void {
 // edit-aware host-key flow (configureInteractiveForEdit); when it throws
 // HostKeyDeclinedError (operator refused the key), the command aborts WITHOUT
 // writing config. The mock provider's plain configureInteractive returns a
-// DIFFERENT benign config, so a wrong route would persist it — which this forbids.
-describe('provider edit — SSH-style host-key decline aborts without writing', () => {
+// DIFFERENT benign config, so a wrong route would persist it - which this forbids.
+describe('provider edit - SSH-style host-key decline aborts without writing', () => {
   let capture: ReturnType<typeof captureConsole>;
 
   beforeEach(() => {

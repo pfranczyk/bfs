@@ -5,11 +5,11 @@
 # The promise protected: creating a backup is not a brittle all-or-nothing
 # keystroke marathon. When a provider's connectivity probe fails, the operator
 # is offered a recovery choice (retry / re-enter / abort) and fixes that one
-# provider in place — every other value already entered is preserved.
+# provider in place - every other value already entered is preserved.
 #
 # This scenario drives the real `bfs init` through a PTY, deterministically
 # fumbles the FIRST FTP provider's password, asserts a recovery prompt appears,
-# RE-ENTERs the correct password, and confirms init completes — followed by a
+# RE-ENTERs the correct password, and confirms init completes - followed by a
 # push/pull roundtrip that restores byte-for-byte (SHA-256).
 #
 # Determinism: the failure is a WRONG-then-RIGHT password (not the flaky "530
@@ -21,13 +21,13 @@
 # (src/i18n/en.ts + pl.ts). If that wording changes, update RECOVERY_ANCHOR here
 # to match the en.ts value.
 #
-# Run me (FTP required — local Docker FTP truncates parallel transfers, use the
+# Run me (FTP required - local Docker FTP truncates parallel transfers, use the
 # real test server):
 #   bash scripts/cli-e2e/run.sh --ftp "<your-ftp-url>" \
 #     --filter 40-init-interactive-ftp-recovery
 
 SCENARIO_NAME="interactive init recovers from a bad FTP password mid-flow"
-SCENARIO_DESC="wrong FTP password during init → recovery prompt → re-enter → init completes, restore"
+SCENARIO_DESC="wrong FTP password during init -> recovery prompt -> re-enter -> init completes, restore"
 REQUIRES_LOCAL=0
 REQUIRES_FTP=1
 
@@ -54,9 +54,9 @@ scenario_run() {
   # Interactive init answer script (fed in order as each anchor appears). enc and
   # compression are turned off via flags so only scheme + per-provider + push +
   # RAM prompts remain. Provider type is a rawlist: local=1, ftp=2 (registration
-  # order). Provider 0's FIRST password is WRONG → authenticate() fails →
-  # recovery prompt → RE-ENTER (choice 2: RETRY=1 / RE-ENTER=2 / ABORT=3) → the
-  # provider's configure prompts re-run with the CORRECT password → success.
+  # order). Provider 0's FIRST password is WRONG -> authenticate() fails ->
+  # recovery prompt -> RE-ENTER (choice 2: RETRY=1 / RE-ENTER=2 / ABORT=3) -> the
+  # provider's configure prompts re-run with the CORRECT password -> success.
   local answers
   answers='[
     {"anchor":"Number of data copies","value":"2"},
@@ -99,7 +99,7 @@ scenario_run() {
   run_bfs_pty "$vault" "$answers" --lang en init "$name" --no-enc --no-compress
   assert_ok
   # The recovery prompt must have rendered and been answered (every scripted
-  # answer fed) — proves the bad credential surfaced mid-flow as a recoverable
+  # answer fed) - proves the bad credential surfaced mid-flow as a recoverable
   # prompt, not a crash.
   assert_out_contains "$RECOVERY_ANCHOR"
   assert_out_contains "PROMPTS_FED=35/35"

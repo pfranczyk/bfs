@@ -23,7 +23,7 @@ scenario_run() {
   assert_manifest_health "$vault" 1 healthy
   assert_manifest_contains "$vault" 1 '"encrypted": true'
 
-  # Lose two shards — within the K=2 parity tolerance.
+  # Lose two shards - within the K=2 parity tolerance.
   rm "$(shard_file 0 1)"
   rm "$(shard_file 6 1)"
   run_bfs "$vault" verify

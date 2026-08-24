@@ -27,7 +27,7 @@ scenario_run() {
   assert_ok
   assert_manifest_contains "$vault" 1 '"encrypted": true'
 
-  # A WRONG password must be rejected (AES-GCM auth failure → non-zero exit).
+  # A WRONG password must be rejected (AES-GCM auth failure -> non-zero exit).
   # --force wipes the tree first, but the next pull restores it from the
   # untouched shards. (We use a wrong password rather than none, because the CLI
   # prompts interactively when --password is omitted instead of failing.)

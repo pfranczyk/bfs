@@ -38,7 +38,9 @@ async function printBanner(rootDir: string): Promise<void> {
 }
 
 /**
- * Prints the help text listing all available REPL commands.
+ * Prints the help text for the REPL commands listed below. `config` and
+ * `provider edit` are parsed by the same program and work here too, but are not
+ * on this list.
  */
 function printHelp(): void {
   console.log(chalk.bold(t('repl_help_header')));
@@ -68,8 +70,9 @@ function printHelp(): void {
 
 /**
  * Handles an error thrown by a REPL command action.
- * Silently swallows known non-fatal errors (CommandAbort, ExitPromptError,
- * CommanderError). Logs unexpected errors to stderr.
+ * Swallows CommandAbort and Commander's own errors silently, prints a short
+ * notice for a cancelled prompt (Esc / Ctrl+C), and logs anything unexpected
+ * to stderr.
  *
  * @param err - Error caught from runCommand
  */
@@ -130,7 +133,7 @@ export async function startRepl(rootDir: string, runCommand: (args: string[]) =>
       dbg('rl.question:input', { raw: JSON.stringify(input), trimmed: JSON.stringify(trimmed), empty: !trimmed, ...stdinState() });
 
       if (!trimmed) {
-        dbg('rl.question:empty → re-prompt', stdinState());
+        dbg('rl.question:empty -> re-prompt', stdinState());
         prompt();
         return;
       }
@@ -149,7 +152,7 @@ export async function startRepl(rootDir: string, runCommand: (args: string[]) =>
 
       const tokens = splitArgs(trimmed);
 
-      // Strip leading 'bfs' prefix — users naturally type "bfs push" in the REPL
+      // Strip leading 'bfs' prefix - users naturally type "bfs push" in the REPL
       if (tokens.length > 1 && tokens[0] === 'bfs') {
         tokens.shift();
       }
@@ -165,8 +168,8 @@ export async function startRepl(rootDir: string, runCommand: (args: string[]) =>
       // same transformer; if our 'keypress' listener is still attached, readline
       // silently buffers them and emits a spurious empty/garbage line after the
       // command finishes. So remove only the 'keypress' listener (our readline's
-      // input handler); the 'data' listener — the transformer added by
-      // emitKeypressEvents — must stay, otherwise Inquirer can't receive key
+      // input handler); the 'data' listener - the transformer added by
+      // emitKeypressEvents - must stay, otherwise Inquirer can't receive key
       // events either. Closing readline is intentionally avoided: on Windows it
       // resets TTY raw-mode, breaking Ctrl+C inside Inquirer prompts.
       rl.pause();
@@ -219,7 +222,7 @@ export async function startRepl(rootDir: string, runCommand: (args: string[]) =>
 
 /**
  * Splits a command line string into tokens, respecting quoted strings.
- * Example: `push --password "my secret"` → ['push', '--password', 'my secret']
+ * Example: `push --password "my secret"` -> ['push', '--password', 'my secret']
  *
  * @param line - Raw command line input
  * @returns     Array of argument tokens

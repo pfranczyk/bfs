@@ -2,13 +2,13 @@
 # Sidecar (BFSH) headers, local: a `bfs repair` location change writes each
 # sibling's updated header to a small `hdr_i.bfs.V` sidecar file INSTEAD of
 # rewriting the whole shard. This proves two things at once:
-#   1. no re-upload — every `shard_i.bfs.V` payload is byte-for-byte unchanged
+#   1. no re-upload - every `shard_i.bfs.V` payload is byte-for-byte unchanged
 #      after repair (only a tiny sidecar is added next to it);
-#   2. correctness — a fresh recovery from a SIBLING still discovers p0 at its
+#   2. correctness - a fresh recovery from a SIBLING still discovers p0 at its
 #      new path, which is only possible if the recovery read-path prefers the
 #      sidecar's (updated) location map over the frozen in-shard one.
 # Master-RED: it cannot go green unless BOTH the sidecar write AND the recovery
-# read-path reroute are implemented — the unchanged-payload asserts fail today
+# read-path reroute are implemented - the unchanged-payload asserts fail today
 # (repair rewrites the shard), and were the write done without the read reroute
 # the sibling-recovery step would then fail on the stale in-shard map.
 
@@ -17,7 +17,7 @@ SCENARIO_DESC="3L 2/1; repair --path p0, assert shards byte-unchanged + hdr_ sid
 REQUIRES_LOCAL=3
 REQUIRES_FTP=0
 
-# _sha <file> — print the file's SHA-256 (hex), or empty string if absent.
+# _sha <file> - print the file's SHA-256 (hex), or empty string if absent.
 _sha() {
   [ -f "$1" ] && sha256sum "$1" | cut -d' ' -f1
 }
@@ -62,11 +62,11 @@ scenario_run() {
   run_bfs "$vault" repair --version all p0 "--path $(winpath "$newdir")"
   assert_ok
 
-  # Sidecar proof: the shard payloads must be untouched (no re-upload)…
+  # Sidecar proof: the shard payloads must be untouched (no re-upload)...
   _assert_sha_unchanged "shard_0" "$s0" "$h0"
   _assert_sha_unchanged "shard_1" "$s1" "$h1"
   _assert_sha_unchanged "shard_2" "$s2" "$h2"
-  # …and each sibling must have gained an hdr_ sidecar carrying the new map.
+  # ...and each sibling must have gained an hdr_ sidecar carrying the new map.
   assert_file "$newdir/$name/hdr_0.bfs.1"
   assert_file "${PV_LOCALDIR[1]}/$name/hdr_1.bfs.1"
   assert_file "${PV_LOCALDIR[2]}/$name/hdr_2.bfs.1"

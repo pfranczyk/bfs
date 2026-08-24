@@ -56,7 +56,7 @@ scenario_run() {
   assert_ok
   assert_file "$hdr"
 
-  # The advisory is gone — every reachable shard has a valid sidecar again.
+  # The advisory is gone - every reachable shard has a valid sidecar again.
   run_bfs "$vault" verify
   assert_ok
   if printf '%s' "$BFS_OUT" | grep -qF -- "--restore-headers"; then

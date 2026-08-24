@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PullSkippedError } from '../../src/core/errors.js';
+import { BfsError, PullSkippedError } from '../../src/core/errors.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
 vi.mock('../../src/vault/vault-manager.js', () => ({ pull: vi.fn() }));
@@ -37,7 +37,7 @@ describe('pull', () => {
     vi.clearAllMocks();
   });
 
-  // ─── Success ───────────────────────────────────────────────────────────────
+  // --- Success ---------------------------------------------------------------
 
   it('should call pull and print success message', async () => {
     const result = await runCmd(['pull']);
@@ -47,7 +47,7 @@ describe('pull', () => {
     expect(capture.logs.some((l) => l.includes('Files restored'))).toBe(true);
   });
 
-  // ─── Flags → pull options ───────────────────────────────────────────────────
+  // --- Flags -> pull options ---------------------------------------------------
 
   it('should pass version when --version flag given', async () => {
     await runCmd(['pull', '--version', '5']);
@@ -73,7 +73,7 @@ describe('pull', () => {
     expect(mockPull).toHaveBeenCalledWith(expect.any(String), expect.not.objectContaining({ version: expect.anything() }));
   });
 
-  // ─── io — overwrite confirmation (pipeline step 4, Mode A) ───────────────
+  // --- io - overwrite confirmation (pipeline step 4, Mode A) ---------------
 
   it('should pass io with confirm for overwrite confirmation', async () => {
     // Pipeline step 4 (Mode A): "On disk: version X. Restoring version Y overwrites the directory."
@@ -85,6 +85,26 @@ describe('pull', () => {
 
     const result = await runCmd(['pull']);
     expect(result).toBe('ok');
+  });
+
+  it('should end with the refusal when the password cannot be asked for', async () => {
+    // A scripted restore of an encrypted backup reaches the password prompt, and
+    // where nobody can answer the IO refuses instead of asking (that refusal is
+    // pinned in tests/providers/cli-provider-io.test.ts). What this pins is the
+    // command's half: the refusal is reported and the run ends non-zero. Left to
+    // itself the prompt would never settle - the process would die mid-restore
+    // and, with no exit code set, report success having written nothing.
+    const refusal = new BfsError('This run asks no questions (--ci, or no terminal attached), and it needs an answer to: Enter decryption password:');
+    mockPull.mockImplementation(async (_dir, opts) => {
+      const io = { ...opts.io, askSecret: vi.fn().mockRejectedValue(refusal) };
+      await io.askSecret('Enter decryption password:');
+      return { version: 1, extracted: 0, skipped: [] };
+    });
+
+    const result = await runCmd(['pull']);
+
+    expect(result).toBe('abort');
+    expect(capture.errors.some((l) => /asks no questions/i.test(l))).toBe(true);
   });
 
   it('should abort pull when io.confirm returns false', async () => {
@@ -113,10 +133,10 @@ describe('pull', () => {
     expect(result).toBe('abort');
   });
 
-  // ─── io — decryption password (pipeline step 9) ───────────────────────────
+  // --- io - decryption password (pipeline step 9) ---------------------------
 
   it('should pass io with askSecret for decryption password prompt', async () => {
-    // Pipeline step 9: "ask for password → deriveKey → decryptBlob"
+    // Pipeline step 9: "ask for password -> deriveKey -> decryptBlob"
     mockPull.mockImplementation(async (_dir, opts) => {
       const pw = await opts.io.askSecret('Podaj hasło deszyfrowania:');
       expect(pw).toBe('');
@@ -127,7 +147,7 @@ describe('pull', () => {
     expect(result).toBe('ok');
   });
 
-  // ─── io.warn wrapper ──────────────────────────────────────────────────────
+  // --- io.warn wrapper ------------------------------------------------------
 
   it('should route io.warn through to underlying io.warn', async () => {
     const warnMock = vi.fn();
@@ -146,14 +166,14 @@ describe('pull', () => {
     });
 
     mockPull.mockImplementation(async (_dir, opts) => {
-      opts.io.warn('Shard 2 unavailable — skipping');
+      opts.io.warn('Shard 2 unavailable - skipping');
       return { version: 1, extracted: 0, skipped: [] };
     });
 
     const result = await runCmd(['pull']);
 
     expect(result).toBe('ok');
-    expect(warnMock).toHaveBeenCalledWith('Shard 2 unavailable — skipping');
+    expect(warnMock).toHaveBeenCalledWith('Shard 2 unavailable - skipping');
   });
 
   it('should pass cacheDir when --cache-dir flag given', async () => {
@@ -162,7 +182,7 @@ describe('pull', () => {
     expect(mockPull).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ cacheDir: '/custom/cache' }));
   });
 
-  // ─── Rejecting removed options ──────────────────────────────────────────
+  // --- Rejecting removed options ------------------------------------------
 
   it('should reject unknown --host option', async () => {
     const result = await runCmd(['pull', '--host', '192.168.1.10']);
@@ -174,7 +194,7 @@ describe('pull', () => {
     expect(result).toBe('commander');
   });
 
-  // ─── PullSkippedError + --cache ───────────────────────────────────────────
+  // --- PullSkippedError + --cache -------------------------------------------
 
   it('should show skipped file list and cache hint when PullSkippedError is thrown', async () => {
     const cachePath = '/vault/.bfs/cache/pull.blob.pending';
@@ -193,7 +213,7 @@ describe('pull', () => {
     expect(mockPull).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ fromCache: true }));
   });
 
-  // ─── pull errors ────────────────────────────────────────────────────────────
+  // --- pull errors ------------------------------------------------------------
 
   it('should abort and print error when pull throws', async () => {
     mockPull.mockRejectedValue(new Error('Za mało shardów'));

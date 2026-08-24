@@ -26,7 +26,7 @@ type MapDecryptResult = { location_map: ShardLocation[]; encKey: Buffer; passwor
  * @param header       parsed shard header (read for `encrypted` and `kdf_salt`)
  * @param headerBytes  raw header bytes, re-parsed with each candidate key
  * @param passwordPool shared MRU pool (not mutated here)
- * @param keyCache     optional (password,salt)→key memo shared across candidates
+ * @param keyCache     optional (password,salt)->key memo shared across candidates
  * @returns the decrypted map, key, and password, or null
  */
 export async function tryPooledPasswords(header: ShardHeader, headerBytes: Buffer, passwordPool: string[], keyCache?: Map<string, Buffer>): Promise<Nullable<MapDecryptResult>> {
@@ -44,23 +44,31 @@ export async function tryPooledPasswords(header: ShardHeader, headerBytes: Buffe
 /**
  * Prompts the operator for one shard's vault password, retrying until a password
  * opens its map or they submit a blank entry. A successful password is appended
- * to the pool so sibling versions reuse it. Returns null on a blank entry or when
- * no interactive TTY is available (`askSecret` rejects). Does NOT emit the
- * pool-exhausted warning — the caller decides whether and when to warn.
+ * to the pool so sibling versions reuse it. Returns null on a blank entry, or
+ * without asking at all when the run has nobody to answer (`io.interactive ===
+ * false`) - this version then counts as one whose password was not supplied, and
+ * the caller carries on with the versions it can open. Does NOT emit the
+ * pool-exhausted warning - the caller decides whether and when to warn.
  *
  * @param header       parsed shard header (read for `encrypted` and `kdf_salt`)
  * @param headerBytes  raw header bytes, re-parsed with each candidate key
  * @param passwordPool shared MRU pool, appended on a successful manual attempt
  * @param io           ProviderIO for the interactive prompt
  * @param prompts      localized prompt text (only `ask`/`retry` are used here)
- * @param keyCache     optional (password,salt)→key memo shared across candidates
+ * @param keyCache     optional (password,salt)->key memo shared across candidates
  * @returns the decrypted map, key, and password, or null
  */
 export async function promptForVaultPassword(header: ShardHeader, headerBytes: Buffer, passwordPool: string[], io: ProviderIO, prompts: PasswordPromptText, keyCache?: Map<string, Buffer>): Promise<Nullable<MapDecryptResult>> {
   if (!header.encrypted || !header.kdf_salt) return null;
+  // A run with no operator (`--bootstrap`, cron, closed stdin) cannot be asked:
+  // the question would never be answered, and the wait ends the process rather
+  // than the prompt. Treat the password as unavailable and let the caller skip
+  // what it cannot open. `=== false` on purpose - an absent field means an
+  // interactive terminal, per the ProviderIO contract.
+  if (io.interactive === false) return null;
   const salt = header.kdf_salt;
   // Unbounded on purpose: at this critical moment the operator keeps trying; a
-  // blank entry (or no interactive TTY) gives up.
+  // blank entry gives up.
   let firstTry = true;
   for (;;) {
     let pwd: Nullable<string> = null;
@@ -83,7 +91,7 @@ export async function promptForVaultPassword(header: ShardHeader, headerBytes: B
  * Resolves the vault key for one shard by decrypting its location map, trying
  * pooled passwords first (MRU order) and falling back to an interactive prompt.
  * A successful manual password is appended to the pool. Returns null for an
- * unencrypted shard, a blank/absent password, or no TTY — the caller decides
+ * unencrypted shard, a blank/absent password, or no TTY - the caller decides
  * whether that is fatal.
  *
  * @param header       parsed shard header (read for `encrypted` and `kdf_salt`)

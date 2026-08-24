@@ -1,24 +1,24 @@
 # shellcheck shell=bash
-# FTPS certificate pinning — the FTP-over-TLS analog of 94's SSH host-key MITM.
+# FTPS certificate pinning - the FTP-over-TLS analog of 94's SSH host-key MITM.
 # A vsftpd server speaks explicit AUTH TLS with a SELF-SIGNED certificate. BFS
 # cannot trust a self-signed cert by default (Node rejects it), so the operator
-# PINS it: `bfs init … --secure true --cert-fingerprint <sha256>`. BFS must then
-#   (a) accept exactly that certificate — full push + pull + SHA-256 roundtrip;
+# PINS it: `bfs init ... --secure true --cert-fingerprint <sha256>`. BFS must then
+#   (a) accept exactly that certificate - full push + pull + SHA-256 roundtrip;
 #   (b) REFUSE a different certificate (an impostor/MITM on the SAME address),
 #       never uploading a shard nor the password to it.
 #
 # RED until FTPS cert pinning exists. Today `--cert-fingerprint` is an unknown
 # flag the FTP adapter silently ignores, and a secure connection to a self-signed
-# cert is rejected outright — so `bfs init`'s probeConnection() fails and the
+# cert is rejected outright - so `bfs init`'s probeConnection() fails and the
 # scenario cannot even create the backup (the first assert_ok trips). Once pinning
 # lands, the pinned cert is trusted (roundtrip passes) and the swapped cert is
 # refused (shard never reaches the impostor).
 #
-# local: N/A — TLS certificate trust is FTPS-specific.
+# local: N/A - TLS certificate trust is FTPS-specific.
 # Docker-managed: self-provisions its ftpd (no --ftp needed). SKIPs without Docker.
 
 SCENARIO_NAME="FTPS cert pin: accept the pinned self-signed cert, refuse an impostor"
-SCENARIO_DESC="init FTPS provider pinned to a self-signed cert's SHA-256; push/pull SHA-256 roundtrip; then swap the server cert (MITM, same address) — a routine push must refuse the changed cert and never upload shard_2"
+SCENARIO_DESC="init FTPS provider pinned to a self-signed cert's SHA-256; push/pull SHA-256 roundtrip; then swap the server cert (MITM, same address) - a routine push must refuse the changed cert and never upload shard_2"
 REQUIRES_LOCAL=2
 REQUIRES_FTP=0
 REQUIRES_DOCKER=1
@@ -32,7 +32,7 @@ scenario_run() {
   local certA="$SC_DIR/certA.pem" keyA="$SC_DIR/keyA.pem"
   local certB="$SC_DIR/certB.pem" keyB="$SC_DIR/keyB.pem"
 
-  # ── Genuine FTPS server presenting self-signed cert A ───────────────────────
+  # -- Genuine FTPS server presenting self-signed cert A -----------------------
   gen_selfsigned_cert "$certA" "$keyA" bfs-ftps-A || _fail "could not generate cert A"
   local fpA; fpA="$(ftps_cert_fingerprint "$certA")"
   [ -n "$fpA" ] || _fail "could not read cert A fingerprint"
@@ -67,9 +67,9 @@ scenario_run() {
   assert_ok
   assert_restored "$vault" "$base"
 
-  # ── (b) MITM: an impostor replaces the box at the SAME address with a FRESH,
+  # -- (b) MITM: an impostor replaces the box at the SAME address with a FRESH,
   #    DIFFERENT self-signed cert B. The pin still names cert A, so a routine push
-  #    must refuse cert B before any credential or byte leaves — shard_2 of the new
+  #    must refuse cert B before any credential or byte leaves - shard_2 of the new
   #    version must never land on the impostor. A competent impostor offers
   #    writable storage (base dir provisioned) precisely to capture what leaks.
   gen_selfsigned_cert "$certB" "$keyB" bfs-ftps-B || _fail "could not generate cert B"

@@ -1,8 +1,8 @@
 import type { Strings } from './index.js';
 
 export const en: Strings = {
-  // ─── REPL ────────────────────────────────────────────────────────────────
-  repl_banner_title: '\n  BFS — Backup File System\n',
+  // --- REPL ----------------------------------------------------------------
+  repl_banner_title: '\n  BFS - Backup File System\n',
   repl_no_config: '  No configuration. Use `init` to get started.',
   repl_banner_hint: '\n  Type `help` to see available commands.\n',
   repl_help_header: '\n  Available commands:\n',
@@ -27,19 +27,20 @@ export const en: Strings = {
   repl_banner_providers: '(%s providers)',
   repl_error_prefix: 'Error: %s',
 
-  // ─── Health ──────────────────────────────────────────────────────────────
-  health_healthy: '✓ healthy',
-  health_degraded: '⚠ degraded',
-  health_damaged: '✗ damaged',
+  // --- Health --------------------------------------------------------------
+  health_healthy: 'OK healthy',
+  health_degraded: '! degraded',
+  health_damaged: 'X damaged',
   health_unknown: '? unknown',
 
-  // ─── Command descriptions (bfs --help) ───────────────────────────────────
-  cmd_bfs_desc: 'Backup File System — distributed backup with Reed-Solomon erasure coding',
+  // --- Command descriptions (bfs --help) -----------------------------------
+  cmd_bfs_desc: 'Backup File System - distributed backup with Reed-Solomon erasure coding',
   cmd_version_flag: 'Show program version',
   cmd_help_flag: 'Display help for command',
   cmd_help_cmd: 'Display help for command',
   cmd_cwd_desc: 'Backup working directory (overrides current directory)',
   cmd_lang_desc: 'Set UI language permanently (e.g. en, pl)',
+  cmd_ci_desc: 'Never prompt: an incomplete command fails instead of asking (for cron, CI and scripts)',
   cmd_init_desc: 'Set up a new backup in the current directory',
   cmd_push_desc: 'Back up the current directory (new version or overwrite)',
   cmd_pull_desc: 'Restore files from backup',
@@ -54,9 +55,9 @@ export const en: Strings = {
   cmd_provider_add_desc: 'Add a new provider to the backup configuration',
   cmd_provider_list_desc: 'List configured providers',
   cmd_provider_remove_desc: 'Remove or replace a provider (with heal option)',
-  cmd_provider_edit_desc: "Edit a provider's connection settings locally (offline)",
+  cmd_provider_edit_desc: "Edit a provider's connection settings locally, without touching the backup",
 
-  // ─── Global / shared ─────────────────────────────────────────────────────
+  // --- Global / shared -----------------------------------------------------
   global_settings_group: 'BFS Settings (global)',
   lang_set: 'Language set to: %s',
   no_config: 'No backup found in this directory. Run `bfs init` first.',
@@ -67,66 +68,72 @@ export const en: Strings = {
   path_not_dir: 'Path is not a directory',
   dir_not_exist: 'Directory does not exist: %s',
 
-  // ─── init ─────────────────────────────────────────────────────────────────
-  init_header: '\n  BFS — backup setup\n',
+  // --- init -----------------------------------------------------------------
+  init_header: '\n  BFS - backup setup\n',
   init_provider_header: '\nProvider %s:',
   init_provider_name_prompt: 'Provider name (e.g. usb-drive, local-nas):',
   init_provider_name_required: 'Name is required',
   init_provider_type_prompt: 'Provider type:',
   init_dir_path_prompt: 'Directory path:',
-  probe_connection: 'Checking connection to provider "%s"…',
+  probe_connection: 'Checking connection to provider "%s"...',
   probe_failed: 'Could not connect to provider "%s": %s',
   probe_validate_failed: 'Invalid config for provider "%s": %s',
-  probe_failed_prompt: 'Reconnection options — what would you like to do?',
+  probe_failed_prompt: 'Reconnection options - what would you like to do?',
   probe_choice_retry: 'Retry connection',
   probe_choice_reenter: "Re-enter this provider's settings",
   probe_choice_abort: 'Abort',
   init_opt_ci: 'Non-interactive mode (CI/scripts): skip prompts',
   init_opt_enc: 'Encryption is enabled by default; this flag is kept for compatibility',
-  init_opt_no_enc: 'Disable encryption — store the backup unencrypted',
+  init_opt_no_enc: 'Disable encryption - store the backup unencrypted',
   init_opt_no_compress: 'Disable ZIP compression (enabled by default)',
   init_opt_compress: 'Enable ZIP compression (overrides auto-detect)',
   init_opt_data_shards: 'Number of data copies N (CI mode)',
   init_opt_parity_shards: 'Number of redundancy copies K (CI mode)',
-  init_opt_provider: 'Provider spec: "type:name [adapter-flags]" — e.g. "local:usb1 --path /mnt/usb". See `bfs provider -h` for per-adapter flags. Repeatable.',
+  init_opt_provider: 'Provider spec: "type:name [adapter-flags]" - e.g. "local:usb1 --path /mnt/usb". See `bfs provider -h` for per-adapter flags. Repeatable.',
   init_opt_push_mode: 'Push mode: new_version|overwrite|ask (CI mode)',
   init_vault_name_arg: 'Backup name (subfolder on providers)',
   init_vault_name_prompt: 'Backup name (subfolder on providers):',
   init_vault_name_required: 'Name is required',
-  init_scanning: 'Scanning directory…',
+  init_scanning: 'Scanning directory...',
   init_found_files: 'Found %s file(s) (%s)',
   init_enc_prompt: 'Enable AES-256-GCM encryption?',
   init_compress_prompt: 'Enable ZIP compression?',
-  init_compress_scanning: 'Analyzing compressibility…',
+  init_compress_scanning: 'Analyzing compressibility...',
   init_compress_skip_suggest: 'Detected %s% already-compressed data (%s). Compression would not reduce backup size.',
-  init_compress_auto_on: 'Compressible data detected — compression recommended',
+  init_compress_auto_on: 'Compressible data detected - compression recommended',
   init_data_shards_prompt: 'Number of data copies N (min. 2):',
   init_data_shards_min: 'Minimum 2 data copies',
   init_parity_shards_prompt: 'Number of redundancy copies K (min. 1):',
   init_parity_shard_min: 'Minimum 1 redundancy copy',
   init_providers_needed: '\nNeed %s providers (%s data + %s parity)\n',
   init_push_mode_prompt: 'Push mode:',
-  init_push_mode_new: 'new_version — each push creates a new version (default)',
-  init_push_mode_overwrite: 'overwrite — overwrite the current version',
-  init_push_mode_ask: 'ask — ask every time',
+  init_push_mode_new: 'new_version - each push creates a new version (default)',
+  init_push_mode_overwrite: 'overwrite - overwrite the current version',
+  init_push_mode_ask: 'ask - ask every time',
   init_push_mode_invalid: 'Invalid --push-mode: "%s". Allowed: new_version|overwrite|ask',
   init_provider_format_invalid: 'Invalid --provider format: "%s". Expected: "type:name [adapter-flags]" (e.g. "local:usb1 --path /mnt/usb" or "ftp:nas --config-file ./nas.json"). See `bfs provider -h` for per-adapter flags.',
   init_provider_config_invalid: 'Provider configuration is invalid: %s',
   init_max_ram_prompt: 'RAM limit for encoding (MB, detected: %sMB, 4096MB is enough):',
   init_opt_max_ram: 'RAM limit for encoding in MB (CI mode)',
   init_success: 'Backup "%s" is ready. Use `bfs push` to back up.',
+  init_vault_exists:
+    'This directory already holds a backup named "%s". Setting one up here would replace its settings and cut this directory off from that data. Run `bfs init` in another directory, or delete the .bfs directory here if that backup is no longer needed.',
+  init_vault_exists_unreadable:
+    'This directory already holds a backup, but its settings in .bfs/config.json cannot be read. Setting one up here would replace them. Run `bfs recovery` to rebuild the settings from your storage, or delete .bfs/config.json if that backup is no longer needed.',
+  init_vault_check_failed:
+    'Cannot tell whether this directory already holds a backup: .bfs/config.json could not be read (%s). If one is here, setting up another would replace it. Clear the read error, or run `bfs init` in another directory.',
   init_ci_name_required: '--ci mode requires backup name as positional argument.',
   init_ci_scheme_required: '--ci mode requires --data-shards and --parity-shards.',
   init_ci_data_shards_invalid: '--data-shards must be an integer >= 2, got "%s".',
   init_ci_parity_shards_invalid: '--parity-shards must be an integer >= 1, got "%s".',
   init_ci_providers_required: '--ci mode requires %s --provider flags (%s data + %s parity).',
 
-  // ─── clear ────────────────────────────────────────────────────────────────
+  // --- clear ----------------------------------------------------------------
   cmd_clear_desc: 'Clear pending backup data cache',
   clear_done: 'Cache cleared.',
   clear_removed_file: '%s removed',
 
-  // ─── config ───────────────────────────────────────────────────────────────
+  // --- config ---------------------------------------------------------------
   cmd_config_desc: 'View or update backup settings',
   config_current_settings: 'Current settings:',
   config_updated: 'Settings updated.',
@@ -149,8 +156,8 @@ export const en: Strings = {
   config_temp_default: '(default: system temp)',
   config_ram_auto: '(auto: 25% system RAM)',
 
-  // ─── push ─────────────────────────────────────────────────────────────────
-  push_preparing: 'Preparing push…',
+  // --- push -----------------------------------------------------------------
+  push_preparing: 'Preparing push...',
   push_completed: 'Push completed',
   push_success: 'Backup uploaded to all providers.',
   push_failed: 'Push failed',
@@ -161,6 +168,7 @@ export const en: Strings = {
   push_damaged: 'push damaged, version %s not recoverable (%s of %s required). Run `bfs prune --version %s` to remove it.',
   push_opt_new: 'Force a new version',
   push_opt_overwrite: 'Overwrite the current version',
+  push_opt_yes: 'Consent up front to creating a new version when the working copy sits on an older one (skips the confirmation)',
   push_opt_password: 'Encryption password (skips interactive prompt)',
   push_opt_cache: 'Upload cached backup data from a previous interrupted push',
   push_opt_max_ram: 'Override RAM limit for this push (MB)',
@@ -182,22 +190,24 @@ export const en: Strings = {
   push_excluded_hint: 'Add them to .bfsignore, or re-run with `bfs push --allow-excluded` to back up everything else.',
   push_excluded_confirm: '%s entr(y/ies) cannot be backed up:\n%s\nAdd them to .bfsignore and retry?',
   push_excluded_allowed: 'Skipping %s entr(y/ies) that cannot be backed up:\n%s',
-  push_excluded_added: 'Added %s entr(y/ies) to .bfsignore; retrying…',
+  push_excluded_added: 'Added %s entr(y/ies) to .bfsignore; retrying...',
   push_excluded_unignorable: 'These entries cannot be added to .bfsignore automatically (their names contain a trailing space, a newline, or similar). Remove or rename them, then retry:\n%s',
-  vault_compressing: 'Compressing…',
-  vault_decompressing: 'Decompressing…',
+  vault_compressing: 'Compressing...',
+  vault_decompressing: 'Decompressing...',
   opt_temp_dir_desc: 'Directory for temporary files during push/pull',
   opt_cache_dir_desc: 'Directory for cached backup data (overrides .bfs/cache)',
 
-  // ─── lockfile / push partial ─────────────────────────────────────────────
+  // --- lockfile / push partial ---------------------------------------------
   lock_concurrent_active: 'another %s in progress (PID %s, started %s)',
   lock_partial_state_push: 'push.lock exists from partial-state push of version %s. Run `bfs clear` to discard the leftover state.',
   push_cache_no_lock: '`--cache` requires both .bfs/push.lock and cached backup data; missing: %s',
   push_cache_write_failed: 'Cache write failed: %s. This push cannot be resumed with `--cache`.',
   push_cache_unavailable_in_lock: '`push.lock` indicates the cached backup data was not persisted (e.g. out of disk space). Run `bfs clear` to discard the leftover state.',
+  push_cache_corrupted:
+    'The cached backup data in %s no longer matches its checksum - the file was damaged or left incomplete, so it cannot be uploaded. Run `bfs clear` to discard the leftover state, then `bfs push` to back up the directory again.',
 
-  // ─── pull ─────────────────────────────────────────────────────────────────
-  pull_preparing: 'Preparing pull…',
+  // --- pull -----------------------------------------------------------------
+  pull_preparing: 'Preparing pull...',
   pull_completed: 'Pull completed',
   pull_success: 'Files restored.',
   pull_failed: 'Pull failed',
@@ -213,7 +223,7 @@ export const en: Strings = {
   pull_opt_cache: 'Retry using cached backup data from a previous interrupted pull',
   pull_opt_allow_missing_adapters: 'Continue when some external adapters are missing, relying on Reed-Solomon redundancy',
 
-  // ─── status ───────────────────────────────────────────────────────────────
+  // --- status ---------------------------------------------------------------
   status_header: '\n  Backup status\n',
   status_name: 'Name:',
   status_latest: 'Latest:',
@@ -223,11 +233,18 @@ export const en: Strings = {
   status_providers: 'Providers:',
   status_enc_enabled: 'enabled',
   status_enc_disabled: 'disabled',
-  status_push_disabled_warn: 'push disabled — scheme %s/%s below minimum 2/1',
+  status_push_disabled_warn: 'push disabled - scheme %s/%s below minimum 2/1',
   status_scheme_breakdown: '(%s data + %s parity)',
 
-  // ─── versions ─────────────────────────────────────────────────────────────
+  // --- versions -------------------------------------------------------------
   versions_empty: 'No versions found. Use `bfs push` to create the first backup.',
+  versions_unrecovered: 'Present on storage, not recovered: %s. Restore one with `bfs pull --version <n> --password <its password>`.',
+  pull_version_parts_missing: 'Version %s is recorded as present on your storage, but no parts of it were found there. It may have been deleted from another machine, or a storage may be unreachable - check with `bfs verify`.',
+  pull_version_parts_unreadable: 'Version %s could not be read from your storage: none of its parts yielded a usable header. Check the storages with `bfs verify`.',
+  pull_version_map_unopened: 'The password supplied does not open version %s. Its parts are on your storage - try again with the password that version was created with.',
+  pull_version_password_required: 'Version %s has not been restored on this machine yet, so its password is needed to reach it. Run the command again with --password <password> or --password-file <path>.',
+  pull_restorable_hint: 'The newest version you can restore right now is %s: `bfs pull --version %s`.',
+  recovery_success_partial: 'Use `bfs pull --version %s` to restore files - the newest version recovered. Still sealed: %s - reach them with `bfs pull --version <n> --password <its password>` once you have it.',
   versions_col_version: 'Version',
   versions_col_status: 'Status',
   versions_col_scheme: 'Scheme',
@@ -236,11 +253,11 @@ export const en: Strings = {
   versions_col_size: 'Size',
   versions_col_pushed_at: 'Pushed at',
 
-  // ─── prune ────────────────────────────────────────────────────────────────
+  // --- prune ----------------------------------------------------------------
   prune_opt_keep_last: 'Keep the N most recent versions, delete the rest',
   prune_opt_force: 'Delete even the last version that can still be restored',
   prune_last_restorable:
-    'Refusing to delete version %s — it would leave no version that can still be restored (anything kept is damaged). Pass --force to delete it anyway, or repair the damaged versions first (`bfs repair --rebuild`). This uses what the last check recorded — run `bfs verify --deep` to re-check the data itself.',
+    'Refusing to delete version %s - it would leave no version that can still be restored (anything kept is damaged). Pass --force to delete it anyway, or repair the damaged versions first (`bfs repair --rebuild`). This uses what the last check recorded - run `bfs verify --deep` to re-check the data itself.',
   prune_opt_yes: 'Skip confirmation prompt',
   prune_range_invalid: 'Invalid range: %s',
   prune_version_format_invalid: 'Invalid version format: "%s"',
@@ -253,11 +270,13 @@ export const en: Strings = {
   prune_no_in_range: 'No versions in the given range.',
   prune_versions_to_delete: 'Versions to delete: %s',
   prune_confirm: 'Delete %s version(s)?',
+  prune_ci_selection_required: 'This run asks no questions (--ci), so it cannot ask which versions to delete. Name them on the command line: `bfs prune <range>` or `bfs prune --keep-last <n>`.',
+  prune_ci_yes_required: 'This run asks no questions (--ci), so the deletion cannot be confirmed. Add --yes to give consent up front.',
   prune_deleted: 'Deleted versions: %s',
-  prune_orphan_warn: 'Could not remove version %s data from storage "%s" — it may still occupy space there.',
+  prune_orphan_warn: 'Could not remove version %s data from storage "%s" - it may still occupy space there.',
 
-  // ─── verify ───────────────────────────────────────────────────────────────
-  verify_spinner: 'Verifying versions…',
+  // --- verify ---------------------------------------------------------------
+  verify_spinner: 'Verifying versions...',
   verify_no_versions: 'No versions to verify.',
   verify_failed: 'Verification failed',
   verify_col_version: 'Version',
@@ -267,18 +286,18 @@ export const en: Strings = {
   verify_col_tolerance: 'Tolerance',
   /** %s = filename, %s = provider id, %s = reason */
   verify_shard_check_failed: 'File "%s" on provider "%s" failed integrity check: %s',
-  verify_shard_medium_unreachable: 'File "%s" could not be checked — provider "%s" is unreachable: %s',
-  verify_shard_unreadable: 'File "%s" could not be read on provider "%s" — missing or unreadable: %s',
-  verify_shard_adapter_missing: 'File "%s" cannot be checked — provider "%s" needs an adapter that is not installed: %s',
-  verify_shard_provider_unknown: 'File "%s" cannot be checked — provider "%s" is no longer in the configuration.',
+  verify_shard_medium_unreachable: 'File "%s" could not be checked - provider "%s" is unreachable: %s',
+  verify_shard_unreadable: 'File "%s" could not be read on provider "%s" - missing or unreadable: %s',
+  verify_shard_adapter_missing: 'File "%s" cannot be checked - provider "%s" needs an adapter that is not installed: %s',
+  verify_shard_provider_unknown: 'File "%s" cannot be checked - provider "%s" is no longer in the configuration.',
   verify_reason_health_check: 'no answer to the reachability check',
-  verify_verdict_retained: 'Version %s keeps the verdict of an earlier deep check — this run read only the headers, which cannot see damage inside the data. Run `bfs verify --deep` to re-check the data itself.',
-  verify_header_advisory: 'Version %s: %s header file(s) missing or damaged. Run "bfs repair --restore-headers" to rebuild them — otherwise recovery of an unencrypted backup may be affected.',
+  verify_verdict_retained: 'Version %s keeps the verdict of an earlier deep check - this run read only the headers, which cannot see damage inside the data. Run `bfs verify --deep` to re-check the data itself.',
+  verify_header_advisory: 'Version %s: %s header file(s) missing or damaged. Run "bfs repair --restore-headers" to rebuild them - otherwise recovery of an unencrypted backup may be affected.',
   verify_opt_deep: 'Deep integrity check: download and verify the full data of every file (transfers all backup data)',
 
-  // ─── recovery ─────────────────────────────────────────────────────────────
+  // --- recovery -------------------------------------------------------------
   recovery_provider_type_prompt: 'Bootstrap provider type:',
-  recovery_opt_provider: 'Bootstrap provider type (e.g. local, ssh, ftp). Combine with --bootstrap for non-interactive mode.',
+  recovery_opt_provider: 'Bootstrap provider type (e.g. local, ssh, ftp). Combine with --bootstrap to supply its settings instead of being asked for them.',
   recovery_opt_bootstrap: 'Adapter flags for the bootstrap provider, e.g. "--host x --user y --password z --path /backup". Same flag grammar as `bfs init --ci` adapter-flags.',
   recovery_path_prompt: 'Provider base path (not the backup subfolder):',
   recovery_vault_name_prompt: 'Backup name (subfolder on providers):',
@@ -294,35 +313,37 @@ export const en: Strings = {
   recovery_provider_type_unknown: 'Unknown provider type: "%s". Run `bfs provider -h` to list registered types.',
   recovery_ci_provider_required: '--bootstrap requires --provider <type> to know which adapter receives the flags.',
   recovery_ci_name_required: '--bootstrap requires --name <vaultName> to locate the backup on providers.',
-  recovery_connecting: 'Connecting to provider…',
-  recovery_scanning: 'Scanning providers…',
-  recovery_rebuilt: '\n  Rebuilt .bfs/ — %s version(s)\n',
+  recovery_ci_bootstrap_required: 'This run asks no questions (--ci), so it cannot ask where the first storage is. Add --bootstrap "<settings>" together with --provider <type> and --name <backupName>.',
+  recovery_connecting: 'Connecting to provider...',
+  recovery_scanning: 'Scanning providers...',
+  recovery_rebuilt: '\n  Rebuilt .bfs/ - %s version(s)\n',
   recovery_col_version: 'Version',
   recovery_col_status: 'Status',
   recovery_col_consensus: 'Consensus',
   recovery_success: 'Use `bfs pull` to restore files (default: latest version).',
   recovery_failed: 'Recovery failed',
 
-  // ─── scheme ───────────────────────────────────────────────────────────────
+  // --- scheme ---------------------------------------------------------------
   scheme_data_shards_invalid: 'Data copies (N) must be an integer >= 2.',
   scheme_parity_shards_invalid: 'Redundancy copies (K) must be an integer >= 1.',
   scheme_requires: 'Scheme %s/%s requires %s providers, currently configured: %s.',
   scheme_add_providers: 'Add %s provider(s) via `provider add`, then change the scheme.',
   scheme_remove_providers: 'Remove %s provider(s) via `provider remove`, then change the scheme.',
-  scheme_changed: 'Scheme changed: %s → %s/%s.',
+  scheme_changed: 'Scheme changed: %s -> %s/%s.',
   scheme_apply_push: 'Run `bfs push` to apply the new scheme.',
   scheme_missing: 'Backup scheme is missing or corrupted in .bfs/config.json. Run `bfs scheme set` to fix.',
   scheme_invalid_data_shards: 'Invalid scheme: data_shards must be an integer >= 2, got "%s". Use `bfs scheme set <N> <K>` to fix.',
   scheme_invalid_parity_shards: 'Invalid scheme: parity_shards must be an integer >= 1, got "%s". Use `bfs provider add` or `bfs scheme set` to fix.',
   scheme_providers_mismatch: 'Scheme requires %s providers, configured: %s. Match the scheme to the storages you have with `bfs scheme set <N> <K>`.',
 
-  // ─── provider: local-fs ──────────────────────────────────────────────────
+  // --- provider: local-fs --------------------------------------------------
   provider_local_path_not_exist_confirm: 'Path "%s" does not exist. Create it?',
   provider_local_path_not_exist_error: 'Path "%s" does not exist and creation was refused.',
   provider_local_path_not_writable: 'Path "%s" is not writable.',
   local_path_prompt: 'Base directory path:',
+  local_edit_path_missing_confirm: 'Directory %s does not exist. Save this path anyway?',
 
-  // ─── provider add ─────────────────────────────────────────────────────────
+  // --- provider add ---------------------------------------------------------
   provider_add_opt_ci: 'Non-interactive mode (CI/scripts): skip prompts',
   provider_add_opt_name: 'New provider name (CI mode)',
   provider_add_opt_type: 'Provider type (CI mode). See `bfs provider -h` for available types.',
@@ -331,15 +352,15 @@ export const en: Strings = {
   provider_add_type_required: '--type is required in CI mode',
   provider_add_name_prompt: 'New provider name:',
   provider_add_name_required: '--name is required in CI mode',
-  provider_id_invalid_chars: 'Provider name "%s" is invalid — only letters, digits, "." "_" "-" are allowed (no whitespace).',
-  vault_name_invalid_chars: 'Backup name "%s" is invalid — only letters, digits, "." "_" "-" are allowed (no path separators, no leading dot, no "..").',
+  provider_id_invalid_chars: 'Provider name "%s" is invalid - only letters, digits, "." "_" "-" are allowed (no whitespace).',
+  vault_name_invalid_chars: 'Backup name "%s" is invalid - only letters, digits, "." "_" "-" are allowed (no path separators, no leading dot, no "..").',
   provider_add_exists: 'Provider "%s" already exists',
-  provider_id_duplicate_in_args: 'Provider name "%s" is given more than once — each storage must have a unique name.',
+  provider_id_duplicate_in_args: 'Provider name "%s" is given more than once - each storage must have a unique name.',
   provider_add_type_prompt: 'Provider type:',
   provider_add_dir_prompt: 'Directory path:',
   provider_add_success: 'Provider "%s" added. Scheme: %s/%s. Run `bfs push` to apply the new scheme.',
 
-  // ─── provider list ────────────────────────────────────────────────────────
+  // --- provider list --------------------------------------------------------
   provider_list_empty: 'No providers configured.',
   provider_list_header: '\nProviders for backup "%s" (scheme %s/%s):\n',
   provider_list_col_num: '#',
@@ -347,7 +368,7 @@ export const en: Strings = {
   provider_list_col_type: 'Type',
   provider_list_col_config: 'Configuration',
 
-  // ─── provider remove ──────────────────────────────────────────────────────
+  // --- provider remove ------------------------------------------------------
   provider_remove_opt_password: 'Encryption password (for rebuild/relocate strategy)',
   provider_remove_opt_strategy: 'CI strategy: relocate|rebuild|remove (skip prompt)',
   provider_remove_opt_new_type: 'New provider type (CI mode). Optional for relocate (defaults to current type); required for rebuild to a new target.',
@@ -361,9 +382,9 @@ export const en: Strings = {
   provider_remove_impact: 'Provider "%s" is used in %s version(s):',
   provider_remove_impact_warn: 'After removal: healthy versions will become degraded, degraded may become damaged.',
   provider_remove_strategy_prompt: 'Choose a strategy:',
-  provider_remove_strategy_relocate: '[R]elocate — data exists, provider changed address (new IP/host/path)',
-  provider_remove_strategy_rebuild: '[R]ebuild — data lost, rebuild from redundancy and upload to another provider',
-  provider_remove_strategy_remove: '[R]emove — remove provider without replacement (match the N/K scheme afterwards with `bfs scheme set`)',
+  provider_remove_strategy_relocate: '[R]elocate - data exists, provider changed address (new IP/host/path)',
+  provider_remove_strategy_rebuild: '[R]ebuild - data lost, rebuild from redundancy and upload to another provider',
+  provider_remove_strategy_remove: '[R]emove - remove provider without replacement (match the N/K scheme afterwards with `bfs scheme set`)',
   provider_remove_strategy_cancel: '[C]ancel',
   provider_remove_new_type_required: '--new-type is required (or include "type:" prefix in --new-path)',
   provider_remove_change_type_confirm: 'Change provider type? (current: %s)',
@@ -375,23 +396,28 @@ export const en: Strings = {
   provider_remove_rebuild_all: '[A]ll versions using this provider',
   provider_remove_rebuild_latest: '[L]atest version only',
   provider_remove_no_other_providers: 'No other providers available for rebuild.',
-  provider_remove_rebuild_new_location: '[N]ew location — add a new provider for the rebuilt backup',
+  provider_remove_rebuild_new_location: '[N]ew location - add a new provider for the rebuilt backup',
   provider_remove_target_prompt: 'Which provider to upload the rebuilt data to?',
   provider_remove_yes_required: '--yes is required for remove strategy in CI mode',
+  provider_remove_ci_id_required: 'This run asks no questions (--ci), so it cannot ask which storage to remove. Name it: `bfs provider remove <name>`.',
+  provider_remove_ci_strategy_required: 'This run asks no questions (--ci), so it cannot ask what to do with the data. Add --strategy relocate|rebuild|remove.',
+  provider_remove_ci_password_required: 'This backup is encrypted and this run asks no questions (--ci), so the password cannot be prompted for. Supply it with --password <password> or --password-file <path>.',
   provider_remove_confirm: 'Remove provider "%s" without rebuilding? Versions will be degraded.',
   provider_remove_scope_invalid: 'Invalid --scope: "%s". Allowed: all|latest',
   provider_remove_target_required: '--target is required for rebuild strategy in CI mode',
   provider_remove_target_invalid: 'Provider "%s" does not exist or is the same as the one being removed',
   provider_remove_success: 'Provider "%s" removed.',
   provider_remove_next_steps: 'Recommended next steps:',
-  provider_remove_next_step_1: '  1. `bfs scheme set <N> <K>` — match the scheme to the remaining storages',
-  provider_remove_next_step_2: '  2. `bfs pull` — fetch the current version (redundancy repair covers the degradation)',
-  provider_remove_next_step_3: '  3. `bfs push` — create a new healthy backup on the remaining storages',
-  provider_remove_next_step_4: '  4. `bfs prune` — optionally delete old degraded versions',
+  provider_remove_next_step_1: '  1. `bfs scheme set <N> <K>` - match the scheme to the remaining storages',
+  provider_remove_next_step_2: '  2. `bfs pull` - fetch the current version (redundancy repair covers the degradation)',
+  provider_remove_next_step_3: '  3. `bfs push` - create a new healthy backup on the remaining storages',
+  provider_remove_next_step_4: '  4. `bfs prune` - optionally delete old degraded versions',
+  provider_remove_target_reverted: 'Provider "%s" was added for the rebuild and has been removed again - the configuration is back to where it started.',
+  provider_remove_target_kept: 'Provider "%s" stays in the configuration: part of the backup may already have been rebuilt onto it. Re-run the same command to finish the rebuild.',
   provider_relocate_success: 'Provider "%s" relocated.',
   provider_rebuild_success: 'Provider "%s" replaced. Run `bfs push` to update the scheme.',
 
-  // ─── provider edit ────────────────────────────────────────────────────────
+  // --- provider edit --------------------------------------------------------
   provider_edit_opt_ci: 'Non-interactive mode (CI/scripts)',
   provider_edit_id_required: 'Provider name is required in --ci mode.',
   provider_edit_not_found: 'Provider "%s" not found.',
@@ -399,68 +425,77 @@ export const en: Strings = {
   provider_edit_prompt: 'Select a provider to edit:',
   provider_edit_configure_failed: 'Could not read the new configuration: %s',
   provider_edit_invalid_config: 'Invalid configuration: %s',
-  provider_edit_no_changes: 'No changes — provider "%s" configuration is unchanged.',
+  provider_edit_no_changes: 'No changes - provider "%s" configuration is unchanged.',
   provider_edit_success: 'Provider "%s" updated.',
   provider_edit_synced_hint: 'Existing backups still record the old location in their headers; the next `bfs push` updates them.',
 
-  // ─── vault operations ────────────────────────────────────────────────────
-  vault_download_shards: 'Downloading version %s…',
-  vault_shard_damaged_on_provider: 'Backup data on "%s" is damaged — skipping it.',
+  // --- vault operations ----------------------------------------------------
+  vault_download_shards: 'Downloading version %s...',
+  vault_shard_damaged_on_provider: 'Backup data on "%s" is damaged - skipping it.',
   vault_download_shard_progress: 'Downloading %s/%s',
-  vault_provider_unreachable: 'Storage "%s" is not accessible — skipping.',
-  vault_file_missing_on_provider: 'Backup data missing on storage "%s" — skipping.',
-  vault_provider_adapter_missing: 'Storage "%s" needs an adapter that is not installed — skipping its piece.',
-  vault_decoding_rs: 'Decoding Reed-Solomon…',
+  vault_provider_unreachable: 'Storage "%s" is not accessible - skipping.',
+  vault_file_missing_on_provider: 'Backup data missing on storage "%s" - skipping.',
+  vault_provider_adapter_missing: 'Storage "%s" needs an adapter that is not installed - skipping its piece.',
+  vault_decoding_rs: 'Decoding Reed-Solomon...',
   vault_ask_decrypt_password: 'Enter decryption password:',
-  vault_decrypting: 'Decrypting…',
+  vault_decrypting: 'Decrypting...',
   vault_push_version_confirm: 'On disk: version %s. Latest: %s. Push will create version %s. Continue?',
-  vault_using_cached_blob: 'Using cached backup data…',
-  vault_no_cached_blob_push: 'No cached backup data found — running full pack…',
+  push_version_switch_no_operator:
+    'This run asks no questions, so it cannot confirm pushing version %s while the latest is %s (this push would create version %s). Re-run with `bfs push --yes` to consent up front, or run `bfs push` at a terminal and answer it there.',
+  vault_checking_cached_blob: 'Checking cached backup data against its checksum...',
+  vault_using_cached_blob: 'Using cached backup data...',
+  vault_no_cached_blob_push: 'No cached backup data found - running full pack...',
   vault_push_skipped_confirm: '%s file(s) could not be read:\n%s\nContinue without them?',
   vault_ask_encrypt_password: 'Enter encryption password:',
   vault_ask_confirm_password: 'Confirm password:',
-  vault_encrypting: 'Encrypting…',
+  vault_encrypting: 'Encrypting...',
   vault_password_overrides_config: 'Encryption enabled by --password (config has encryption disabled).',
   vault_unencrypted_warning:
-    'This backup is NOT encrypted — part of your data is directly readable on a single storage device, and the addresses and usernames of all your storage are visible on every device. Anyone with access to one device can read that data and locate the rest. Run without --no-enc to encrypt.',
+    'This backup is NOT encrypted - part of your data is directly readable on a single storage device, and the addresses and usernames of all your storage are visible on every device. Anyone with access to one device can read that data and locate the rest. Run without --no-enc to encrypt.',
   gcm_payload_too_large:
     'This backup is too large to encrypt safely: each data unit would exceed the ~%s GiB limit for a single encryption key. Raise the data count in the scheme (`bfs scheme set`) so each unit stays smaller, or back up a smaller directory.',
-  push_damaged_zero: 'Push failed — no storage pieces uploaded (at least %s of %s required); forensic state kept in .bfs/push.lock.',
+  push_damaged_zero: 'Push failed - no storage pieces uploaded (at least %s of %s required); forensic state kept in .bfs/push.lock.',
   push_cancelled: 'Push cancelled.',
   vault_password_required: 'Password required for an encrypted backup.',
+  prompt_no_operator: 'This run asks no questions (--ci, or no terminal attached), and it needs an answer to: %s Supply the value on the command line and run it again.',
+  prompt_no_operator_ci: 'This run asks no questions (--ci), and it needs an answer to: %s Supply the value on the command line and run it again.',
+  bootstrap_password_required_noninteractive: 'This run cannot ask for a password (--ci, or no terminal attached), and the backup did not open with what was supplied. Run it again with --password <password> or --password-file <path>.',
   vault_passwords_mismatch: 'Passwords do not match.',
   push_no_config: 'No backup configuration found. Run `bfs init` first.',
   push_recovered_locations_intro: 'This backup was rebuilt by recovery. Confirm where the backup pieces will be sent before continuing:',
-  push_recovered_location: '  • %s → %s',
+  push_recovered_location: '  * %s -> %s',
   push_confirm_recovered_locations: 'Send backup data to these locations?',
   push_recovered_locations_declined: 'Push aborted: recovered provider locations not confirmed. Verify them in `.bfs/config.json` (e.g. with `bfs config`) and retry.',
-  pull_not_enough_shards: 'Not enough storage pieces: need %s, got %s — this version cannot be restored from the storage available now. Run `bfs verify --deep` to see which versions still can.',
+  push_recovered_locations_no_operator:
+    'This run asks no questions, so the recovered storage locations cannot be confirmed. Check them in `.bfs/config.json` (e.g. with `bfs config`), then either run this command at a terminal or redo the recovery with `bfs recovery --provider <type> --name <backupName> --bootstrap "<settings>" --trust-locations`.',
+  pull_not_enough_shards: 'Not enough storage pieces: need %s, got %s - this version cannot be restored from the storage available now. Run `bfs verify --deep` to see which versions still can.',
   pull_failed_on_damaged: 'Damaged backup data on: %s.',
   pull_failed_on_missing: 'Backup data missing on: %s.',
   pull_failed_on_unreachable: 'Storage not reachable: %s.',
   pull_failed_on_adapter_missing: 'Storage needing an adapter that is not installed: %s.',
   pull_failed_on_not_configured: 'Storage recorded in this backup but absent from the configuration: %s.',
   pull_blob_size_unreadable: 'Could not read the backup size from any storage piece.',
-  pull_salt_missing: 'This encrypted backup is missing its key material — its storage pieces may be corrupted or incomplete.',
-  pull_provider_not_found_skip: 'Storage "%s" is not in the configuration — skipping its part of the backup.',
-  pull_shard_header_invalid_skip: 'Backup data on "%s" failed header validation — skipping it.',
-  pull_shard_hash_mismatch_skip: 'Backup data on "%s" failed its integrity check on download — skipping it.',
-  pull_degraded_repair: 'Some pieces are missing — reconstructing from redundancy…',
+  pull_salt_missing: 'This encrypted backup is missing its key material - its storage pieces may be corrupted or incomplete.',
+  pull_provider_not_found_skip: 'Storage "%s" is not in the configuration - skipping its part of the backup.',
+  pull_shard_header_invalid_skip: 'Backup data on "%s" failed header validation - skipping it.',
+  pull_shard_hash_mismatch_skip: 'Backup data on "%s" failed its integrity check on download - skipping it.',
+  pull_degraded_repair: 'Some pieces are missing - reconstructing from redundancy...',
   scheme_provider_count_mismatch: 'The scheme requires %s storage providers, but %s were given.',
   pull_cancelled: 'Pull cancelled.',
-  pull_blob_hash_mismatch: 'Backup data failed its integrity check — corrupted, or the password is wrong.',
+  pull_blob_hash_mismatch: 'Backup data failed its integrity check - corrupted, or the password is wrong.',
   pull_no_config: 'No backup configuration found. Run `bfs init` or `bfs recovery` first.',
   no_versions_available: 'No versions available. Run `bfs push` first.',
   version_not_found: 'Version %s was not found.',
   provider_not_found_in_config: 'Storage "%s" not found in the configuration.',
-  provider_remove_min: 'Cannot remove — at least 3 storage providers (scheme 2/1) are required. Use relocate or rebuild instead.',
-  vault_encoding_rs: 'Encoding with Reed-Solomon…',
-  vault_uploading_shards: 'Uploading…',
+  provider_remove_min: 'Cannot remove - at least 3 storage providers (scheme 2/1) are required. Use relocate or rebuild instead.',
+  vault_encoding_rs: 'Encoding with Reed-Solomon...',
+  vault_uploading_shards: 'Uploading...',
   vault_upload_shard_progress: 'Uploading %s/%s',
   vault_upload_shard_failed: 'Upload %s/%s failed: %s',
-  vault_no_cached_blob_pull: 'No cached backup data found — running full pull…',
+  vault_no_cached_blob_pull: 'No cached backup data found - running full pull...',
   vault_pull_overwrite_confirm: 'On disk: version %s. Restoring version %s will overwrite directory. Continue?',
-  vault_unpacking_files: 'Unpacking files…',
+  pull_overwrite_no_operator: 'This run asks no questions, so overwriting version %s with version %s cannot be confirmed. Add --yes to give consent up front.',
+  vault_unpacking_files: 'Unpacking files...',
   vault_pull_write_error_confirm: '%s file(s) could not be written:\n%s\nFix permissions, then press Y to retry or N to cancel.',
   vault_degraded_provider_unreachable: 'Pool degraded: one or more providers are unreachable. Use `bfs provider remove` to replace the provider, then `bfs push` to restore redundancy.',
   vault_degraded_file_missing: 'Pool degraded: backup data was deleted from a healthy provider. Run `bfs push` to re-create the backup.',
@@ -469,22 +504,23 @@ export const en: Strings = {
   vault_degraded_provider_not_configured:
     'Pool degraded: storage recorded in this backup but absent from the configuration: %s. If the name went missing by accident, bring it back with `bfs repair --version all <configured-storage> "<type>:<recorded-storage> <storage settings>"` (one such pair per name) and run `bfs pull` again. If you removed that storage on purpose, run `bfs push` to create a sound backup on the storage you have left.',
 
-  // ─── recovery operations (vault layer) ──────────────────────────────────
+  // --- recovery operations (vault layer) ----------------------------------
   recovery_ask_version_password: 'Enter password for version %s (or leave blank to skip):',
+  pull_ask_version_password: 'Enter the password for version %s:',
   recovery_pool_password_failed: 'Known passwords did not work for version %s.',
   recovery_wrong_password_retry: 'Wrong password. Try again for version %s (or leave blank to skip):',
-  recovery_decrypt_skip: 'Version %s skipped — could not decrypt (wrong password or not provided).',
+  recovery_decrypt_skip: 'Version %s skipped - could not decrypt (wrong password or not provided).',
   recovery_ask_transport_password: 'Enter "%s" for storage "%s" (required to reconnect during recovery, leave blank to skip):',
 
-  // ─── bootstrap operations ────────────────────────────────────────────────
+  // --- bootstrap operations ------------------------------------------------
   bootstrap_ask_password: 'Backup is encrypted. Enter password for version %s:',
   bootstrap_wrong_password_retry: 'Wrong password. Try again for version %s:',
   bootstrap_copy_integrity_failed:
-    'The backup data on this provider failed its integrity check — the data is damaged, or the password is wrong. Recover from a different provider: bfs recovery --provider <type> --name <backup> --bootstrap "<settings of that provider>".',
+    'The backup data on this provider failed its integrity check - the data is damaged, or the password is wrong. Recover from a different provider: bfs recovery --provider <type> --name <backup> --bootstrap "<settings of that provider>".',
   bootstrap_copy_integrity_failed_no_password: 'The backup data on this provider failed its integrity check. Recover from a different provider: bfs recovery --provider <type> --name <backup> --bootstrap "<settings of that provider>".',
-  bootstrap_single_provider_warn: 'Only 1 provider available — cannot verify consensus. Data may be compromised. Proceeding anyway.',
+  bootstrap_single_provider_warn: 'Only 1 provider available - cannot verify consensus. Data may be compromised. Proceeding anyway.',
 
-  // ─── provider: ftp ──────────────────────────────────────────────────────
+  // --- provider: ftp ------------------------------------------------------
   ftp_host_prompt: 'FTP host:',
   ftp_port_prompt: 'Port (default 21):',
   ftp_user_prompt: 'Username:',
@@ -493,7 +529,7 @@ export const en: Strings = {
   ftp_secure_prompt: 'Use FTPS (secure connection)?',
   provider_add_ftp_ci_not_supported: 'FTP in CI mode is not yet supported. Use interactive mode.',
 
-  // ─── provider help (bfs provider -h) ─────────────────────────────────────
+  // --- provider help (bfs provider -h) -------------------------------------
   provider_help_available_header: 'Available providers:',
   provider_help_usage_label: 'Usage:',
   provider_help_options_label: 'Options:',
@@ -504,15 +540,15 @@ export const en: Strings = {
   local_help_flag_path_desc: 'Base directory for the provider. Absolute paths used as-is; ' + 'relative paths resolve against the BFS working directory. ' + 'Wins over --config-file when both are present.',
   local_help_flag_config_file_desc: 'JSON file with { "path": "<absolute>" }. Used when --path is ' + 'absent. When also absent, defaults to ~/.bfs-local/<name>/',
 
-  ftp_help_description: 'Connects to an FTP(S) server and stores backup data as files on the ' + 'remote. Configuration may come from inline flags, a JSON config ' + 'file, or both — inline flags override values loaded from JSON.',
+  ftp_help_description: 'Connects to an FTP(S) server and stores backup data as files on the ' + 'remote. Configuration may come from inline flags, a JSON config ' + 'file, or both - inline flags override values loaded from JSON.',
   ftp_help_flag_host_desc: 'FTP server hostname or IP',
   ftp_help_flag_port_desc: 'FTP server port (default 21)',
   ftp_help_flag_user_desc: 'FTP login user',
   ftp_help_flag_password_desc: 'FTP login password',
   ftp_help_flag_path_desc: 'Absolute base path on the FTP server (must start with "/")',
   ftp_help_flag_secure_desc: 'Use FTPS (TLS). Accepts true|false|1|0|yes|no (default true)',
-  ftp_help_flag_cert_fingerprint_desc: 'Pin the FTPS certificate to this SHA-256 fingerprint (colon-hex, e.g. AB:CD:…); a mismatch aborts as tampering',
-  ftp_help_flag_accept_new_cert_desc: 'Trust the certificate the server presents on first connect when no pin is set (non-interactive TOFU opt-in)',
+  ftp_help_flag_cert_fingerprint_desc: 'Pin the FTPS certificate to this SHA-256 fingerprint (colon-hex, e.g. AB:CD:...); a mismatch aborts as tampering',
+  ftp_help_flag_accept_new_cert_desc: 'Trust the certificate the server presents on first connect when no pin is set, without asking (pins nothing - see --cert-fingerprint)',
   ftp_help_flag_config_file_desc: 'JSON with any of { host, port, user, password, path, secure, cert_fingerprint, accept_new_cert }. ' + 'Inline flags override fields loaded from JSON.',
 
   ftp_host_required: 'FTP adapter: "host" is required. Pass --host <hostname> or ' + '--config-file <path> inside the --provider spec, e.g. ' + '--provider "ftp:nas --host 192.168.1.1 --path /backup".',
@@ -520,7 +556,7 @@ export const en: Strings = {
   ftp_path_must_be_absolute: 'FTP adapter: "path" must be absolute (start with "/").',
   local_config_path_missing: 'Local adapter: --config-file JSON must contain non-empty "path".',
 
-  // ─── Adapter preflight (missing / version mismatch) ────────────────────────
+  // --- Adapter preflight (missing / version mismatch) ------------------------
   adapter_preflight_missing_header: 'The following adapters are required but not installed:',
   adapter_preflight_install_label: 'install:',
   adapter_preflight_retry_hint: 'Install them and retry. Alternatively, if enough copies are available\n' + 'via already-installed providers, pass --allow-missing-adapters to try\n' + 'Reed-Solomon recovery from what is present.',
@@ -530,22 +566,22 @@ export const en: Strings = {
   adapter_version_mismatch_strong: 'Warning: adapter "%s" was configured for version %s but the installed version is %s. ' + 'Consider: npm install -g %s',
   adapter_version_mismatch_soft: 'Warning: adapter "%s" was configured for version %s but the installed version is %s. ' + 'A small version difference should be safe.',
 
-  // ─── Generic provider errors (CLI side) ────────────────────────────────────
+  // --- Generic provider errors (CLI side) ------------------------------------
   provider_type_unknown: 'Unknown provider type: %s',
   provider_add_configure_failed: 'Configuration failed: %s',
   provider_add_validate_failed: 'Invalid config: %s',
   provider_add_probe_failed: 'Provider probe failed: %s',
   provider_add_probe_unsaved: 'Config NOT saved. Re-run with corrected settings.',
 
-  // ─── Recovery (consensus + final) ──────────────────────────────────────────
-  recovery_consensus_vault_id_mismatch: 'Version %s: backup identity mismatch — skipping',
-  recovery_consensus_filename_mismatch: 'Version %s: filename/header mismatch — skipping',
-  recovery_consensus_failed: 'Version %s: consensus failed (fields: %s) — marking as untrusted',
-  recovery_map_from_sibling: 'Version %s: location map recovered from a sibling — medium(s) %s could not supply it; verify/repair them',
+  // --- Recovery (consensus + final) ------------------------------------------
+  recovery_consensus_vault_id_mismatch: 'Version %s: backup identity mismatch - skipping',
+  recovery_consensus_filename_mismatch: 'Version %s: filename/header mismatch - skipping',
+  recovery_consensus_failed: 'Version %s: consensus failed (fields: %s) - marking as untrusted',
+  recovery_map_from_sibling: 'Version %s: location map recovered from a sibling - medium(s) %s could not supply it; verify/repair them',
   recovery_no_manifests: 'Could not reconstruct any valid backup version from the available providers.',
   recovery_manifest_unreadable: 'The latest backup version %s could not be read after recovery.',
 
-  // ─── Provider runtime errors (FTP + LocalFS shared shape) ──────────────────
+  // --- Provider runtime errors (FTP + LocalFS shared shape) ------------------
   provider_short_shard: 'File "%s" is too short to contain a valid payload after the header',
   provider_stat_failed: 'Failed to stat "%s": %s',
   provider_header_read_failed: 'Failed to read header "%s": %s',
@@ -557,18 +593,20 @@ export const en: Strings = {
   verify_shard_corrupted: 'file at "%s" has a corrupted header: %s',
   verify_shard_unverifiable: 'provider "%s" cannot verify the file at "%s" (no partial-read support)',
 
-  // ─── FTP — runtime errors ──────────────────────────────────────────────────
+  // --- FTP - runtime errors --------------------------------------------------
   ftp_operation_failed: 'FTP operation failed on %s:%s: %s',
-  ftp_size_mismatch_attempt: 'FTP upload size mismatch for "%s" on attempt %s/%s: ' + 'sent %s B, server reports %s B — retrying.',
+  ftp_size_mismatch_attempt: 'FTP upload size mismatch for "%s" on attempt %s/%s: ' + 'sent %s B, server reports %s B - retrying.',
   ftp_size_mismatch_final: 'FTP upload size mismatch for "%s" after %s attempts: ' + 'sent %s B, server reports %s B (diff %s). ' + 'Verify the FTP server runs in binary mode (TYPE I).',
-  ftp_insecure_warning: 'FTP connection to %s is not encrypted — the storage password and your backup data cross the network in cleartext. Enable FTPS (secure) or use a network you trust.',
+  ftp_insecure_warning: 'FTP connection to %s is not encrypted - the storage password and your backup data cross the network in cleartext. Enable FTPS (secure) or use a network you trust.',
   ftp_control_chars: 'FTP path and backup name must not contain line breaks or control characters.',
   ftp_recovery_confirm_host: 'Recovery wants to send the FTP password to %s (path %s). Send it to this host?',
   ftp_recovery_target: 'Recovery: connecting to FTP %s (path %s).',
   ftp_recovery_password: 'FTP password for %s:',
   ftp_recovery_declined: 'Recovery declined: no FTP password sent to %s.',
+  ftp_recovery_no_operator:
+    'Nobody can confirm that %s is the right host, so no FTP password was sent and this storage is skipped. Check the recovered locations, then redo the recovery with `bfs recovery --provider ftp --name <backupName> --bootstrap "<settings>" --trust-locations`, or run it at a terminal.',
 
-  // ─── FTP — configureFromFlags + validateConfig ─────────────────────────────
+  // --- FTP - configureFromFlags + validateConfig -----------------------------
   ftp_config_port_invalid: 'FTP adapter: config "port" must be an integer between 1 and 65535',
   ftp_inline_port_invalid: 'FTP adapter: --port must be an integer between 1 and 65535',
   ftp_inline_secure_invalid: 'FTP adapter: --secure must be one of true|false|1|0|yes|no',
@@ -581,15 +619,34 @@ export const en: Strings = {
   ftp_describe_cert_nokind: '%s, cert: %s',
   ftp_cert_kind_self_signed: 'self-signed',
   ftp_cert_kind_ca: 'CA-signed',
-  ftp_cert_pin_mismatch: 'FTPS certificate for %s does not match the pinned fingerprint — possible man-in-the-middle attack (tampering). Expected %s, but the server presented %s. Refusing to connect.',
+  ftp_cert_pin_mismatch: 'FTPS certificate for %s does not match the pinned fingerprint - possible man-in-the-middle attack (tampering). Expected %s, but the server presented %s. Refusing to connect.',
   ftp_cert_untrusted: 'FTPS certificate for %s is not trusted (no pinned fingerprint). The server presented %s. Pin it with --cert-fingerprint, or pass --accept-new-cert to trust it on first connect.',
+  ftp_cert_trust_conflict:
+    'Conflicting instructions for %s: this run states that nothing may be asked, yet nothing says how to trust the server. FTPS is on by default and its certificate has to be trusted before the password is sent. Pass --accept-new-cert to trust the certificate presented on first connect, or --cert-fingerprint <AA:BB:...> if you already know the fingerprint. For a server that offers no TLS at all, pass --secure false.',
   ftp_cert_confirm: 'FTPS server %s presented a %s certificate with fingerprint %s. Trust it?',
-  ftp_cert_declined: 'FTPS certificate for %s was not trusted — refusing to connect.',
+  ftp_cert_declined: 'FTPS certificate for %s was not trusted - refusing to connect.',
   ftp_cert_fingerprint_invalid: 'FTP adapter: --cert-fingerprint must be a colon-hex SHA-256 fingerprint (32 hex byte-pairs joined by ":")',
   ftp_cert_pin_requires_secure: 'FTP: cert_fingerprint requires secure:true (a certificate pin is meaningless over plaintext FTP)',
-  ftp_tls_not_established: 'FTPS handshake to %s did not present a certificate — cannot verify the server identity.',
+  ftp_tls_not_established: 'FTPS handshake to %s did not present a certificate - cannot verify the server identity.',
+  ftp_cert_trust_menu: 'FTPS server %s presented a %s certificate with fingerprint %s. What would you like to do?',
+  trust_choice_accept: 'Trust this server identity',
+  trust_choice_back: 'Go back and re-enter the connection settings',
+  trust_choice_cancel: 'Cancel (end the command)',
+  configure_reenter_notice: 'Going back to the connection settings.',
+  configure_restarts_exhausted: 'Went back to the connection settings too many times - nothing was saved. Run the command again once you have the settings at hand.',
+  ftp_edit_pin_dropped: 'FTPS turned off for %s - the pinned certificate %s will be permanently removed, and later connections will not verify the server identity.',
+  ftp_edit_connecting: 'Connecting to %s to confirm its certificate...',
+  ftp_edit_offline_menu: 'Could not reach %s. Choose how to set the certificate pin:',
+  ftp_edit_offline_paste: 'Paste a certificate fingerprint (AA:BB:...)',
+  ftp_edit_paste_prompt: 'Certificate fingerprint (AA:BB:...):',
+  ftp_edit_fingerprint_invalid: 'Not a valid certificate fingerprint (expected 32 hex byte-pairs joined by ":"). Try again.',
+  ftp_edit_offline_no_pin: 'Save without a certificate pin',
+  ftp_edit_no_pin_warn:
+    'Saved offline with no certificate pin. BFS will ask you to trust the certificate on the first connection, and a non-interactive run will refuse it; recovery on another machine will require confirming the certificate.',
+  ftp_edit_offline_exit: 'Cancel the edit',
+  ftp_edit_cancelled: 'Edit cancelled - certificate pin not set.',
 
-  // ─── FTP — probeConnection ─────────────────────────────────────────────────
+  // --- FTP - probeConnection -------------------------------------------------
   ftp_probe_incomplete: 'Probe failed: FTP config incomplete (host and path must be set)',
   ftp_probe_step_ensure_dir: 'Probe failed at ensureDir: %s',
   ftp_probe_step_upload: 'Probe failed at upload: %s',
@@ -597,7 +654,7 @@ export const en: Strings = {
   ftp_probe_step_compare_remote: 'Probe failed at compare: downloaded bytes differ from uploaded',
   ftp_probe_step_cleanup: 'Probe failed at cleanup: %s',
 
-  // ─── provider: ssh ──────────────────────────────────────────────────────
+  // --- provider: ssh ------------------------------------------------------
   ssh_host_prompt: 'SSH host:',
   ssh_port_prompt: 'Port (default 22):',
   ssh_user_prompt: 'Username:',
@@ -609,27 +666,27 @@ export const en: Strings = {
   ssh_passphrase_prompt: 'Private key passphrase (blank if none):',
   ssh_path_prompt: 'Base path on server (absolute, forward slashes):',
 
-  // ─── SSH — host key ────────────────────────────────────────────────────────
+  // --- SSH - host key --------------------------------------------------------
   ssh_host_key_confirm: 'Trust the host key for %s?\n  fingerprint %s',
-  ssh_host_key_declined: 'Host key for %s was not trusted — connection refused.',
-  ssh_host_key_revoked: 'Host key for %s is revoked in ~/.ssh/known_hosts — refusing to connect (the key is marked compromised).',
-  ssh_host_key_mismatch: 'Host key for %s has CHANGED — this is a possible man-in-the-middle attack (tampering). Expected %s, but the server presented %s. Refusing to connect.',
+  ssh_host_key_declined: 'Host key for %s was not trusted - connection refused.',
+  ssh_host_key_revoked: 'Host key for %s is revoked in ~/.ssh/known_hosts - refusing to connect (the key is marked compromised).',
+  ssh_host_key_mismatch: 'Host key for %s has CHANGED - this is a possible man-in-the-middle attack (tampering). Expected %s, but the server presented %s. Refusing to connect.',
 
-  // ─── SSH — edit (online-first host key, offline fallback) ───────────────────
-  ssh_edit_connecting: 'Connecting to %s to confirm the host key…',
+  // --- SSH - edit (online-first host key, offline fallback) -------------------
+  ssh_edit_connecting: 'Connecting to %s to confirm the host key...',
   ssh_edit_offline_menu: 'Could not reach %s. Choose how to set the host-key pin:',
-  ssh_edit_offline_paste: 'Paste a host-key fingerprint (SHA256:…)',
-  ssh_edit_paste_prompt: 'Host-key fingerprint (SHA256:…):',
+  ssh_edit_offline_paste: 'Paste a host-key fingerprint (SHA256:...)',
+  ssh_edit_paste_prompt: 'Host-key fingerprint (SHA256:...):',
   ssh_edit_fingerprint_invalid: 'Not a valid SHA256 fingerprint (expected "SHA256:" followed by base64). Try again.',
-  ssh_edit_offline_known_hosts_entry: 'Use %s from ~/.ssh/known_hosts — %s',
-  ssh_edit_offline_known_hosts_entry_recommended: 'Use %s from ~/.ssh/known_hosts — %s (recommended — BFS will use this type)',
+  ssh_edit_offline_known_hosts_entry: 'Use %s from ~/.ssh/known_hosts - %s',
+  ssh_edit_offline_known_hosts_entry_recommended: 'Use %s from ~/.ssh/known_hosts - %s (recommended - BFS will use this type)',
   ssh_edit_offline_no_pin: 'Save without a host-key pin',
   ssh_edit_no_pin_warn: 'Saved offline with no host-key fingerprint. BFS will trust the host via ~/.ssh/known_hosts or ask on the first push; recovery on another machine will require confirming the host key.',
   ssh_edit_offline_exit: 'Cancel the edit',
-  ssh_edit_cancelled: 'Edit cancelled — host-key pin not set.',
+  ssh_edit_cancelled: 'Edit cancelled - host-key pin not set.',
 
-  // ─── SSH — help ────────────────────────────────────────────────────────────
-  ssh_help_description: 'Connects to an SSH/SFTP server and stores backup data as files on the ' + 'remote. Configuration may come from inline flags, a JSON config file, ' + 'or both — inline flags override values loaded from JSON.',
+  // --- SSH - help ------------------------------------------------------------
+  ssh_help_description: 'Connects to an SSH/SFTP server and stores backup data as files on the ' + 'remote. Configuration may come from inline flags, a JSON config file, ' + 'or both - inline flags override values loaded from JSON.',
   ssh_help_flag_host_desc: 'SSH server hostname or IP',
   ssh_help_flag_port_desc: 'SSH server port (default 22)',
   ssh_help_flag_user_desc: 'SSH login user',
@@ -637,11 +694,11 @@ export const en: Strings = {
   ssh_help_flag_private_key_desc: 'Path to the private key file (never the key contents). When neither ' + '--password nor --private-key is given, ~/.ssh/id_ed25519 then id_rsa are tried.',
   ssh_help_flag_passphrase_desc: 'Passphrase for the private key (if encrypted)',
   ssh_help_flag_path_desc: 'Absolute base path on the server (must start with "/")',
-  ssh_help_flag_known_host_desc: 'Pin the expected host-key fingerprint (SHA256:…) for non-interactive trust',
-  ssh_help_flag_accept_new_host_key_desc: 'In non-interactive mode, trust a new host key on first connect',
+  ssh_help_flag_known_host_desc: 'Pin the expected host-key fingerprint (SHA256:...); trust is then decided against it, with no question',
+  ssh_help_flag_accept_new_host_key_desc: 'Trust a new host key on first connect and pin its fingerprint, without asking',
   ssh_help_flag_config_file_desc: 'JSON with any of { host, port, user, password, private_key_path, ' + 'passphrase, path, host_key_fingerprint }. Inline flags override JSON.',
 
-  // ─── SSH — runtime errors ──────────────────────────────────────────────────
+  // --- SSH - runtime errors --------------------------------------------------
   ssh_operation_failed: 'SSH operation failed on %s:%s: %s',
   ssh_size_mismatch: 'SSH upload size mismatch for "%s": sent %s B, server stored %s B.',
   ssh_control_chars: 'SSH path and backup name must not contain line breaks or control characters.',
@@ -651,20 +708,22 @@ export const en: Strings = {
   ssh_recovery_password: 'SSH password for %s:',
   ssh_recovery_passphrase: 'SSH private key passphrase for %s:',
   ssh_recovery_declined: 'Recovery declined: no SSH secret sent to %s.',
+  ssh_recovery_no_operator:
+    'Nobody can confirm that %s is the right host, so no SSH secret was sent and this storage is skipped. Check the recovered locations, then redo the recovery with `bfs recovery --provider ssh --name <backupName> --bootstrap "<settings>" --trust-locations`, or run it at a terminal.',
   ssh_recovery_no_secret_noninteractive: 'Recovery cannot obtain the SSH secret for %s in non-interactive mode: no supplied secret authenticated. Provide it via the recovery inputs.',
   ssh_recovery_unpinned: '(unpinned)',
 
-  // ─── SSH — configureFromFlags + validateConfig ─────────────────────────────
+  // --- SSH - configureFromFlags + validateConfig -----------------------------
   ssh_config_port_invalid: 'SSH adapter: config "port" must be an integer between 1 and 65535',
   ssh_inline_port_invalid: 'SSH adapter: --port must be an integer between 1 and 65535',
   ssh_host_required: 'SSH adapter: "host" is required. Pass --host <hostname> or ' + '--config-file <path> inside the --provider spec.',
   ssh_path_required: 'SSH adapter: "path" is required. Pass --path </absolute/path> or --config-file <path>.',
   ssh_path_must_be_absolute: 'SSH adapter: "path" must be absolute (start with "/").',
   ssh_auth_conflict: 'SSH adapter: pass either --password or --private-key, not both.',
-  ssh_auth_missing: 'SSH adapter: no credentials — pass --password, --private-key <path>, ' + 'or place a key at ~/.ssh/id_ed25519 or ~/.ssh/id_rsa.',
+  ssh_auth_missing: 'SSH adapter: no credentials - pass --password, --private-key <path>, ' + 'or place a key at ~/.ssh/id_ed25519 or ~/.ssh/id_rsa.',
   ssh_accept_new_offline:
     '--accept-new-host-key needs to contact the server to capture and pin its host key, which an offline "provider edit" does not do. ' +
-    'Pin the new host explicitly with --known-host <SHA256:…>, or add it online via "bfs provider add" / "bfs init".',
+    'Pin the new host explicitly with --known-host <SHA256:...>, or add it online via "bfs provider add".',
   ssh_validate_host_required: 'SSH: host is required and must be a non-empty string',
   ssh_validate_port_invalid: 'SSH: port must be an integer between 1 and 65535',
   ssh_validate_path_required: 'SSH: path is required and must be a non-empty string',
@@ -673,7 +732,7 @@ export const en: Strings = {
   ssh_validate_auth_conflict: 'SSH: use a password OR a private key, not both',
   ssh_describe_config: 'host: %s, port: %s, user: %s, path: %s, %s',
 
-  // ─── SSH — probeConnection ─────────────────────────────────────────────────
+  // --- SSH - probeConnection -------------------------------------------------
   ssh_probe_incomplete: 'Probe failed: SSH config incomplete (host and path must be set)',
   ssh_probe_step_ensure_dir: 'Probe failed at ensureDir: %s',
   ssh_probe_step_upload: 'Probe failed at upload: %s',
@@ -681,17 +740,17 @@ export const en: Strings = {
   ssh_probe_step_compare_remote: 'Probe failed at compare: downloaded bytes differ from uploaded',
   ssh_probe_step_cleanup: 'Probe failed at cleanup: %s',
 
-  // ─── LocalFS — runtime errors ──────────────────────────────────────────────
+  // --- LocalFS - runtime errors ----------------------------------------------
   local_list_failed: 'Failed to list backup directory "%s": %s',
   local_list_vaults_failed: 'Failed to list backups in "%s": %s',
   local_update_header_failed: 'Failed to update header "%s": %s',
   local_read_shard_failed: 'Failed to read "%s": %s',
 
-  // ─── LocalFS — validateConfig + describeConfig ─────────────────────────────
+  // --- LocalFS - validateConfig + describeConfig -----------------------------
   local_validate_path_required: 'Local FS: path is required and must be a non-empty string',
   local_describe_config: 'path: %s',
 
-  // ─── LocalFS — probeConnection ─────────────────────────────────────────────
+  // --- LocalFS - probeConnection ---------------------------------------------
   local_probe_incomplete: 'Probe failed: local FS config incomplete (path must be set)',
   local_probe_step_mkdir: 'Probe failed at mkdir: %s',
   local_probe_step_write: 'Probe failed at write: %s',
@@ -699,20 +758,26 @@ export const en: Strings = {
   local_probe_step_compare_local: 'Probe failed at compare: read bytes differ from written',
   local_probe_step_cleanup: 'Probe failed at cleanup: %s',
 
-  // ─── repair (spec parsing) ─────────────────────────────────────────────────
+  // --- repair (spec parsing) -------------------------------------------------
   repair_spec_odd_args: 'Each provider name must be followed by its params string.',
   repair_unknown_provider: 'Provider "%s" not found in backup config.',
   repair_duplicate_provider_in_args: 'Provider "%s" repeated in repair arguments.',
   repair_spec_invalid_params: 'Invalid repair params: "%s". Use adapter flags (e.g. --path) or a type:name migration.',
-  heal_shard_corrupt_skip: 'Backup data on storage "%s" failed its integrity check — skipping it for this repair.',
-  heal_locationmap_update_failed: 'Could not update storage "%s" with the new location info — heal or repair it separately.',
+  heal_shard_corrupt_skip: 'Backup data on storage "%s" failed its integrity check - skipping it for this repair.',
+  heal_locationmap_update_failed: 'Could not update storage "%s" with the new location info - heal or repair it separately.',
   heal_relocate_unreachable: 'Storage "%s" is not usable at the new address: %s',
 
-  // ─── repair (command) ──────────────────────────────────────────────────────
+  // --- repair (command) ------------------------------------------------------
   cmd_repair_desc: 'Repair a provider location after a path change or credential rotation',
   repair_opt_version: 'Versions to repair: latest (default), all, 5, 1-10, 1-10,15',
   repair_opt_password: 'Encryption password for the backup (repeatable)',
   repair_opt_password_file: 'Read an encryption password from a file (repeatable)',
+  push_opt_password_file: 'Read the encryption password from a file, keeping it out of the process list',
+  pull_opt_password_file: 'Read the decryption password from a file, keeping it out of the process list',
+  recovery_opt_password_file: 'Read a password from a file, keeping it out of the process list (repeatable)',
+  provider_remove_opt_password_file: 'Read the encryption password from a file, keeping it out of the process list',
+  password_file_unreadable: 'Cannot read the password file "%s". Check the path and its permissions - the command needs it to open the backup.',
+  password_file_empty: 'The password file "%s" is empty. Write the password into it (no trailing spaces), or pass --password instead.',
   repair_opt_ci: 'Non-interactive: never prompt; fail if a password is required and none matches',
   repair_opt_rebuild: 'Reconstruct a backup part that is lost or damaged, using Reed-Solomon (downloads the other parts)',
   repair_help_syntax: `Syntax:
@@ -725,18 +790,18 @@ Examples:
   bfs repair --version all usb1 "--path /mnt/new-usb"
       the drive is mounted somewhere else now
   bfs repair --version all nas "--host 10.0.0.5 --user backup --path /backup"
-      the server moved — give the complete settings, they replace the old ones
+      the server moved - give the complete settings, they replace the old ones
   bfs repair --version 3 usb1 "" --rebuild
       the data on usb1 is damaged or gone; the other devices rebuild it`,
   repair_opt_force_unverified: 'Continue a migration when a backup part cannot be verified (not when it is missing or altered)',
   repair_no_versions: 'No matching versions to repair.',
-  repair_foreign_shard_detected: 'A backup part for version %s belongs to a different backup — aborting.',
+  repair_foreign_shard_detected: 'A backup part for version %s belongs to a different backup - aborting.',
   vault_collision_detected:
     'This location on storage "%s" already holds a different backup of the same name. BFS will not overwrite or delete data from another backup. To continue, manually remove the files at that location, use a different backup name, or run `bfs recovery` if this backup is yours. Aborting.',
-  repair_wrong_version_shard: 'A backup part for version %s does not match its expected version — aborting.',
+  repair_wrong_version_shard: 'A backup part for version %s does not match its expected version - aborting.',
   repair_force_unverified_warn: 'Continuing despite an unverifiable backup part for version %s.',
   repair_ask_vault_password: 'Encryption password for version %s:',
-  repair_wrong_vault_password_retry: 'Wrong password for version %s — try again (blank to skip):',
+  repair_wrong_vault_password_retry: 'Wrong password for version %s - try again (blank to skip):',
   repair_pool_password_failed: 'No supplied password decrypts version %s.',
   repair_password_required_ci: 'No password matched version %s. Pass --password to provide more.',
   repair_password_exhausted: 'Password attempts exhausted for version %s.',
@@ -746,5 +811,5 @@ Examples:
   repair_restore_headers_success: 'Header files restored for %s version(s).',
   repair_restore_headers_no_pairs: 'The --restore-headers option takes no provider arguments.',
   repair_restore_headers_rebuild_conflict: 'The --restore-headers and --rebuild options cannot be combined.',
-  repair_partial: 'Repair partial — failed: %s. See .bfs/repair.lock; retry after fixing the cause.',
+  repair_partial: 'Repair partial - failed: %s. See .bfs/repair.lock; retry after fixing the cause.',
 };

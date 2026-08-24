@@ -2,15 +2,15 @@
 # Provider dropped from the pool with `--strategy remove`: the medium is gone
 # from the config but the stored scheme still demands the old N+K, so every
 # restore is blocked until the operator rescales it. This walks the exact
-# remediation list `bfs provider remove` prints — scheme set → pull → push →
-# prune — and proves it ends in data the operator can restore bit-for-bit.
+# remediation list `bfs provider remove` prints - scheme set -> pull -> push ->
+# prune - and proves it ends in data the operator can restore bit-for-bit.
 #
 # `remove` is the only strategy that leaves the vault in a self-inconsistent
 # state on purpose (no relocate target, no rebuild), so the guidance text is
 # load-bearing: it is the only thing telling the operator how to get out.
 
 SCENARIO_NAME="provider remove: rescale scheme, restore"
-SCENARIO_DESC="drop p0 (--strategy remove) → pull blocked by scheme mismatch → scheme set 2 1 → restore + healthy re-push"
+SCENARIO_DESC="drop p0 (--strategy remove) -> pull blocked by scheme mismatch -> scheme set 2 1 -> restore + healthy re-push"
 REQUIRES_LOCAL=4
 REQUIRES_FTP=0
 
@@ -20,7 +20,7 @@ scenario_run() {
   # 4 media is the floor `--strategy remove` accepts (removeProvider refuses at
   # providers.length <= 3), and 3 survivors leave 2/1 as the only legal scheme.
   # 3/1 is the sharpest starting scheme of the legal ones: p0 carries shard_0,
-  # a DATA shard, and K=1 puts the restore of v1 exactly at RS tolerance — no
+  # a DATA shard, and K=1 puts the restore of v1 exactly at RS tolerance - no
   # slack hiding a broken reconstruction.
   build_pool "$SC_DIR" 4 0 "$name"
 
@@ -36,7 +36,7 @@ scenario_run() {
     assert_file "$(shard_file "$i" 1)"
   done
 
-  # ── The medium leaves the pool ─────────────────────────────────────────────
+  # -- The medium leaves the pool ---------------------------------------------
   run_bfs "$vault" provider remove p0 --strategy remove --yes
   assert_ok
   # The remediation list is the operator's only exit from the inconsistent
@@ -62,13 +62,13 @@ $(cat "$vault/.bfs/config.json")"
 --- config ---
 $(cat "$vault/.bfs/config.json")"
 
-  # ── Restore is blocked while the scheme disagrees with the pool ────────────
+  # -- Restore is blocked while the scheme disagrees with the pool ------------
   run_bfs "$vault" pull --force --yes
   assert_fail
   assert_out_contains 'requires 4 providers'
   assert_out_contains 'configured: 3'
 
-  # ── Step 1 of the printed list: match the scheme to the surviving media ────
+  # -- Step 1 of the printed list: match the scheme to the surviving media ----
   run_bfs "$vault" scheme set 2 1
   assert_ok
   grep -q '"data_shards": 2' "$vault/.bfs/config.json" ||
@@ -76,18 +76,18 @@ $(cat "$vault/.bfs/config.json")"
 --- config ---
 $(cat "$vault/.bfs/config.json")"
 
-  # ── Step 2: pull. Wipe the working tree first (keep .bfs/) — this also drops
+  # -- Step 2: pull. Wipe the working tree first (keep .bfs/) - this also drops
   # .bfsignore, which `pull --force` preserves, so its round-trip through the
   # blob is proven along with the fixtures.
   find "$vault" -mindepth 1 -maxdepth 1 ! -name '.bfs' -exec rm -rf {} +
   assert_no_file "$vault/hello.txt"
   run_bfs "$vault" pull --force --yes
   assert_ok
-  # v1 was pushed as 3/1 and exactly N=3 shards remain reachable — parity covers
+  # v1 was pushed as 3/1 and exactly N=3 shards remain reachable - parity covers
   # the removed medium. This is the whole point of the scenario.
   assert_restored "$vault" "$b1"
 
-  # ── Step 3: push a healthy copy onto the media that are left ───────────────
+  # -- Step 3: push a healthy copy onto the media that are left ---------------
   # Change the tree first: v2 must differ from v1, otherwise the closing restore
   # could not tell which version it actually came back from.
   mutate_fixtures "$vault"
@@ -98,18 +98,18 @@ $(cat "$vault/.bfs/config.json")"
   assert_manifest_health "$vault" 2 healthy
   assert_manifest_contains "$vault" 2 '"data_shards": 2'
   assert_manifest_contains "$vault" 2 '"parity_shards": 1'
-  # v2 has 3 shards, re-indexed onto the survivors p1..p3 (shard_i → i-th
+  # v2 has 3 shards, re-indexed onto the survivors p1..p3 (shard_i -> i-th
   # configured provider), and nothing was written to the removed medium.
   for i in 1 2 3; do
     assert_file "${PV_LOCALDIR[$i]}/$name/shard_$((i - 1)).bfs.2"
   done
-  # Nothing at all reached the removed medium — checked as "no v2 artefact in
+  # Nothing at all reached the removed medium - checked as "no v2 artefact in
   # p0's vault dir", not as one predicted filename.
   if ls "${PV_LOCALDIR[0]}/$name/"*.bfs.2 >/dev/null 2>&1; then
     _fail "v2 artefacts written to the removed medium p0: $(ls "${PV_LOCALDIR[0]}/$name/")"
   fi
 
-  # ── Step 4: drop the degraded version; the backup reads healthy again ──────
+  # -- Step 4: drop the degraded version; the backup reads healthy again ------
   run_bfs "$vault" prune 1 --yes
   assert_ok
   for i in 1 2 3; do
@@ -128,9 +128,9 @@ $(cat "$vault/.bfs/config.json")"
   assert_ok
   assert_restored "$vault" "$b2"
 
-  # ── Floor control: the pool is now at the minimum, so a second `remove` is
+  # -- Floor control: the pool is now at the minimum, so a second `remove` is
   # refused. This is what makes 4 media the smallest pool this path can start
-  # from — the parameter choice above, asserted rather than assumed.
+  # from - the parameter choice above, asserted rather than assumed.
   run_bfs "$vault" provider remove p1 --strategy remove --yes
   assert_fail
   assert_out_contains 'at least 3 storage providers'

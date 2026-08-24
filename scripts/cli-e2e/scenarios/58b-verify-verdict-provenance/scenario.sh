@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # A verdict reached by reading the payload must not be erased by a check that
-# never looked at the payload — and only such a verdict may be sticky.
+# never looked at the payload - and only such a verdict may be sticky.
 #
 # `verifyVersion` (src/vault/verify.ts) writes manifest.health unconditionally and
 # records nothing about how the verdict was reached, so the cheap header-window
@@ -10,7 +10,7 @@
 #
 # The stickiness must be narrow: only detected payload rot survives a shallow
 # pass. A part that was merely unreachable (medium offline, file temporarily
-# gone) must NOT freeze a damaged verdict — otherwise a deep check run during an
+# gone) must NOT freeze a damaged verdict - otherwise a deep check run during an
 # outage forces the operator to pull the whole backup over the network again just
 # to clear a verdict that no longer describes reality.
 #
@@ -41,7 +41,7 @@ scenario_run() {
   cp "$(shard_file 0 1)" "$keep/shard_0"
   cp "$(shard_file 1 1)" "$keep/shard_1"
 
-  # ── An unreachable part must not freeze the verdict ──────────────────────────
+  # -- An unreachable part must not freeze the verdict --------------------------
   mv "$(shard_file 2 1)" "$keep/shard_2_away"
   run_bfs "$vault" --lang en verify --deep
   assert_exit 4
@@ -52,7 +52,7 @@ scenario_run() {
   assert_exit 0
   assert_manifest_health "$vault" 1 healthy
 
-  # ── Detected payload rot must survive a shallow pass ─────────────────────────
+  # -- Detected payload rot must survive a shallow pass -------------------------
   local i
   for i in 0 1; do
     BFS_OUT="$("$TSX" "$(winpath "$corrupt_driver")" "$(winpath "$(shard_file "$i" 1)")" 2>&1)" || true
@@ -69,7 +69,7 @@ scenario_run() {
   # The operator must learn why a header-only check reports damage, and how to re-check.
   assert_out_contains "earlier deep check"
 
-  # ── Once the data is sound again, a deep check clears the verdict ────────────
+  # -- Once the data is sound again, a deep check clears the verdict ------------
   cp "$keep/shard_0" "$(shard_file 0 1)"
   cp "$keep/shard_1" "$(shard_file 1 1)"
   run_bfs "$vault" --lang en verify --deep

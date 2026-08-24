@@ -4,7 +4,7 @@
 # manifest scheme. Mirrors tests/e2e Scenariusz 8.
 
 SCENARIO_NAME="scheme per version"
-SCENARIO_DESC="v1 3/1, add provider → v2 3/2, restore both"
+SCENARIO_DESC="v1 3/1, add provider -> v2 3/2, restore both"
 REQUIRES_LOCAL=5
 REQUIRES_FTP=0
 
@@ -21,7 +21,7 @@ scenario_run() {
   snapshot_hashes "$vault" "$b1"
   run_bfs "$vault" push --new; assert_ok          # v1: 3/1
 
-  # Add a 5th provider — parity bumps to 2 (scheme becomes 3/2).
+  # Add a 5th provider - parity bumps to 2 (scheme becomes 3/2).
   mkdir -p "$addir"
   run_bfs "$vault" provider add --ci --name p4 --type local \
     --path "$(winpath "$addir")"

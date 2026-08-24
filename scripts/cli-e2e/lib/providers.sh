@@ -11,10 +11,10 @@
 # reruns never collide and the harness never deletes anything on the user's
 # server.
 
-# parse_ftp_specs — fill FTP_HOST/PORT/USER/PASS/BASE/SECURE from FTP_SPECS.
+# parse_ftp_specs - fill FTP_HOST/PORT/USER/PASS/BASE/SECURE from FTP_SPECS.
 # Grammar: [ftp[s]://]user:pass@host[:port]/basepath
 parse_ftp_specs() {
-  FTP_HOST=(); FTP_PORT=(); FTP_USER=(); FTP_PASS=(); FTP_BASE=(); FTP_SECURE=(); FTP_CERT_FP=()
+  FTP_HOST=(); FTP_PORT=(); FTP_USER=(); FTP_PASS=(); FTP_BASE=(); FTP_SECURE=(); FTP_CERT_FP=(); FTP_ACCEPT_NEW=()
   local spec secure userpass rest hostport host port path
   for spec in "${FTP_SPECS[@]:-}"; do
     [ -n "$spec" ] || continue
@@ -47,26 +47,35 @@ parse_ftp_specs() {
     FTP_HOST+=("$host"); FTP_PORT+=("$port"); FTP_USER+=("$user")
     FTP_PASS+=("$pass"); FTP_BASE+=("$path"); FTP_SECURE+=("$secure")
     # `--ftp` specs carry no certificate pin (plaintext or non-pinned FTPS);
-    # keep the array index-aligned with the other endpoint arrays.
+    # keep the array index-aligned with the other endpoint arrays. An `ftps://`
+    # endpoint given on the command line is the operator's own test server and
+    # there is no way to pass its fingerprint, so trusting what it presents is
+    # the intended reading - without it every `init --ci` would refuse.
     FTP_CERT_FP+=("")
+    FTP_ACCEPT_NEW+=("$secure")
   done
 }
 
 ftp_count() { printf '%s' "${#FTP_HOST[@]}"; }
 
-# register_ftp_endpoint <host> <port> <user> <pass> <base> <secure> [cert-fp] —
+# register_ftp_endpoint <host> <port> <user> <pass> <base> <secure> [cert-fp] -
 # append a scenario-managed FTP endpoint to the pool arrays; the new index is left
-# in the global REG_FTP_INDEX. (Must NOT be captured via $(...) — command
+# in the global REG_FTP_INDEX. (Must NOT be captured via $(...) - command
 # substitution's subshell would drop the array appends.) Lets a docker-managed
 # scenario provision its own ftpd (not from --ftp flags). The optional 7th arg is
-# a SHA-256 certificate fingerprint (AA:BB:… form): when given, _pool_add_ftp adds
+# a SHA-256 certificate fingerprint (AA:BB:... form): when given, _pool_add_ftp adds
 # `--cert-fingerprint <fp>` so `bfs` pins the endpoint's self-signed FTPS cert.
 register_ftp_endpoint() {
   FTP_HOST+=("$1"); FTP_PORT+=("$2"); FTP_USER+=("$3"); FTP_PASS+=("$4"); FTP_BASE+=("$5"); FTP_SECURE+=("$6"); FTP_CERT_FP+=("${7:-}")
+  # A scenario-provisioned endpoint says exactly what it wants: a pin through the
+  # 7th argument, or nothing - because "secure, unpinned and untrusted" is itself
+  # a state some scenarios exist to exercise. Only endpoints handed in on the
+  # command line get the blanket opt-in (see parse_ftp_specs).
+  FTP_ACCEPT_NEW+=("false")
   REG_FTP_INDEX="$(( ${#FTP_HOST[@]} - 1 ))"
 }
 
-# parse_ssh_specs — fill SSH_HOST/PORT/USER/PASS/BASE from SSH_SPECS.
+# parse_ssh_specs - fill SSH_HOST/PORT/USER/PASS/BASE from SSH_SPECS.
 # Grammar: [ssh://]user:pass@host[:port]/basepath
 parse_ssh_specs() {
   SSH_HOST=(); SSH_PORT=(); SSH_USER=(); SSH_PASS=(); SSH_BASE=()
@@ -104,9 +113,9 @@ parse_ssh_specs() {
 
 ssh_count() { printf '%s' "${#SSH_HOST[@]}"; }
 
-# register_ssh_endpoint <host> <port> <user> <pass> <base> — append a
+# register_ssh_endpoint <host> <port> <user> <pass> <base> - append a
 # scenario-managed SSH endpoint to the pool arrays; the new index is left in the
-# global REG_SSH_INDEX. (Must NOT be captured via $(...) — command substitution
+# global REG_SSH_INDEX. (Must NOT be captured via $(...) - command substitution
 # runs in a subshell, where the array appends would be lost.) Lets a
 # docker-managed scenario provision its own sshd (not from --ssh flags) and then
 # build a pool with `ssh` providers that round-robin onto it.
@@ -115,14 +124,14 @@ register_ssh_endpoint() {
   REG_SSH_INDEX="$(( ${#SSH_HOST[@]} - 1 ))"
 }
 
-# set_ssh_endpoint_port <index> <port> — update a registered endpoint's port after
+# set_ssh_endpoint_port <index> <port> - update a registered endpoint's port after
 # its container restarts on a new one, so ssh_sha / bootstrap specs reach it. The
 # remote sub-path (PV_SSH_REMOTE) is port-independent, so it stays valid.
 set_ssh_endpoint_port() {
   SSH_PORT[$1]="$2"
 }
 
-# pool_reset <vaultname> — start a fresh provider pool for one scenario.
+# pool_reset <vaultname> - start a fresh provider pool for one scenario.
 pool_reset() {
   POOL_VAULTNAME="$1"
   PROVIDER_ARGS=()
@@ -157,6 +166,11 @@ _pool_add_ftp() {
   # every plaintext / non-pinned endpoint, so existing scenarios are unchanged.
   if [ -n "${FTP_CERT_FP[$e]:-}" ]; then
     spec="${spec} --cert-fingerprint ${FTP_CERT_FP[$e]}"
+  elif [ "${FTP_ACCEPT_NEW[$e]:-false}" = "true" ]; then
+    # Secure, unpinned, and the endpoint opted into trust-on-first-use: `bfs`
+    # refuses an unattended run with no basis for trusting the server, so say so
+    # explicitly rather than leaving the scenario to fail on it.
+    spec="${spec} --accept-new-cert"
   fi
   PROVIDER_ARGS+=(--provider "$spec")
   PV_ID+=("$id"); PV_TYPE+=("ftp"); PV_LOCALDIR+=("")
@@ -183,7 +197,7 @@ _pool_add_ssh() {
   PV_COUNT=$((PV_COUNT + 1))
 }
 
-# _pool_add <type> <sandbox> — append one provider of the given type.
+# _pool_add <type> <sandbox> - append one provider of the given type.
 _pool_add() {
   case "$1" in
     local) _pool_add_local "$2/prov/p${PV_COUNT}" ;;
@@ -218,7 +232,7 @@ build_pool() {
   build_pool_seq "$sandbox" "$vault" "${seq[@]}"
 }
 
-# ftp_bootstrap_spec <provider-index> — `--bootstrap` adapter flags for
+# ftp_bootstrap_spec <provider-index> - `--bootstrap` adapter flags for
 # recovering via the given FTP provider (its endpoint creds + remote path).
 ftp_bootstrap_spec() {
   local i="$1"
@@ -228,7 +242,7 @@ ftp_bootstrap_spec() {
     "${PV_FTP_REMOTE[$i]}" "${FTP_SECURE[$e]}"
 }
 
-# ssh_bootstrap_spec <provider-index> — `--bootstrap` adapter flags for
+# ssh_bootstrap_spec <provider-index> - `--bootstrap` adapter flags for
 # recovering via the given SSH provider (its endpoint creds + remote path).
 ssh_bootstrap_spec() {
   local i="$1"
@@ -238,7 +252,7 @@ ssh_bootstrap_spec() {
     "${PV_SSH_REMOTE[$i]}"
 }
 
-# shard_file <provider-index> <version> — path to a local provider's shard file.
+# shard_file <provider-index> <version> - path to a local provider's shard file.
 # Shard index equals provider index (BFS assigns shard_i to provider i in order).
 shard_file() {
   local i="$1" version="$2"

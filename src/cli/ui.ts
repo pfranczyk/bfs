@@ -2,16 +2,16 @@ import chalk from 'chalk';
 import { t } from '../i18n/index.js';
 import { VersionHealth } from '../types/index.js';
 
-// ─── Color helpers ────────────────────────────────────────────────────────────
+// --- Color helpers ------------------------------------------------------------
 
 /** Prints a success message in green. */
 export function success(msg: string): void {
-  console.log(chalk.green(`✓ ${msg}`));
+  console.log(chalk.green(`OK ${msg}`));
 }
 
 /** Prints an error message in red. */
 export function error(msg: string): void {
-  console.error(chalk.red(`✗ ${msg}`));
+  console.error(chalk.red(`X ${msg}`));
 }
 
 /**
@@ -32,7 +32,7 @@ export class CommandAbort extends Error {
 
 /** Prints a warning message in yellow. */
 export function warn(msg: string): void {
-  console.warn(chalk.yellow(`⚠ ${msg}`));
+  console.warn(chalk.yellow(`! ${msg}`));
 }
 
 /** Prints an info message. */
@@ -40,7 +40,7 @@ export function info(msg: string): void {
   console.log(chalk.cyan(`  ${msg}`));
 }
 
-// ─── Box drawing ──────────────────────────────────────────────────────────────
+// --- Box drawing --------------------------------------------------------------
 
 /**
  * Renders text inside a box with a title.
@@ -50,22 +50,22 @@ export function info(msg: string): void {
 export function box(title: string, lines: string[]): void {
   const maxLen = Math.max(title.length, ...lines.map((l) => stripAnsi(l).length));
   const width = maxLen + 4;
-  const top = `┌${'─'.repeat(width)}┐`;
-  const bottom = `└${'─'.repeat(width)}┘`;
-  const titleLine = `│ ${chalk.bold(title)}${' '.repeat(width - title.length - 1)}│`;
-  const sep = `├${'─'.repeat(width)}┤`;
+  const top = `+${'-'.repeat(width)}+`;
+  const bottom = `+${'-'.repeat(width)}+`;
+  const titleLine = `| ${chalk.bold(title)}${' '.repeat(width - title.length - 1)}|`;
+  const sep = `+${'-'.repeat(width)}+`;
 
   console.log(chalk.dim(top));
-  console.log(chalk.dim('│') + titleLine.slice(1, -1) + chalk.dim('│'));
+  console.log(chalk.dim('|') + titleLine.slice(1, -1) + chalk.dim('|'));
   console.log(chalk.dim(sep));
   for (const line of lines) {
     const pad = width - stripAnsi(line).length - 1;
-    console.log(`${chalk.dim('│')} ${line}${' '.repeat(pad)}${chalk.dim('│')}`);
+    console.log(`${chalk.dim('|')} ${line}${' '.repeat(pad)}${chalk.dim('|')}`);
   }
   console.log(chalk.dim(bottom));
 }
 
-// ─── Table ────────────────────────────────────────────────────────────────────
+// --- Table --------------------------------------------------------------------
 
 /**
  * Renders a simple ASCII table.
@@ -96,7 +96,7 @@ export function table(headers: string[], rows: string[][]): void {
   console.log(chalk.dim(sep));
 }
 
-// ─── Health formatting ────────────────────────────────────────────────────────
+// --- Health formatting --------------------------------------------------------
 
 /** Returns a colored health string with icon. */
 export function formatHealth(health: VersionHealth): string {
@@ -120,7 +120,7 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-// ─── Internal ─────────────────────────────────────────────────────────────────
+// --- Internal -----------------------------------------------------------------
 
 /** Strips ANSI escape codes from a string for length calculation. */
 function stripAnsi(str: string): string {

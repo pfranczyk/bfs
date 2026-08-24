@@ -35,7 +35,7 @@ export async function streamToBuffer(stream: Readable): Promise<Buffer> {
 
 /**
  * Computes SHA-256 of a file, excluding the last `tailBytes` bytes.
- * Streams the file in chunks — does not load the whole file into memory.
+ * Streams the file in chunks - does not load the whole file into memory.
  * Used for blob hash verification without buffering the full blob.
  *
  * @param filePath  - Path to the file to hash

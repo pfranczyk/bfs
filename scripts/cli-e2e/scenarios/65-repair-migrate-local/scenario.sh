@@ -4,7 +4,7 @@
 # config + every manifest and rewrites the sibling location maps, so recovery
 # from a sibling discovers the shard under its new provider id.
 
-SCENARIO_NAME="repair: migrate provider id (local→local)"
+SCENARIO_NAME="repair: migrate provider id (local->local)"
 SCENARIO_DESC="3L 2/1; move p2 storage to a new provider p9, repair migrate, verify+pull, recover from sibling"
 REQUIRES_LOCAL=3
 REQUIRES_FTP=0

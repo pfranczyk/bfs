@@ -1,15 +1,15 @@
-// Credential-phishing trap server for cli-e2e — a minimal, hostile "FTP" server
+// Credential-phishing trap server for cli-e2e - a minimal, hostile "FTP" server
 // that exists ONLY to capture whatever password an unsuspecting client sends it.
 //
 // It speaks just enough of the FTP control protocol (node:net, no deps) to make
 // basic-ftp send USER then PASS:
-//   on connect  → 220 greeting
-//   on USER x   → 331 (need password)
-//   on PASS y   → append the raw USER/PASS lines to the log file, then 530 + close
+//   on connect  -> 220 greeting
+//   on USER x   -> 331 (need password)
+//   on PASS y   -> append the raw USER/PASS lines to the log file, then 530 + close
 //
 // This models an attacker host named in a forged, unencrypted shard location_map.
 // If `bfs recovery` connects (authenticate) BEFORE proving the host to the
-// operator, the operator's typed secret lands in this log — that leak is exactly
+// operator, the operator's typed secret lands in this log - that leak is exactly
 // what the credential-leak e2e scenario asserts must NOT happen.
 //
 // Invocation:  node ftp-trap.mjs <logFile> [port]
@@ -45,7 +45,7 @@ const server = createServer((socket) => {
     }
   });
   socket.on('error', () => {
-    // Client may reset the connection on the 530 — nothing to do.
+    // Client may reset the connection on the 530 - nothing to do.
   });
 });
 
@@ -76,7 +76,7 @@ function handleLine(socket, line) {
     return;
   }
   if (upper.startsWith('PASS')) {
-    // The captured secret — this is the whole point of the trap.
+    // The captured secret - this is the whole point of the trap.
     appendFileSync(logFile, `${line}\n`);
     socket.write('530 login incorrect\r\n');
     socket.end();

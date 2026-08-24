@@ -8,14 +8,14 @@
 # the password is withheld and the redundancy promise must hold without it.
 
 SCENARIO_NAME="recovery skips an un-authable FTP medium"
-SCENARIO_DESC="local bootstrap, FTP password withheld → skip, rebuild degraded from N, restore"
+SCENARIO_DESC="local bootstrap, FTP password withheld -> skip, rebuild degraded from N, restore"
 REQUIRES_LOCAL=2
 REQUIRES_FTP=1
 
 scenario_run() {
   local vault="$SC_DIR/vault" base="$SC_DIR/baseline.txt" name="bfs39"
   make_fixtures "$vault"
-  build_pool_seq "$SC_DIR" "$name" local local ftp   # p0 L (bootstrap) · p1 L · p2 F
+  build_pool_seq "$SC_DIR" "$name" local local ftp   # p0 L (bootstrap) - p1 L - p2 F
 
   run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 2 --parity-shards 1 "${PROVIDER_ARGS[@]}"
@@ -30,7 +30,7 @@ scenario_run() {
 
   # Bootstrap from the LOCAL provider p0 (no seed secret), so recovery must
   # reconnect the FTP sibling interactively. The operator approves the host but
-  # withholds the password (blank), declining that medium — it is skipped, and
+  # withholds the password (blank), declining that medium - it is skipped, and
   # the two local shards (N=2) carry the rebuild.
   local answers
   answers='[{"anchor":"Send it to this host","value":"y"},{"anchor":"FTP password for","value":""}]'

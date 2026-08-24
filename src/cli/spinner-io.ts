@@ -4,7 +4,7 @@ import type { ProviderIO } from '../types/index.js';
 
 /**
  * Runs an interactive action with the spinner paused, restarting it only if it
- * was running before. A throw from `action` skips the restart — the caller's
+ * was running before. A throw from `action` skips the restart - the caller's
  * error path owns the spinner from there (e.g. `spinner.fail()`).
  *
  * @param spinner - ora spinner to pause for the action's duration
@@ -24,7 +24,7 @@ async function _pausedAround<T>(spinner: Ora, action: () => Promise<T>): Promise
  * update the spinner line in place, while `warn` and the interactive prompts
  * pause the spinner for their duration so their output does not interleave with
  * the animated spinner line. The spinner is only restarted if it was running
- * before — a prompt or warn fired while the spinner was idle leaves it idle.
+ * before - a prompt or warn fired while the spinner was idle leaves it idle.
  *
  * @param io - underlying ProviderIO the wrapper delegates to
  * @param spinner - ora spinner the wrapper drives

@@ -24,12 +24,13 @@ jobs:
           - '0.10.0'
           - '0.11.0'
           - '0.12.0'
+          - '0.13.0'
           # On release, add the latest patch of the previous release line.
           # Patches within a line share the on-disk format, and users are
           # expected to run the newest patch, so the latest patch represents
           # the whole line (e.g. 0.6.2 covers 0.6.0/0.6.1).
 
-    name: bfs@${{ matrix.old-version }} → current
+    name: bfs@${{ matrix.old-version }} -> current
 
     steps:
       - uses: actions/checkout@v6
@@ -42,5 +43,5 @@ jobs:
       - name: Build and link current BFS
         run: npm ci && npm run build && npm link
 
-      - name: Test bfs@${{ matrix.old-version }} → current
+      - name: Test bfs@${{ matrix.old-version }} -> current
         run: bash scripts/compat-fixtures/run.sh "${{ matrix.old-version }}"

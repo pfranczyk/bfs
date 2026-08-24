@@ -5,7 +5,7 @@
 # 49 flips the tail of the GCM tag sealing the map, so the map itself no longer
 # authenticates. Here the sealed map is untouched and the 16-byte Argon2id salt
 # above it is not, so the key derived from the CORRECT password does not open it.
-# Same outcome on that one shard, different cause — and a different trap: a
+# Same outcome on that one shard, different cause - and a different trap: a
 # version's salt is shared by all of its shards, so a reader that derives one key
 # per version FROM THE DAMAGED SHARD's salt opens nothing anywhere, while the
 # untouched siblings still carry the version's real salt and its map.
@@ -65,7 +65,7 @@ scenario_run() {
   # Rebuild .bfs/ by bootstrapping from p0. --password seeds the pool with the
   # password that opens every shard of this backup, so no version needs operator
   # input. The run goes through a PTY so that a prompt would be a real, visible
-  # prompt — the blank answer is a safety net that keeps a prompting run from
+  # prompt - the blank answer is a safety net that keeps a prompting run from
   # hanging on it, not an expected input.
   local answers
   answers='[{"anchor":"Enter password for version","value":""}]'
@@ -80,7 +80,7 @@ scenario_run() {
     _fail "recovery prompted for the v1 password although the healthy siblings carry the version's salt and open with --password"
   fi
 
-  # Control — the undamaged version is recovered.
+  # Control - the undamaged version is recovered.
   assert_file "$vault/.bfs/manifests/v002.json"
 
   # The damaged version: its salt and map are both readable from either healthy

@@ -34,7 +34,7 @@ describe('cleanup', () => {
     vi.restoreAllMocks();
   });
 
-  // ─── trackFile ────────────────────────────────────────────────────────────
+  // --- trackFile ------------------------------------------------------------
 
   it('should register SIGINT handler on first trackFile call', () => {
     trackFile('/tmp/file.bin');
@@ -54,13 +54,13 @@ describe('cleanup', () => {
     expect(vi.mocked(process.on)).not.toHaveBeenCalled();
   });
 
-  // ─── untrackFile ──────────────────────────────────────────────────────────
+  // --- untrackFile ----------------------------------------------------------
 
   it('should remove file from tracked set after untrackFile', () => {
     trackFile('/tmp/target.bin');
     untrackFile('/tmp/target.bin');
 
-    // Trigger SIGINT — file should NOT be deleted
+    // Trigger SIGINT - file should NOT be deleted
     const [[, handler]] = vi.mocked(process.on).mock.calls;
     expect(() => (handler as () => void)()).toThrow('process.exit called');
 
@@ -71,7 +71,7 @@ describe('cleanup', () => {
     expect(() => untrackFile('/tmp/nonexistent.bin')).not.toThrow();
   });
 
-  // ─── SIGINT handler ───────────────────────────────────────────────────────
+  // --- SIGINT handler -------------------------------------------------------
 
   it('should call fs.unlinkSync for each tracked file on SIGINT', () => {
     trackFile('/tmp/a.bin');

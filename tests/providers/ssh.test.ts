@@ -12,7 +12,7 @@ import { createMockProviderIO } from '../../src/providers/provider.js';
 import { SshProvider } from '../../src/providers/ssh.js';
 import type { CliProviderInput, ConfigureEditContext, ProviderConfig, ProviderIO, RecoverySecret, RemoteRef, ShardHeader, ShardLocation } from '../../src/types/index.js';
 
-// ─── Fixed host key + fingerprint contract ───────────────────────────────────
+// --- Fixed host key + fingerprint contract -----------------------------------
 //
 // GUESSED API (must match the GREEN implementation): the SSH host-key
 // fingerprint is derived from the raw host-key buffer passed to `hostVerifier`
@@ -30,7 +30,7 @@ function sshFingerprint(key: Buffer): string {
 
 const SERVER_FP = sshFingerprint(SERVER_KEY);
 
-// ─── In-memory SSH / SFTP mock ───────────────────────────────────────────────
+// --- In-memory SSH / SFTP mock -----------------------------------------------
 
 interface MockConnectConfig {
   host?: string;
@@ -55,13 +55,13 @@ interface MockDirEntry {
 }
 
 const mockState: {
-  /** Fake SFTP filesystem: full remote path → bytes. */
+  /** Fake SFTP filesystem: full remote path -> bytes. */
   files: Map<string, Buffer>;
   /** Fake SFTP directories: full remote path. */
   dirs: Set<string>;
-  /** Connect emits a code-less, level-less transport error (→ unverifiable). */
+  /** Connect emits a code-less, level-less transport error (-> unverifiable). */
   connectShouldFail: boolean;
-  /** Connect emits an error carrying `level: 'client-authentication'` (→ auth_failed). */
+  /** Connect emits an error carrying `level: 'client-authentication'` (-> auth_failed). */
   authShouldFail: boolean;
   /** Raw host-key bytes handed to the client's hostVerifier during handshake. */
   hostKey: Buffer;
@@ -90,13 +90,13 @@ const mockState: {
   /** When set, key-auth connect requires cfg.passphrase to equal this (models an encrypted key). */
   keyPassphrase: Nullable<string>;
   /**
-   * When true, the write stream emits 'close' but suppresses 'finish' — modeling
+   * When true, the write stream emits 'close' but suppresses 'finish' - modeling
    * ssh2's SFTP WriteStream, which closes the remote handle ('close') and never
    * fires 'finish'. Guards against regressing upload to await 'finish' alone.
    */
   suppressWriteFinish: boolean;
   /**
-   * When true, SFTP operations after `ready` never respond — readdir/stat
+   * When true, SFTP operations after `ready` never respond - readdir/stat
    * callbacks never fire and read streams emit nothing. Models a hung-but-alive
    * server that completes the handshake, then goes silent (the M1 DoS: no
    * per-operation timeout means push/pull/verify hangs forever).
@@ -104,7 +104,7 @@ const mockState: {
   sftpHang: boolean;
   /**
    * When set, a read stream emits `streamChunks` chunks, one every
-   * `streamChunkDelayMs` ms — drives fake-timer tests that the idle timeout
+   * `streamChunkDelayMs` ms - drives fake-timer tests that the idle timeout
    * RESETS on each received payload (a slow-but-progressing transfer completes).
    */
   streamChunkDelayMs: Nullable<number>;
@@ -195,7 +195,7 @@ class MockWriteStream extends Writable {
   override emit(event: string | symbol, ...args: unknown[]): boolean {
     // Model ssh2's SFTP WriteStream: 'close' fires (remote handle closed) but
     // 'finish' never does. Swallowing 'finish' proves upload() resolves on
-    // 'close' alone. The internal finished→autoDestroy→'close' transition is
+    // 'close' alone. The internal finished->autoDestroy->'close' transition is
     // unaffected (it does not depend on this emit's return value).
     if (mockState.suppressWriteFinish && event === 'finish') return false;
     return super.emit(event, ...args);
@@ -204,7 +204,7 @@ class MockWriteStream extends Writable {
 
 const mockSftp = {
   readdir(dir: string, cb: (err: Nullable<Error>, list?: MockDirEntry[]) => void): void {
-    if (mockState.sftpHang) return; // never respond — models a stalled server after ready
+    if (mockState.sftpHang) return; // never respond - models a stalled server after ready
     const entries: MockDirEntry[] = [];
     for (const [key, buf] of mockState.files.entries()) {
       if (key.slice(0, key.lastIndexOf('/')) === dir) {
@@ -220,7 +220,7 @@ const mockSftp = {
   },
 
   stat(p: string, cb: (err: Nullable<Error>, stats?: MockAttrs) => void): void {
-    if (mockState.sftpHang) return; // never respond — stalled server after ready
+    if (mockState.sftpHang) return; // never respond - stalled server after ready
     const buf = mockState.files.get(p);
     if (buf) {
       cb(null, { size: buf.length, isDirectory: () => false });
@@ -236,7 +236,7 @@ const mockSftp = {
   createReadStream(p: string, opts?: { start?: number; end?: number }): Readable {
     mockState.lastDownloadBytesWritten = 0;
     // A stalled server: the read stream opens but never delivers a byte (no
-    // 'data'/'end'/'error') — the transfer hangs forever without a timeout.
+    // 'data'/'end'/'error') - the transfer hangs forever without a timeout.
     if (mockState.sftpHang) return new Readable({ read() {} });
     // A slow-but-progressing transfer: one chunk every streamChunkDelayMs ms.
     if (mockState.streamChunkDelayMs !== null) {
@@ -360,10 +360,23 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir, default: { ...actual, homedir } };
 });
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// --- Helpers -----------------------------------------------------------------
+
+/**
+ * Scratch directories handed out by writeJsonConfig, emptied after every test -
+ * so a path it returns must not be used outside the test that asked for it.
+ */
+const configDirs: string[] = [];
+
+afterEach(async () => {
+  // Swallow removal errors: a test that already passed must not turn red because
+  // something else on the machine still held the file for a moment.
+  await Promise.all(configDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }).catch(() => {})));
+});
 
 async function writeJsonConfig(content: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-ssh-cfg-'));
+  configDirs.push(dir);
   const file = path.join(dir, 'ssh.json');
   await fs.writeFile(file, content, 'utf8');
   return file;
@@ -502,7 +515,7 @@ function resetMockState(): void {
   mockState.streamChunks = 0;
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
+// --- Tests -------------------------------------------------------------------
 
 describe('SshProvider', () => {
   let provider: SshProvider;
@@ -522,14 +535,14 @@ describe('SshProvider', () => {
     createdHomes.length = 0;
   });
 
-  // ─── constructor (lazy init — validation via validateConfig) ─────────────
+  // --- constructor (lazy init - validation via validateConfig) -------------
 
-  it('should NOT throw when host is missing — config validation is lazy', () => {
+  it('should NOT throw when host is missing - config validation is lazy', () => {
     const { io } = createMockProviderIO();
     expect(() => new SshProvider(makeConfig({ host: '' }), io)).not.toThrow();
   });
 
-  it('should NOT throw when path is missing — config validation is lazy', () => {
+  it('should NOT throw when path is missing - config validation is lazy', () => {
     const { io } = createMockProviderIO();
     expect(() => new SshProvider(makeConfig({ path: '' }), io)).not.toThrow();
   });
@@ -539,7 +552,7 @@ describe('SshProvider', () => {
     expect(() => new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io)).not.toThrow();
   });
 
-  // ─── diagnostic logging (gated by `bfs --debug`) ─────────────────────────
+  // --- diagnostic logging (gated by `bfs --debug`) -------------------------
 
   it('should route the connection log through io.debug, not io.info', async () => {
     const { io, logs } = createMockProviderIO();
@@ -556,7 +569,7 @@ describe('SshProvider', () => {
     expect(logs.find((l) => l.level === 'info' && l.message.includes('sshhost'))).toBeUndefined();
   });
 
-  // ─── control-character / traversal rejection in vault name ───────────────
+  // --- control-character / traversal rejection in vault name ---------------
 
   it('should reject a vault name containing a line break before any SFTP operation', async () => {
     const { io } = createMockProviderIO();
@@ -582,7 +595,7 @@ describe('SshProvider', () => {
     await expect(uploadBuf(p, 'shard_0.bfs.1', Buffer.alloc(8, 1))).rejects.toThrow(UnsafePathError);
   });
 
-  // ─── upload / download roundtrip ─────────────────────────────────────────
+  // --- upload / download roundtrip -----------------------------------------
 
   it('should upload and download identical binary data', async () => {
     const data = Buffer.alloc(512);
@@ -604,7 +617,7 @@ describe('SshProvider', () => {
     expect(ref.hash).toHaveLength(64);
   });
 
-  // ─── post-upload verification (defense against silent SFTP corruption) ────
+  // --- post-upload verification (defense against silent SFTP corruption) ----
 
   it('should throw ProviderError when the server stored fewer bytes than uploaded', async () => {
     // The post-upload `stat` reports the truncated size, so the size check fails.
@@ -614,7 +627,7 @@ describe('SshProvider', () => {
     await expect(uploadBuf(provider, 'shard_0.bfs.1', data)).rejects.toThrow(ProviderError);
   });
 
-  // ─── chunking regression (CRITICAL — streaming.md) ───────────────────────
+  // --- chunking regression (CRITICAL) --------------------------------------
 
   it('should split a multi-chunk-sized payload across multiple stream chunks', async () => {
     // Regression: `Readable.from(buffer)` pushes the whole buffer as one chunk,
@@ -632,7 +645,7 @@ describe('SshProvider', () => {
   it('should resolve upload when the write stream emits close but never finish', async () => {
     // Regression: ssh2's SFTP WriteStream closes the remote handle (emitting
     // 'close') but never emits 'finish'. An upload path that awaits 'finish'
-    // alone hangs forever against a real server — invisible to a mock that emits
+    // alone hangs forever against a real server - invisible to a mock that emits
     // both. With 'finish' suppressed, upload() must still resolve (via 'close').
     mockState.suppressWriteFinish = true;
     const data = Buffer.alloc(4 * 1024, 0xcd);
@@ -643,7 +656,7 @@ describe('SshProvider', () => {
     expect(mockState.files.get('/backup/testvault/shard_0.bfs.1')?.length).toBe(data.length);
   });
 
-  // ─── list ────────────────────────────────────────────────────────────────
+  // --- list ----------------------------------------------------------------
 
   it('should list all uploaded files', async () => {
     await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('a'));
@@ -670,7 +683,7 @@ describe('SshProvider', () => {
     expect(refs).toEqual([]);
   });
 
-  // ─── delete ──────────────────────────────────────────────────────────────
+  // --- delete --------------------------------------------------------------
 
   it('should delete a file', async () => {
     const ref = await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('data'));
@@ -680,10 +693,10 @@ describe('SshProvider', () => {
     expect(refs.map((r: RemoteRef) => r.path)).not.toContain('shard_0.bfs.1');
   });
 
-  // Deleting an already-absent shard is idempotent (success), not an error — see
+  // Deleting an already-absent shard is idempotent (success), not an error - see
   // the "hardening" block (L6). It must not raise a false prune orphan warning.
 
-  // ─── healthCheck ─────────────────────────────────────────────────────────
+  // --- healthCheck ---------------------------------------------------------
 
   it('should return true when connection succeeds', async () => {
     expect(await provider.healthCheck()).toBe(true);
@@ -694,7 +707,7 @@ describe('SshProvider', () => {
     expect(await provider.healthCheck()).toBe(false);
   });
 
-  // ─── authenticate ────────────────────────────────────────────────────────
+  // --- authenticate --------------------------------------------------------
 
   it('should not throw when connection succeeds', async () => {
     await expect(provider.authenticate()).resolves.toBeUndefined();
@@ -705,7 +718,7 @@ describe('SshProvider', () => {
     await expect(provider.authenticate()).rejects.toThrow(ProviderError);
   });
 
-  // ─── rename ──────────────────────────────────────────────────────────────
+  // --- rename --------------------------------------------------------------
 
   it('should rename a file and make old path unavailable', async () => {
     const ref = await uploadBuf(provider, 'shard_0.bfs.1.tmp', Buffer.from('payload'));
@@ -722,7 +735,7 @@ describe('SshProvider', () => {
     expect(names).toContain('shard_0.bfs.1');
   });
 
-  // ─── updateShardHeader ───────────────────────────────────────────────────
+  // --- updateShardHeader ---------------------------------------------------
 
   it('should update shard header, keep payload intact, and recompute checksum', async () => {
     const payload = Buffer.alloc(256, 0xab);
@@ -770,7 +783,7 @@ describe('SshProvider', () => {
     await expect(provider.updateShardHeader(ref, newHeaderData)).rejects.toThrow(ProviderError);
   });
 
-  // ─── listVaults ──────────────────────────────────────────────────────────
+  // --- listVaults ----------------------------------------------------------
 
   it('should list vault directories from basePath', async () => {
     mockState.dirs.add('/backup/vault-a');
@@ -783,7 +796,7 @@ describe('SshProvider', () => {
     expect(vaults.sort()).toEqual(['vault-a', 'vault-b']);
   });
 
-  // ─── getSize ──────────────────────────────────────────────────────────────
+  // --- getSize --------------------------------------------------------------
 
   describe('getSize', () => {
     it('should return shard size via stat without transferring the payload', async () => {
@@ -802,7 +815,7 @@ describe('SshProvider', () => {
     });
   });
 
-  // ─── downloadHeader ───────────────────────────────────────────────────────
+  // --- downloadHeader -------------------------------------------------------
 
   describe('downloadHeader', () => {
     it('should pull the whole file when size <= maxBytes', async () => {
@@ -839,12 +852,12 @@ describe('SshProvider', () => {
     });
   });
 
-  // ─── configureInteractive (dual-auth) ─────────────────────────────────────
+  // --- configureInteractive (dual-auth) -------------------------------------
 
   describe('configureInteractive', () => {
     it('should prompt for all fields and return a password-method config', async () => {
       // choose returns the first option = password auth (option order [password, key]).
-      // confirm → true accepts the TOFU host-key prompt so a fingerprint is pinned.
+      // confirm -> true accepts the TOFU host-key prompt so a fingerprint is pinned.
       const { io } = scriptIo({ ask: interactiveAsk, askSecret: () => 'supersecret', choose: (_m, o) => o[0] ?? '', confirm: () => true });
       const { io: ctorIO } = createMockProviderIO();
       const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, ctorIO);
@@ -856,7 +869,7 @@ describe('SshProvider', () => {
     });
 
     it('should collect a private key by PATH only (never prompt to paste the key body)', async () => {
-      // choose returns the second option = key auth. No passphrase (askSecret → '').
+      // choose returns the second option = key auth. No passphrase (askSecret -> '').
       const { io, calls } = scriptIo({ ask: interactiveAsk, askSecret: () => '', choose: (_m, o) => o[1] ?? '', confirm: () => true });
       const { io: ctorIO } = createMockProviderIO();
       const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, ctorIO);
@@ -895,8 +908,8 @@ describe('SshProvider', () => {
     });
 
     // configureInteractive owns TOFU: after collecting parameters it connects,
-    // reads the host key, consults ~/.ssh/known_hosts (entry → trust silently),
-    // else prompts io.confirm and pins host_key_fingerprint on acceptance —
+    // reads the host key, consults ~/.ssh/known_hosts (entry -> trust silently),
+    // else prompts io.confirm and pins host_key_fingerprint on acceptance -
     // because `bfs init` persists ONLY configureInteractive's result, not the
     // probeConnection connect. The TOFU host-key scan captures the key during the
     // handshake and does not require the private key file to be readable.
@@ -940,7 +953,7 @@ describe('SshProvider', () => {
     });
   });
 
-  // ─── configureFromFlags ───────────────────────────────────────────────────
+  // --- configureFromFlags ---------------------------------------------------
 
   describe('configureFromFlags', () => {
     it('should throw ProviderError when no config source is given', async () => {
@@ -1041,7 +1054,7 @@ describe('SshProvider', () => {
     });
   });
 
-  // ─── validateConfig ───────────────────────────────────────────────────────
+  // --- validateConfig -------------------------------------------------------
 
   describe('validateConfig', () => {
     it('should return [] for a valid password config', () => {
@@ -1083,7 +1096,7 @@ describe('SshProvider', () => {
     });
   });
 
-  // ─── describeConfig ───────────────────────────────────────────────────────
+  // --- describeConfig -------------------------------------------------------
 
   describe('describeConfig', () => {
     it('should include host, port, user, and path', () => {
@@ -1098,7 +1111,7 @@ describe('SshProvider', () => {
       expect(desc).toContain('/backup');
     });
 
-    it('should mask the password field — no plaintext, asterisks present', () => {
+    it('should mask the password field - no plaintext, asterisks present', () => {
       const { io } = createMockProviderIO();
       const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
 
@@ -1108,7 +1121,7 @@ describe('SshProvider', () => {
       expect(desc).toMatch(/\*{3,}/);
     });
 
-    it('should mask the passphrase field — no plaintext, asterisks present', () => {
+    it('should mask the passphrase field - no plaintext, asterisks present', () => {
       const { io } = createMockProviderIO();
       const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
 
@@ -1120,7 +1133,7 @@ describe('SshProvider', () => {
     });
   });
 
-  // ─── getSecretFields ──────────────────────────────────────────────────────
+  // --- getSecretFields ------------------------------------------------------
 
   describe('getSecretFields', () => {
     it('should return ["password", "passphrase"]', () => {
@@ -1130,10 +1143,10 @@ describe('SshProvider', () => {
     });
   });
 
-  // ─── probeConnection ──────────────────────────────────────────────────────
+  // --- probeConnection ------------------------------------------------------
 
   describe('probeConnection', () => {
-    it('should upload, download, compare, and clean up — leaving no residue', async () => {
+    it('should upload, download, compare, and clean up - leaving no residue', async () => {
       await provider.probeConnection();
 
       const refs = await provider.list();
@@ -1146,7 +1159,7 @@ describe('SshProvider', () => {
     });
   });
 
-  // ─── verifyShard ──────────────────────────────────────────────────────────
+  // --- verifyShard ----------------------------------------------------------
 
   describe('verifyShard', () => {
     const IDENTITY = { vault_id: '550e8400-e29b-41d4-a716-446655440000', shard_index: 0, version: 1 };
@@ -1195,13 +1208,13 @@ describe('SshProvider', () => {
     });
   });
 
-  // ─── host-key verification (TOFU + known_hosts, CI gate) ───────────────────
+  // --- host-key verification (TOFU + known_hosts, CI gate) -------------------
   //
   // GUESSED API surfaced in the report:
   //  - The provider builds `cfg.hostVerifier(key, cb)`; cb(true) trusts, cb(false)
   //    rejects. A rejection makes connect emit an error; withClient surfaces a
-  //    host-key mismatch (pin set, presented fp !== pin) as TamperDetectedError —
-  //    a precise MITM signal uniform with FTP — and every other host-key refusal
+  //    host-key mismatch (pin set, presented fp !== pin) as TamperDetectedError -
+  //    a precise MITM signal uniform with FTP - and every other host-key refusal
   //    (@revoked, TOFU decline) as ProviderError/HostKeyDeclinedError.
   //  - Precedence: a pinned `host_key_fingerprint` in config wins; otherwise
   //    `~/.ssh/known_hosts` is consulted; otherwise TOFU (io.confirm) interactively,
@@ -1231,7 +1244,7 @@ describe('SshProvider', () => {
       await expect(p.authenticate()).rejects.toThrow(TamperDetectedError);
     });
 
-    // NEW CONTRACT (RED until GREEN): the classic MITM — a valid pin is configured,
+    // NEW CONTRACT (RED until GREEN): the classic MITM - a valid pin is configured,
     // but an impostor at the same address answers the handshake with a DIFFERENT
     // host key (fp !== pin). This is exactly what the pin exists to catch, so the
     // rejection must be TamperDetectedError, not a generic ProviderError.
@@ -1282,7 +1295,7 @@ describe('SshProvider', () => {
 
     // The pin in config.json is authoritative for trust: a wrong pin refuses even
     // when ~/.ssh/known_hosts holds the correct key as a (non-revoked) trusted
-    // line. Only an @revoked entry overrides a pin — see the hardening block.
+    // line. Only an @revoked entry overrides a pin - see the hardening block.
     it('should let a config pin override known_hosts (pin authoritative)', async () => {
       const home = await makeTempHome();
       await fs.writeFile(path.join(home, '.ssh', 'known_hosts'), `sshhost ssh-ed25519 ${SERVER_KEY.toString('base64')}\n`, 'utf8');
@@ -1292,7 +1305,7 @@ describe('SshProvider', () => {
       const p = new SshProvider(makeConfig({ host_key_fingerprint: 'SHA256:deadbeefdeadbeefdeadbeefdeadbeef' }), io);
       p.setVaultName('testvault');
 
-      // Pin is authoritative but does not match the presented key → host-key
+      // Pin is authoritative but does not match the presented key -> host-key
       // mismatch, which surfaces as TamperDetectedError under the new contract.
       await expect(p.authenticate()).rejects.toThrow(TamperDetectedError);
     });
@@ -1322,13 +1335,62 @@ describe('SshProvider', () => {
 
       await expect(p.authenticate()).resolves.toBeUndefined();
     });
+
+    // The opt-in is consent given up front, not a mode. An operator who passed
+    // `--accept-new-host-key` has already answered the identity question; asking
+    // it again adds no decision, only a repetition (a new server has a new key by
+    // definition). So the opt-in settles the question whether or not anyone is at
+    // the keyboard - the same order FTPS uses (decideCertTrust checks
+    // accept_new_cert before the mode). `confirm` is scripted to REFUSE, so a run
+    // that still asks fails here rather than passing on a friendly answer.
+    it('should accept a new host without prompting when accept_new_host_key is set, even with an operator present', async () => {
+      const { io, calls } = scriptIo({ confirm: () => false, interactive: true });
+      const p = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), io);
+      p.setVaultName('testvault');
+
+      await expect(p.authenticate()).resolves.toBeUndefined();
+      expect(calls.some((c) => c.kind === 'confirm')).toBe(false);
+    });
+
+    // Guard for the order above: revocation is checked FIRST and beats every
+    // source of trust (fail-closed), the opt-in included. Every host-key refusal
+    // surfaces the same ProviderError, so the reason is asserted through the warn
+    // entry - without it this passes even if the revocation notice is dropped.
+    it('should still refuse an @revoked key when accept_new_host_key is set on a terminal', async () => {
+      const home = await makeTempHome();
+      await fs.writeFile(path.join(home, '.ssh', 'known_hosts'), `@revoked sshhost ssh-ed25519 ${SERVER_KEY.toString('base64')}\n`, 'utf8');
+      mockState.homeDir = home;
+
+      const { io, calls } = scriptIo({ confirm: () => true, interactive: true });
+      const p = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), io);
+      p.setVaultName('testvault');
+
+      await expect(p.authenticate()).rejects.toThrow(ProviderError);
+      expect(calls.some((c) => c.kind === 'confirm')).toBe(false);
+      expect(calls.some((c) => c.kind === 'warn' && c.text.includes('revoked'))).toBe(true);
+    });
+
+    // Guard for the other end of the ladder: the pin stays authoritative. The
+    // opt-in and a pin travel together in every config the flag produces (and in
+    // every SSH provider the e2e harness builds), so an opt-in check placed above
+    // the pin would silently switch host-key MITM detection off for all of them.
+    it('should still refuse a mismatched pin when accept_new_host_key is set on a terminal', async () => {
+      const { io, calls } = scriptIo({ confirm: () => true, interactive: true });
+      const p = new SshProvider(makeConfig({ host_key_fingerprint: SERVER_FP, accept_new_host_key: true }), io);
+      p.setVaultName('testvault');
+
+      mockState.hostKey = Buffer.from('impostor-ssh-host-key');
+
+      await expect(p.authenticate()).rejects.toThrow(TamperDetectedError);
+      expect(calls.some((c) => c.kind === 'confirm')).toBe(false);
+    });
   });
 
-  // ─── H1: --accept-new-host-key must PIN (real TOFU), not trust every time ──
+  // --- H1: --accept-new-host-key must PIN (real TOFU), not trust every time --
   //
   // Regression guard for a MITM window: `--accept-new-host-key` on a
   // non-interactive `provider add`/`init` (no `--known-host`) must capture the
-  // host key on first contact and PIN its fingerprint into the config — the
+  // host key on first contact and PIN its fingerprint into the config - the
   // OpenSSH `accept-new` semantics the flag name implies. Trusting whatever key
   // is presented on EVERY later connection ("accept every time") leaves a
   // permanent MITM window: an impostor at the same address intercepts the
@@ -1360,15 +1422,15 @@ describe('SshProvider', () => {
       // An impostor now answers at the same address with a DIFFERENT host key.
       mockState.hostKey = Buffer.from('impostor-ssh-host-key');
 
-      // Presented impostor key differs from the pinned fp → host-key mismatch →
+      // Presented impostor key differs from the pinned fp -> host-key mismatch ->
       // TamperDetectedError under the new contract.
       await expect(p.authenticate()).rejects.toThrow(TamperDetectedError);
     });
 
-    // Guard: once a pin exists, --accept-new-host-key is a no-op — it must NOT
+    // Guard: once a pin exists, --accept-new-host-key is a no-op - it must NOT
     // recapture and overwrite the authoritative pin with whatever key the server
-    // now presents. (The counterpart — a mismatched key being refused against an
-    // existing pin — is already covered by "should surface TamperDetectedError
+    // now presents. (The counterpart - a mismatched key being refused against an
+    // existing pin - is already covered by "should surface TamperDetectedError
     // when the pinned fingerprint does not match the server key" in the host-key
     // verification block; not duplicated here.)
     it('should NOT overwrite an existing --known-host pin when --accept-new-host-key is also given', async () => {
@@ -1380,13 +1442,44 @@ describe('SshProvider', () => {
 
       expect(config.host_key_fingerprint).toBe(EXISTING_PIN);
     });
+
+    // The capture must not depend on whether anyone is watching. `bfs repair` and
+    // `bfs provider remove --strategy` forward the adapter flags with an
+    // INTERACTIVE io (neither requires --ci) and persist what comes back.
+    // Capturing only off a terminal therefore leaves those runs writing
+    // `accept_new_host_key: true` with a null pin - the standing "trust any key at
+    // this address, every connection" window this block exists to close.
+    it('should pin the presented fingerprint on a terminal too when --accept-new-host-key is given', async () => {
+      const { io, calls } = scriptIo({ interactive: true, confirm: () => false });
+      const p = new SshProvider({ id: 'p2', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--host', 'sshhost', '--user', 'sshuser', '--password', 'p', '--path', '/backup', '--accept-new-host-key'] }));
+
+      expect(config.host_key_fingerprint).toBe(SERVER_FP);
+      // Silently: the flag already carries the operator's answer.
+      expect(calls.some((c) => c.kind === 'confirm')).toBe(false);
+    });
+
+    // Counterpart of the non-interactive guard above. Worth knowing when reading
+    // a green run: it only tells "an explicit pin survives" as long as the
+    // capture fires on this path at all - with no capture there would be nothing
+    // to overwrite and it would pass vacuously.
+    it('should NOT overwrite an existing --known-host pin on a terminal either', async () => {
+      const EXISTING_PIN = 'SHA256:existingpinexistingpinexistingpinexistingpin';
+      const { io } = scriptIo({ interactive: true });
+      const p = new SshProvider({ id: 'p2', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--host', 'sshhost', '--user', 'sshuser', '--password', 'p', '--path', '/backup', '--known-host', EXISTING_PIN, '--accept-new-host-key'] }));
+
+      expect(config.host_key_fingerprint).toBe(EXISTING_PIN);
+    });
   });
 
-  // ─── M1: per-operation SFTP idle timeout (DoS) ───────────────────────────
+  // --- M1: per-operation SFTP idle timeout (DoS) ---------------------------
   //
   // A malicious or hung-but-alive SSH server completes the handshake (so `ready`
   // fires, passing readyTimeout) then never answers an SFTP request. Without a
-  // per-operation idle timeout the operation — and the whole CLI command — hangs
+  // per-operation idle timeout the operation - and the whole CLI command - hangs
   // forever. FTP survives this via basic-ftp's 10s socket timeout; SSH must match
   // with an idle timeout reset on each received payload. Fake timers make the wait
   // instant: after advancing past the idle window the op must have REJECTED; while
@@ -1399,7 +1492,7 @@ describe('SshProvider', () => {
     // Every connection's host-key check reads ~/.ssh/known_hosts. A real
     // fs.readFile is a libuv thread-pool macrotask that does NOT settle under
     // fake timers, so the handshake would never reach `ready` and the idle timer
-    // under test would never be armed. Resolve the (absent — homeDir points at a
+    // under test would never be armed. Resolve the (absent - homeDir points at a
     // non-existent dir) read as a microtask-queue rejection so the handshake
     // completes deterministically; the idle-timeout behavior asserted below is
     // untouched.
@@ -1453,7 +1546,7 @@ describe('SshProvider', () => {
       }
     });
 
-    // The idle timeout must RESET on each received payload — a slow-but-
+    // The idle timeout must RESET on each received payload - a slow-but-
     // progressing transfer completes, only a genuine stall fails. 4 chunks 8s
     // apart (< the 10s idle window) total 32s: a correct idle timeout resolves;
     // a WRONG total-operation timeout would cut it at 10s. Guards against
@@ -1487,9 +1580,9 @@ describe('SshProvider', () => {
     });
   });
 
-  // ─── hardening (L1 revoked host key, L2 path traversal, L4 auth conflict, L6 idempotent delete) ───
+  // --- hardening (L1 revoked host key, L2 path traversal, L4 auth conflict, L6 idempotent delete) ---
   describe('hardening', () => {
-    // L1 — an @revoked entry in ~/.ssh/known_hosts marks the key compromised; it
+    // L1 - an @revoked entry in ~/.ssh/known_hosts marks the key compromised; it
     // must HARD-REFUSE, never fall through to a TOFU confirm that could accept the
     // revoked key.
     it('should hard-refuse a host key marked @revoked in known_hosts', async () => {
@@ -1507,7 +1600,7 @@ describe('SshProvider', () => {
 
     // A key revoked in ~/.ssh/known_hosts is compromised and must be hard-refused
     // even when its fingerprint is PINNED in the provider config. Revocation from
-    // any source wins over trust (fail-closed) — the pin alone must not authorize
+    // any source wins over trust (fail-closed) - the pin alone must not authorize
     // a connection the operator marked @revoked. The refusal surfaces the reason
     // (revoked) so the operator understands why, not a generic transport failure.
     it('should hard-refuse a @revoked host key even when the fingerprint is pinned', async () => {
@@ -1516,7 +1609,7 @@ describe('SshProvider', () => {
       mockState.homeDir = home;
 
       // Pin equals the presented key's fingerprint. Revocation is checked before
-      // the pin, so a pinned-but-revoked key is refused (fail-closed) — the pin
+      // the pin, so a pinned-but-revoked key is refused (fail-closed) - the pin
       // alone does not authorize a connection the operator marked @revoked.
       const { io, calls } = scriptIo({ confirm: () => true });
       const p = new SshProvider(makeConfig({ host_key_fingerprint: SERVER_FP }), io);
@@ -1527,7 +1620,7 @@ describe('SshProvider', () => {
       expect(calls.some((c) => c.kind === 'warn' && /revoked/i.test(c.text))).toBe(true); // reason surfaced
     });
 
-    // L2 — a ref.path with a traversal segment must be rejected before it is
+    // L2 - a ref.path with a traversal segment must be rejected before it is
     // joined into the remote path, so a crafted filename cannot escape the vault.
     it('should reject a download whose ref.path contains a traversal segment', async () => {
       const { io } = createMockProviderIO();
@@ -1545,7 +1638,7 @@ describe('SshProvider', () => {
       await expect(p.delete({ provider_id: 'test-ssh', path: '../evil' })).rejects.toThrow(UnsafePathError);
     });
 
-    // L4 — validateConfig must reject a config carrying BOTH a password and a key,
+    // L4 - validateConfig must reject a config carrying BOTH a password and a key,
     // matching configureFromFlags (which throws ssh_auth_conflict). A hand-edited
     // config with both must not silently validate.
     it('should reject a config that carries both a password and a private key', () => {
@@ -1557,7 +1650,7 @@ describe('SshProvider', () => {
       expect(errors.length).toBeGreaterThan(0);
     });
 
-    // L6 — delete must be idempotent: an already-absent shard is success, not a
+    // L6 - delete must be idempotent: an already-absent shard is success, not a
     // throw. Otherwise prune emits a false "possible orphan" warning for data that
     // is already gone.
     it('should treat deleting an already-absent shard as success (idempotent)', async () => {
@@ -1565,11 +1658,11 @@ describe('SshProvider', () => {
       const p = new SshProvider(makeConfig(), io);
       p.setVaultName('testvault');
 
-      // shard_9.bfs.1 was never uploaded → absent from the mock filesystem.
+      // shard_9.bfs.1 was never uploaded -> absent from the mock filesystem.
       await expect(p.delete({ provider_id: 'test-ssh', path: 'shard_9.bfs.1' })).resolves.toBeUndefined();
     });
 
-    // F1 — delete removes the header sidecar together with the shard, so prune
+    // F1 - delete removes the header sidecar together with the shard, so prune
     // (which calls delete) leaves no orphaned hdr_ file behind on the medium.
     it('should remove the header sidecar together with the shard on delete', async () => {
       const { io } = createMockProviderIO();
@@ -1585,7 +1678,7 @@ describe('SshProvider', () => {
     });
   });
 
-  // ─── auth-defaults (~/.ssh key discovery) ─────────────────────────────────
+  // --- auth-defaults (~/.ssh key discovery) ---------------------------------
 
   describe('auth defaults', () => {
     it('should default to the ~/.ssh/id_ed25519 key when no credential flag is given', async () => {
@@ -1639,7 +1732,7 @@ describe('SshProvider', () => {
     });
   });
 
-  // ─── connectForRecovery (anti-phishing: show host BEFORE the secret) ───────
+  // --- connectForRecovery (anti-phishing: show host BEFORE the secret) -------
 
   describe('connectForRecovery', () => {
     type WithRecovery = SshProvider & { connectForRecovery(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<Nullable<string>> };
@@ -1711,11 +1804,11 @@ describe('SshProvider', () => {
       expect(calls.some((c) => c.kind === 'askSecret')).toBe(false);
     });
 
-    // Transport failure ≠ rejected secret. A "connection lost before the
+    // Transport failure != rejected secret. A "connection lost before the
     // handshake" is a code-less/level-less transport error (wrapped as a
     // ProviderError), not an authentication rejection. In a NON-interactive
     // recovery (io.interactive === false) there is no operator to answer, so
-    // connectForRecovery must never fall through to io.askSecret — it must
+    // connectForRecovery must never fall through to io.askSecret - it must
     // surface the transport failure instead of silently mistaking it for a
     // wrong secret and prompting into a closed stdin.
     it('should NOT prompt for a secret in non-interactive recovery when the connection fails with a transport error', async () => {
@@ -1727,7 +1820,7 @@ describe('SshProvider', () => {
           return '';
         },
       });
-      // Connect cannot be established at all → code-less, level-less error →
+      // Connect cannot be established at all -> code-less, level-less error ->
       // wrapped as a transport ProviderError (NOT level 'client-authentication').
       mockState.connectShouldFail = true;
       const sshProvider = new SshProvider(makeConfig({ host: 'sshhost', port: 2222, user: 'victim' }), io) as WithRecovery;
@@ -1742,7 +1835,7 @@ describe('SshProvider', () => {
       expect(askSecretCalled).toBe(false);
     });
 
-    // Transport failure ≠ rejected secret, in INTERACTIVE mode too. A pooled
+    // Transport failure != rejected secret, in INTERACTIVE mode too. A pooled
     // secret is present but the host is unreachable: the transport failure must
     // surface (reject) rather than be mistaken for a wrong secret and drive an
     // endless password re-prompt. Guards the classification, not just the
@@ -1762,7 +1855,7 @@ describe('SshProvider', () => {
     // A REJECTED credential (ssh2 level 'client-authentication') IS distinct from
     // a transport failure: a wrong pooled secret must fall through to the
     // interactive prompt (here the operator declines with a blank secret). This
-    // is the counterpart to the transport case above — together they prove the
+    // is the counterpart to the transport case above - together they prove the
     // transport-vs-auth classification, not just "never prompts".
     it('should fall through to the interactive prompt when a pooled secret is rejected', async () => {
       const { io, calls } = scriptIo({ interactive: true, askSecret: () => '' });
@@ -1777,17 +1870,17 @@ describe('SshProvider', () => {
     });
   });
 
-  // ─── configureInteractiveForEdit (offline-first host-key handling) ─────────
+  // --- configureInteractiveForEdit (offline-first host-key handling) ---------
   //
   // `bfs provider edit <ssh>` must keep the offline-edit contract while still
   // handling host-key trust intelligently:
-  //   (1) host AND port unchanged with a fingerprint already pinned → reuse the
+  //   (1) host AND port unchanged with a fingerprint already pinned -> reuse the
   //       pin WITHOUT contacting the server;
-  //   (2) identity changed (host/port) or no old pin AND the server unreachable →
+  //   (2) identity changed (host/port) or no old pin AND the server unreachable ->
   //       drop into an OFFLINE MENU (io.choose: paste / use known_hosts / leave
   //       unset / exit) instead of failing;
   //   (3) identity changed AND the server reachable but the operator refuses the
-  //       shown key (or the key is @revoked) → abort with HostKeyDeclinedError.
+  //       shown key (or the key is @revoked) -> abort with HostKeyDeclinedError.
   describe('configureInteractiveForEdit', () => {
     const EXIST_HOST = 'sshhost';
     const NEW_HOST = 'newsshhost';
@@ -1845,11 +1938,11 @@ describe('SshProvider', () => {
       return { host: EXIST_HOST, port: 22, user: EDIT_USER, password: 'old-pw', path: '/backup', auth_method: 'password', host_key_fingerprint: OLD_PIN, ...overrides };
     }
 
-    // ── Scenario 1: host + port unchanged, fingerprint already pinned ─────────
+    // -- Scenario 1: host + port unchanged, fingerprint already pinned ---------
 
     it('reuses the pinned fingerprint and does not contact the server when host and port are unchanged', async () => {
       // connectShouldFail proves NO server contact: a reuse path never dials, so
-      // a dead server is irrelevant. The delegating stub dials and rejects → RED.
+      // a dead server is irrelevant. The delegating stub dials and rejects -> RED.
       mockState.connectShouldFail = true;
       const { io } = scriptIo({ ask: fieldAsk({ host: EXIST_HOST, port: '22', user: EDIT_USER, path: '/backup' }), askSecret: () => 'rotated-password', choose: (_m, o) => o[0] ?? '' });
       const p = editProvider(io);
@@ -1865,15 +1958,15 @@ describe('SshProvider', () => {
       const ctx: ConfigureEditContext = { existingConfig: existingConfig() };
 
       await expect(p.configureInteractiveForEdit(io, ctx)).resolves.toBeDefined();
-      // No TOFU confirm and no offline host-key menu — the pin is reused silently.
+      // No TOFU confirm and no offline host-key menu - the pin is reused silently.
       expect(calls.some((c) => c.kind === 'confirm')).toBe(false);
       expect(calls.some((c) => c.kind === 'choose' && (c.options?.length ?? 0) >= 3)).toBe(false);
     });
 
-    // ── Scenario 2: identity changed, server unreachable → offline menu ───────
+    // -- Scenario 2: identity changed, server unreachable -> offline menu -------
 
     it('falls back to the offline menu (no known_hosts option) and pins a pasted SHA256 fingerprint when the server is unreachable and the host changed', async () => {
-      mockState.connectShouldFail = true; // server down → offline menu
+      mockState.connectShouldFail = true; // server down -> offline menu
       let fpAsks = 0;
       const base = fieldAsk({ host: NEW_HOST, port: '22', user: EDIT_USER, path: '/backup' });
       const ask = (prompt: string): string => {
@@ -1891,7 +1984,7 @@ describe('SshProvider', () => {
       expect(fpAsks).toBeGreaterThanOrEqual(1);
       const offlineMenu = calls.find((c) => c.kind === 'choose' && (c.options?.length ?? 0) >= 3);
       expect(offlineMenu).toBeDefined();
-      // No known_hosts key for NEW_HOST (default non-existent home) → the menu
+      // No known_hosts key for NEW_HOST (default non-existent home) -> the menu
       // must NOT offer the known_hosts option.
       expect(offlineMenu?.options?.some((o) => /known.?hosts/i.test(o))).toBe(false);
     });
@@ -1912,7 +2005,7 @@ describe('SshProvider', () => {
       const ctx: ConfigureEditContext = { existingConfig: existingConfig({ host: EXIST_HOST }) };
 
       await expect(p.configureInteractiveForEdit(io, ctx)).resolves.toMatchObject({ host_key_fingerprint: PASTED_FP });
-      // The bad format is rejected → the fingerprint is asked again, and the exact
+      // The bad format is rejected -> the fingerprint is asked again, and the exact
       // invalid-format warning surfaces.
       expect(fpAsks).toBeGreaterThanOrEqual(2);
       expect(calls.some((c) => c.kind === 'warn' && c.text === fmtFor('en', 'ssh_edit_fingerprint_invalid'))).toBe(true);
@@ -1922,7 +2015,7 @@ describe('SshProvider', () => {
       mockState.connectShouldFail = true;
       const base = fieldAsk({ host: NEW_HOST, port: '22', user: EDIT_USER, path: '/backup' });
       // Empty input at the paste prompt (Enter pressed / stdin closed) must abandon
-      // the paste and cancel — never spin the re-prompt loop forever.
+      // the paste and cancel - never spin the re-prompt loop forever.
       const ask = (prompt: string): string => (/fingerprint|sha256|odcisk|paste|wklej/i.test(prompt) ? '' : base(prompt));
       const { io } = scriptIo({ ask, askSecret: () => 'pw', choose: chooseOffline('paste') });
       const p = editProvider(io);
@@ -1933,7 +2026,7 @@ describe('SshProvider', () => {
 
     it('surfaces the sole known_hosts key as a recommended proposal showing its fingerprint and pins it', async () => {
       const home = await makeTempHome();
-      // Exactly one non-revoked key for NEW_HOST → surfaced as a concrete, recommended proposal.
+      // Exactly one non-revoked key for NEW_HOST -> surfaced as a concrete, recommended proposal.
       await fs.writeFile(path.join(home, '.ssh', 'known_hosts'), `${NEW_HOST} ssh-ed25519 ${SERVER_KEY.toString('base64')}\n`, 'utf8');
       mockState.homeDir = home;
       mockState.connectShouldFail = true;
@@ -1971,7 +2064,7 @@ describe('SshProvider', () => {
       mockState.homeDir = home;
       mockState.connectShouldFail = true;
 
-      // A single flat menu — pick the ed25519 proposal directly (no separate key picker).
+      // A single flat menu - pick the ed25519 proposal directly (no separate key picker).
       const { io, calls } = scriptIo({ ask: fieldAsk({ host: NEW_HOST, port: '22', user: EDIT_USER, path: '/backup' }), askSecret: () => 'pw', choose: (_m, o) => o.find((x) => x.includes(FP_ED)) ?? o[0] ?? '' });
       const p = editProvider(io);
       const ctx: ConfigureEditContext = { existingConfig: existingConfig({ host: EXIST_HOST }) };
@@ -2015,11 +2108,11 @@ describe('SshProvider', () => {
       await expect(p.configureInteractiveForEdit(io, ctx)).rejects.toThrow(HostKeyDeclinedError);
     });
 
-    // ── Scenario 3: identity changed, server reachable, operator declines ─────
+    // -- Scenario 3: identity changed, server reachable, operator declines -----
 
     it('throws HostKeyDeclinedError when the host changed, the server is reachable, and the operator declines the key', async () => {
       // Reachable server, no known_hosts, no reusable pin (host changed): the
-      // provider shows the fingerprint and the operator refuses → abort. It must
+      // provider shows the fingerprint and the operator refuses -> abort. It must
       // NOT fall into the offline menu (the server IS reachable).
       const { io, calls } = scriptIo({ ask: fieldAsk({ host: NEW_HOST, port: '22', user: EDIT_USER, path: '/backup' }), askSecret: () => 'pw', confirm: () => false });
       const p = editProvider(io);
@@ -2029,7 +2122,7 @@ describe('SshProvider', () => {
       expect(calls.some((c) => c.kind === 'choose' && (c.options?.length ?? 0) >= 3)).toBe(false);
     });
 
-    // ── Scenario 4: identity changed, server reachable, key @revoked ──────────
+    // -- Scenario 4: identity changed, server reachable, key @revoked ----------
 
     it('warns ssh_host_key_revoked and throws HostKeyDeclinedError when the server key is @revoked during an online edit', async () => {
       const home = await makeTempHome();
@@ -2045,8 +2138,8 @@ describe('SshProvider', () => {
       expect(calls.some((c) => c.kind === 'warn' && c.text === fmtFor('en', 'ssh_host_key_revoked', `${EDIT_USER}@${NEW_HOST}:22`))).toBe(true);
     });
 
-    // ── Scenario 5 (GUARD, already green): identity changed, reachable, accept ─
-    // Not RED — documents that the online accept path pins the LIVE server
+    // -- Scenario 5 (GUARD, already green): identity changed, reachable, accept -
+    // Not RED - documents that the online accept path pins the LIVE server
     // fingerprint, so the offline-first refactor must preserve it.
     it('pins the live server fingerprint when the host changed, the server is reachable, and the operator accepts', async () => {
       const { io } = scriptIo({ ask: fieldAsk({ host: NEW_HOST, port: '22', user: EDIT_USER, path: '/backup' }), askSecret: () => 'pw', confirm: () => true });
@@ -2058,11 +2151,11 @@ describe('SshProvider', () => {
   });
 });
 
-// ─── Header sidecar (BFSH) ─────────────────────────────────────────────────
+// --- Header sidecar (BFSH) -------------------------------------------------
 // SSH is a built-in provider, so it keeps a relocated shard's updated header in
 // an `hdr_i.bfs.V` sidecar next to the shard (payload write-once). The `hdr_`
 // prefix keeps it out of every `list('shard_')` scan structurally.
-describe('SshProvider — header sidecar (BFSH)', () => {
+describe('SshProvider - header sidecar (BFSH)', () => {
   let provider: SshProvider;
   const shardRef = { provider_id: 'test-ssh', path: 'shard_0.bfs.1' };
   const SIDECAR_KEY = '/backup/testvault/hdr_0.bfs.1';

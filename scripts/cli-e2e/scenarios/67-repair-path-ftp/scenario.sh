@@ -1,8 +1,8 @@
 # shellcheck shell=bash
 # bfs repair on an FTP provider: the shard's remote storage moves to a new path
 # (a relocated remote dir / changed mount point). `bfs repair` rewrites the config
-# AND the sibling shards' location maps over the network — the payload is NOT
-# rebuilt, only the header coordinates — and the backup restores from the FTP
+# AND the sibling shards' location maps over the network - the payload is NOT
+# rebuilt, only the header coordinates - and the backup restores from the FTP
 # shard at its new remote path. (Sibling-header propagation is proven for the
 # local case by scenarios 60/62/65; a recovery-from-sibling proof for an FTP
 # sibling is not repeated here because the FTP password is stripped from the
@@ -16,7 +16,7 @@ REQUIRES_FTP=1
 scenario_run() {
   local vault="$SC_DIR/vault" base="$SC_DIR/baseline.txt" name="bfs67"
   make_fixtures "$vault"
-  build_pool_seq "$SC_DIR" "$name" local local ftp   # p0 L · p1 L · p2 F
+  build_pool_seq "$SC_DIR" "$name" local local ftp   # p0 L - p1 L - p2 F
 
   run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 2 --parity-shards 1 "${PROVIDER_ARGS[@]}"
@@ -29,7 +29,7 @@ scenario_run() {
   # Relocate the FTP provider p2's remote storage, then repair to the new path.
   # The new connection config goes through a JSON file (the documented
   # credential-file form): a lone POSIX remote path in argv would be rewritten to
-  # a Windows path by Git-Bash/MSYS before the native bfs process sees it — the
+  # a Windows path by Git-Bash/MSYS before the native bfs process sees it - the
   # JSON content is not subject to that.
   local e="${PV_FTP_ENDPOINT[2]}"
   local oldremote="${PV_FTP_REMOTE[2]}"

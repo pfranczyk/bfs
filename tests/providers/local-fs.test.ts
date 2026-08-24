@@ -2,19 +2,40 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderError, UnsafePathError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
 import { buildShard, parseShardHeaderFromStream } from '../../src/core/shard-io.js';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
-import type { CliProviderInput, ProviderConfig, ShardHeader, ShardLocation } from '../../src/types/index.js';
+import type { CliProviderInput, ProviderConfig, ProviderIO, ShardHeader, ShardLocation, StorageProvider } from '../../src/types/index.js';
 
 function cliInput(overrides: Partial<CliProviderInput> = {}): CliProviderInput {
   return { name: overrides.name ?? 'test', rawArgs: overrides.rawArgs ?? [] };
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// --- Helpers ------------------------------------------------------------------
+
+/**
+ * Scratch directories handed out by writeConfigFile, emptied after every test -
+ * so a path it returns must not be used outside the test that asked for it.
+ */
+const configDirs: string[] = [];
+
+afterEach(async () => {
+  // Swallow removal errors: a test that already passed must not turn red because
+  // something else on the machine still held the file for a moment.
+  await Promise.all(configDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }).catch(() => {})));
+});
+
+/** Writes `content` as cfg.json in a fresh temp directory and returns the file path. */
+async function writeConfigFile(content: string): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-loc-'));
+  configDirs.push(dir);
+  const file = path.join(dir, 'cfg.json');
+  await fs.writeFile(file, content, 'utf8');
+  return file;
+}
 
 function makeConfig(basePath: string, id = 'test-local'): ProviderConfig {
   return { id, type: 'local', adapterPackage: null, config: { path: basePath } };
@@ -55,7 +76,7 @@ async function downloadBuf(provider: LocalFsProvider, ref: { provider_id: string
   return streamToBuffer(await provider.download(ref));
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// --- Tests --------------------------------------------------------------------
 
 describe('LocalFsProvider', () => {
   let tmpDir: string;
@@ -69,10 +90,11 @@ describe('LocalFsProvider', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  // ─── upload / download ────────────────────────────────────────────────────
+  // --- upload / download ----------------------------------------------------
 
   it('should upload and download identical data', async () => {
     const data = Buffer.from('hello, shard data');
@@ -98,7 +120,7 @@ describe('LocalFsProvider', () => {
     expect(ref.hash).toHaveLength(64); // SHA-256 hex
   });
 
-  // ─── list ─────────────────────────────────────────────────────────────────
+  // --- list -----------------------------------------------------------------
 
   it('should list uploaded files', async () => {
     await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('a'));
@@ -124,7 +146,7 @@ describe('LocalFsProvider', () => {
     expect(refs).toEqual([]);
   });
 
-  // ─── delete ───────────────────────────────────────────────────────────────
+  // --- delete ---------------------------------------------------------------
 
   it('should delete a file and remove it from list', async () => {
     const ref = await uploadBuf(provider, 'shard_0.bfs.1', Buffer.from('data'));
@@ -140,7 +162,7 @@ describe('LocalFsProvider', () => {
     await expect(provider.delete({ provider_id: 'test-local', path: 'nonexistent.bfs.1' })).resolves.toBeUndefined();
   });
 
-  // ─── healthCheck ──────────────────────────────────────────────────────────
+  // --- healthCheck ----------------------------------------------------------
 
   it('should return true for an existing path', async () => {
     expect(await provider.healthCheck()).toBe(true);
@@ -152,7 +174,7 @@ describe('LocalFsProvider', () => {
     expect(await badProvider.healthCheck()).toBe(false);
   });
 
-  // ─── authenticate ─────────────────────────────────────────────────────────
+  // --- authenticate ---------------------------------------------------------
 
   it('should succeed silently when path already exists', async () => {
     await expect(provider.authenticate()).resolves.toBeUndefined();
@@ -174,11 +196,11 @@ describe('LocalFsProvider', () => {
     await expect(p.authenticate()).rejects.toThrow(ProviderError);
   });
 
-  // Non-interactive (--ci / --bootstrap / no TTY): a missing base path must be
+  // Non-interactive (--ci / no TTY): a missing base path must be
   // created without prompting. A prompt has nobody to answer, so asking would
   // abort a scripted repair/recovery that restores to a machine where the
   // source paths don't exist. The mock has NO confirm answer, so if the create
-  // prompt were still reached it would resolve false and this would reject —
+  // prompt were still reached it would resolve false and this would reject -
   // resolving proves the prompt was bypassed.
   it('should create the path without prompting when io is non-interactive', async () => {
     const newPath = path.join(tmpDir, 'ci-created-dir');
@@ -191,7 +213,7 @@ describe('LocalFsProvider', () => {
     expect(stat.isDirectory()).toBe(true);
   });
 
-  // ─── rename ───────────────────────────────────────────────────────────────
+  // --- rename ---------------------------------------------------------------
 
   it('should rename a file and make it available under the new name', async () => {
     const tmpBuf = Buffer.from('payload');
@@ -208,7 +230,7 @@ describe('LocalFsProvider', () => {
     expect(names).toContain('shard_0.bfs.1');
   });
 
-  // ─── updateShardHeader ────────────────────────────────────────────────────
+  // --- updateShardHeader ----------------------------------------------------
 
   it('should update shard header, keep payload intact, and recompute trailing checksum', async () => {
     const payload = Buffer.alloc(256, 0xab);
@@ -222,7 +244,7 @@ describe('LocalFsProvider', () => {
     const newShardForHeader = buildShard(updatedHeader, Buffer.alloc(0));
     // Extract just the header bytes (everything before the payload+checksum)
     // We built a shard with empty payload so: [header][0 payload][32 checksum]
-    // → header = newShardForHeader.subarray(0, length - 32)
+    // -> header = newShardForHeader.subarray(0, length - 32)
     const newHeaderData = newShardForHeader.subarray(0, newShardForHeader.length - 32);
 
     await provider.updateShardHeader(ref, newHeaderData);
@@ -240,12 +262,12 @@ describe('LocalFsProvider', () => {
     expect(h.location_map[0].remote_path).toBe('/new/path/shard_0.bfs.1');
   });
 
-  // ─── listVaults ───────────────────────────────────────────────────────────
+  // --- listVaults -----------------------------------------------------------
 
   it('should list vault directories under basePath', async () => {
     await fs.mkdir(path.join(tmpDir, 'vault-a'));
     await fs.mkdir(path.join(tmpDir, 'vault-b'));
-    // Also place a regular file — must be excluded
+    // Also place a regular file - must be excluded
     await fs.writeFile(path.join(tmpDir, 'not-a-vault.txt'), 'x');
 
     const { io } = createMockProviderIO();
@@ -260,7 +282,7 @@ describe('LocalFsProvider', () => {
     expect(await p.listVaults()).toEqual([]);
   });
 
-  // ─── getSize ──────────────────────────────────────────────────────────────
+  // --- getSize --------------------------------------------------------------
 
   describe('getSize', () => {
     it('should return the byte size of an existing shard via fs.stat', async () => {
@@ -284,7 +306,7 @@ describe('LocalFsProvider', () => {
     });
   });
 
-  // ─── downloadHeader ───────────────────────────────────────────────────────
+  // --- downloadHeader -------------------------------------------------------
 
   describe('downloadHeader', () => {
     it('should return exactly maxBytes for a shard larger than the limit', async () => {
@@ -332,7 +354,7 @@ describe('LocalFsProvider', () => {
     });
   });
 
-  // ─── configureInteractive ─────────────────────────────────────────────────
+  // --- configureInteractive -------------------------------------------------
 
   describe('configureInteractive', () => {
     it('should ask for base path and return config', async () => {
@@ -346,7 +368,106 @@ describe('LocalFsProvider', () => {
     });
   });
 
-  // ─── configureFromFlags ───────────────────────────────────────────────────
+  // --- configureInteractiveForEdit ------------------------------------------
+  //
+  // `bfs provider edit` exists for the moment the medium is NOT there: the drive
+  // was unplugged, the share moved, the mount point changed between machines.
+  // The add-time flow re-prompts until the directory exists, which is right when
+  // a backup is being created and wrong when its address is being corrected -
+  // the operator would have nothing to type. The edit-aware flow therefore lets
+  // a path that is not there yet be stored, once the operator stands behind it.
+  describe('configureInteractiveForEdit', () => {
+    it('should store a path that does not exist yet, once the operator confirms it', async () => {
+      const missing = path.join(tmpDir, 'not-mounted-yet');
+      const { io: base } = createMockProviderIO({ 'Base directory path:': missing });
+      let confirms = 0;
+      const io: ProviderIO = {
+        ...base,
+        async confirm(): Promise<boolean> {
+          confirms += 1;
+          return true;
+        },
+      };
+      const { io: ctorIO } = createMockProviderIO();
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, ctorIO);
+      expect(typeof p.configureInteractiveForEdit).toBe('function');
+
+      const config = await p.configureInteractiveForEdit?.(io, { existingConfig: { path: tmpDir } });
+
+      expect(config).toEqual({ path: missing });
+      expect(confirms).toBe(1);
+    });
+
+    it('should keep re-asking when the path cannot be reached at all, rather than offering it for confirmation', async () => {
+      // EACCES is forced rather than provoked: a permission wall that reproduces
+      // on Windows, Linux and macOS alike cannot be built from the filesystem.
+      const denied = path.join(tmpDir, 'walled-off');
+      const replies = [denied, tmpDir];
+      let asked = 0;
+      let confirms = 0;
+      vi.spyOn(fs, 'stat').mockImplementation(async (target) => {
+        if (String(target) === denied) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+        return { isDirectory: () => true } as never;
+      });
+      const { io: base } = createMockProviderIO();
+      const io: ProviderIO = {
+        ...base,
+        async ask(): Promise<string> {
+          const reply = replies[asked] ?? tmpDir;
+          asked += 1;
+          return reply;
+        },
+        async confirm(): Promise<boolean> {
+          confirms += 1;
+          return true;
+        },
+      };
+      const { io: ctorIO } = createMockProviderIO();
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, ctorIO);
+
+      const config = await p.configureInteractiveForEdit?.(io, { existingConfig: { path: tmpDir } });
+
+      // An unusable path is not something the operator can stand behind, so it is
+      // re-asked - the confirmation belongs to "not there yet", not "not allowed".
+      expect(config).toEqual({ path: tmpDir });
+      expect(asked).toBe(2);
+      expect(confirms).toBe(0);
+    });
+
+    it('should keep rejecting a path that exists but is not a directory', async () => {
+      const filePath = path.join(tmpDir, 'a-file.txt');
+      await fs.writeFile(filePath, 'x', 'utf8');
+      const replies = [filePath, tmpDir];
+      let asked = 0;
+      let confirms = 0;
+      const { io: base } = createMockProviderIO();
+      const io: ProviderIO = {
+        ...base,
+        async ask(): Promise<string> {
+          const reply = replies[asked] ?? tmpDir;
+          asked += 1;
+          return reply;
+        },
+        async confirm(): Promise<boolean> {
+          confirms += 1;
+          return true;
+        },
+      };
+      const { io: ctorIO } = createMockProviderIO();
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, ctorIO);
+      expect(typeof p.configureInteractiveForEdit).toBe('function');
+
+      const config = await p.configureInteractiveForEdit?.(io, { existingConfig: { path: tmpDir } });
+
+      // A file where a directory belongs is a typo, not an absent medium - it is
+      // re-asked, and nothing about it is put to the operator for confirmation.
+      expect(config).toEqual({ path: tmpDir });
+      expect(asked).toBe(2);
+      expect(confirms).toBe(0);
+    });
+  });
+
+  // --- configureFromFlags ---------------------------------------------------
 
   describe('configureFromFlags', () => {
     it('should default to ~/.bfs-local/<name> when filePath is null', async () => {
@@ -359,9 +480,7 @@ describe('LocalFsProvider', () => {
     });
 
     it('should read JSON file containing { path } when filePath is given', async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-loc-'));
-      const file = path.join(dir, 'cfg.json');
-      await fs.writeFile(file, JSON.stringify({ path: '/custom/path' }), 'utf8');
+      const file = await writeConfigFile(JSON.stringify({ path: '/custom/path' }));
 
       const { io } = createMockProviderIO();
       const p = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, io);
@@ -372,9 +491,7 @@ describe('LocalFsProvider', () => {
     });
 
     it('should throw ProviderError when JSON lacks a non-empty "path"', async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-loc-'));
-      const file = path.join(dir, 'cfg.json');
-      await fs.writeFile(file, JSON.stringify({ path: '' }), 'utf8');
+      const file = await writeConfigFile(JSON.stringify({ path: '' }));
 
       const { io } = createMockProviderIO();
       const p = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, io);
@@ -385,9 +502,7 @@ describe('LocalFsProvider', () => {
     });
 
     it('should throw on malformed JSON', async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-loc-'));
-      const file = path.join(dir, 'cfg.json');
-      await fs.writeFile(file, 'not json', 'utf8');
+      const file = await writeConfigFile('not json');
 
       const { io } = createMockProviderIO();
       const p = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, io);
@@ -395,16 +510,14 @@ describe('LocalFsProvider', () => {
     });
 
     it('should throw when JSON is not a plain object', async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-loc-'));
-      const file = path.join(dir, 'cfg.json');
-      await fs.writeFile(file, JSON.stringify([1, 2]), 'utf8');
+      const file = await writeConfigFile(JSON.stringify([1, 2]));
 
       const { io } = createMockProviderIO();
       const p = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, io);
       await expect(p.configureFromFlags(cliInput({ name: 'x', rawArgs: ['--config-file', file] }))).rejects.toThrow(ProviderError);
     });
 
-    // ─── Inline --path ──────────────────────────────────────────────────────
+    // --- Inline --path ------------------------------------------------------
 
     it('should accept inline --path with absolute path', async () => {
       const { io } = createMockProviderIO();
@@ -425,9 +538,7 @@ describe('LocalFsProvider', () => {
     });
 
     it('should let inline --path win over --config-file', async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-loc-'));
-      const file = path.join(dir, 'cfg.json');
-      await fs.writeFile(file, JSON.stringify({ path: '/from/json' }), 'utf8');
+      const file = await writeConfigFile(JSON.stringify({ path: '/from/json' }));
 
       const { io } = createMockProviderIO();
       const p = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, io);
@@ -438,7 +549,7 @@ describe('LocalFsProvider', () => {
     });
   });
 
-  // ─── validateConfig ───────────────────────────────────────────────────────
+  // --- validateConfig -------------------------------------------------------
 
   describe('validateConfig', () => {
     it('should return [] for a non-empty path', () => {
@@ -466,7 +577,7 @@ describe('LocalFsProvider', () => {
     });
   });
 
-  // ─── describeConfig ───────────────────────────────────────────────────────
+  // --- describeConfig -------------------------------------------------------
 
   describe('describeConfig', () => {
     it('should include the path', () => {
@@ -479,7 +590,7 @@ describe('LocalFsProvider', () => {
     });
   });
 
-  // ─── getSecretFields ──────────────────────────────────────────────────────
+  // --- getSecretFields ------------------------------------------------------
 
   describe('getSecretFields', () => {
     it('should return []', () => {
@@ -489,10 +600,10 @@ describe('LocalFsProvider', () => {
     });
   });
 
-  // ─── probeConnection ──────────────────────────────────────────────────────
+  // --- probeConnection ------------------------------------------------------
 
   describe('probeConnection', () => {
-    it('should write/read/compare/unlink — leaving no residue in vault dir', async () => {
+    it('should write/read/compare/unlink - leaving no residue in vault dir', async () => {
       await provider.probeConnection();
 
       const refs = await provider.list();
@@ -501,7 +612,7 @@ describe('LocalFsProvider', () => {
 
     it('should throw ProviderError when basePath is unwritable', async () => {
       const badPath = path.join(os.tmpdir(), `bfs-unwritable-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-      // NOTE: path simply does not exist and its parent is writable —
+      // NOTE: path simply does not exist and its parent is writable -
       // but probeConnection tries to create vaultDir under a non-existent
       // root; on Windows this surfaces as EACCES/ENOENT. On Linux it may
       // succeed via recursive mkdir. To force failure, use a path under a
@@ -520,7 +631,7 @@ describe('LocalFsProvider', () => {
     });
   });
 
-  // ─── usesSidecar / verifyShard / sidecar methods ───────────────────────────
+  // --- usesSidecar / verifyShard / sidecar methods ---------------------------
 
   describe('header storage strategy + verifyShard', () => {
     const IDENTITY = { vault_id: '550e8400-e29b-41d4-a716-446655440000', shard_index: 0, version: 1 };
@@ -539,7 +650,7 @@ describe('LocalFsProvider', () => {
 
     // Regression: a present-but-unreadable shard must classify as unverifiable,
     // not not_found. A directory at the shard path is readable (fs.access R_OK
-    // passes) but reads as EISDIR — the cause must drive the classification, so
+    // passes) but reads as EISDIR - the cause must drive the classification, so
     // a non-ENOENT failure stays unverifiable without a second stat.
     it('should report unverifiable when the shard path is present but unreadable', async () => {
       await uploadBuf(provider, 'shard_keep.bfs.1', Buffer.from('seed')); // creates the vault dir
@@ -569,14 +680,14 @@ describe('LocalFsProvider', () => {
     });
   });
 
-  // ─── vault name runtime guard (path traversal) ──────────────────────────────
+  // --- vault name runtime guard (path traversal) ------------------------------
   // A vault name becomes a path segment under basePath ({basePath}/{vaultName}/
   // shard_...). With no guard the name escapes the root for real: list() reads
   // the parent directory, and upload() (recursive mkdir + write) lands the shard
   // outside the configured base. The provider must refuse it where the path is
   // built (vaultDir()). The safe-segment rule is a BFS-core invariant, so it
-  // throws the core UnsafePathError — the same type the unpack-path traversal
-  // guard (resolveSafeChildPath) raises — not a provider-specific ProviderError.
+  // throws the core UnsafePathError - the same type the unpack-path traversal
+  // guard (resolveSafeChildPath) raises - not a provider-specific ProviderError.
   // Scope is separators / '..' only; control chars / NUL are a transport concern
   // (covered in ftp.test.ts) and stay out of this filesystem-segment floor.
   //
@@ -597,7 +708,7 @@ describe('LocalFsProvider', () => {
 
     // upload() recursively creates the resolved directory and writes the shard
     // there, so today the write SUCCEEDS at an escaping / separator-injected path
-    // — exactly the vulnerability. The guard must reject before the write.
+    // - exactly the vulnerability. The guard must reject before the write.
     const ESCAPING_NAMES: ReadonlyArray<[label: string, name: string]> = [
       ['bare dot-dot (escapes to parent)', '..'],
       ['parent-traversal prefix', '../evil'],
@@ -630,7 +741,7 @@ describe('LocalFsProvider', () => {
       });
     });
 
-    // Control case — proves the guard is not overly broad: a normal name still
+    // Control case - proves the guard is not overly broad: a normal name still
     // works end-to-end (list returns, upload succeeds).
     it('should accept a normal vault name (no false positive)', async () => {
       await withBase(async (base) => {
@@ -651,7 +762,7 @@ describe('LocalFsProvider', () => {
 // shard, so a `bfs repair` location change transfers KB, not the full payload.
 // The sidecar name uses an `hdr_` prefix (not a `.hdr` suffix) so a version
 // parser scanning `shard_*` never mistakes it for a shard.
-describe('LocalFsProvider — header sidecar (BFSH)', () => {
+describe('LocalFsProvider - header sidecar (BFSH)', () => {
   let tmpDir: string;
   let provider: LocalFsProvider;
   const shardRef = { provider_id: 'test-local', path: 'shard_0.bfs.1' };

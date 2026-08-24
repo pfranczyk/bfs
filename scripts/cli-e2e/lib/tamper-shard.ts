@@ -1,7 +1,7 @@
-// Shard-forging helper for cli-e2e — rewrites a `--no-enc` shard in place and
+// Shard-forging helper for cli-e2e - rewrites a `--no-enc` shard in place and
 // re-seals it with a freshly computed trailing SHA-256, so the forgery is
 // byte-valid. With encryption off a shard's header and location_map are plain,
-// guarded only by an UNKEYED trailing checksum, which buildShardV2 recomputes —
+// guarded only by an UNKEYED trailing checksum, which buildShardV2 recomputes -
 // so the checksum guards nothing against an attacker who can rewrite the shard.
 // Reuses the project's own shard-io codec (no new deps).
 //
@@ -17,7 +17,7 @@
 // 2) header metadata forge (heal cross-validation vector):
 //    tsx tamper-shard.ts <shardPath> --meta <field> <value>
 //      <field>  one of: blob_hash | vault_name
-//      <value>  replacement value (e.g. ffff…ff for blob_hash, a rogue name)
+//      <value>  replacement value (e.g. ffff...ff for blob_hash, a rogue name)
 //    Heal (`bfs provider remove --strategy rebuild`) adopts shard metadata from
 //    the first available sibling; forging ONE sibling's blob_hash/vault_name
 //    plants divergent metadata heal must detect rather than silently trust.

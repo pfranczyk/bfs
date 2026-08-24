@@ -5,7 +5,7 @@
 # connection config to a reachable host and the backup is healthy again. Proves
 # repair repoints the SSH host end-to-end while leaving the shard body untouched:
 # a host-change is a config edit (relocateProvider), so it only rewrites config +
-# the header sidecar, never re-uploads the payload — the before/after hash of the
+# the header sidecar, never re-uploads the payload - the before/after hash of the
 # shard file confirms the bytes did not change.
 
 SCENARIO_NAME="repair: SSH host address change"
@@ -16,7 +16,7 @@ REQUIRES_SSH=1
 scenario_run() {
   local vault="$SC_DIR/vault" base="$SC_DIR/baseline.txt" name="bfs83"
   make_fixtures "$vault"
-  build_pool_seq "$SC_DIR" "$name" local local ssh   # p0 L · p1 L · p2 S
+  build_pool_seq "$SC_DIR" "$name" local local ssh   # p0 L - p1 L - p2 S
 
   run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 2 --parity-shards 1 "${PROVIDER_ARGS[@]}"
@@ -41,7 +41,7 @@ scenario_run() {
   assert_manifest_health "$vault" 1 degraded
 
   # Repair p2 to a reachable host. The endpoint is local, so use the other
-  # spelling (127.0.0.1 <-> localhost) — the host string genuinely changes while
+  # spelling (127.0.0.1 <-> localhost) - the host string genuinely changes while
   # still reaching the same server. --accept-new-host-key TOFU-accepts the new
   # host string (its known_hosts entry is not yet pinned).
   local host="${SSH_HOST[$e]}"
@@ -56,9 +56,9 @@ scenario_run() {
     "$newhost" "${SSH_PORT[$e]}" "${SSH_USER[$e]}" "${SSH_PASS[$e]}" \
     "${PV_SSH_REMOTE[2]}" >"$sshjson"
 
-  # --ci makes repair non-interactive so --accept-new-host-key is honoured (in
-  # interactive mode SSH always TOFU-prompts for a new host key). This is how a
-  # real operator runs an unattended SSH host-change, mirroring init/push --ci.
+  # --ci is how a real operator runs an unattended SSH host-change, mirroring
+  # init/push --ci; --accept-new-host-key authorizes the new box's key up front
+  # (that flag is honoured in either mode - the terminal-side path is 111).
   run_bfs "$vault" repair --ci --version all p2 "--config-file $(winpath "$sshjson") --accept-new-host-key"
   assert_ok
 

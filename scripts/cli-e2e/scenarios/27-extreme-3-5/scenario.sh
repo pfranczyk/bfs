@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Extreme scheme sanity check: 3/5 (8 providers, local-only for speed). A very
-# parity-heavy layout — push, verify, drop a shard, restore. Light by design.
+# parity-heavy layout - push, verify, drop a shard, restore. Light by design.
 
 SCENARIO_NAME="extreme 3/5 (8 providers)"
 SCENARIO_DESC="very-high-parity roundtrip + single-shard repair"

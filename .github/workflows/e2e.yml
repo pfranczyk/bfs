@@ -18,12 +18,19 @@ jobs:
 
       - name: Start FTP server
         run: |
+          # vsftpd runs in the FOREGROUND: left to itself the image backgrounds
+          # it, guesses its pid with `pgrep vsftpd | tail -n 1`, and hands the
+          # guess to a watchdog that takes the whole container down when the pid
+          # it watches turns out to be a short-lived startup process. The -o
+          # flags must follow the config path, whose background=YES would
+          # otherwise win.
           docker run -d --name bfs-ftp-test \
             -p 21:21 \
             -p 21000-21010:21000-21010 \
             -e "USERS=bfsuser|bfspass" \
             --restart=always \
-            delfer/alpine-ftp-server
+            delfer/alpine-ftp-server \
+            sh -c 'exec vsftpd /etc/vsftpd/vsftpd.conf -obackground=NO -opasv_min_port=${MIN_PORT:-21000} -opasv_max_port=${MAX_PORT:-21010} ${ADDRESS:+-opasv_address=$ADDRESS}'
           for i in $(seq 1 30); do
             if curl -s --connect-timeout 3 "ftp://bfsuser:bfspass@127.0.0.1/" > /dev/null 2>&1; then
               echo "FTP server ready"; exit 0
@@ -40,6 +47,10 @@ jobs:
           # --exclude ssh: SSH scenarios (80-82, 90) run in the dedicated e2e-ssh
           # job with real sshd endpoints; without --ssh they would hit the loud
           # "SSH mandatory" gate here. --exclude repair splits off 60-89 to e2e-repair.
+          # --exclude-docker: this job supplies an --ftp endpoint, and a scenario
+          # that provisions its own server would drive THIS one while asserting
+          # against its own - a red with no defect behind it. They run in
+          # e2e-repair-docker.
           bash scripts/cli-e2e/run.sh --exclude repair --exclude ssh --exclude-docker --ftp "ftp://bfsuser:bfspass@127.0.0.1/ftp/bfsuser" 2>&1 | tee /tmp/e2e.log
 
       - name: Job summary
@@ -47,10 +58,12 @@ jobs:
         run: |
           result=$(grep -oE '[0-9]+ passed, [0-9]+ failed' /tmp/e2e.log 2>/dev/null | tail -1 || true)
           passed=$(echo "$result" | grep -oE '^[0-9]+' || echo '?')
-          failed=$(echo "$result" | grep -oE '[0-9]+$' || echo '?')
+          # Anchor on the word, not on end-of-line: `result` ends in "failed",
+          # so a trailing-digit match never fires and the count reads as unknown.
+          failed=$(echo "$result" | grep -oE '[0-9]+ failed' | grep -oE '^[0-9]+' || echo '?')
           {
             echo "## CLI e2e Report"
-            echo "| ✅ Passed | ❌ Failed |"
+            echo "| OK Passed | X Failed |"
             echo "|-----------|-----------|"
             echo "| $passed | $failed |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -77,12 +90,14 @@ jobs:
 
       - name: Start FTP server
         run: |
+          # Foreground vsftpd - same reason as the FTP job above.
           docker run -d --name bfs-ftp-repair \
             -p 21:21 \
             -p 21000-21010:21000-21010 \
             -e "USERS=bfsuser|bfspass" \
             --restart=always \
-            delfer/alpine-ftp-server
+            delfer/alpine-ftp-server \
+            sh -c 'exec vsftpd /etc/vsftpd/vsftpd.conf -obackground=NO -opasv_min_port=${MIN_PORT:-21000} -opasv_max_port=${MAX_PORT:-21010} ${ADDRESS:+-opasv_address=$ADDRESS}'
           for i in $(seq 1 30); do
             if curl -s --connect-timeout 3 "ftp://bfsuser:bfspass@127.0.0.1/" > /dev/null 2>&1; then
               echo "FTP server ready"; exit 0
@@ -107,10 +122,11 @@ jobs:
               c.on("error",()=>{c.end();if(done)return;if(Date.now()>deadline){console.error("sshd not ready");process.exit(1)}setTimeout(t,1000)});
               c.connect({host:"127.0.0.1",port:2222,username:"bfsuser",password:"bfspass",readyTimeout:4000,hostVerifier:()=>true});})();'
 
-      # External-endpoint repair only (60-79 local+ftp, 83/84/88 ssh). --exclude-docker
-      # keeps the docker-managed scenarios (85-87, 89) out: they self-provision and
-      # must run WITHOUT external endpoints (see the e2e-repair-docker job) — with
-      # --ssh/--ftp present the round-robin pool picks the wrong endpoint.
+      # Every scenario whose directory name carries "repair", on external endpoints
+      # (local, ftp and ssh alike). --exclude-docker keeps the docker-managed ones
+      # out: they self-provision and must run WITHOUT external endpoints (see the
+      # e2e-repair-docker job) - with --ssh/--ftp present the round-robin pool picks
+      # the wrong endpoint.
       - name: Run repair CLI e2e
         run: |
           set -o pipefail
@@ -123,10 +139,12 @@ jobs:
         run: |
           result=$(grep -oE '[0-9]+ passed, [0-9]+ failed' /tmp/e2e-repair.log 2>/dev/null | tail -1 || true)
           passed=$(echo "$result" | grep -oE '^[0-9]+' || echo '?')
-          failed=$(echo "$result" | grep -oE '[0-9]+$' || echo '?')
+          # Anchor on the word, not on end-of-line: `result` ends in "failed",
+          # so a trailing-digit match never fires and the count reads as unknown.
+          failed=$(echo "$result" | grep -oE '[0-9]+ failed' | grep -oE '^[0-9]+' || echo '?')
           {
             echo "## Repair CLI e2e Report"
-            echo "| ✅ Passed | ❌ Failed |"
+            echo "| OK Passed | X Failed |"
             echo "|-----------|-----------|"
             echo "| $passed | $failed |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -149,7 +167,7 @@ jobs:
   # them. --exclude-docker keeps the docker-managed SSH scenarios (94-96) out:
   # they self-provision their own sshd and must NOT see these external endpoints,
   # or the round-robin pool pins the provider to endpoint 0 instead of the
-  # scenario's own — they run in e2e-repair-docker (--docker-only) instead. Repair
+  # scenario's own - they run in e2e-repair-docker (--docker-only) instead. Repair
   # SSH scenarios (83-88) run in e2e-repair (they reuse that job's FTP + Docker).
   e2e-ssh:
     runs-on: ubuntu-latest
@@ -191,10 +209,12 @@ jobs:
         run: |
           result=$(grep -oE '[0-9]+ passed, [0-9]+ failed' /tmp/e2e-ssh.log 2>/dev/null | tail -1 || true)
           passed=$(echo "$result" | grep -oE '^[0-9]+' || echo '?')
-          failed=$(echo "$result" | grep -oE '[0-9]+$' || echo '?')
+          # Anchor on the word, not on end-of-line: `result` ends in "failed",
+          # so a trailing-digit match never fires and the count reads as unknown.
+          failed=$(echo "$result" | grep -oE '[0-9]+ failed' | grep -oE '^[0-9]+' || echo '?')
           {
             echo "## SSH CLI e2e Report"
-            echo "| ✅ Passed | ❌ Failed |"
+            echo "| OK Passed | X Failed |"
             echo "|-----------|-----------|"
             echo "| $passed | $failed |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -204,11 +224,14 @@ jobs:
         run: |
           for p in 2222 2223 2224; do docker rm -f "bfs-sshd-$p" || true; done
 
-  # Docker-managed scenarios (repair: 85-87 SSH, 89 FTP; host-key/edit: 94-96 SSH):
-  # each self-provisions a real server via lib/docker-endpoint.sh (start →
-  # wipe/restart/kill → repair or edit) and takes NO external endpoints, so
-  # --docker-only runs them alone — passing --ssh/--ftp would make the round-robin
-  # pool pick the wrong endpoint. ubuntu-latest always has Docker.
+  # Docker-managed scenarios (repair: 85-87 SSH, 89 FTP; host-key/edit: 94-96 and
+  # 111 SSH; cert pinning: 97 FTPS; provider edit: 101-102 and 104-105 FTPS; init
+  # and server identity: 106-107 FTPS): each self-provisions a real server via
+  # lib/docker-endpoint.sh (start -> wipe/restart/kill -> repair, edit or re-pin) and
+  # takes NO external endpoints, so --docker-only runs them alone - passing
+  # --ssh/--ftp would make the round-robin pool pick the wrong endpoint, and the
+  # scenario would assert against a server it never wrote to. This job is the only
+  # place they execute; ubuntu-latest always has Docker.
   e2e-repair-docker:
     runs-on: ubuntu-latest
     steps:
@@ -229,18 +252,20 @@ jobs:
         run: |
           result=$(grep -oE '[0-9]+ passed, [0-9]+ failed' /tmp/e2e-docker.log 2>/dev/null | tail -1 || true)
           passed=$(echo "$result" | grep -oE '^[0-9]+' || echo '?')
-          failed=$(echo "$result" | grep -oE '[0-9]+$' || echo '?')
+          # Anchor on the word, not on end-of-line: `result` ends in "failed",
+          # so a trailing-digit match never fires and the count reads as unknown.
+          failed=$(echo "$result" | grep -oE '[0-9]+ failed' | grep -oE '^[0-9]+' || echo '?')
           {
             echo "## Docker-managed CLI e2e Report"
-            echo "| ✅ Passed | ❌ Failed |"
+            echo "| OK Passed | X Failed |"
             echo "|-----------|-----------|"
             echo "| $passed | $failed |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Windows local-only e2e: the full create→restore→recovery→repair cycle on
+  # Windows local-only e2e: the full create->restore->recovery->repair cycle on
   # windows-latest with byte-for-byte SHA-256 checks. FTP/mixed scenarios need a
   # Linux FTP container, so --local-only skips them (by REQUIRES_FTP metadata,
-  # not by name), while every local scenario — including repair-local (60-66) —
+  # not by name), while every local scenario - including repair-local (60-66) -
   # runs. The harness already carries the Windows-specific code it needs: winpath
   # (cygpath) for paths passed to bfs and spawn_live_pid_holder for native PIDs
   # instead of MSYS-emulated $$/$!.
@@ -253,7 +278,7 @@ jobs:
           node-version: '24'
           cache: 'npm'
       - run: npm ci
-      # Output goes straight to the step log — no `| tee` / `> file` on the outer
+      # Output goes straight to the step log - no `| tee` / `> file` on the outer
       # run.sh. Under Git Bash, redirecting the outer invocation corrupts script
       # parsing for scenarios that spawn background processes (concurrent-push,
       # lock tests), because those children inherit the fd bash reads the script

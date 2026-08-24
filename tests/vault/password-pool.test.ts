@@ -1,9 +1,9 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { deriveKey, generateSalt } from '../../src/core/crypto.js';
 import { buildShard } from '../../src/core/shard-io.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
 import type { ShardHeader, ShardLocation } from '../../src/types/index.js';
-import { tryDecryptLocationMap } from '../../src/vault/password-pool.js';
+import { promptForVaultPassword, tryDecryptLocationMap } from '../../src/vault/password-pool.js';
 
 const LOCATIONS: ShardLocation[] = [
   { shard_index: 0, provider_id: 'local-1', provider_type: 'local', adapterPackage: null, connection_config: { path: '/mnt/backup' }, required_inputs: [], remote_path: '/mnt/backup/v/shard_0.bfs.1', shard_hash: 'a'.repeat(64) },
@@ -101,11 +101,76 @@ describe('tryDecryptLocationMap', () => {
   });
 
   it('should return null when the operator gives up at the prompt', async () => {
-    // First manual attempt (ask) is wrong; the retry answer is blank → give up.
+    // First manual attempt (ask) is wrong; the retry answer is blank -> give up.
     const { io } = createMockProviderIO({ [PROMPTS.ask]: 'still-wrong', [PROMPTS.retry]: '' });
 
     const result = await tryDecryptLocationMap(header, headerBytes, ['wrong'], io, PROMPTS);
 
     expect(result).toBeNull();
+  });
+
+  it('should not reach the prompt when no one can answer it', async () => {
+    // The answer would open the map, so a result here proves the prompt ran.
+    const { io } = createMockProviderIO({ [PROMPTS.ask]: 'correct' }, process.cwd(), false);
+    const askSecret = vi.spyOn(io, 'askSecret');
+
+    const result = await tryDecryptLocationMap(header, headerBytes, ['wrong'], io, PROMPTS);
+
+    expect(askSecret).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+  });
+});
+
+describe('promptForVaultPassword', () => {
+  let salt: Buffer;
+  let correctKey: Buffer;
+  let header: ShardHeader;
+  let headerBytes: Buffer;
+
+  beforeAll(async () => {
+    salt = generateSalt();
+    correctKey = await deriveKey('correct', salt);
+    header = makeHeader({ encrypted: true, kdf_salt: salt });
+    headerBytes = buildShard(header, Buffer.from('payload'), correctKey);
+  });
+
+  it('should prompt and return the map when a terminal is present', async () => {
+    const { io } = createMockProviderIO({ [PROMPTS.ask]: 'correct' });
+    const pool: string[] = [];
+
+    const result = await promptForVaultPassword(header, headerBytes, pool, io, PROMPTS);
+
+    expect(result?.encKey.equals(correctKey)).toBe(true);
+    expect(pool).toContain('correct');
+  });
+
+  it('should still prompt when the IO does not carry the field at all', async () => {
+    // The contract reads an absent `interactive` as an interactive terminal, so
+    // an IO predating the field - any external adapter's, or a caller building
+    // one by hand - must keep its prompt. A guard written as `!io.interactive`
+    // would silently take it away and every other test here would stay green.
+    const { io } = createMockProviderIO({ [PROMPTS.ask]: 'correct' });
+    const bareIo = { ...io };
+    delete (bareIo as { interactive?: boolean }).interactive;
+
+    const result = await promptForVaultPassword(header, headerBytes, [], bareIo, PROMPTS);
+
+    expect(result?.encKey.equals(correctKey)).toBe(true);
+  });
+
+  it('should give up without asking when nobody can answer', async () => {
+    // A run with no terminal (`--bootstrap`, cron, closed stdin) has nobody to
+    // answer: an unanswerable prompt never settles, the event loop empties and
+    // the process dies mid-recovery, leaving .bfs/ half-written behind a zero
+    // exit code. The password must be taken as unavailable instead.
+    const { io } = createMockProviderIO({ [PROMPTS.ask]: 'correct' }, process.cwd(), false);
+    const askSecret = vi.spyOn(io, 'askSecret');
+    const pool: string[] = [];
+
+    const result = await promptForVaultPassword(header, headerBytes, pool, io, PROMPTS);
+
+    expect(askSecret).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+    expect(pool).toEqual([]);
   });
 });

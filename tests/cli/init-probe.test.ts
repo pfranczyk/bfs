@@ -1,4 +1,4 @@
-// Interactive `bfs init` — provider connectivity probe + retry.
+// Interactive `bfs init` - provider connectivity probe + retry.
 //
 // Right after a provider's configureInteractive() returns, the init action
 // instantiates the provider and validates the medium with a full storage
@@ -8,12 +8,12 @@
 // the medium end to end, so it is the acceptance gate for the chosen medium. On
 // a ProviderError it warns via io.warn and asks io.choose with three options in
 // a fixed order:
-//   [0] RETRY    — re-probe the same config
-//   [1] RE-ENTER — re-run configureInteractive for that provider
-//   [2] ABORT    — clean cancellation, no stack dump
-// RETRY→success or RE-ENTER→success completes init; ABORT ends cleanly. This
-// keeps a connection failure — transient, or a typo in host/port/password/path
-// — recoverable in place, instead of aborting the whole command and discarding
+//   [0] RETRY    - re-probe the same config
+//   [1] RE-ENTER - re-run configureInteractive for that provider
+//   [2] ABORT    - clean cancellation, no stack dump
+// RETRY->success or RE-ENTER->success completes init; ABORT ends cleanly. This
+// keeps a connection failure - transient, or a typo in host/port/password/path
+// - recoverable in place, instead of aborting the whole command and discarding
 // every value the operator already entered.
 //
 // The recovery option is selected by INDEX in the offered list (documented
@@ -41,10 +41,18 @@ vi.mock('inquirer', () => ({
     type = 'separator';
   },
 }));
-// scanDir / compressibility analysis hit fs — return an empty directory so the
-// test stays off disk (mirrors tests/cli/init.test.ts).
+// scanDir / compressibility analysis hit fs - return an empty directory so the
+// test stays off disk (mirrors tests/cli/init.test.ts). readFile answers ENOENT:
+// the re-init guard asks about .bfs/config.json first, and these runs are about
+// the probe loop in a directory that holds no backup.
 vi.mock('node:fs/promises', () => {
-  const mock = { readdir: vi.fn().mockResolvedValue([]), stat: vi.fn().mockResolvedValue({ isDirectory: () => true, size: 0 }), access: vi.fn().mockResolvedValue(undefined), constants: { R_OK: 4, W_OK: 2, X_OK: 1, F_OK: 0 } };
+  const mock = {
+    readdir: vi.fn().mockResolvedValue([]),
+    stat: vi.fn().mockResolvedValue({ isDirectory: () => true, size: 0 }),
+    access: vi.fn().mockResolvedValue(undefined),
+    readFile: vi.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
+    constants: { R_OK: 4, W_OK: 2, X_OK: 1, F_OK: 0 },
+  };
   return { default: mock, ...mock };
 });
 
@@ -60,13 +68,13 @@ interface ProbeState {
   /** One outcome consumed per probeConnection() call: 'fail' throws, 'ok' resolves. */
   attempts: string[];
   /**
-   * Count of probeConnection() invocations — the acceptance gate. One scripted
+   * Count of probeConnection() invocations - the acceptance gate. One scripted
    * outcome from `attempts` is consumed per call.
    */
   probeCalls: number;
   /**
    * Count of authenticate() invocations. Kept separate (and never the gate) to
-   * prove authenticate() alone does NOT decide provider acceptance — it is a
+   * prove authenticate() alone does NOT decide provider acceptance - it is a
    * lightweight connect/login, not a round-trip check.
    */
   authCalls: number;
@@ -87,12 +95,12 @@ interface ProbeState {
   /**
    * One outcome consumed per validateConfig() call: 'invalid' returns a
    * non-empty error list, anything else returns []. Lets a test prove init
-   * runs validateConfig() as a gate (parity with provider-add) — a config that
+   * runs validateConfig() as a gate (parity with provider-add) - a config that
    * fails validation must surface the recovery prompt BEFORE probing, not be
    * silently accepted. Defaults to always-valid when undefined.
    */
   validateAttempts?: string[];
-  /** Count of validateConfig() invocations — never the probe gate. */
+  /** Count of validateConfig() invocations - never the probe gate. */
   validateCalls: number;
 }
 
@@ -109,12 +117,12 @@ function registerProbeProvider(state: ProbeState): void {
     displayName: 'Mock Probe',
     create: () =>
       ({
-        // Lightweight connect/login — NOT the acceptance gate. Never throws.
+        // Lightweight connect/login - NOT the acceptance gate. Never throws.
         async authenticate(): Promise<void> {
           state.authCalls += 1;
           return;
         },
-        // Full storage round-trip — THIS is the acceptance gate. One scripted
+        // Full storage round-trip - THIS is the acceptance gate. One scripted
         // outcome consumed per call; 'fail' throws a ProviderError.
         async probeConnection(): Promise<void> {
           const outcome = state.attempts[state.probeCalls] ?? 'ok';
@@ -130,13 +138,13 @@ function registerProbeProvider(state: ProbeState): void {
         },
         // Config-shape gate run BEFORE the round-trip probe. One scripted
         // outcome consumed per call; 'invalid' returns a non-empty error list.
-        // Never gates the probe — a separate acceptance step.
+        // Never gates the probe - a separate acceptance step.
         validateConfig(): string[] {
           const outcome = state.validateAttempts?.[state.validateCalls] ?? 'ok';
           state.validateCalls += 1;
           return outcome === 'invalid' ? ['mock validation error'] : [];
         },
-        // Provider-API completeness surface (v2) — unused by the probe path.
+        // Provider-API completeness surface (v2) - unused by the probe path.
         usesSidecar: () => false,
         uploadHeaderSidecar: async () => {},
         downloadHeaderSidecar: async () => null,
@@ -148,7 +156,7 @@ function registerProbeProvider(state: ProbeState): void {
 
 /**
  * Installs a ProviderIO (via spying on createCliProviderIO) whose `choose`
- * returns the option at `pickIndex` — picking the recovery action by its
+ * returns the option at `pickIndex` - picking the recovery action by its
  * documented position (0=RETRY, 1=RE-ENTER, 2=ABORT) rather than its
  * not-yet-translated text. Records warn() lines and every choose() call so a
  * test can assert the recovery prompt was actually presented.
@@ -181,7 +189,7 @@ function installProbeIO(pickIndex: number): { warns: string[]; chooseCalls: Arra
  * Scripts an interactive `bfs init myvault` for a 2/1 scheme with three mock
  * providers. The prompt order is: encryption, compression, scheme, then per
  * provider (id, type), then push mode, RAM. Encryption + compression are
- * answered "no" via inquirer (NOT via flags — the action detects --no-compress
+ * answered "no" via inquirer (NOT via flags - the action detects --no-compress
  * from process.argv, which is not set under vitest, so it always prompts).
  */
 function scriptInteractivePrompts(): void {
@@ -199,7 +207,7 @@ function scriptInteractivePrompts(): void {
     .mockResolvedValueOnce({ maxRamStr: '1024' } as never); // RAM
 }
 
-describe('interactive init — provider connectivity probe + retry', () => {
+describe('interactive init - provider connectivity probe + retry', () => {
   let capture: ReturnType<typeof captureConsole>;
 
   beforeEach(() => {
@@ -234,7 +242,7 @@ describe('interactive init — provider connectivity probe + retry', () => {
     // The recovery choice prompt must actually have been presented.
     expect(chooseCalls.length).toBeGreaterThanOrEqual(1);
     // Probe re-ran the SAME config: the failing provider was probed twice
-    // (fail → ok), and configureInteractive ran exactly once per provider
+    // (fail -> ok), and configureInteractive ran exactly once per provider
     // (no re-entry on RETRY).
     expect(state.probeCalls).toBeGreaterThanOrEqual(4); // 3 providers + 1 retry
     expect(state.configCalls).toBe(3);
@@ -271,8 +279,8 @@ describe('interactive init — provider connectivity probe + retry', () => {
 
     // The recovery prompt was shown and the operator chose abort.
     expect(chooseCalls.length).toBeGreaterThanOrEqual(1);
-    // Clean cancellation: runCmd maps CommandAbort → 'abort' and prompt
-    // cancellation → 'cancelled'. Either is an intentional, handled outcome —
+    // Clean cancellation: runCmd maps CommandAbort -> 'abort' and prompt
+    // cancellation -> 'cancelled'. Either is an intentional, handled outcome -
     // what must NOT happen is an unexpected uncaught error type (runCmd rethrows
     // those) or silently reaching vault-manager.init() despite the abort.
     expect(['abort', 'cancelled']).toContain(result);
@@ -281,7 +289,7 @@ describe('interactive init — provider connectivity probe + retry', () => {
 
   // Message-agnosticism: the recovery loop must fire for ANY ProviderError,
   // regardless of the failure text. This guards against a fix special-cased to
-  // one symptom (e.g. "530 max connections") — every real FTP wrong-field
+  // one symptom (e.g. "530 max connections") - every real FTP wrong-field
   // failure must surface the same recoverable prompt. Each case fails the first
   // probe with a distinct, field-specific message, then RE-ENTER (index 1)
   // re-runs configureInteractive and the next probe succeeds; the recovery
@@ -293,7 +301,7 @@ describe('interactive init — provider connectivity probe + retry', () => {
     { field: 'wrong path (550 no such directory)', message: '550 No such file or directory.' },
   ];
 
-  it.each(FAILURE_MESSAGES)('RE-ENTER recovery fires for any ProviderError — $field', async ({ message }) => {
+  it.each(FAILURE_MESSAGES)('RE-ENTER recovery fires for any ProviderError - $field', async ({ message }) => {
     // First probe of the first provider fails with the field-specific message;
     // after RE-ENTER its next probe succeeds. The other two succeed immediately.
     const state: ProbeState = { attempts: ['fail', 'ok'], probeCalls: 0, authCalls: 0, configCalls: 0, validateCalls: 0, setVaultNames: [], failMessage: message };
@@ -312,11 +320,11 @@ describe('interactive init — provider connectivity probe + retry', () => {
     expect(mockInit).toHaveBeenCalledTimes(1);
   });
 
-  // Regression: init MUST gate provider acceptance on probeConnection() — the full
-  // storage round-trip — not on authenticate(). A provider that authenticates
+  // Regression: init MUST gate provider acceptance on probeConnection() - the full
+  // storage round-trip - not on authenticate(). A provider that authenticates
   // (valid host/port/login) but has an unusable base path fails the round-trip;
   // it must NOT be silently accepted. Here the first provider's first probe
-  // fails and the second (after RE-ENTER) succeeds — recovery is driven entirely
+  // fails and the second (after RE-ENTER) succeeds - recovery is driven entirely
   // by the probeConnection() outcome. authCalls is deliberately NOT the gate:
   // whether authenticate() ran or not is irrelevant to acceptance.
   it('should gate provider acceptance on probeConnection round-trip, not authenticate', async () => {
@@ -331,12 +339,12 @@ describe('interactive init — provider connectivity probe + retry', () => {
     expect(chooseCalls.length).toBeGreaterThanOrEqual(1);
     // The round-trip gate ran across all providers plus the re-probe.
     expect(state.probeCalls).toBeGreaterThanOrEqual(4);
-    // The gate wired the vault name before probing — a dropped setVaultName()
+    // The gate wired the vault name before probing - a dropped setVaultName()
     // would leave probeConnection() unable to resolve its path on real providers.
     expect(state.setVaultNames).toContain('myvault');
     // RE-ENTER re-ran configureInteractive for the failing provider.
     expect(state.configCalls).toBeGreaterThan(3);
-    // Recovery via probeConnection completed init — the bad provider was caught,
+    // Recovery via probeConnection completed init - the bad provider was caught,
     // not accepted.
     expect(result).toBe('ok');
     expect(mockInit).toHaveBeenCalledTimes(1);
@@ -344,8 +352,8 @@ describe('interactive init — provider connectivity probe + retry', () => {
 
   // Parity with provider-add: init must run validateConfig() as an acceptance
   // gate (config-shape check) inside the SAME recovery loop, BEFORE the probe.
-  // A config that fails validation must surface the recovery prompt — even
-  // though probeConnection() would succeed — so a malformed provider is never
+  // A config that fails validation must surface the recovery prompt - even
+  // though probeConnection() would succeed - so a malformed provider is never
   // silently accepted. Here validateConfig fails on the first attempt and
   // passes after RE-ENTER, while probeConnection always succeeds: the recovery
   // prompt must be driven by the VALIDATION error, then init completes.

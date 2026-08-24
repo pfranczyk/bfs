@@ -1,15 +1,17 @@
 # Security Policy
 
-BFS (Backup File System) is a distributed backup tool: it packs and compresses a
-directory into a binary blob, splits it with Reed-Solomon erasure coding, and
-encrypts each resulting shard — compression and encryption are both on by
-default — then spreads the shards across independent storage providers. This
-document describes what that design protects, what it does not, and how to report
-a vulnerability.
+BFS (Backup File System) is a distributed backup tool: it packs a directory into
+a binary blob, optionally compresses it, splits it with Reed-Solomon erasure
+coding, encrypts each resulting shard, and spreads the shards across independent
+storage providers. Encryption is on by default. Compression has no fixed
+default - `bfs init` scans the directory and settles it per backup, turning it
+off when the data is mostly already compressed (images, video, archives) - and
+`--compress` / `--no-compress` decide it outright. This document describes what
+that design protects, what it does not, and how to report a vulnerability.
 
 ## Reporting a Vulnerability
 
-Please report security issues **privately** — do not open a public issue for a
+Please report security issues **privately** - do not open a public issue for a
 suspected vulnerability.
 
 - **Preferred channel:** [GitHub Security Advisories](https://github.com/pfranczyk/bfs/security/advisories/new).
@@ -27,13 +29,13 @@ Public, non-security bugs belong in the normal
 
 BFS is pre-1.0 and ships frequently. Security fixes are released against the
 **latest published stable version** only. There is no long-term support branch
-for older releases — upgrade to the newest stable version to receive security
+for older releases - upgrade to the newest stable version to receive security
 updates.
 
-| Version                  | Security updates                              |
-| ------------------------ | --------------------------------------------- |
-| Latest stable release    | ✅ Yes                                        |
-| Older releases           | ❌ No                                         |
+| Version                  | Security updates |
+| ------------------------ | ---------------- |
+| Latest stable release    | Yes              |
+| Older releases           | No               |
 
 ## Encryption Defaults
 
@@ -48,7 +50,7 @@ updates.
   setting is read from its own local configuration, so an automated push on a
   previously created backup keeps behaving exactly as before.
 - When a backup is stored unencrypted (`--no-enc`), BFS prints a prominent
-  warning — at `bfs init` and again on **every** `bfs push` of that backup —
+  warning - at `bfs init` and again on **every** `bfs push` of that backup -
   that part of the data is directly readable on a single storage device and that
   the addresses and usernames of all your storage are visible on every device.
   An unintended opt-out is hard to miss. (Current versions never embed storage
@@ -64,44 +66,46 @@ updates.
   The 256-bit data key is derived from the user-chosen password and that salt.
 - **Nonce derivation:** each shard's 12-byte GCM nonce is derived
   deterministically as `HMAC-SHA256(data_key, "shard_nonce" || uint32LE(version)
-  || uint8(shard_index))[:12]` — the UTF-8 label `shard_nonce`, the snapshot
+  || uint8(shard_index))[:12]` - the UTF-8 label `shard_nonce`, the snapshot
   version as a 4-byte little-endian integer, and the shard index as a single
   byte, in that order, truncated to the leading 12 bytes. Because a new push uses
   a fresh salt (hence a fresh key), and each shard within a version gets a
   distinct index, no `(key, nonce)` pair is ever reused.
-- **Integrity hashing:** SHA-256 is used throughout for integrity — a cleartext
+- **Integrity hashing:** SHA-256 is used throughout for integrity - a cleartext
   content hash over the packed backup data and a separate checksum over each
-  stored shard — independent of, and in addition to, the AES-GCM tag. See
+  stored shard - independent of, and in addition to, the AES-GCM tag. See
   *Integrity of a restored backup*.
 
 ## Threat Model
 
 ### What a single storage provider can see
 
-Each provider stores exactly **one shard per backup version** — never enough
+Each provider stores exactly **one shard per backup version** - never enough
 data, on its own, to reconstruct an encrypted backup. What a provider (or anyone
 who obtains one shard) can read depends on whether encryption is enabled:
 
 **Encrypted backup (the default):**
 
-- The **backup data payload is encrypted** — unreadable without the password.
-- The **location map** — the coordinates of every other shard (provider host,
-  port, username, path) — is **encrypted**.
+- The **backup data payload is encrypted** - unreadable without the password.
+- The **location map** - the coordinates of every other shard (provider host,
+  port, username, path) - is **encrypted**.
 - A fixed set of **header metadata is in cleartext** (see below).
 
 **Unencrypted backup (`--no-enc`):**
 
 - The payload is **systematic** Reed-Solomon over the packed backup data: the
-  `N` data shards are verbatim slices of it. With compression off, a single
-  shard exposes raw file fragments directly. With compression on (the default),
-  the packed data is a deflate-compressed archive, so a shard holds compressed
-  fragments rather than readable text — but holding `N` of the `N+K` shards
-  still reconstructs the archive, and then your files, verbatim and without any
-  key.
+  `N` data shards are verbatim slices of it. What a single shard exposes
+  therefore depends on the compression this backup settled on. With compression
+  off, a shard exposes raw file fragments directly - and a directory of photos
+  or video is exactly the case where `bfs init` turns compression off, so do not
+  assume it is on. With compression on, the packed data is a deflate-compressed
+  archive, so a shard holds compressed fragments rather than readable text.
+  Either way, holding `N` of the `N+K` shards reconstructs the archive, and then
+  your files, verbatim and without any key.
 - The location map is **plaintext** on every device: the address, username, and
   path of every storage location are visible to anyone holding any one shard,
   who can then locate and reach the rest.
-- Storage **passwords are not exposed by current versions** — they are stripped
+- Storage **passwords are not exposed by current versions** - they are stripped
   from shard headers regardless of encryption, though shards written by an
   earlier version still carry them until re-pushed (see *Credential handling*).
 
@@ -115,22 +119,22 @@ backup:
 - the backup name (as you chose it at `init`),
 - the total backup-data size,
 - a SHA-256 hash of the packed backup data, taken before encryption (over the
-  compressed archive when compression is enabled — the default — not over your
-  original files),
+  compressed archive when this backup is compressed, not over your original
+  files),
 - the scheme (data count `N`, parity count `K`),
 - the Reed-Solomon stripe size,
 - the shard's index and the version (snapshot) number,
 - the encryption flag and, when encrypted, the KDF salt.
 
 The cleartext content hash means an observer holding a shard can confirm whether
-a backup matches data they can reproduce byte-for-byte — the same files packed
-(and compressed) the same way — not merely a file they happen to possess. This cleartext header metadata is
+a backup matches data they can reproduce byte-for-byte - the same files packed
+(and compressed) the same way - not merely a file they happen to possess. This cleartext header metadata is
 listed under *Out of Scope* below.
 
 ### Credential handling
 
 - **Current versions of BFS never write storage credentials into shard headers.** A provider's
-  password — and any field an adapter marks as secret — is kept only in the
+  password - and any field an adapter marks as secret - is kept only in the
   local backup configuration (`.bfs/config.json`) and is stripped from the
   location map embedded in shards. Non-secret coordinates (host, port, username,
   path) remain, so one shard can still discover and reach the others.
@@ -144,7 +148,7 @@ listed under *Out of Scope* below.
 The FTP adapter uses FTPS (TLS) **by default**: storing a device's part over
 plain FTP now requires an explicit opt-out (`--secure false`). A plain FTP
 connection sends the storage password and the shard bytes in cleartext over the
-network — independent of whether the backup itself is encrypted, and worst for an
+network - independent of whether the backup itself is encrypted, and worst for an
 unencrypted backup, whose shard payloads and plaintext location map would then
 also cross the network in the clear. When a backup operation connects over plain
 FTP, BFS prints a warning naming the server, so an unintended insecure transport
@@ -153,15 +157,16 @@ is hard to miss. The SSH/SFTP adapter is always encrypted.
 BFS verifies **who** it is talking to before sending your password, so an
 attacker on the network cannot intercept the connection. On the first FTPS
 connection to a server, BFS shows you the server certificate's fingerprint (and
-whether it is self-signed or CA-signed) and pins it — trust on first use — so a
+whether it is self-signed or CA-signed) and pins it - trust on first use - so a
 self-signed certificate is usable by trusting its fingerprint directly, without a
 CA chain. You can also pin a fingerprint up front (`--cert-fingerprint`) or
-accept a new one non-interactively (`--accept-new-cert`). The certificate is
+authorize a new one ahead of the connection (`--accept-new-cert`), which is then
+taken at its word instead of being asked about again. The certificate is
 checked **before** the password is sent, and the check happens against the pinned
 fingerprint, not merely the CA chain. SSH host keys work the same way: the key is
 verified on first connection and pinned. If a server later presents a **different**
-identity than the one pinned — a changed FTPS certificate, or a changed SSH host
-key — BFS stops and reports it as detected tampering (a possible
+identity than the one pinned - a changed FTPS certificate, or a changed SSH host
+key - BFS stops and reports it as detected tampering (a possible
 machine-in-the-middle), rather than silently connecting or failing with a generic
 error. This defends the transport channel against interception; it is separate
 from, and does not replace, an encrypted backup's protection of the data itself.
@@ -171,9 +176,9 @@ from, and does not replace, an encrypted backup's protection of the data itself.
 The local backup configuration stores provider credentials in plaintext on the
 machine that runs BFS. BFS applies defense-in-depth file permissions: the whole
 `.bfs/` tree is created mode `0700`, and the files inside it that hold secrets,
-metadata, or a plaintext copy of your data — `config.json` (provider
+metadata, or a plaintext copy of your data - `config.json` (provider
 credentials), `state.json`, the version manifests, and any cached backup blob
-under `.bfs/cache/` — are written mode `0600`. These restrict access to the
+under `.bfs/cache/` - are written mode `0600`. These restrict access to the
 owning user on POSIX systems. On Windows these mode bits are a no-op (NTFS uses
 ACLs, not POSIX permissions), so the practical protection there is the access
 control of the directory holding `.bfs/`. This is **not**
@@ -185,9 +190,15 @@ out of any unrelated version-control repository (BFS does not modify your
 
 - Any `N` of the `N+K` shards reconstruct the backup; losing up to `K` providers
   loses no data.
+- The same property read from the other side: a restore needs `N` providers
+  reachable **at the same time**. Splitting the data is what stops any single
+  storage from holding a readable copy, and the price is that no single storage
+  can serve a restore either. A tool that replicates a whole repository needs one
+  surviving copy; BFS needs a quorum. Plan provider availability - not just
+  provider durability - accordingly.
 - Redundancy is an availability property, not a confidentiality one. For an
   encrypted backup, an attacker who collects shards still cannot read anything
-  without the password — and BFS cannot recover the data if the password is
+  without the password - and BFS cannot recover the data if the password is
   lost. There is no recovery backdoor and no key escrow: **if you lose the
   password, the backup is unrecoverable.**
 
@@ -199,9 +210,9 @@ enforced separately, in layers:
 
 - **Per-shard checksum.** Each stored shard ends with a SHA-256 over its own
   header and payload. A restore (`bfs pull`) reads the whole shard and recomputes
-  a per-shard SHA-256 before reconstruction — the in-shard header+payload checksum
+  a per-shard SHA-256 before reconstruction - the in-shard header+payload checksum
   for shards in the current striped format, or the per-shard payload hash recorded
-  in the manifest for older non-striped shards — so a shard that a storage device
+  in the manifest for older non-striped shards - so a shard that a storage device
   silently corrupted or that the transport truncated is set aside before
   reconstruction and the backup is rebuilt from the remaining healthy shards plus
   parity, the same path as a shard that is missing entirely. Corrupting up to `K`
@@ -209,11 +220,11 @@ enforced separately, in layers:
   shard cannot deny an otherwise-recoverable restore. For an encrypted backup
   this covers the header too: the per-version KDF salt is taken from a shard
   whose checksum verifies, not blindly from the first shard read, so bit-rot in
-  one shard's salt — which also breaks that shard's own checksum — cannot derive
+  one shard's salt - which also breaks that shard's own checksum - cannot derive
   a wrong key and sink the whole version. This full header+payload coverage is a
   property of the current striped format. The legacy non-striped format, which
   `bfs push` no longer writes, validates only the manifest's payload hash on
-  restore, so header bit-rot there — the KDF salt included — is undetected and
+  restore, so header bit-rot there - the KDF salt included - is undetected and
   can block decryption of an entire version; re-pushing the backup rewrites it
   in the current striped format, which restores single-damaged-shard
   survivability. A wrong password is distinguished from corruption: it fails a
@@ -222,36 +233,40 @@ enforced separately, in layers:
   the same distinction at its entry point: when the shard `bfs recovery
   --bootstrap` starts from will not open, that shard is checked against its own
   checksum before the password is blamed, and one that fails is reported as
-  damaged — pointing at any other device of the same backup, which carries the
-  same information — instead of prompting for a password that could not help.
+  damaged - pointing at any other device of the same backup, which carries the
+  same information - instead of prompting for a password that could not help.
   `bfs verify` and `bfs
   recovery` read only the shard header window (see *Format validation*): they
   confirm a shard is present and carries a consistent header, but do not
-  re-check its payload bytes. `bfs verify --deep` closes that gap on demand —
+  re-check its payload bytes. `bfs verify --deep` closes that gap on demand -
   it streams every shard end-to-end and re-computes its trailing checksum,
   catching silent bit-rot the header check misses and setting the affected shard
   aside as damaged. It needs no password (the checksum covers the stored bytes,
   ciphertext included) but downloads all shard data, so it is opt-in.
 - **Content hash.** The reconstructed backup data is checked against the SHA-256
-  content hash recorded for the backup. Individual files are checked too: on the
-  default compressed path each file is validated against a stored CRC-32 and its
-  declared size, and on the uncompressed path against a per-file SHA-256.
+  content hash recorded for the backup. Individual files are checked too, by the
+  same means on both paths: the backup's file table records each file's
+  uncompressed size and a per-file SHA-256, and a restore verifies both before
+  writing the file. On the compressed path the archive's own CRC-32 is checked as
+  well, so that path carries two independent checks. A backup written in the
+  older layout, which `bfs push` no longer produces, has no per-file entries for
+  a compressed archive and rests on the CRC-32 alone.
 - **Authentication tag.** For an encrypted backup, each shard is a single
   AES-GCM message whose 16-byte tag detects any tampering on decryption.
-- **Format validation.** Every shard — and, where a provider keeps the updated
-  header in a separate sidecar file, every sidecar — begins with a fixed format
+- **Format validation.** Every shard - and, where a provider keeps the updated
+  header in a separate sidecar file, every sidecar - begins with a fixed format
   marker that is checked before any field is parsed; a sidecar additionally
   carries its own SHA-256. A bad marker or checksum is treated as corruption and
   the read is rejected.
 - **Cross-provider consensus (recovery).** Rebuilding a backup's metadata on a
   fresh machine cross-checks shard headers held by *different* providers. When
   BFS bootstraps from one provider's shard, it compares that header against a
-  second provider's — backup UUID, content hash, version, scheme, and the
-  encryption flag — and aborts recovery as suspected tampering if they disagree.
+  second provider's - backup UUID, content hash, version, scheme, and the
+  encryption flag - and aborts recovery as suspected tampering if they disagree.
   As each further version is rebuilt, the same comparison (minus the encryption
   flag) instead marks that version as lacking consensus and continues. This is
   the one check that can catch a single provider serving an altered header, even
-  for an unencrypted backup — though it does not cover the payload, nor tampering
+  for an unencrypted backup - though it does not cover the payload, nor tampering
   applied consistently across the providers an attacker controls.
 
 On the backup side, BFS never follows symbolic links or packs special files
@@ -261,13 +276,13 @@ silently followed (`bfs push` stops on them unless you pass `--allow-excluded` o
 list them in `.bfsignore`). As further defense-in-depth, a restore refuses to
 write any file whose stored path would land outside the directory you are
 restoring into (absolute paths, `..` traversal, NUL bytes). BFS also rejects a
-backup — or an individual shard —
+backup - or an individual shard -
 whose internal size fields have been altered to implausible values, failing with
 a clear error rather than over-allocating memory or failing unpredictably; the
 shard-header check runs during verify and recovery as well as restore. And
-because compression is on by default, a restore caps how far the embedded archive
-may expand — bounded by the smaller of the on-disk data size times a fixed
-maximum deflate ratio and half of the machine's RAM — so a tampered or
+when the packed data is compressed, a restore caps how far the embedded archive
+may expand - bounded by the smaller of the on-disk data size times a fixed
+maximum deflate ratio and half of the machine's RAM - so a tampered or
 maliciously crafted archive that would inflate past that ceiling is stopped
 before it can exhaust memory.
 
@@ -277,14 +292,15 @@ whatever the umask would have given it, and an executable stays executable. That
 mode is a field in the backup's file table like any other, which places it under
 the same trust boundary as the rest: for an **encrypted** backup the field is
 covered by the AES-GCM tag and cannot be altered undetected, while for an
-**unencrypted** one it falls under the cleartext-trust limitation described below
-— an attacker who controls the parts can set it, `setuid` and `setgid` bits
+**unencrypted** one it falls under the cleartext-trust limitation described below -
+an attacker who controls the parts can set it, `setuid` and `setgid` bits
 included, and recompute the checksums that guard it. Restoring an unencrypted
 backup you do not fully trust is therefore something to do as an ordinary user
 rather than as `root`: a forged `setuid` bit is only worth something to an
 attacker if the restoring account is privileged. On Windows the mode bits are a
-no-op, and a backup written before this release is restored without its recorded
-mode — exactly as it always was.
+no-op, and a legacy backup whose backup data uses the older layout is restored
+without its mode reapplied - an uncompressed one still records the field but does
+not put it back, and a compressed one never recorded per-file modes at all.
 
 Together these bound what a corrupted or faulty storage device can do during a
 restore. They are not, however, a substitute for encryption: apart from the
@@ -296,13 +312,13 @@ to a key you hold and cannot be forged without it.
 
 ### Overwriting a different backup on shared storage
 
-One storage location can end up holding two different backups — two machines
+One storage location can end up holding two different backups - two machines
 running `bfs init documents` against the same network share, or a path reused
 after a backup was abandoned. Before writing anything, `bfs init`, `bfs push` and
 `bfs provider add` read the backup UUID recorded in the parts already present at
 that location and refuse to proceed when it belongs to a *different* backup. The
 refusal is unconditional: there is no `--force` and no prompt, because the loss it
-prevents is silent and total — the second machine's push would otherwise replace
+prevents is silent and total - the second machine's push would otherwise replace
 the first machine's only copy.
 
 This bounds accidental destruction, not a hostile co-tenant: anyone who holds
@@ -315,19 +331,19 @@ you would not trust with the data.
 
 `bfs push` reads each file exactly once while packing, so the resulting blob is
 always internally consistent and restorable. To catch files that change on disk
-*while* a push runs, it brackets the pack with two directory snapshots — each
-file's size and modification time (`mtime`) before packing and again after — and
+*while* a push runs, it brackets the pack with two directory snapshots - each
+file's size and modification time (`mtime`) before packing and again after - and
 reports any file that changed, vanished, or appeared in between. In an
 interactive terminal you are asked whether to accept the drifted backup (still
 fully restorable, just not current for that file) or retry without touching
 files; a non-interactive push refuses by default and requires `--allow-drift` to
-accept. `--allow-drift` waives only *currency* — never *recoverability*, which
+accept. `--allow-drift` waives only *currency* - never *recoverability*, which
 the single-read pack guarantees for every blob.
 
 This check compares size and `mtime`, not file contents: a change that preserves
 **both** a file's size and its `mtime` is not detected. Doing so requires
-deliberately forging the modification time — a user who does that is knowingly
-corrupting their own backup — so it is out of scope, alongside the other
+deliberately forging the modification time - a user who does that is knowingly
+corrupting their own backup - so it is out of scope, alongside the other
 cleartext-trust limitations of an unencrypted backup. The check is designed to
 surface accidental mid-push edits and ordinary saves, not an adversary forging
 timestamps.
@@ -339,9 +355,9 @@ AES-GCM can safely encrypt only a bounded amount of data under one
 wraps). BFS encrypts each shard as one GCM message, so the limit applies per
 shard. `bfs push` **refuses** to encrypt when a single data unit would exceed
 **60 GiB** (a margin below the hard limit), with an error suggesting you raise
-the data count (`bfs scheme set`) or back up a smaller directory — rather than
+the data count (`bfs scheme set`) or back up a smaller directory - rather than
 silently weakening the encryption. Because each shard holds roughly
-`backup_size / N`, the total encrypted backup can be up to about `60 GiB × N`.
+`backup_size / N`, the total encrypted backup can be up to about `60 GiB x N`.
 
 ## Disaster Recovery and Interactivity
 
@@ -352,25 +368,25 @@ degrades gracefully instead (see *Known limitations*). A password
 supplied once via `--bootstrap` is reused for every storage location that shares
 it, so a typical single-server setup recovers without extra prompts; only
 locations with a *different* credential are prompted for. A location that needs
-no secret at all — an anonymous or guest resource — is never prompted, because
+no secret at all - an anonymous or guest resource - is never prompted, because
 the shard location map records that it requires no input.
 
 Before any storage password is sent during recovery, BFS shows the destination
-host it is about to send it to and lets you decline — so a tampered location map
+host it is about to send it to and lets you decline - so a tampered location map
 in an unencrypted backup cannot redirect your password to an attacker's server.
 The recovered locations are also cross-checked across providers (see *Integrity
-of a restored backup → Cross-provider consensus*), and the first write after
-recovery — a push, or a `bfs provider remove` that relocates or rebuilds storage
-— re-confirms each destination before data is sent there. Unattended recovery can
+of a restored backup -> Cross-provider consensus*), and the first write after
+recovery - a push, or a `bfs provider remove` that relocates or rebuilds storage -
+re-confirms each destination before data is sent there. Unattended recovery can
 pre-approve the recovered hosts with `bfs recovery --trust-locations`, skipping
 the per-destination prompt. An encrypted backup's location map is authenticated
 by its AES-GCM tag and was never exposed to this redirection.
 
 Known limitations:
 
-- **No interactive terminal → graceful degrade.** In an environment without a
+- **No interactive terminal -> graceful degrade.** In an environment without a
   TTY (CI, cron, a test harness), a provider that needs a password is skipped
-  rather than prompted, and recovery never crashes — but that provider's shard
+  rather than prompted, and recovery never crashes - but that provider's shard
   is unavailable for the recovery.
 - **No non-interactive path to supply a transport password yet.** Fully
   recovering a stripped backup that needs a credential other than the bootstrap
@@ -395,14 +411,14 @@ The following are explicitly outside BFS's threat model:
   (including plaintext provider credentials) and any decrypted data.
 - **Password strength.** The confidentiality of an encrypted backup rests
   entirely on the password you choose; BFS does not enforce a policy.
-- **Cleartext header metadata.** A fixed set of header fields — backup name,
+- **Cleartext header metadata.** A fixed set of header fields - backup name,
   size, scheme, content hash, the random backup UUID, the shard index and
-  version, the encryption flag, and more — is not hidden (see *Metadata exposed
+  version, the encryption flag, and more - is not hidden (see *Metadata exposed
   in cleartext* for the complete list).
 - **Traffic and access-pattern analysis.** BFS does not obscure when, how often,
   or in what sizes it talks to your providers.
 - **Provider-side security of your storage accounts** (their own authentication
   and access controls). See *Transport to a provider* for what each adapter does
-  and does not secure over the network — including plain FTP as an explicit
+  and does not secure over the network - including plain FTP as an explicit
   opt-out.
 - **Recovery of a lost password.** There is no escrow or backdoor by design.

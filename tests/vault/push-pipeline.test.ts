@@ -17,7 +17,7 @@ import { registerSecretProvider, SecretLocalProvider, secretProviderConfig, unre
 
 // Hoisted mid-pack mutation target. When armed, the mocked fs.readFile below
 // performs a real on-disk rewrite of `mutateFile` the moment `triggerFile` is
-// read during packing — reproducing an external process changing a file inside
+// read during packing - reproducing an external process changing a file inside
 // the pack window, so snapshotAfter diverges from snapshotBefore (drift).
 // Null = pure call-through, so every other test in this file sees the real fs.
 const midPack = vi.hoisted(() => ({ target: null as Nullable<{ triggerFile: string; mutateFile: string; mutateContent: Buffer }> }));
@@ -32,7 +32,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const readFile = (async (p: unknown, options: unknown) => {
     const t = midPack.target;
     if (t && typeof p === 'string' && p === t.triggerFile) {
-      await actual.writeFile(t.mutateFile, t.mutateContent); // real writeFile — bypasses the mock
+      await actual.writeFile(t.mutateFile, t.mutateContent); // real writeFile - bypasses the mock
     }
     return actual.readFile(p as never, options as never);
   }) as typeof actual.readFile;
@@ -244,7 +244,7 @@ describe('push catalog drift verification', () => {
 
   // End-to-end proof: a source file changes inside the pack window (mtime + size),
   // so snapshotAfter diverges from snapshotBefore. The mocked fs.readFile rewrites
-  // `a-first.bin` the instant `z-last.bin` is read during packing — the earlier
+  // `a-first.bin` the instant `z-last.bin` is read during packing - the earlier
   // file's blob bytes are already captured, matching a real mid-push mutation.
   describe('end-to-end mid-pack drift', () => {
     async function tmpDir(): Promise<string> {
@@ -292,7 +292,7 @@ describe('push catalog drift verification', () => {
       const dirs = [await tmpDir(), await tmpDir(), await tmpDir()];
       const firstAbs = path.join(root, 'a-first.bin');
       const lastAbs = path.join(root, 'z-last.bin');
-      const lastContent = Buffer.alloc(256, 0xbb); // never mutated — must restore byte-for-byte
+      const lastContent = Buffer.alloc(256, 0xbb); // never mutated - must restore byte-for-byte
       await fs.writeFile(firstAbs, Buffer.alloc(256, 0xaa));
       await fs.writeFile(lastAbs, lastContent);
       await initVault(root, dirs);

@@ -1,23 +1,23 @@
 # shellcheck shell=bash
 # Explicit guard: `bfs --cwd <vault>` invoked from an unrelated process cwd
 # must place every artifact (.bfs/, cache, push.lock, manifests, shards) under
-# <vault>, not under the spawn cwd. Run the full create→partial→resume cycle
+# <vault>, not under the spawn cwd. Run the full create->partial->resume cycle
 # through the flag and assert the spawn cwd stays empty the whole time.
 #
 # Other scenarios already exercise --cwd implicitly (run_bfs always passes it),
-# but they live in $REPO_ROOT — they would let a hypothetical bug "writes to
+# but they live in $REPO_ROOT - they would let a hypothetical bug "writes to
 # process.cwd() instead of --cwd" land in the repository unnoticed. This
 # scenario uses a dedicated, expected-empty spawn cwd so the negative
 # assertion is precise.
 
-SCENARIO_NAME="--cwd × cache isolation (spawn cwd stays untouched)"
+SCENARIO_NAME="--cwd x cache isolation (spawn cwd stays untouched)"
 SCENARIO_DESC="bfs --cwd <vault> from unrelated cwd; full push/partial/resume; spawn cwd empty"
 REQUIRES_LOCAL=4
 REQUIRES_FTP=0
 
 # run_bfs_from <spawn-cwd> <vault> <bfs-args...>
 # Mirrors run_bfs but lets the caller pick the process cwd of the spawned
-# tsx. Same globals (BFS_EXIT / BFS_OUT / …) so existing asserts apply.
+# tsx. Same globals (BFS_EXIT / BFS_OUT / ...) so existing asserts apply.
 run_bfs_from() {
   local spawn_cwd="$1" vault="$2"
   shift 2
@@ -42,7 +42,7 @@ run_bfs_from() {
 $BFS_STDERR"
 
   if [ "${VERBOSE:-0}" = "1" ]; then
-    printf '    \033[2m→ exit %s\033[0m\n' "$BFS_EXIT"
+    printf '    \033[2m-> exit %s\033[0m\n' "$BFS_EXIT"
     [ -n "$BFS_OUT" ] && printf '%s\n' "$BFS_OUT" | sed 's/^/      | /'
   fi
   return 0
@@ -68,14 +68,14 @@ scenario_run() {
   mkdir -p "$spawn_cwd"
   assert_spawn_cwd_empty "$spawn_cwd"
 
-  # ── init from unrelated cwd ────────────────────────────────────────────────
+  # -- init from unrelated cwd ------------------------------------------------
   run_bfs_from "$spawn_cwd" "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 3 --parity-shards 1 "${PROVIDER_ARGS[@]}"
   assert_ok
   assert_file "$vault/.bfs/config.json"
   assert_spawn_cwd_empty "$spawn_cwd"
 
-  # ── healthy push from unrelated cwd ────────────────────────────────────────
+  # -- healthy push from unrelated cwd ----------------------------------------
   run_bfs_from "$spawn_cwd" "$vault" push --new
   assert_ok
   assert_lock_absent "$vault"
@@ -86,7 +86,7 @@ scenario_run() {
   assert_file "$(shard_file 3 1)"
   assert_spawn_cwd_empty "$spawn_cwd"
 
-  # ── partial push from unrelated cwd → forensic state lands in vault ───────
+  # -- partial push from unrelated cwd -> forensic state lands in vault -------
   local broken="${PV_LOCALDIR[2]}"
   rm -rf "$broken"
   : >"$broken"
@@ -99,7 +99,7 @@ scenario_run() {
   assert_file "$vault/.bfs/cache/push.blob.pending"
   assert_spawn_cwd_empty "$spawn_cwd"
 
-  # ── resume via --cache --overwrite from unrelated cwd ──────────────────────
+  # -- resume via --cache --overwrite from unrelated cwd ----------------------
   rm -f "$broken"
   mkdir -p "$broken"
 
@@ -111,12 +111,12 @@ scenario_run() {
   assert_no_file "$vault/.bfs/cache/push.blob.pending"
   assert_spawn_cwd_empty "$spawn_cwd"
 
-  # ── pull from unrelated cwd into the vault directory ──────────────────────
+  # -- pull from unrelated cwd into the vault directory ----------------------
   run_bfs_from "$spawn_cwd" "$vault" pull --force --yes
   assert_ok
   assert_spawn_cwd_empty "$spawn_cwd"
 
-  # ── clear from unrelated cwd: cwd still empty afterwards ──────────────────
+  # -- clear from unrelated cwd: cwd still empty afterwards ------------------
   # Seed a stale lock so clear has work to do, then verify it targets vault.
   : >"$vault/.bfs/push.lock"
   run_bfs_from "$spawn_cwd" "$vault" clear

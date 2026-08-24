@@ -1,11 +1,11 @@
 # shellcheck shell=bash
-# Partial push where the emergency RAM→disk cache dump itself cannot land
+# Partial push where the emergency RAM->disk cache dump itself cannot land
 # (broken cache dir). The lock must explicitly record blob_pending_path=null;
 # `bfs push --cache` must refuse with PushCacheUnavailableError instead of
 # the misleading "missing file" message; recovery is bfs clear + fresh push.
 
 SCENARIO_NAME="partial push: cache write fails, lock records null"
-SCENARIO_DESC="broken cache dir → push.lock with blob_pending_path=null → bfs push --cache refuses cleanly"
+SCENARIO_DESC="broken cache dir -> push.lock with blob_pending_path=null -> bfs push --cache refuses cleanly"
 REQUIRES_LOCAL=4
 REQUIRES_FTP=0
 
@@ -42,19 +42,19 @@ scenario_run() {
     || _fail "expected .bfs/cache/push.blob.pending to remain a directory (write failed)"
 
   # Lock must record blob_pending_path=null. Use grep -F on the raw JSON
-  # rather than parsing — scenarios are bash, no jq dependency.
+  # rather than parsing - scenarios are bash, no jq dependency.
   grep -qF '"blob_pending_path": null' "$vault/.bfs/push.lock" \
     || _fail "expected push.lock.blob_pending_path === null. Got:
 $(cat "$vault/.bfs/push.lock")"
 
-  # bfs push --cache must refuse with the dedicated message — not the
+  # bfs push --cache must refuse with the dedicated message - not the
   # generic "missing: <path>" one, because the lock is honest about cache
   # never being persisted.
   run_bfs "$vault" push --cache
   assert_fail
   assert_out_contains "indicates"
   assert_out_contains "cache"
-  # Distinct from PushCacheNoLockError — that one says "requires both"
+  # Distinct from PushCacheNoLockError - that one says "requires both"
   if printf '%s' "$BFS_OUT" | grep -qF '\`--cache\` requires both'; then
     _fail "expected PushCacheUnavailableError text, got PushCacheNoLockError text:
 $BFS_OUT"

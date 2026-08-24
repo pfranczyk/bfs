@@ -17,7 +17,7 @@ describeOrSkip('_handleExcludedEntries (real symlink, POSIX)', () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'bfs-excluded-'));
     await writeFile(join(dir, 'real.txt'), 'content');
-    await symlink('real.txt', join(dir, 'link.txt')); // symlink → file
+    await symlink('real.txt', join(dir, 'link.txt')); // symlink -> file
   });
 
   afterEach(async () => {

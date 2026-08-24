@@ -1,5 +1,5 @@
 /**
- * Push pipeline — full implementation of `bfs push`.
+ * Push pipeline - full implementation of `bfs push`.
  *
  * This module contains the push() function and all its private helpers.
  * vault-manager.ts re-exports push and buildRemotePath as the public entry points.
@@ -13,11 +13,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { estimateBlobSize, packBlob, packBlobToFile, packBlobToFileZipped, scanDirClassified } from '../core/blob-pack.js';
-import { parseBlobFileTable } from '../core/blob-unpack.js';
+import { parseBlobFileTable, parseBlobFileTableFromFile } from '../core/blob-unpack.js';
 import { trackFile, untrackFile } from '../core/cleanup.js';
 import { deriveKey, deriveShardNonce, encryptStream, exceedsGcmPlaintextLimit, GCM_MAX_PLAINTEXT_BYTES, generateSalt } from '../core/crypto.js';
 import type { SkippedFile } from '../core/errors.js';
-import { BfsError, ProviderError, PushCacheNoLockError, PushCacheUnavailableError, PushDriftError, PushExcludedError, PushSkippedError } from '../core/errors.js';
+import { BfsError, ProviderError, PushCacheCorruptedError, PushCacheNoLockError, PushCacheUnavailableError, PushDriftError, PushExcludedError, PushSkippedError } from '../core/errors.js';
 import { hashBuffer, hashStream, SHA256_BYTES } from '../core/hash.js';
 import { appendToBfsignore, createIgnoreFilter } from '../core/ignore.js';
 import { calcShardPayloadSize, rsEncodeStriped } from '../core/reed-solomon.js';
@@ -25,7 +25,7 @@ import { buildShardStream, serializeShardHeader, uuidToBuffer, V2_MAX_STRIPE_SIZ
 import { fmt, t } from '../i18n/index.js';
 import { providerRegistry } from '../providers/provider.js';
 import type { CatalogDrift, ExcludedEntry, ManifestShard, ProviderConfig, ProviderIO, PushOptions, PushResult, ShardHeader, ShardLocation, StorageProvider, VaultConfig, VaultState, VersionManifest } from '../types/index.js';
-import { BLOB_FLAGS, PushMode, VersionHealth } from '../types/index.js';
+import { PushMode, VersionHealth } from '../types/index.js';
 import { catalogHasDrift, diffCatalog, snapshotCatalog } from './catalog-verify.js';
 import { assertSchemeValid, readConfig } from './config.js';
 import { splitLocationSecrets } from './location-map.js';
@@ -36,15 +36,19 @@ import { confirmRecoveredLocations } from './recovered-locations.js';
 import { readState, writeState } from './state.js';
 import { assertNoForeignVault } from './vault-collision.js';
 
-// ─── Push-only V2 constants ──────────────────────────────────────────────────
+// --- Push-only V2 constants --------------------------------------------------
 // V2_STRIPE_SIZE is intentionally kept in vault-manager.ts because pull needs it too.
 
 /** Minimum stripe size floor (16 MiB). */
 const V2_MIN_STRIPE_SIZE = 16 * 1024 * 1024;
-/** packBlob() uses Buffer.concat — cap to avoid excessive RAM from double-buffering. */
+/** packBlob() uses Buffer.concat - cap to avoid excessive RAM from double-buffering. */
 const V2_MAX_BLOB_IN_RAM = 4 * 1024 * 1024 * 1024;
 
-// ─── RAM budget utilities ────────────────────────────────────────────────────
+/** Magic bytes and fixed header size of the BFS blob format. */
+const BLOB_MAGIC = Buffer.from([0x42, 0x46, 0x53, 0x00]);
+const BLOB_HEADER_SIZE = 70;
+
+// --- RAM budget utilities ----------------------------------------------------
 
 /** Resolves the RAM budget in bytes from user config or system auto-detect. */
 function resolveRamBudget(maxRamMb: Nullable<number> | undefined): number {
@@ -59,8 +63,9 @@ interface StripeSizeParams {
 }
 
 /**
- * Computes the optimal stripe size given a RAM budget.
- * Peak RS encoding RAM = (N + K) × stripeSize bytes.
+ * Computes the stripe size that fits a RAM budget, dividing it by (N + K).
+ * Encoding peaks above that - see computeRamThreshold for why the budget is
+ * optimistic (`proposals/followups.plan.md` #3).
  */
 function computeStripeSize(params: StripeSizeParams): number {
   const ramBytes = resolveRamBudget(params.maxRamMb);
@@ -70,7 +75,7 @@ function computeStripeSize(params: StripeSizeParams): number {
 }
 
 /**
- * Per-shard plaintext payload size (bytes) for striped encoding — identical for
+ * Per-shard plaintext payload size (bytes) for striped encoding - identical for
  * data and parity shards, and equal to what passes through one encryptStream
  * (a single AES-GCM key+nonce). Used both to size the upload and to guard the
  * GCM plaintext limit.
@@ -82,7 +87,11 @@ function rawShardPayloadSize(blobSize: number, N: number, stripeSize: number): n
 
 /**
  * Computes the RAM threshold for keeping the blob in memory vs writing to disk.
- * Reserves only the actual RS encoding overhead: (N+K) × V2_MAX_STRIPE_SIZE.
+ * Reserves (N+K) x V2_MAX_STRIPE_SIZE for the RS encoder. That reservation is
+ * smaller than what encoding actually peaks at - rsEncodeStriped also holds an
+ * N-wide input block, and the WASM encoder copies the working block into its own
+ * linear memory - so the budget is optimistic by design until that is reworked
+ * (`proposals/followups.plan.md` #3).
  */
 function computeRamThreshold(maxRamMb: Nullable<number> | undefined, N: number, K: number): number {
   const ramBytes = resolveRamBudget(maxRamMb);
@@ -90,11 +99,11 @@ function computeRamThreshold(maxRamMb: Nullable<number> | undefined, N: number, 
   return Math.min(Math.max(0, ramBytes - rsOverhead), V2_MAX_BLOB_IN_RAM);
 }
 
-// ─── V2 streaming helpers (push-only) ───────────────────────────────────────
+// --- V2 streaming helpers (push-only) ---------------------------------------
 
 /**
  * Async generator that yields fixed-size stripe chunks for one data shard.
- * Each yield covers one stripe — the shard's slice of each RS stripe row.
+ * Each yield covers one stripe - the shard's slice of each RS stripe row.
  *
  * @param source     - Blob as Buffer (RAM) or file path (disk)
  * @param blobSize   - Total blob byte count
@@ -141,11 +150,11 @@ function _stripedShardStream(source: Buffer | string, blobSize: number, shardInd
   return Readable.from(_stripedShardChunks(source, blobSize, shardIndex, N, stripeSize));
 }
 
-// ─── Shared utilities (local copy — push must not import vault-manager) ──
+// --- Shared utilities (local copy - push must not import vault-manager) --
 
 /**
  * Validates that a configured directory (or its parent) exists before use.
- * A local copy — the no-import-from-vault-manager rule forbids sharing it
+ * A local copy - the no-import-from-vault-manager rule forbids sharing it
  * through that module.
  */
 async function _validateConfigDir(dir: string, configFlag: string): Promise<void> {
@@ -173,11 +182,87 @@ async function _hashBlobWithoutChecksum(source: Buffer | string, size: number): 
     return hashBuffer(source.subarray(0, size - SHA256_BYTES));
   }
   // createReadStream `end` is inclusive (0-indexed), so the last hashed byte
-  // is size - SHA256_BYTES - 1 — exactly the bytes before the trailing checksum.
+  // is size - SHA256_BYTES - 1 - exactly the bytes before the trailing checksum.
   return hashStream(createReadStream(source, { start: 0, end: size - SHA256_BYTES - 1 }));
 }
 
-// ─── buildRemotePath ─────────────────────────────────────────────────────────
+/**
+ * Verifies a cached blob against the SHA-256 sealed in its own last 32 bytes.
+ *
+ * Every other path packs the blob and uploads it within one run, so its bytes
+ * cannot change in between. A resume is the exception: the file has been sitting
+ * on disk since an earlier run and may have rotted there. Nothing downstream
+ * would notice - the parts are sealed over whatever they are handed, so a
+ * corrupt blob yields a version that verifies, deep-verifies, and only fails at
+ * the first restore, blaming the storage for damage that happened locally.
+ *
+ * The verified digest is returned rather than discarded: it is by definition the
+ * same value `blob_hash` carries, so the caller reuses it instead of hashing the
+ * file a second time. That matters here more than anywhere - a resume exists for
+ * backups too large to push in one go.
+ *
+ * A file that never finished becoming a blob is a different case and keeps its
+ * older behaviour: an interrupted pack writes the header LAST, so a Ctrl+C
+ * mid-pack leaves a zeroed prefix, and a plain BfsError sends that down the
+ * "no usable backup data" path, which packs the directory again by itself.
+ * Refusing there would turn a self-healing situation into two manual commands.
+ *
+ * @param cachePath - Path of the cached pending blob
+ * @param size      - Total blob byte count, including the trailing checksum
+ * @param io        - Provider IO used to announce the read before it starts
+ * @returns SHA-256 hex of the blob content, equal to the seal it was checked against
+ * @throws PushCacheCorruptedError when a genuine blob's content does not match its seal
+ * @throws BfsError when the file never became a blob (too short, or no magic)
+ */
+async function _verifyCachedBlobSeal(cachePath: string, size: number, io: ProviderIO): Promise<string> {
+  if (size <= BLOB_HEADER_SIZE + SHA256_BYTES) throw new BfsError('Cached backup data is too short to be a blob');
+  const seal = Buffer.alloc(SHA256_BYTES);
+  const magic = Buffer.alloc(BLOB_MAGIC.length);
+  const fh = await fs.open(cachePath, 'r');
+  try {
+    await fh.read(magic, 0, magic.length, 0);
+    if (magic.compare(BLOB_MAGIC) !== 0) throw new BfsError('Cached backup data does not start with a blob header');
+    const { bytesRead } = await fh.read(seal, 0, SHA256_BYTES, size - SHA256_BYTES);
+    if (bytesRead < SHA256_BYTES) throw new BfsError('Cached backup data is truncated below its checksum');
+  } finally {
+    await fh.close();
+  }
+  // Everything above is a pair of bounded reads; hashing walks the whole file, which is
+  // slowest exactly where a resume matters, so it announces itself first. The
+  // wording stops at "checking" - a cache that fails is refused, and a line
+  // claiming it is already in use would have to be taken back. Announcing only
+  // past the shape checks keeps it off the unfinished-pack path, which re-packs
+  // and would otherwise read as "checking... no cached backup data found".
+  io.info(t('vault_checking_cached_blob'));
+  const actual = await _hashBlobWithoutChecksum(cachePath, size);
+  if (actual !== seal.toString('hex')) throw new PushCacheCorruptedError(cachePath);
+  return actual;
+}
+
+/**
+ * Reads how many files a cached blob holds and their uncompressed total from its
+ * file table. A V2 blob carries one entry per user file in both the plain and the
+ * compressed layout, so compression makes no difference to what can be read here.
+ *
+ * @param cachePath - Path of the cached pending blob, already checked against its seal
+ * @returns File count and total uncompressed size, as the manifest records them
+ * @throws PushCacheCorruptedError when the file table cannot be parsed
+ */
+async function _readCachedBlobFigures(cachePath: string): Promise<{ file_count: number; total_size: number }> {
+  try {
+    const entries = await parseBlobFileTableFromFile(cachePath);
+    return { file_count: entries.length, total_size: entries.reduce((s, e) => s + Number(e.size), 0) };
+  } catch (err) {
+    // The seal already proved these are the bytes the interrupted run wrote, so
+    // a file table that will not parse means the blob contradicts itself - and a
+    // restore reads that same table, so this cache could never be unpacked.
+    // Saying so beats falling through to a silent re-pack that discards it.
+    if (err instanceof BfsError) throw new PushCacheCorruptedError(cachePath);
+    throw err;
+  }
+}
+
+// --- buildRemotePath ---------------------------------------------------------
 
 /**
  * Builds the remote_path for a shard on a given provider.
@@ -188,7 +273,7 @@ export function buildRemotePath(providerConfig: ProviderConfig, vaultName: strin
   return [base, vaultName, filename].join('/').replace(/\\/g, '/');
 }
 
-// ─── openProviders ───────────────────────────────────────────────────────────
+// --- openProviders -----------------------------------------------------------
 
 /** Creates, authenticates, and sets vault name on all providers in config. */
 async function openProviders(config: VaultConfig, io: ProviderIO): Promise<StorageProvider[]> {
@@ -216,16 +301,16 @@ async function _assertNoForeignVaults(config: VaultConfig, io: ProviderIO): Prom
   }
 }
 
-// ─── Push lock ───────────────────────────────────────────────────────────────
+// --- Push lock ---------------------------------------------------------------
 
 /**
  * Acquires .bfs/push.lock for the current push attempt. The lock is the
  * concurrency mutex: a fresh push takes it atomically (acquirePushLock,
- * O_EXCL), so two overlapping pushes cannot both proceed. For fromCache=true
- * it validates that both the lock and cached blob exist (throws
- * PushCacheNoLockError otherwise), refuses only under a live concurrent
- * operation (acquireCachePushLock), then resets uploaded/failed for a fresh
- * retry.
+ * O_EXCL), so two overlapping pushes cannot both proceed. For fromCache=true it
+ * validates the resume state - a lock recording no cache throws
+ * PushCacheUnavailableError, a missing lock or missing cached blob throws
+ * PushCacheNoLockError - refuses only under a live concurrent operation
+ * (acquireCachePushLock), then resets uploaded/failed for a fresh retry.
  */
 async function _initPushLock(rootDir: string, fromCache: boolean, cachePath: string, targetVersion: number, config: VaultConfig): Promise<PushLock> {
   const lockPath = pushLockPath(rootDir);
@@ -267,7 +352,7 @@ async function _initPushLock(rootDir: string, fromCache: boolean, cachePath: str
   return lock;
 }
 
-// ─── Error classification + health ──────────────────────────────────────────
+// --- Error classification + health ------------------------------------------
 
 /**
  * Classifies an upload failure into a PushLockFailedReason + human detail.
@@ -297,7 +382,7 @@ export function _classifyUploadError(e: unknown): { reason: PushLockFailedReason
 
 /**
  * Maps the uploaded shard count to a VersionHealth value.
- * Throws BfsError when zero — caller must NOT write a manifest in that case.
+ * Throws BfsError when zero - caller must NOT write a manifest in that case.
  */
 function _computeHealth(uploaded: number, N: number, K: number): VersionHealth {
   if (uploaded === N + K) return VersionHealth.Healthy;
@@ -306,7 +391,7 @@ function _computeHealth(uploaded: number, N: number, K: number): VersionHealth {
   throw new BfsError(fmt('push_damaged_zero', String(N), String(N + K)));
 }
 
-// ─── Push helpers ─────────────────────────────────────────────────────────────
+// --- Push helpers -------------------------------------------------------------
 
 interface LoadOrPackBlobOptions {
   rootDir: string;
@@ -327,6 +412,13 @@ interface BlobPackResult {
   file_count: number;
   total_size: number;
   skipped: SkippedFile[];
+  /**
+   * Content hash, when this path already had to compute it. A resume verifies
+   * the cache against its own seal, and that digest is exactly `blob_hash`, so
+   * carrying it forward saves a second full pass over a file that is large by
+   * definition. Null on the packing paths, which have nothing to reuse.
+   */
+  blob_hash: Nullable<string>;
 }
 
 interface PackFreshBlobOptions {
@@ -360,7 +452,7 @@ async function _packFreshBlob(options: PackFreshBlobOptions): Promise<BlobPackRe
     await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
     trackFile(cachePath);
     const r = await packBlobToFileZipped(rootDir, cachePath, filter, vaultIdBuf);
-    return { blobSource: cachePath, blobSize: r.blobSize, file_count: r.fileCount, total_size: r.totalSize, skipped: r.skipped };
+    return { blobSource: cachePath, blobSize: r.blobSize, file_count: r.fileCount, total_size: r.totalSize, skipped: r.skipped, blob_hash: null };
   }
   const estimated = await estimateBlobSize(rootDir, filter);
   const ramThreshold = computeRamThreshold(maxRamMb, N, K);
@@ -375,12 +467,12 @@ async function _packFreshBlob(options: PackFreshBlobOptions): Promise<BlobPackRe
   if (useRamPath) {
     const r = await packBlob(rootDir, filter, vaultIdBuf);
     const entries = parseBlobFileTable(r.blob);
-    return { blobSource: r.blob, blobSize: r.blob.length, file_count: entries.length, total_size: entries.reduce((s, e) => s + Number(e.size), 0), skipped: r.skipped };
+    return { blobSource: r.blob, blobSize: r.blob.length, file_count: entries.length, total_size: entries.reduce((s, e) => s + Number(e.size), 0), skipped: r.skipped, blob_hash: null };
   }
   await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
   trackFile(cachePath);
   const r = await packBlobToFile(rootDir, cachePath, filter, vaultIdBuf);
-  return { blobSource: cachePath, blobSize: r.blobSize, file_count: r.fileCount, total_size: r.totalSize, skipped: r.skipped };
+  return { blobSource: cachePath, blobSize: r.blobSize, file_count: r.fileCount, total_size: r.totalSize, skipped: r.skipped, blob_hash: null };
 }
 
 /**
@@ -397,20 +489,37 @@ async function _loadOrPackBlob(options: LoadOrPackBlobOptions): Promise<BlobPack
   const { rootDir, cachePath, cacheDir, vaultIdBuf, shouldCompress, maxRamMb, N, K, io } = options;
   if (options.fromCache) {
     try {
+      // Read the cache by offsets and hand the rest of the pipeline a PATH. This
+      // branch exists for a blob that was already too big to push in one go, so
+      // slurping it whole is worst exactly where it is needed most - and past
+      // Node's 2 GiB single-read ceiling it does not merely strain memory, it
+      // throws. The catch below would then swallow that, report "no cached blob"
+      // and re-pack the directory from scratch, unlinking the very cache that
+      // BFS told the operator to resume from. Everything needed here is a
+      // prefix: the file table, which a V2 blob carries per user file whether or
+      // not the data section is compressed. Reading it is what lets the version
+      // report how many files it holds and how much they weigh - figures that
+      // describe the CACHED blob, not the directory as it stands now, which a
+      // resume deliberately no longer looks at.
       const stat = await fs.stat(cachePath);
-      const cacheBlob = await fs.readFile(cachePath);
-      const cacheFlags = cacheBlob.readUInt32LE(0x16);
-      const isCacheCompressed = (cacheFlags & BLOB_FLAGS.COMPRESSED) !== 0;
-      let file_count = 0;
-      let total_size = 0;
-      if (!isCacheCompressed) {
-        const entries = parseBlobFileTable(cacheBlob);
-        file_count = entries.length;
-        total_size = entries.reduce((s, e) => s + Number(e.size), 0);
-      }
+      const blob_hash = await _verifyCachedBlobSeal(cachePath, stat.size, io);
+      const { file_count, total_size } = await _readCachedBlobFigures(cachePath);
       io.info(t('vault_using_cached_blob'));
-      return { blobSource: cacheBlob, blobSize: stat.size, file_count, total_size, skipped: [] };
-    } catch {
+      return { blobSource: cachePath, blobSize: stat.size, file_count, total_size, skipped: [], blob_hash };
+    } catch (err) {
+      // A cache that fails its own seal is not "this is not usable backup data"
+      // - it IS backup data, whose bytes stopped agreeing with it. Falling
+      // through would unlink the evidence and silently re-pack, turning a signal
+      // that the disk is misbehaving into a longer push nobody asked for.
+      if (err instanceof PushCacheCorruptedError) throw err;
+      // Past the seal check, only a missing cache may fall through to a fresh
+      // pack, because the fallback starts by unlinking it. A read that broke for
+      // another reason - the file briefly locked by a scanner, a descriptor
+      // limit - says nothing about the bytes, and swallowing it would destroy
+      // the work an interrupted push already did, on the very path the operator
+      // was told to resume from.
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (!(err instanceof BfsError) && code !== 'ENOENT') throw err;
       io.info(t('vault_no_cached_blob_push'));
     }
   }
@@ -463,7 +572,7 @@ async function _writePushResults(options: WritePushResultsOptions): Promise<void
   };
   await writeManifest(rootDir, manifest);
   if (manifestShards.length >= 1) {
-    // A completed push confirms the provider locations are trusted — clear the
+    // A completed push confirms the provider locations are trusted - clear the
     // post-recovery "unconfirmed" gate so later pushes run unprompted.
     await writeState(rootDir, { latest_version: Math.max(state.latest_version, targetVersion), working_version: targetVersion, locations_confirmed: true });
   }
@@ -480,16 +589,19 @@ interface TargetVersionOptions {
   config: VaultConfig;
   state: VaultState;
   io: ProviderIO;
+  /** Pre-consents to the version-switch confirmation, skipping it entirely. */
+  yes?: boolean;
 }
 
 /**
  * Determines the target push version based on the effective PushMode.
  * May prompt the user interactively (Ask mode) and confirms when working_version
- * lags behind latest_version to prevent accidental overwrites.
+ * lags behind latest_version to prevent accidental overwrites. `yes` pre-consents
+ * to that confirmation.
  *
- * @param options - mode, config, state, io
+ * @param options - mode, config, state, io, yes
  * @returns Target version number for this push
- * @throws BfsError when the user cancels the confirmation dialog
+ * @throws BfsError when the user cancels, or when a run with no operator cannot confirm
  */
 async function _resolveTargetVersion(options: TargetVersionOptions): Promise<number> {
   const { config, state, io } = options;
@@ -508,7 +620,15 @@ async function _resolveTargetVersion(options: TargetVersionOptions): Promise<num
       targetVersion = state.latest_version + 1;
       break;
   }
-  if (state.working_version > 0 && state.working_version < state.latest_version) {
+  if (options.yes !== true && state.working_version > 0 && state.working_version < state.latest_version) {
+    // `--yes` carries this consent up front. Without it, a run with nobody in it
+    // names that flag and stops, rather than borrowing the wording of a
+    // cancellation nobody made - and it points at `push --yes`, never `bfs pull`,
+    // whose confirmation would overwrite the working directory (the single source
+    // of truth) instead of waiving a prompt.
+    if (io.interactive === false) {
+      throw new BfsError(fmt('push_version_switch_no_operator', String(state.working_version), String(state.latest_version), String(targetVersion)));
+    }
     const cont = await io.confirm(fmt('vault_push_version_confirm', String(state.working_version), String(state.latest_version), String(targetVersion)));
     if (!cont) throw new BfsError(t('push_cancelled'));
   }
@@ -647,7 +767,7 @@ interface BuildShardStreamsResult {
 /**
  * Builds the shard header, encrypts or passes through the payload, and assembles
  * the final shard Readable stream (header + payload + checksum placeholder).
- * Pure computation — no I/O.
+ * Pure computation - no I/O.
  *
  * @param options - all fields needed to construct one shard's binary stream
  * @returns { shardStream, shardFileSize }
@@ -706,7 +826,7 @@ interface UploadOneShardResult {
 /**
  * Uploads a single shard stream to its provider and updates push.lock.
  * On failure captures the error in lock.failed and performs an emergency
- * RAM→disk blob dump when the blob is still in-memory.
+ * RAM->disk blob dump when the blob is still in-memory.
  * Mutates `lock` in-place (object reference shared with the caller).
  *
  * @param options - all shard-specific data plus shared lock reference
@@ -724,7 +844,7 @@ async function _uploadOneShard(options: UploadOneShardOptions): Promise<UploadOn
     return { manifestShard, cacheDumpAttempted };
   } catch (e: unknown) {
     // Release the shard stream so its file-backed payload source (parity temp)
-    // is torn down now, before the parity files are unlinked after the loop —
+    // is torn down now, before the parity files are unlinked after the loop -
     // otherwise an orphaned read stream races the unlink and throws ENOENT.
     shardStream.destroy();
     const { reason, detail } = _classifyUploadError(e);
@@ -778,11 +898,11 @@ interface UploadAllShardsResult {
  * Runs the upload loop over all N+K shards with partial-commit semantics.
  * Each shard is built and uploaded independently; failures are recorded in
  * `lock` (mutated in-place) without aborting remaining shards.
- * An emergency RAM→disk blob dump is attempted on the first failure when
+ * An emergency RAM->disk blob dump is attempted on the first failure when
  * blobSource is a Buffer (so `bfs push --cache` can resume later).
  *
  * @param options - all data needed for the upload loop
- * @returns { manifestShards } — only successfully uploaded shards
+ * @returns { manifestShards } - only successfully uploaded shards
  */
 async function _uploadAllShards(options: UploadAllShardsOptions): Promise<UploadAllShardsResult> {
   const { config, providers, blobSource, parityPaths, locationMap, shardHashes, lock, cachePath, cacheDir, rootDir, targetVersion, N, K, stripeSize, encKey, kdf_salt, shouldEncrypt, blob_hash, blobSize, io } = options;
@@ -851,7 +971,7 @@ const DRIFT_LIST_LIMIT = 10;
 
 /**
  * Renders a drift breakdown as an indented, labelled file list for prompts and
- * warnings. Truncates to DRIFT_LIST_LIMIT lines with a "… and N more" tail.
+ * warnings. Truncates to DRIFT_LIST_LIMIT lines with a "... and N more" tail.
  *
  * @param drift - Drift buckets to render
  * @returns Multi-line string; each line is `  - <label>: <path>`
@@ -882,10 +1002,10 @@ interface HandleCatalogDriftOptions {
 }
 
 /**
- * Decision gate for a detected blob↔directory drift. No-op when there is no
+ * Decision gate for a detected blob<->directory drift. No-op when there is no
  * drift. With allowDrift it warns and proceeds (any mode). Interactive mode
  * prompts to accept or retry; declining throws BfsError. Non-interactive without
- * allowDrift throws PushDriftError. Every outcome keeps the blob restorable —
+ * allowDrift throws PushDriftError. Every outcome keeps the blob restorable -
  * the gate governs currency, never recoverability.
  *
  * @param options - drift, allowDrift, interactive, io
@@ -914,7 +1034,7 @@ const EXCLUDED_LIST_LIMIT = 10;
 
 /**
  * Renders excluded entries as an indented, labelled file list for prompts and
- * warnings. Truncates to EXCLUDED_LIST_LIMIT lines with a "… and N more" tail.
+ * warnings. Truncates to EXCLUDED_LIST_LIMIT lines with a "... and N more" tail.
  *
  * @param excluded - Entries excluded by type (symlinks/special files)
  * @returns Multi-line string; each line is `  - <label>: <path>`
@@ -971,7 +1091,7 @@ export async function _handleExcludedEntries(options: HandleExcludedEntriesOptio
     excluded = (await scanDirClassified(rootDir, createIgnoreFilter(rootDir))).excluded;
     // Progress guard: an entry still present after being appended to .bfsignore
     // has a name that cannot be encoded as a matching ignore pattern (trailing
-    // whitespace, an embedded newline, …). Stop with a clear error instead of
+    // whitespace, an embedded newline, ...). Stop with a clear error instead of
     // re-appending it forever.
     const stuck = excluded.filter((e) => beforePaths.has(e.path));
     if (stuck.length > 0) throw new BfsError(fmt('push_excluded_unignorable', _formatExcludedList(stuck)));
@@ -989,7 +1109,7 @@ interface BuildLocationMapOptions {
 /**
  * Builds the ShardLocation[] map embedded in each shard header. Each provider's
  * adapter-declared secret values are stripped from connection_config and their
- * names recorded in required_inputs — secrets must never travel inside shard
+ * names recorded in required_inputs - secrets must never travel inside shard
  * headers. No disk or network I/O; the input config is not mutated.
  *
  * @param options - config, targetVersion, shardHashes, io
@@ -1012,10 +1132,10 @@ function _buildLocationMap(options: BuildLocationMapOptions): ShardLocation[] {
   });
 }
 
-// ─── push() — main export ────────────────────────────────────────────────────
+// --- push() - main export ----------------------------------------------------
 
 /**
- * Full push pipeline: pack → [encrypt] → RS-encode → upload → manifest → state.
+ * Full push pipeline: pack -> [encrypt] -> RS-encode -> upload -> manifest -> state.
  *
  * Partial-commit semantics: shard upload failures are captured per shard in
  * .bfs/push.lock and the manifest is written with whichever shards succeeded
@@ -1023,11 +1143,16 @@ function _buildLocationMap(options: BuildLocationMapOptions): ShardLocation[] {
  * throws when 0 uploaded). State.json is updated whenever at least one shard
  * uploaded; lock + cached blob are removed only on full success.
  *
- * @returns PushResult with version, file_count, total_size, skipped, uploaded_count, failed, health
+ * @returns PushResult with version, file_count, total_size, skipped, excluded, uploaded_count, failed, health
  * @throws BfsError if config missing, password missing for encrypted vault, or zero shards uploaded
+ * @throws VaultCollisionError if a provider's location holds a different backup
  * @throws LockConcurrentActiveError if another push or repair operation is in progress
  * @throws LockPartialStatePushError if a leftover push.lock from a crashed/dead run is detected
  * @throws PushCacheNoLockError when fromCache=true but push.lock or cached blob is missing
+ * @throws PushCacheUnavailableError when fromCache=true and the lock records no cache to resume from
+ * @throws PushCacheCorruptedError when fromCache=true and the cached blob contradicts its own checksum
+ * @throws PushExcludedError (non-interactive) if entries cannot be backed up (symlinks / special files)
+ * @throws PushDriftError (non-interactive) if the directory changed while packing
  * @throws PushSkippedError (non-interactive) if any source files could not be read
  */
 export async function push(rootDir: string, options: PushOptions): Promise<PushResult> {
@@ -1043,7 +1168,7 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
     await confirmRecoveredLocations(config, options.io);
   }
   // Refuse to overwrite a DIFFERENT backup occupying our target location (foreign
-  // vault_id) — before packing, so a colliding push wastes no pack/encode work.
+  // vault_id) - before packing, so a colliding push wastes no pack/encode work.
   await _assertNoForeignVaults(config, options.io);
   // Entries that cannot be backed up (symlinks / special files) are handled
   // before packing: abort with exit code 3 non-interactively, or offer to add
@@ -1052,7 +1177,7 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
   const excluded = options.fromCache === true ? [] : await _handleExcludedEntries({ rootDir, allowExcluded: options.allowExcluded, interactive: options.interactive, io: options.io });
   const { data_shards: N, parity_shards: K } = config.scheme;
   const { cacheDir, tempDir, cachePath } = await _resolvePushPaths({ rootDir, cacheDir: options.cacheDir, tempDir: options.tempDir, config });
-  const targetVersion = await _resolveTargetVersion({ mode: options.mode, config, state, io: options.io });
+  const targetVersion = await _resolveTargetVersion({ mode: options.mode, config, state, io: options.io, ...(options.yes === true ? { yes: true } : {}) });
   const lock = await _initPushLock(rootDir, options.fromCache === true, cachePath, targetVersion, config);
   const maxRamMb = options.maxRamMb ?? config.max_ram_mb;
   const shouldCompress = options.compressOverride !== undefined ? options.compressOverride : (config.compression?.enabled ?? true);
@@ -1061,18 +1186,14 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
   // earlier pack, so there is no fresh window to bracket.
   const driftFilter = options.fromCache !== true ? createIgnoreFilter(rootDir) : null;
   const snapshotBefore = driftFilter ? await snapshotCatalog(rootDir, driftFilter) : null;
-  const { blobSource, blobSize, file_count, total_size, skipped } = await _loadOrPackBlob({
-    rootDir,
-    cachePath,
-    cacheDir,
-    vaultIdBuf: uuidToBuffer(config.vault_id),
-    fromCache: options.fromCache,
-    shouldCompress,
-    maxRamMb,
-    N,
-    K,
-    io: options.io,
-  });
+  const {
+    blobSource,
+    blobSize,
+    file_count,
+    total_size,
+    skipped,
+    blob_hash: verifiedBlobHash,
+  } = await _loadOrPackBlob({ rootDir, cachePath, cacheDir, vaultIdBuf: uuidToBuffer(config.vault_id), fromCache: options.fromCache, shouldCompress, maxRamMb, N, K, io: options.io });
   await _handleSkippedFiles({ skipped, cachePath, cacheDir, blobSource, interactive: options.interactive, io: options.io });
   if (driftFilter && snapshotBefore) {
     const snapshotAfter = await snapshotCatalog(rootDir, driftFilter);
@@ -1080,7 +1201,10 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
     await _handleCatalogDrift({ drift, allowDrift: options.allowDrift, interactive: options.interactive, io: options.io });
   }
   const { shouldEncrypt, kdf_salt, encKey } = await _deriveEncryptionKey({ config, password: options.password, io: options.io });
-  const blob_hash = await _hashBlobWithoutChecksum(blobSource, blobSize);
+  // A resume already hashed these bytes to check them against the blob's own
+  // seal, and that digest IS blob_hash - hashing the file again would double the
+  // read on exactly the backups that were too large to push in one go.
+  const blob_hash = verifiedBlobHash ?? (await _hashBlobWithoutChecksum(blobSource, blobSize));
   const stripeSize = computeStripeSize({ maxRamMb, N, K, blobSize });
   if (encKey && exceedsGcmPlaintextLimit(rawShardPayloadSize(blobSize, N, stripeSize))) {
     throw new BfsError(fmt('gcm_payload_too_large', String(GCM_MAX_PLAINTEXT_BYTES / 1024 ** 3)));

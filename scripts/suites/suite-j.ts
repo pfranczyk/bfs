@@ -5,7 +5,7 @@ import { assert, runBfs, runTest } from '../smoke-runner.js';
 import type { SuiteResult, TestResult } from '../smoke-types.js';
 import { initTestVault, readJson, verifyShaHashes } from '../smoke-vault.js';
 
-// ─── Suite J — ZIP Compression ───────────────────────────────────────────────
+// --- Suite J - ZIP Compression -----------------------------------------------
 
 export async function suiteJ(): Promise<SuiteResult> {
   const tests: TestResult[] = [];
@@ -17,10 +17,10 @@ export async function suiteJ(): Promise<SuiteResult> {
   const p3Dir = path.join(tmpBase, 'p3');
   let originalHashes = new Map<string, string>();
 
-  // ── J0 — setup: init without --no-compress (compression ON by default) ──────
+  // -- J0 - setup: init without --no-compress (compression ON by default) ------
 
   tests.push(
-    await runTest('J0', 'bfs init --ci (without --no-compress) — compression.enabled=true in config', async () => {
+    await runTest('J0', 'bfs init --ci (without --no-compress) - compression.enabled=true in config', async () => {
       originalHashes = await initTestVault(
         vaultDir,
         'zip-vault',
@@ -36,10 +36,10 @@ export async function suiteJ(): Promise<SuiteResult> {
     }),
   );
 
-  // ── J1 — push → manifest.compressed=true ──────────────────────────────────
+  // -- J1 - push -> manifest.compressed=true ----------------------------------
 
   tests.push(
-    await runTest('J1', 'bfs push → exit 0, manifest v1 compressed=true', async () => {
+    await runTest('J1', 'bfs push -> exit 0, manifest v1 compressed=true', async () => {
       const r = runBfs(['push'], vaultDir);
       assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
       const manifest = await readJson<{ compressed?: boolean }>(path.join(vaultDir, '.bfs', 'manifests', 'v001.json'));
@@ -47,10 +47,10 @@ export async function suiteJ(): Promise<SuiteResult> {
     }),
   );
 
-  // ── J2 — pull → SHA-256 matches original ─────────────────────────────────
+  // -- J2 - pull -> SHA-256 matches original ---------------------------------
 
   tests.push(
-    await runTest('J2', 'bfs pull --force → exit 0, SHA-256 of restored files match', async () => {
+    await runTest('J2', 'bfs pull --force -> exit 0, SHA-256 of restored files match', async () => {
       const entries = await fs.readdir(vaultDir, { withFileTypes: true });
       for (const entry of entries) {
         if (entry.name === '.bfs') continue;
@@ -62,10 +62,10 @@ export async function suiteJ(): Promise<SuiteResult> {
     }),
   );
 
-  // ── J3 — init --no-compress → compressed absent in manifest ──────────────
+  // -- J3 - init --no-compress -> compressed absent in manifest --------------
 
   tests.push(
-    await runTest('J3', 'bfs init --ci --no-compress → push → manifest.compressed nieobecne', async () => {
+    await runTest('J3', 'bfs init --ci --no-compress -> push -> manifest.compressed absent', async () => {
       const noCompDir = path.join(tmpBase, 'no-compress');
       await initTestVault(
         noCompDir,
@@ -84,10 +84,10 @@ export async function suiteJ(): Promise<SuiteResult> {
     }),
   );
 
-  // ── J4 — init with compression, push --no-compress → compressed absent ───────
+  // -- J4 - init with compression, push --no-compress -> compressed absent -------
 
   tests.push(
-    await runTest('J4', 'init (compression ON) + push --no-compress → manifest without compressed', async () => {
+    await runTest('J4', 'init (compression ON) + push --no-compress -> manifest without compressed', async () => {
       const overDir = path.join(tmpBase, 'override-off');
       await initTestVault(
         overDir,
@@ -106,10 +106,10 @@ export async function suiteJ(): Promise<SuiteResult> {
     }),
   );
 
-  // ── J5 — init --no-compress, push --compress → compressed=true ─────────────
+  // -- J5 - init --no-compress, push --compress -> compressed=true -------------
 
   tests.push(
-    await runTest('J5', 'init --no-compress + push --compress → manifest.compressed=true', async () => {
+    await runTest('J5', 'init --no-compress + push --compress -> manifest.compressed=true', async () => {
       const overOnDir = path.join(tmpBase, 'override-on');
       await initTestVault(
         overOnDir,
@@ -124,14 +124,14 @@ export async function suiteJ(): Promise<SuiteResult> {
       const rp = runBfs(['push', '--compress'], overOnDir);
       assert(rp.status === 0, `push exit ${rp.status ?? 'null'}\n${rp.stdout}\n${rp.stderr}`);
       const manifest = await readJson<{ compressed?: boolean }>(path.join(overOnDir, '.bfs', 'manifests', 'v001.json'));
-      assert(manifest.compressed === true, `oczekiwano compressed=true gdy push --compress, got: ${JSON.stringify(manifest.compressed)}`);
+      assert(manifest.compressed === true, `expected compressed=true with push --compress, got: ${JSON.stringify(manifest.compressed)}`);
     }),
   );
 
-  // ── J6 — push --compress + --no-compress simultaneously → exit != 0 ─────────
+  // -- J6 - push --compress + --no-compress simultaneously -> exit != 0 ---------
 
   tests.push(
-    await runTest('J6', 'bfs push --compress --no-compress → exit != 0, error message', () => {
+    await runTest('J6', 'bfs push --compress --no-compress -> exit != 0, error message', () => {
       const r = runBfs(['push', '--compress', '--no-compress'], vaultDir);
       assert(r.status !== 0, `expected exit != 0 for conflicting --compress + --no-compress, got ${r.status ?? 'null'}`);
       const out = r.stdout + r.stderr;
@@ -139,9 +139,9 @@ export async function suiteJ(): Promise<SuiteResult> {
     }),
   );
 
-  // ── Cleanup ────────────────────────────────────────────────────────────────
+  // -- Cleanup ----------------------------------------------------------------
 
   await fs.rm(tmpBase, { recursive: true, force: true }).catch(() => {});
 
-  return { name: 'Suite J — ZIP Compression', tests };
+  return { name: 'Suite J - ZIP Compression', tests };
 }

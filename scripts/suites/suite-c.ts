@@ -3,7 +3,7 @@ import path from 'node:path';
 import { assert, runBfs, runTest } from '../smoke-runner.js';
 import type { SmokeContext, SuiteResult, TestResult } from '../smoke-types.js';
 
-// ─── Suite C — Push + read ─────────────────────────────────────────────────
+// --- Suite C - Push + read -------------------------------------------------
 
 export async function suiteC(ctx: SmokeContext): Promise<SuiteResult> {
   const tests: TestResult[] = [];
@@ -16,7 +16,7 @@ export async function suiteC(ctx: SmokeContext): Promise<SuiteResult> {
   );
 
   tests.push(
-    await runTest('C2', 'shards na dysku (v1)', async () => {
+    await runTest('C2', 'shards on disk (v1)', async () => {
       for (const provDir of [ctx.provider1Dir, ctx.provider2Dir, ctx.provider3Dir]) {
         const vaultSubdir = path.join(provDir, 'smoke-vault');
         const files = await fs.readdir(vaultSubdir).catch(() => [] as string[]);
@@ -62,5 +62,5 @@ export async function suiteC(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  return { name: 'Suite C — Push + odczyt', tests };
+  return { name: 'Suite C - Push + read', tests };
 }

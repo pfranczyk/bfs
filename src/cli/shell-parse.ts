@@ -3,17 +3,17 @@ import { BfsError } from '../core/errors.js';
 /**
  * Tokenizes a shell-like spec string into argv-style tokens.
  *
- * Semantics — quoting only, no expansion, no shell-style escape outside quotes:
+ * Semantics - quoting only, no expansion, no shell-style escape outside quotes:
  *   - whitespace (space, tab, newline) separates tokens
  *   - `'...'` wraps a literal token (no escapes inside)
  *   - `"..."` wraps a token; `\"` and `\\` are the only recognized escapes
- *   - outside quotes, every character is literal — including `\`. Windows
+ *   - outside quotes, every character is literal - including `\`. Windows
  *     paths inline (`--path D:\backup\p1`) work without escaping. Values
  *     with embedded spaces still need quoting (`--path 'my disk'`).
  *   - no variable expansion, no command substitution, no globbing
  *
  * Adjacent quoted and unquoted fragments join into one token
- * (e.g. `foo"bar baz"` → `foo bar baz` as a single token).
+ * (e.g. `foo"bar baz"` -> `foo bar baz` as a single token).
  *
  * @param input - the raw CLI spec, typically the value of `--provider`
  * @returns      tokens in input order

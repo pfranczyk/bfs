@@ -36,7 +36,7 @@ export function runBfs(bfsArgs: string[], cwd: string, stdin?: string, env?: Nod
       spawnArgs = [bin, ...finalArgs];
     }
   } else {
-    // JS file: invoke node directly — stdin piping works correctly without cmd /c
+    // JS file: invoke node directly - stdin piping works correctly without cmd /c
     exe = process.execPath;
     spawnArgs = [bin, ...finalArgs];
   }
@@ -51,7 +51,7 @@ export function runBfs(bfsArgs: string[], cwd: string, stdin?: string, env?: Nod
  *
  * @param id          - Test identifier (e.g. "A1")
  * @param description - Description of the command / action being tested
- * @param fn          - Test function — throws on failure or returns normally
+ * @param fn          - Test function - throws on failure or returns normally
  * @returns           Test result
  */
 export async function runTest(id: string, description: string, fn: () => Promise<void> | void): Promise<TestResult> {
@@ -91,7 +91,12 @@ export function printSuite(suite: SuiteResult): { failures: number; skipped: num
   let failures = 0;
   let skipped = 0;
   for (const t of suite.tests) {
-    const icon = t.skipped ? '⏭' : t.passed ? '✓' : '✗';
+    // Padded to a fixed width so the columns line up whichever marker is used.
+    // The failure marker is `[[X]]`, not a bare `X`: the CI log trimmer greps
+    // job logs for it, and a bare `X` also prefixes every CLI error message
+    // (`error()` in src/cli/ui.ts), so a passing test that asserts an error path
+    // would otherwise be reported as a failure.
+    const icon = (t.skipped ? 'SKIP' : t.passed ? 'OK' : '[[X]]').padEnd(5);
     const idPad = t.id.padEnd(3);
     const descPad = t.description.padEnd(36);
     const ms = `(${t.ms}ms)`;
@@ -109,7 +114,7 @@ export function printSuite(suite: SuiteResult): { failures: number; skipped: num
 
 /**
  * Denies read access to a file for the current user.
- * Works without root/admin — a file's owner can always modify its ACL/mode.
+ * Works without root/admin - a file's owner can always modify its ACL/mode.
  */
 export function denyRead(filePath: string): void {
   if (process.platform === 'win32') {

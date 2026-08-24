@@ -24,7 +24,7 @@ function canonical(value: unknown): string {
  * maps (provider_type, connection_config, required_inputs, remote_path). Only
  * indices present in BOTH maps are compared. Every shard in a version carries
  * the identical location map, so any per-entry divergence between two shards of
- * the same version signals a forged (unencrypted) map — used by recovery
+ * the same version signals a forged (unencrypted) map - used by recovery
  * consensus to detect a redirected provider. Returns [] when the maps agree.
  *
  * @param a - one shard's location map
@@ -36,7 +36,7 @@ export function divergentShardIndices(a: ShardLocation[], b: ShardLocation[]): n
   const diverged: number[] = [];
   for (const ea of a) {
     const eb = byIndex.get(ea.shard_index);
-    if (!eb) continue; // index only on one side — different shard set, not a per-entry forgery
+    if (!eb) continue; // index only on one side - different shard set, not a per-entry forgery
     const differs =
       ea.provider_type !== eb.provider_type || ea.remote_path !== eb.remote_path || canonical(ea.required_inputs ?? []) !== canonical(eb.required_inputs ?? []) || canonical(ea.connection_config) !== canonical(eb.connection_config);
     if (differs) diverged.push(ea.shard_index);
@@ -48,7 +48,7 @@ export function divergentShardIndices(a: ShardLocation[], b: ShardLocation[]): n
  * Returns the secret field names an adapter of the given type declares. The
  * adapter reports them via {@link StorageProvider.getSecretFields}, which is a
  * pure declaration (no I/O), so a throwaway instance with an empty config is
- * enough to read it. Returns an empty array for unknown types — an unregistered
+ * enough to read it. Returns an empty array for unknown types - an unregistered
  * adapter's secrets cannot be known, so nothing is stripped.
  *
  * @returns the adapter's declared secret field names, or [] for unknown types
@@ -69,7 +69,7 @@ function hasValue(value: unknown): boolean {
  * Splits a provider connection config into the part embedded in a shard
  * location map and the list of inputs the operator must supply at recovery.
  *
- * Secrets (FTP password, future SSH key/passphrase) must never travel in shard
+ * Secrets (an FTP or SSH password, an SSH key passphrase) must never travel in shard
  * headers: anyone holding a single shard would read every provider's
  * credentials. So the adapter's declared secret fields are removed from
  * `connection_config`, and the names of those that were actually set are
@@ -78,7 +78,7 @@ function hasValue(value: unknown): boolean {
  *
  * `required_inputs` lets disaster recovery act deterministically without
  * blind connection attempts: `[]` means the resource needs no secret (e.g.
- * anonymous FTP — never prompt), a non-empty list names exactly what to ask
+ * anonymous FTP - never prompt), a non-empty list names exactly what to ask
  * for. The input config is never mutated.
  *
  * @returns the stripped config plus the names of required (stripped) inputs

@@ -7,12 +7,12 @@ import { createMockProviderIO, providerRegistry } from '../../src/providers/prov
 import type { ProviderConfig, RemoteRef, ShardHeader, ShardLocation, StorageProvider } from '../../src/types/index.js';
 import { recover } from '../../src/vault/recovery.js';
 
-// ─── Contract under test — S2 sibling, in the multi-version recovery loop ──────
+// --- Contract under test - S2 sibling, in the multi-version recovery loop ------
 //
-// `processVersion` (src/vault/recovery.ts) runs its OWN, softer consensus than
+// `rebuildVersionManifest` (src/vault/version-rebuild.ts) runs its OWN, softer consensus than
 // bootstrap's `runConsensusCheck`: it downloads up to two shard headers for a
 // version and, on divergence, does a soft `io.warn` + `consensusOk = false`
-// instead of throwing — it loops over many versions, so one bad version must not
+// instead of throwing - it loops over many versions, so one bad version must not
 // abort the rest.
 //
 // With encryption off the location_map is raw JSON guarded only by an unkeyed
@@ -29,7 +29,7 @@ import { recover } from '../../src/vault/recovery.js';
 // Two versions are needed to exercise the soft path. The latest version is the
 // bootstrap target, so it is kept honest for bootstrap's own hard consensus to
 // pass and for recovery to reach the per-version loop; the OLDER version carries
-// the forged map, so its detection is processVersion's flag rather than a
+// the forged map, so its detection is rebuildVersionManifest's flag rather than a
 // bootstrap throw.
 
 const VAULT_ID = '550e8400-e29b-41d4-a716-446655440000';
@@ -39,14 +39,14 @@ const VAULT_NAME = 'recovery-consensus-map';
 const MAP_TYPE = 'mock-recovery-map';
 
 /** Versions present in the vault: v2 latest (bootstrap target, kept honest),
- * v1 older (forged — exercises processVersion's per-version soft consensus). */
+ * v1 older (forged - exercises rebuildVersionManifest's per-version soft consensus). */
 const VERSIONS = [1, 2] as const;
 
 /** Per-(id@version) honest/forged location map a provider serves via downloadHeader. */
 let serveMaps: Map<string, ShardLocation[]>;
 
 /**
- * Base of a connected StorageProvider — every method a no-op stub except the
+ * Base of a connected StorageProvider - every method a no-op stub except the
  * ones recovery touches (authenticate, setVaultName, list, downloadHeader).
  * list/downloadHeader are overridden per instance by the factory below.
  */
@@ -124,7 +124,7 @@ function mapLoc(shardIndex: number, host: string): ShardLocation {
  * Registers MAP_TYPE so adapter preflight passes and bootstrap can build the
  * sibling providers from the location map. Each created instance lists one shard
  * for version 1 and serves its OWN map (keyed by id in `serveMaps`) on
- * downloadHeader — so the primary (p0) serves the forged map and the consensus
+ * downloadHeader - so the primary (p0) serves the forged map and the consensus
  * sibling serves the honest one.
  */
 function registerMapProvider(): void {
@@ -141,7 +141,7 @@ function registerMapProvider(): void {
  * map. It lists a shard for every version in VERSIONS and serves the map keyed
  * `${id}@${version}` on downloadHeader, so the latest version can stay honest
  * (bootstrap consensus passes) while an older version carries a forged map
- * (processVersion soft-flags it).
+ * (rebuildVersionManifest soft-flags it).
  */
 function buildMapProvider(id: string): StorageProvider {
   const p = baseProvider(id, MAP_TYPE);
@@ -163,7 +163,7 @@ async function tmp(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'bfs-consensus-map-'));
 }
 
-describe('processVersion location_map cross-check (S2 sibling)', () => {
+describe('rebuildVersionManifest location_map cross-check (S2 sibling)', () => {
   beforeEach(() => {
     serveMaps = new Map();
     registerMapProvider();
@@ -177,11 +177,11 @@ describe('processVersion location_map cross-check (S2 sibling)', () => {
   it('should report consensus=false when an older version diverges in connection_config', async () => {
     const root = await tmp();
 
-    // v2 (latest) is honest on every provider, so bootstrap — which targets the
-    // latest version — passes its hard consensus and recovery proceeds.
+    // v2 (latest) is honest on every provider, so bootstrap - which targets the
+    // latest version - passes its hard consensus and recovery proceeds.
     // v1 (older) is forged on the primary shard (shard_1 host = "attacker") while
     // the reachable sibling carries the honest v1 map. Every HEADER field is
-    // identical, so processVersion's header-only consensus does not fire — only
+    // identical, so rebuildVersionManifest's header-only consensus does not fire - only
     // the location_map cross-check catches the redirected host, soft-flagging v1.
     const honest = [mapLoc(0, 'honest'), mapLoc(1, 'honest'), mapLoc(2, 'honest')];
     const forgedV1 = [mapLoc(0, 'honest'), mapLoc(1, 'attacker'), mapLoc(2, 'honest')];
@@ -195,7 +195,7 @@ describe('processVersion location_map cross-check (S2 sibling)', () => {
     serveMaps.set('p1@1', honest);
     serveMaps.set('p2@1', honest);
 
-    // Bootstrap provider = p0 (serves honest v2 to bootstrap, forged v1 to processVersion).
+    // Bootstrap provider = p0 (serves honest v2 to bootstrap, forged v1 to rebuildVersionManifest).
     const bootstrapProvider = buildMapProvider('p0');
 
     const { io } = createMockProviderIO({});

@@ -47,6 +47,23 @@ export class HostKeyDeclinedError extends ProviderError {
   }
 }
 
+/**
+ * Control-flow signal raised when the operator asks to return to the connection
+ * prompts instead of deciding about a server identity they were shown. Refusing
+ * an identity usually means "I aimed at the wrong server", not "I distrust this
+ * one", and without a way back that mistake costs every field already entered.
+ *
+ * Absorbed by the configure entry point that offered the way back, so it never
+ * reaches BFS-core or a command; it is deliberately NOT part of the public
+ * adapter contract (`src/lib.ts`).
+ */
+export class ConfigureRestartRequested extends BfsError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConfigureRestartRequested';
+  }
+}
+
 /** Thrown when AES-GCM decryption fails (wrong key or corrupted ciphertext). */
 export class DecryptionError extends BfsError {
   constructor(message: string) {
@@ -57,7 +74,7 @@ export class DecryptionError extends BfsError {
 
 /**
  * Thrown by the write-path guards (init / provider add / push) when the target
- * location on a provider already holds a DIFFERENT backup of the same name — a
+ * location on a provider already holds a DIFFERENT backup of the same name - a
  * shard whose header carries a foreign vault_id, or (for a fresh `init`, which
  * has no vault_id yet) any shard at all in the freshly-named vault sub-directory.
  * Aborts before any upload so a second machine's backup never silently
@@ -74,6 +91,14 @@ export class VaultCollisionError extends BfsError {
   }
 }
 
+/** Thrown when `init` is asked to set up a backup in a directory that already describes one. */
+export class VaultAlreadyInitializedError extends BfsError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'VaultAlreadyInitializedError';
+  }
+}
+
 /** Thrown when consensus check detects mismatching shard headers across providers. */
 export class TamperDetectedError extends BfsError {
   constructor(message: string) {
@@ -83,7 +108,7 @@ export class TamperDetectedError extends BfsError {
 }
 
 /**
- * Thrown when a blob entry's path is unsafe to write during unpack — absolute,
+ * Thrown when a blob entry's path is unsafe to write during unpack - absolute,
  * contains a `..` segment or NUL byte, or resolves outside the target directory.
  * This is the path-traversal / zip-slip guard for restoring a backup whose
  * contents may originate from an untrusted source.
@@ -115,7 +140,7 @@ export class PushSkippedError extends BfsError {
 
 /**
  * Thrown by push() (non-interactive, without --allow-excluded) when the source
- * directory contains entries that cannot be backed up — symbolic links or
+ * directory contains entries that cannot be backed up - symbolic links or
  * special files (socket/FIFO/block/char device). Unlike unreadable files, this
  * is a permanent, by-design exclusion: the entry can never be represented in a
  * blob, so retrying is pointless. The user should add them to .bfsignore or pass
@@ -133,7 +158,7 @@ export class PushExcludedError extends BfsError {
 
 /**
  * Thrown by push() (non-interactive, without --allow-drift) when the source
- * directory changed during packing — one or more files were modified, removed,
+ * directory changed during packing - one or more files were modified, removed,
  * or appeared inside the pack window. The blob is fully restorable; this signals
  * that it is not current with the directory. Carries the per-file drift breakdown.
  */
@@ -178,8 +203,25 @@ export class LockConcurrentActiveError extends BfsError {
 }
 
 /**
+ * Thrown when a lockfile is present but carries no readable owner: the exclusive
+ * create that reserves it returns before the JSON payload is written, so a peer
+ * that just won the race is briefly visible as a zero-byte file. Both ways out
+ * are executable in the state where this prints - retrying picks up the peer's
+ * payload (or takes the file over once it is old enough to be abandoned), and
+ * `bfs clear` discards it outright.
+ */
+export class LockReservationUnreadableError extends BfsError {
+  readonly operation: 'push' | 'repair';
+  constructor(operation: 'push' | 'repair') {
+    super(`${operation}.lock is reserved but carries no readable owner yet - another ${operation} may be starting right now. Retry in a moment; if none is running, run \`bfs clear\` to discard the leftover.`);
+    this.name = 'LockReservationUnreadableError';
+    this.operation = operation;
+  }
+}
+
+/**
  * Thrown when push detects a leftover push.lock from a crashed/dead operation.
- * The vault is in partial state — user must `bfs repair --rebuild` (PR2) or
+ * The vault is in partial state - user must run `bfs repair --rebuild` or
  * `bfs clear` to discard.
  */
 export class LockPartialStatePushError extends BfsError {
@@ -211,5 +253,31 @@ export class PushCacheUnavailableError extends BfsError {
   constructor() {
     super('`push.lock` indicates the cached blob was not persisted; run `bfs clear` to discard the leftover state');
     this.name = 'PushCacheUnavailableError';
+  }
+}
+
+/**
+ * Thrown when `bfs push --cache` finds the cached blob's content no longer
+ * matching the SHA-256 sealed at its end, or carrying a file table that will not
+ * parse. Distinct from PushCacheNoLockError (a file that is absent) and
+ * PushCacheUnavailableError (a cache the lock disowns): here the cache is a blob
+ * that contradicts itself. Also distinct from a file that never became a blob at
+ * all - no magic, or shorter than a header plus checksum - which is unfinished
+ * packing and gets re-packed rather than refused. Uploading a self-contradicting
+ * blob would seal every part over content that cannot be unpacked, so the backup
+ * would read as healthy until the first restore.
+ *
+ * The advice is ordered, not a choice: the refusal leaves push.lock in place, so
+ * a bare `bfs push` would stop on the leftover state (LockPartialStatePushError)
+ * and send the operator to `bfs clear` anyway.
+ */
+export class PushCacheCorruptedError extends BfsError {
+  readonly cachePath: string;
+  constructor(cachePath: string) {
+    super(
+      `The cached backup data in ${cachePath} no longer matches its checksum - the file was damaged or left incomplete, so it cannot be uploaded. Run \`bfs clear\` to discard the leftover state, then \`bfs push\` to back up the directory again.`,
+    );
+    this.name = 'PushCacheCorruptedError';
+    this.cachePath = cachePath;
   }
 }

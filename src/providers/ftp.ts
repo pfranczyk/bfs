@@ -7,9 +7,10 @@ import { assertSafeFilename, assertSafeVaultName, isSafeFilename } from '../core
 import { hashBuffer, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
 import { buildShardHeaderFromBytes, computeShardHeaderSize, SHARD_HEADER_READ_BYTES, sidecarFilename } from '../core/shard-io.js';
 import { fmtFor, t, tFor } from '../i18n/index.js';
-import type { CliProviderInput, ProviderConfig, ProviderHelp, ProviderIO, RecoverySecret, RemoteRef, ShardHeader, ShardIdentity, StorageProvider, VerifyShardResult } from '../types/index.js';
+import type { CliProviderInput, ConfigureEditContext, ProviderConfig, ProviderHelp, ProviderIO, RecoverySecret, RemoteRef, ShardHeader, ShardIdentity, StorageProvider, VerifyShardResult } from '../types/index.js';
 import { findStringFlag, readJsonObjectFile } from './flags.js';
 import { finishVerifyShard } from './header-verify.js';
+import { askIdentityTrust, requestConfigureRestart, withConfigureRestarts } from './identity-trust.js';
 import { type ProviderFactory, providerRegistry } from './provider.js';
 
 const CHECKSUM_SIZE = SHA256_BYTES;
@@ -30,7 +31,7 @@ const SIZE_RETRY_DELAYS_MS: readonly number[] = [0, 100, 250, 500];
  * `Readable.from(buffer)` pushes the whole buffer in a single chunk. When
  * basic-ftp's `pipeline(source, dataSocket)` then forwards a multi-MB chunk
  * to the TCP data socket, certain server/network configurations (notably
- * Docker-bridged vsftpd on Windows) silently drop bytes — observed as
+ * Docker-bridged vsftpd on Windows) silently drop bytes - observed as
  * 61 799 B loss on a 263 MB shard. Splitting into 64 KB chunks matches the
  * known-good behavior of `createReadStream`, lets backpressure cooperate,
  * and removes the truncation.
@@ -96,20 +97,20 @@ export class FtpProvider implements StorageProvider {
   private readonly basePath: string;
   private readonly secure: boolean;
   // Pinned FTPS certificate fingerprint (colon-hex SHA-256), or null when no pin
-  // is configured. Non-secret — travels in the location map like the SSH host-key
+  // is configured. Non-secret - travels in the location map like the SSH host-key
   // pin, so recovery can show the operator which server identity it will trust.
   private readonly certFingerprint: Nullable<string>;
-  // TOFU opt-in for non-interactive runs: trust whatever certificate the server
+  // TOFU opt-in, consent given up front: trust whatever certificate the server
   // presents on first connect when no pin is set (mirrors SSH --accept-new-host-key).
   private readonly acceptNewCert: boolean;
   private readonly io: ProviderIO;
   private vaultName: Nullable<string> = null;
   // One-shot guard so the plaintext-FTP warning fires once per provider instance
-  // (≈ once per push/pull) instead of on every per-operation connect.
+  // (~ once per push/pull) instead of on every per-operation connect.
   private plaintextWarned = false;
 
   constructor(config: ProviderConfig, io: ProviderIO) {
-    // Lazy init — an incomplete config is allowed so CLI can construct a
+    // Lazy init - an incomplete config is allowed so CLI can construct a
     // placeholder instance and call configureInteractive/configureFromFlags
     // on it before persisting. Validation happens in validateConfig() and
     // at the point of actual use (withClient / probeConnection).
@@ -129,11 +130,13 @@ export class FtpProvider implements StorageProvider {
     this.acceptNewCert = c.accept_new_cert === true;
   }
 
-  // ─── Private helpers ──────────────────────────────────────────────────────
+  // --- Private helpers ------------------------------------------------------
 
   /**
    * Opens a fresh FTP connection, runs `op`, and always closes the client.
-   * All exceptions (network, auth, FTP errors) are wrapped in ProviderError.
+   * Wraps network / auth / FTP errors in ProviderError; a ProviderError raised
+   * inside `op` and a TamperDetectedError from the certificate-pin check pass
+   * through unwrapped.
    */
   private async withClient<T>(op: (client: ftp.Client) => Promise<T>): Promise<T> {
     const client = new ftp.Client(FTP_TIMEOUT_MS);
@@ -147,7 +150,7 @@ export class FtpProvider implements StorageProvider {
       return await op(client);
     } catch (err) {
       // A pin mismatch is a TamperDetectedError (extends BfsError, not
-      // ProviderError) and MUST survive to the caller — wrapping it into a generic
+      // ProviderError) and MUST survive to the caller - wrapping it into a generic
       // ProviderError would erase the MITM signal.
       if (err instanceof ProviderError || err instanceof TamperDetectedError) throw err;
       throw new ProviderError(fmtFor(this.io.lang, 'ftp_operation_failed', this.host, String(this.port), err instanceof Error ? err.message : String(err)));
@@ -161,7 +164,7 @@ export class FtpProvider implements StorageProvider {
    * decision BEFORE login when TLS is enabled.
    *
    * For `secure:true` the connection is driven step-by-step
-   * (connect → useTLS → verify certificate → login) rather than via the bundled
+   * (connect -> useTLS -> verify certificate -> login) rather than via the bundled
    * `access()`, because `access()` sends the password (PASS) as part of login
    * immediately after the TLS upgrade. The pin/TOFU check therefore has to happen
    * between `useTLS` and `login`, so a mismatching or untrusted certificate aborts
@@ -211,10 +214,11 @@ export class FtpProvider implements StorageProvider {
   /**
    * Decides whether to trust the presented FTPS certificate, mirroring the SSH
    * host-key trust ladder:
-   *   - pin set → trust only when the fingerprint matches; mismatch is tamper.
-   *   - no pin + `accept_new_cert` → trust on first use (non-interactive opt-in).
-   *   - no pin + interactive → show the operator the fingerprint and kind, confirm.
-   *   - no pin + non-interactive → fail closed (cannot establish trust).
+   *   - pin set -> trust only when the fingerprint matches; mismatch is tamper.
+   *   - no pin + `accept_new_cert` -> trust on first use (consent given up front,
+   *     so it settles the question in every mode).
+   *   - no pin + interactive -> show the operator the fingerprint and kind, confirm.
+   *   - no pin + non-interactive -> fail closed (cannot establish trust).
    *
    * @throws TamperDetectedError on a pin mismatch; ProviderError when trust cannot
    *   be established or the operator declines.
@@ -252,37 +256,122 @@ export class FtpProvider implements StorageProvider {
   }
 
   /**
-   * Opens a throwaway TLS connection to capture the server's certificate for
-   * trust-on-first-use during interactive configuration: shows the operator the
-   * fingerprint and kind, and returns the pin to persist once they accept. No
-   * login is attempted — the certificate is presented during the handshake,
-   * before any credential is needed.
+   * Opens a throwaway TLS connection and reads the certificate the server
+   * presents. No login is attempted - the certificate arrives during the
+   * handshake, before any credential is needed. Reading is kept separate from
+   * the operator's decision so a caller can tell an unreachable server (retry
+   * elsewhere) from a refused certificate (a decision, final).
    *
-   * @throws ProviderError when the operator declines or TLS does not establish.
+   * @param host - FTPS host to contact
+   * @param port - control port
+   * @returns the presented fingerprint and whether the certificate is self-signed
+   * @throws ProviderError when TLS does not establish or no certificate is presented
    */
-  private async captureCert(io: ProviderIO, host: string, port: number): Promise<{ fingerprint: string; selfSigned: boolean }> {
+  private async readServerCert(host: string, port: number): Promise<{ fingerprint: string; selfSigned: boolean }> {
     const client = new ftp.Client(FTP_TIMEOUT_MS);
     try {
       await client.connect(host, port);
       await client.useTLS({ rejectUnauthorized: false, host });
       const cert = this.readPeerCertificate(client);
-      const fingerprint = cert.fingerprint256;
-      const selfSigned = this.isSelfSigned(cert);
-      const kind = selfSigned ? tFor(io.lang, 'ftp_cert_kind_self_signed') : tFor(io.lang, 'ftp_cert_kind_ca');
-      const approved = await io.confirm(fmtFor(io.lang, 'ftp_cert_confirm', `${host}:${port}`, kind, fingerprint));
-      if (!approved) {
-        throw new ProviderError(fmtFor(io.lang, 'ftp_cert_declined', `${host}:${port}`));
-      }
-      return { fingerprint, selfSigned };
+      return { fingerprint: cert.fingerprint256, selfSigned: this.isSelfSigned(cert) };
     } finally {
       client.close();
     }
   }
 
   /**
+   * Shows the operator the presented certificate (fingerprint + kind) and
+   * returns it once they accept.
+   *
+   * @param io        - ProviderIO for the trust prompt
+   * @param host      - FTPS host the certificate came from
+   * @param port      - control port
+   * @param presented - the fingerprint/kind read off the wire
+   * @returns the accepted certificate identity, to persist as the pin
+   * @throws ProviderError when the operator declines
+   */
+  private async confirmCert(io: ProviderIO, host: string, port: number, presented: { fingerprint: string; selfSigned: boolean }): Promise<{ fingerprint: string; selfSigned: boolean }> {
+    const target = `${host}:${port}`;
+    const kind = presented.selfSigned ? tFor(io.lang, 'ftp_cert_kind_self_signed') : tFor(io.lang, 'ftp_cert_kind_ca');
+    const choice = await askIdentityTrust(io, fmtFor(io.lang, 'ftp_cert_trust_menu', target, kind, presented.fingerprint), fmtFor(io.lang, 'ftp_cert_confirm', target, kind, presented.fingerprint));
+    if (choice === 'back') requestConfigureRestart(`certificate decision for ${target}`);
+    if (choice === 'cancel') {
+      throw new ProviderError(fmtFor(io.lang, 'ftp_cert_declined', target));
+    }
+    return presented;
+  }
+
+  /**
+   * Trust-on-first-use capture: reads the server's certificate and returns the
+   * pin to persist once the operator accepts it.
+   *
+   * @throws ProviderError when the operator declines or TLS does not establish.
+   */
+  private async captureCert(io: ProviderIO, host: string, port: number): Promise<{ fingerprint: string; selfSigned: boolean }> {
+    return this.confirmCert(io, host, port, await this.readServerCert(host, port));
+  }
+
+  /**
+   * Certificate menu shown when the server is unreachable during an edit: paste
+   * a fingerprint read off a second channel, go back to the connection prompts,
+   * save without a pin, or cancel. Returns the fingerprint to pin - an empty
+   * string means "save without a pin".
+   *
+   * @param io   - ProviderIO for the menu and the paste prompt
+   * @param host - FTPS host the edit points at
+   * @param port - control port
+   * @returns the fingerprint to pin, or '' to save unpinned
+   * @throws ProviderError when the operator cancels; ConfigureRestartRequested
+   *   when they ask for the connection prompts again
+   */
+  private async offlineCertMenu(io: ProviderIO, host: string, port: number): Promise<string> {
+    const optPaste = tFor(io.lang, 'ftp_edit_offline_paste');
+    const optBack = tFor(io.lang, 'trust_choice_back');
+    const optNoPin = tFor(io.lang, 'ftp_edit_offline_no_pin');
+    const optExit = tFor(io.lang, 'ftp_edit_offline_exit');
+    // Pasting stays first: a typo in the address lands here more often than at
+    // the certificate decision, but the operator who does have the fingerprint
+    // to hand is the common case, and existing scenarios answer by position.
+    const choice = await io.choose(fmtFor(io.lang, 'ftp_edit_offline_menu', `${host}:${port}`), [optPaste, optBack, optNoPin, optExit]);
+    switch (choice) {
+      case optPaste:
+        return this.promptCertFingerprint(io);
+      case optBack:
+        requestConfigureRestart(`unreachable target ${host}:${port}`);
+        break;
+      case optNoPin:
+        io.warn(tFor(io.lang, 'ftp_edit_no_pin_warn'));
+        return '';
+      default:
+        // optExit or any unexpected selection -> cancel the edit (fail-closed).
+        throw new ProviderError(tFor(io.lang, 'ftp_edit_cancelled'));
+    }
+  }
+
+  /**
+   * Prompts for an operator-pasted certificate fingerprint, re-prompting on a
+   * malformed value. Empty input (Enter, or a closed stream) abandons the paste
+   * and cancels the edit, so an EOF stdin can never spin the loop forever.
+   *
+   * @param io - ProviderIO for the prompt
+   * @returns a well-formed colon-hex SHA-256 fingerprint
+   * @throws ProviderError on empty input
+   */
+  private async promptCertFingerprint(io: ProviderIO): Promise<string> {
+    for (;;) {
+      const entered = (await io.ask(tFor(io.lang, 'ftp_edit_paste_prompt'))).trim();
+      if (entered.length === 0) throw new ProviderError(tFor(io.lang, 'ftp_edit_cancelled'));
+      if (isValidCertFingerprint(entered)) return entered;
+      // Not the flag-shaped message: the operator is standing at a prompt, not
+      // passing --cert-fingerprint, and needs to know the question comes back.
+      io.warn(tFor(io.lang, 'ftp_edit_fingerprint_invalid'));
+    }
+  }
+
+  /**
    * Emits the plaintext-FTP warning once per provider instance. A plain
    * (non-FTPS) connection sends the password and shard bytes in the clear, so
-   * the user is warned — but only on the first connect, to avoid one line per
+   * the user is warned - but only on the first connect, to avoid one line per
    * shard during a push.
    */
   private warnInsecureOnce(): void {
@@ -316,7 +405,7 @@ export class FtpProvider implements StorageProvider {
 
   /**
    * Builds {vaultPath}/{filename}, rejecting a filename that is not a safe path
-   * segment (traversal / separator / control char) before it is joined — a
+   * segment (traversal / separator / control char) before it is joined - a
    * crafted ref.path or a hostile server's LIST entry cannot escape the vault.
    */
   private remoteFile(filename: string): string {
@@ -348,8 +437,8 @@ export class FtpProvider implements StorageProvider {
   /**
    * Uploads `buffer` to `remotePath`, retrying up to MAX_UPLOAD_ATTEMPTS times
    * if the post-STOR `SIZE` does not match. Some vsftpd/Docker deployments
-   * randomly truncate uploads (verified independently with Windows Explorer
-   * — not BFS-specific). A fresh STOR on the next attempt almost always
+   * randomly truncate uploads (verified independently with Windows Explorer -
+   * not BFS-specific). A fresh STOR on the next attempt almost always
    * delivers the full payload.
    *
    * Persistent mismatches (e.g. ASCII mode silently rewriting bytes) keep
@@ -388,7 +477,7 @@ export class FtpProvider implements StorageProvider {
     return Buffer.concat(chunks);
   }
 
-  // ─── StorageProvider interface ────────────────────────────────────────────
+  // --- StorageProvider interface --------------------------------------------
 
   /**
    * Verifies FTP connectivity by connecting and listing the base path.
@@ -413,31 +502,41 @@ export class FtpProvider implements StorageProvider {
   /**
    * Recovery hook: shows the operator the FTP target (host[:port] and path) and
    * lets them decline BEFORE any credential is sent. This is the defense against
-   * a recovery whose location map was redirected to a hostile host — the
+   * a recovery whose location map was redirected to a hostile host - the
    * operator sees exactly where the password would go and can refuse. Once the
    * host is approved, a pooled secret (collected for a sibling) is tried first,
    * then the password is prompted with retry until one authenticates.
    *
-   * @param io   - ProviderIO for the host confirmation and password prompt
-   * @param pool - secrets already collected this recovery, tried before prompting
+   * @param io      - ProviderIO for the host confirmation and password prompt
+   * @param pool    - secrets already collected this recovery, tried before prompting
+   * @param options - `trustLocation` skips the host confirmation (unattended
+   *                  recovery) and only logs the target
    * @returns the password that authenticated (added to the recovery pool)
-   * @throws ProviderError when the operator declines (host or blank password)
+   * @throws ProviderError when the operator declines (host or blank password),
+   *         or when there is no operator to confirm the host
    */
   async connectForRecovery(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<Nullable<string>> {
     const target = this.port === 21 ? this.host : `${this.host}:${this.port}`;
     const remotePath = this.basePath.length > 0 ? this.basePath : '/';
     if (options?.trustLocation === true) {
       // Operator pre-approved the recovered locations (unattended recovery via
-      // `bfs recovery --trust-locations`) — surface the target for the log but
+      // `bfs recovery --trust-locations`) - surface the target for the log but
       // do not block on a confirmation.
       io.info(fmtFor(this.io.lang, 'ftp_recovery_target', target, remotePath));
+    } else if (io.interactive === false) {
+      // The confirmation would answer itself with "no", and bootstrap turns any
+      // throw from here into a silent skip of this storage - so the reason has
+      // to be spoken before the throw, and through warn(): the recovery spinner
+      // routes info() into spinner.text, which a piped run never emits at all.
+      io.warn(fmtFor(this.io.lang, 'ftp_recovery_no_operator', target));
+      throw new ProviderError(fmtFor(this.io.lang, 'ftp_recovery_no_operator', target));
     } else {
       const approved = await io.confirm(fmtFor(this.io.lang, 'ftp_recovery_confirm_host', target, remotePath));
       if (!approved) {
         throw new ProviderError(fmtFor(this.io.lang, 'ftp_recovery_declined', target));
       }
     }
-    // Host approved — reuse a pooled secret if one authenticates here (newest
+    // Host approved - reuse a pooled secret if one authenticates here (newest
     // first), otherwise prompt with retry. Unbounded retry mirrors the legacy
     // recovery path: at this critical moment the operator keeps trying until the
     // password works or they give up with a blank entry.
@@ -447,7 +546,7 @@ export class FtpProvider implements StorageProvider {
         await this.authenticate();
         return this.password;
       } catch {
-        // pooled secret did not authenticate here — fall through to prompting
+        // pooled secret did not authenticate here - fall through to prompting
       }
     }
     for (;;) {
@@ -460,7 +559,7 @@ export class FtpProvider implements StorageProvider {
         await this.authenticate();
         return secret;
       } catch {
-        // wrong password — re-prompt
+        // wrong password - re-prompt
       }
     }
   }
@@ -471,7 +570,7 @@ export class FtpProvider implements StorageProvider {
    *
    * @param shardFilename - Target filename, e.g. "shard_0.bfs.1"
    * @param data          - Readable stream of the full shard
-   * @param _size         - Total byte size (unused — FTP does not need Content-Length)
+   * @param _size         - Total byte size (unused - FTP does not need Content-Length)
    * @returns RemoteRef with provider_id, filename, and SHA-256 hash
    * @throws ProviderError on upload failure
    */
@@ -484,13 +583,13 @@ export class FtpProvider implements StorageProvider {
       await client.ensureDir(this.vaultPath());
       // STOR + post-upload SIZE check, with bounded retry. Some vsftpd/Docker
       // deployments randomly truncate the data connection (reproduced with
-      // Windows Explorer too — not BFS-specific); a fresh STOR almost always
+      // Windows Explorer too - not BFS-specific); a fresh STOR almost always
       // delivers the full payload. Persistent mismatches (ASCII mode etc.)
       // keep failing and surface as ProviderError after the last attempt.
       // Full byte-for-byte round-trip verification stays in probeConnection().
       await this.uploadWithRetry(client, remotePath, buffer, shardFilename);
       // A fresh shard carries a fresh in-shard header, so a stale sidecar for
-      // this filename (from a prior relocate) must go — else it would shadow the
+      // this filename (from a prior relocate) must go - else it would shadow the
       // new header on the sidecar-aware read-path.
       await this.bestEffortRemove(client, `${this.vaultPath()}/${sidecarFilename(shardFilename)}`);
     });
@@ -516,7 +615,9 @@ export class FtpProvider implements StorageProvider {
   }
 
   /**
-   * Deletes a shard file identified by ref.
+   * Deletes a shard file (and its header sidecar) identified by ref. An
+   * already-absent shard is a no-op, not a failure - delete is idempotent
+   * (parity with LocalFS/SSH), so a resumed prune raises no false orphan warning.
    *
    * @param ref - RemoteRef of the shard to delete
    * @throws ProviderError if the file cannot be deleted
@@ -555,7 +656,7 @@ export class FtpProvider implements StorageProvider {
    * in memory, and re-uploaded (STOR overwrites the existing file).
    *
    * @param ref        - RemoteRef of the shard to update
-   * @param headerData - New serialized header (magic … end of location map)
+   * @param headerData - New serialized header (magic ... end of location map)
    * @returns Updated RemoteRef (same path, no hash)
    * @throws ProviderError on failure or if the shard is too short
    */
@@ -574,7 +675,7 @@ export class FtpProvider implements StorageProvider {
       const newChecksum = Buffer.from(hashBuffer(newBody), 'hex');
       const newShard = Buffer.concat([newBody, newChecksum]);
 
-      // Same retry strategy as upload() — sporadic vsftpd truncation handled
+      // Same retry strategy as upload() - sporadic vsftpd truncation handled
       // by re-running STOR up to MAX_UPLOAD_ATTEMPTS times.
       await this.uploadWithRetry(client, remotePath, newShard, ref.path);
       return { provider_id: this.id, path: ref.path };
@@ -585,8 +686,9 @@ export class FtpProvider implements StorageProvider {
    * Lists shard files in the vault directory, optionally filtered by prefix.
    *
    * @param prefix - Optional filename prefix filter (e.g. "shard_0")
-   * @returns Array of RemoteRef (hash not populated)
-   * @throws ProviderError if the directory cannot be read
+   * @returns Array of RemoteRef (hash not populated); an unreadable or absent
+   *          vault directory yields an empty array
+   * @throws ProviderError when the connection itself fails
    */
   async list(prefix?: string): Promise<RemoteRef[]> {
     return this.withClient(async (client) => {
@@ -597,7 +699,7 @@ export class FtpProvider implements StorageProvider {
         return [];
       }
 
-      // Drop directories and any name that is not a safe segment — a hostile
+      // Drop directories and any name that is not a safe segment - a hostile
       // server could return a traversal filename from LIST (L2).
       const files = entries.filter((e) => !e.isDirectory && isSafeFilename(e.name));
       const filtered = prefix ? files.filter((e) => e.name.startsWith(prefix)) : files;
@@ -606,7 +708,7 @@ export class FtpProvider implements StorageProvider {
   }
 
   /**
-   * Returns the size of a shard via the `SIZE` FTP command — no content
+   * Returns the size of a shard via the `SIZE` FTP command - no content
    * transfer over the data channel.
    *
    * @param ref - RemoteRef of the shard
@@ -625,11 +727,11 @@ export class FtpProvider implements StorageProvider {
   }
 
   /**
-   * Reads at most `maxBytes` bytes from the start of the shard — enough to read
+   * Reads at most `maxBytes` bytes from the start of the shard - enough to read
    * just the header (~16 KB) without buffering the full payload.
    *
    * Strategy:
-   *   - If `SIZE` ≤ maxBytes: download the whole file (it's small).
+   *   - If `SIZE` <= maxBytes: download the whole file (it's small).
    *   - Otherwise: pipe into a Writable that aborts the transfer once it has
    *     collected `maxBytes`. basic-ftp surfaces the abort as an error which
    *     we swallow because we already hold the bytes we need; any
@@ -653,7 +755,7 @@ export class FtpProvider implements StorageProvider {
         throw new ProviderError(fmtFor(this.io.lang, 'provider_stat_failed', remotePath, err instanceof Error ? err.message : String(err)));
       }
 
-      // Shard fits entirely within the requested window — pull it once.
+      // Shard fits entirely within the requested window - pull it once.
       if (totalSize <= maxBytes) {
         return this.downloadToBuffer(client, remotePath);
       }
@@ -708,7 +810,7 @@ export class FtpProvider implements StorageProvider {
       await client.downloadTo(collector, remotePath);
     } catch (err) {
       if (!aborted) throw err;
-      // Deliberate abort — basic-ftp surfaces the destroyed writable as an
+      // Deliberate abort - basic-ftp surfaces the destroyed writable as an
       // error. We already hold the bytes we need.
     }
     return Buffer.concat(chunks);
@@ -729,7 +831,7 @@ export class FtpProvider implements StorageProvider {
 
   /**
    * Checks whether the FTP server is reachable by connecting and disconnecting.
-   * Never throws — returns false on any error.
+   * Never throws - returns false on any error.
    *
    * @returns true if the server is reachable, false otherwise
    */
@@ -741,7 +843,7 @@ export class FtpProvider implements StorageProvider {
     }
   }
 
-  // ─── Header storage strategy + verification ───────────────────────────────
+  // --- Header storage strategy + verification -------------------------------
 
   /** FTP keeps a relocated shard's header in an `hdr_` sidecar next to it. */
   usesSidecar(): boolean {
@@ -769,7 +871,7 @@ export class FtpProvider implements StorageProvider {
   /**
    * Downloads the header sidecar `hdr_i.bfs.V` next to the shard, or null when
    * none exists (SIZE replies 550). A sidecar is header-only, so it is pulled in
-   * full — bounded by its own size, not the payload.
+   * full - bounded by its own size, not the payload.
    *
    * @param ref       - RemoteRef of the shard
    * @param _maxBytes - Byte cap (a sidecar is inherently small; the whole file is read)
@@ -819,8 +921,8 @@ export class FtpProvider implements StorageProvider {
   /**
    * Verifies the shard identity by reading only its header window and comparing
    * the plaintext vault_id / shard_index / version. Reads over a dedicated
-   * connection so the raw FTP reply codes survive: 530 → auth_failed,
-   * 550 → not_found.
+   * connection so the raw FTP reply codes survive: 530 -> auth_failed,
+   * 550 -> not_found.
    *
    * @param ref      - RemoteRef of the shard
    * @param expected - Identity the shard is expected to carry
@@ -828,6 +930,8 @@ export class FtpProvider implements StorageProvider {
    *          corrupted / mismatch / unverifiable). A transport failure with no
    *          recognized reply code (host down, ECONNREFUSED, TLS) is reported
    *          as unverifiable rather than thrown, mirroring LocalFsProvider.
+   * @throws TamperDetectedError when the presented certificate does not match
+   *         the configured pin - a MITM signal is never folded into a verdict
    */
   async verifyShard(ref: RemoteRef, expected: ShardIdentity): Promise<VerifyShardResult> {
     const lang = this.io.lang;
@@ -838,7 +942,7 @@ export class FtpProvider implements StorageProvider {
       headerBytes = await this.readHeaderWindowDirect(remotePath, SHARD_HEADER_READ_BYTES);
     } catch (err) {
       // A certificate pin mismatch is a deliberate MITM signal, not an
-      // "unverifiable" transport hiccup — surface it so verify/recovery refuses
+      // "unverifiable" transport hiccup - surface it so verify/recovery refuses
       // the tampered host instead of silently degrading.
       if (err instanceof TamperDetectedError) throw err;
       switch (ftpReplyCode(err)) {
@@ -852,7 +956,7 @@ export class FtpProvider implements StorageProvider {
     }
 
     // The header window has no payload or trailing checksum, so parse it
-    // synchronously — no payload stream to build, verify, or discard.
+    // synchronously - no payload stream to build, verify, or discard.
     let header: ShardHeader;
     try {
       header = buildShardHeaderFromBytes(headerBytes);
@@ -863,32 +967,43 @@ export class FtpProvider implements StorageProvider {
     return finishVerifyShard(header, expected, lang);
   }
 
-  // ─── Configuration lifecycle ──────────────────────────────────────────────
+  // --- Configuration lifecycle ----------------------------------------------
 
   /**
-   * Interactively prompts the user for all FTP fields via ProviderIO and
-   * returns a config object. Does not mutate this instance — the caller
-   * persists the result into VaultConfig.
+   * Interactively prompts the user for all FTP fields via ProviderIO and, for a
+   * secure connection, reads the server certificate and pins the fingerprint the
+   * operator accepts. Does not mutate this instance - the caller persists the
+   * result into VaultConfig.
    *
+   * @throws ProviderError when the operator declines the certificate, when TLS
+   *         does not establish, or when the operator uses up the restarts
    * @throws whatever the supplied ProviderIO throws (e.g. on cancellation)
    */
   async configureInteractive(io: ProviderIO): Promise<Record<string, unknown>> {
-    const host = (await io.ask(t('ftp_host_prompt'))).trim();
-    const portStr = (await io.ask(t('ftp_port_prompt'))).trim();
-    const user = (await io.ask(t('ftp_user_prompt'))).trim();
-    const password = await io.askSecret(t('ftp_password_prompt'));
-    const remotePath = (await io.ask(t('ftp_path_prompt'))).trim();
-    const secure = await io.confirm(t('ftp_secure_prompt'));
+    return withConfigureRestarts(
+      io,
+      () => this.collectAddConfig(io),
+      () => new ProviderError(tFor(io.lang, 'configure_restarts_exhausted')),
+    );
+  }
 
-    const port = portStr.length === 0 ? 21 : Number(portStr);
-
-    const config: Record<string, unknown> = { host, port, user, password, path: remotePath, secure };
+  /**
+   * One pass over the add-time settings. Re-run from scratch whenever the
+   * operator goes back at the certificate decision, so nothing read during an
+   * abandoned pass survives into the config.
+   *
+   * @param io - ProviderIO carrying the prompts
+   * @returns the connection-config to persist
+   */
+  private async collectAddConfig(io: ProviderIO): Promise<Record<string, unknown>> {
+    const fields = await this.collectFtpFields(io);
+    const config: Record<string, unknown> = { ...fields };
 
     // Trust-on-first-use: when TLS is enabled, connect once to read the server's
     // certificate, show the operator its fingerprint and kind, and persist the pin
-    // once they accept — so later connections verify the identity, not the CA chain.
-    if (secure) {
-      const { fingerprint, selfSigned } = await this.captureCert(io, host, port);
+    // once they accept - so later connections verify the identity, not the CA chain.
+    if (fields.secure) {
+      const { fingerprint, selfSigned } = await this.captureCert(io, fields.host, fields.port);
       config.cert_fingerprint = fingerprint;
       config.cert_self_signed = selfSigned;
     }
@@ -897,22 +1012,124 @@ export class FtpProvider implements StorageProvider {
   }
 
   /**
+   * Prompts for the FTP connection fields via ProviderIO - everything except the
+   * certificate-trust step. Shared by the add flow (`configureInteractive`) and
+   * the edit flow (`configureInteractiveForEdit`).
+   *
+   * @param io - ProviderIO carrying the prompts
+   * @returns the collected fields, spread verbatim into the final config
+   */
+  private async collectFtpFields(io: ProviderIO): Promise<{ host: string; port: number; user: string; password: string; path: string; secure: boolean }> {
+    const host = (await io.ask(t('ftp_host_prompt'))).trim();
+    const portStr = (await io.ask(t('ftp_port_prompt'))).trim();
+    const user = (await io.ask(t('ftp_user_prompt'))).trim();
+    const password = await io.askSecret(t('ftp_password_prompt'));
+    const remotePath = (await io.ask(t('ftp_path_prompt'))).trim();
+    const secure = await io.confirm(t('ftp_secure_prompt'));
+    return { host, port: portStr.length === 0 ? 21 : Number(portStr), user, password, path: remotePath, secure };
+  }
+
+  /**
+   * Interactive `bfs provider edit` flow. Collects the fields, then resolves the
+   * certificate pin without ever letting the server dictate it:
+   *   - host AND port unchanged and already pinned -> reuse the pin without
+   *     contacting the medium, so a credential or path edit stays fully local and
+   *     a server that answers at that address cannot replace the trusted identity;
+   *   - otherwise the target identity is genuinely new, so read the certificate
+   *     for a live confirmation. A refusal aborts; an unreachable server drops to
+   *     an offline menu (paste a fingerprint / save unpinned / cancel) so the edit
+   *     still completes.
+   *
+   * @param io  - ProviderIO for prompts and diagnostics
+   * @param ctx - carries the existing connection-config (old host/port/pin)
+   * @returns the connection-config to persist
+   * @throws ProviderError when the operator declines the certificate or cancels
+   */
+  async configureInteractiveForEdit(io: ProviderIO, ctx: ConfigureEditContext): Promise<Record<string, unknown>> {
+    return withConfigureRestarts(
+      io,
+      () => this.collectEditConfig(io, ctx),
+      () => new ProviderError(tFor(io.lang, 'configure_restarts_exhausted')),
+    );
+  }
+
+  /**
+   * One pass over the edit-time settings, including whichever identity decision
+   * the target calls for. Re-run from scratch on every restart, so a certificate
+   * read during a pass the operator walked away from cannot end up trusted for
+   * the address they finally save.
+   *
+   * @param io  - ProviderIO for prompts and diagnostics
+   * @param ctx - carries the existing connection-config (old host/port/pin)
+   * @returns the connection-config to persist
+   * @throws ProviderError when the operator cancels; ConfigureRestartRequested
+   *   when they ask for the prompts again
+   */
+  private async collectEditConfig(io: ProviderIO, ctx: ConfigureEditContext): Promise<Record<string, unknown>> {
+    const fields = await this.collectFtpFields(io);
+    const config: Record<string, unknown> = { ...fields };
+    const existing = ctx.existingConfig;
+    const oldPin = typeof existing.cert_fingerprint === 'string' ? existing.cert_fingerprint : '';
+
+    // No TLS, no certificate: carrying a pin here would fail validateConfig and
+    // turn a deliberate downgrade into a config that cannot be saved at all. The
+    // loss is permanent and invisible afterwards, so it is said out loud - but
+    // only when there was something to lose.
+    if (!fields.secure) {
+      if (oldPin.length > 0) io.warn(fmtFor(io.lang, 'ftp_edit_pin_dropped', `${fields.host}:${fields.port}`, oldPin));
+      return config;
+    }
+
+    const oldHost = typeof existing.host === 'string' ? existing.host : '';
+    const oldPort = typeof existing.port === 'number' ? existing.port : 21;
+    if (fields.host === oldHost && fields.port === oldPort && oldPin.length > 0) {
+      config.cert_fingerprint = oldPin;
+      if (typeof existing.cert_self_signed === 'boolean') config.cert_self_signed = existing.cert_self_signed;
+      return config;
+    }
+
+    io.info(fmtFor(io.lang, 'ftp_edit_connecting', `${fields.host}:${fields.port}`));
+    let presented: { fingerprint: string; selfSigned: boolean };
+    try {
+      presented = await this.readServerCert(fields.host, fields.port);
+    } catch {
+      // Unreachable is not a refusal - the operator still has to finish the edit.
+      // The menu runs outside this catch's reach, so a request to go back from it
+      // propagates instead of being read as another failure to connect.
+      const pin = await this.offlineCertMenu(io, fields.host, fields.port);
+      if (pin.length > 0) config.cert_fingerprint = pin;
+      return config;
+    }
+    const trusted = await this.confirmCert(io, fields.host, fields.port, presented);
+    config.cert_fingerprint = trusted.fingerprint;
+    config.cert_self_signed = trusted.selfSigned;
+    return config;
+  }
+
+  /**
    * Builds a config object from the BFS CLI pass-through input. Two grammars
    * are accepted and may be combined:
    *
-   *   - `--config-file <path>` — JSON `{ host, port, user, password, path,
+   *   - `--config-file <path>` - JSON `{ host, port, user, password, path,
    *     secure }`. Path resolved via `io.workDir` for relative values.
    *   - inline flags: `--host`, `--port`, `--user`, `--password`, `--path`,
-   *     `--secure` (`true|false|1|0|yes|no`, case-insensitive).
+   *     `--secure` (`true|false|1|0|yes|no`, case-insensitive),
+   *     `--cert-fingerprint <fp>` and the value-less `--accept-new-cert`.
    *
    * Inline flags override fields from `--config-file` so CI scripts can keep
    * a baseline JSON and substitute per-environment values (e.g. password)
-   * via argv. Defaults: `port=21`, `secure=false`. `host`, `user`,
-   * `password`, `path` have no defaults — missing values surface from
-   * `validateConfig`. The remote `path` must start with `/`.
+   * via argv. Defaults: `port=21`, `secure=true`. A missing `host` or `path`,
+   * and a `path` that is not absolute, are rejected here rather than left to
+   * `validateConfig`. `user` and `password` have no defaults and no default
+   * value is invented for them - an anonymous server needs neither. The JSON file
+   * accepts the same fields, `cert_fingerprint` / `accept_new_cert` included -
+   * they carry the basis of trust for a secure connection.
    *
    * @throws ProviderError when `--config-file` is unreadable / malformed,
-   *         port/secure flags are invalid, or final config fails validation
+   *         port/secure flags are invalid, final config fails validation, or the
+   *         run declares itself unattended while the assembled config gives no
+   *         basis to trust a secure server (no pin, no opt-in) - an `offline`
+   *         input is exempt, since it never reaches the medium
    */
   async configureFromFlags(input: CliProviderInput): Promise<Record<string, unknown>> {
     // Secure by default (an explicit `--secure false` / `"secure": false` opts out).
@@ -999,6 +1216,16 @@ export class FtpProvider implements StorageProvider {
     }
     if (!(config.path as string).startsWith('/')) {
       throw new ProviderError(tFor(this.io.lang, 'ftp_path_must_be_absolute'));
+    }
+
+    // Two instructions that cannot both hold, decided from the assembled config
+    // rather than the raw flags - a fingerprint or an opt-in may equally have
+    // come from --config-file. `offline` is exempt: `bfs provider edit` never
+    // reaches the server, so a config without a pin is legal there and the
+    // trust decision falls to whoever connects later.
+    const trustable = typeof config.cert_fingerprint === 'string' || config.accept_new_cert === true;
+    if (input.offline !== true && this.io.interactive === false && config.secure === true && !trustable) {
+      throw new ProviderError(fmtFor(this.io.lang, 'ftp_cert_trust_conflict', `${config.host}:${config.port}`));
     }
 
     return config;
@@ -1133,17 +1360,17 @@ export class FtpProvider implements StorageProvider {
     });
   }
 
-  /** Silent remove — swallow errors (used in probe cleanup paths). */
+  /** Silent remove - swallow errors (used in probe cleanup paths). */
   private async bestEffortRemove(client: ftp.Client, remotePath: string): Promise<void> {
     try {
       await client.remove(remotePath);
     } catch {
-      // intentional — cleanup after a failure must not mask the original error
+      // intentional - cleanup after a failure must not mask the original error
     }
   }
 
   /**
-   * Remove that treats "file unavailable" (FTP reply 550) as success — an
+   * Remove that treats "file unavailable" (FTP reply 550) as success - an
    * already-absent shard is a no-op, not a failure. Keeps `delete` idempotent so
    * a re-run (or a shard removed out of band) does not raise a false prune orphan
    * warning; a real failure (permissions, transport) still throws.
@@ -1158,7 +1385,7 @@ export class FtpProvider implements StorageProvider {
   }
 }
 
-// ─── Factory + registry ──────────────────────────────────────────────────────
+// --- Factory + registry ------------------------------------------------------
 
 const ftpFactory: ProviderFactory = {
   lang: 'en',
@@ -1183,7 +1410,7 @@ const ftpFactory: ProviderFactory = {
       examples: [
         'bfs provider add --ci --name nas --type ftp \\',
         '  --host ftp.example.com --port 21 --user backup \\',
-        "  --password '…' --path /backup --secure false",
+        "  --password '...' --path /backup --secure false",
         '',
         'bfs provider add --ci --name nas --type ftp --config-file ./nas.json',
         '# nas.json:',
@@ -1191,7 +1418,7 @@ const ftpFactory: ProviderFactory = {
         '#   "host": "ftp.example.com",',
         '#   "port": 21,',
         '#   "user": "backup",',
-        '#   "password": "…",',
+        '#   "password": "...",',
         '#   "path": "/backup",',
         '#   "secure": false',
         '# }',

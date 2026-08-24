@@ -4,11 +4,11 @@
 # restored on another where none of the source paths exist. All provider base
 # paths recorded in config are gone, so repair must relocate all of them at once
 # without prompting. LocalFs.authenticate() must treat a missing path as
-# unreachable (like FtpProvider) instead of asking io.confirm() — under --ci
+# unreachable (like FtpProvider) instead of asking io.confirm() - under --ci
 # there is nobody to answer, so a prompt aborts/hangs the restore.
 
 SCENARIO_NAME="repair: relocate all providers non-interactively"
-SCENARIO_DESC="3L 2/1; move every provider's storage, delete old paths, repair --ci --version all to all new paths, verify+pull byte-for-byte — no prompt"
+SCENARIO_DESC="3L 2/1; move every provider's storage, delete old paths, repair --ci --version all to all new paths, verify+pull byte-for-byte - no prompt"
 REQUIRES_LOCAL=3
 REQUIRES_FTP=0
 
@@ -27,7 +27,7 @@ scenario_run() {
   assert_manifest_health "$vault" 1 healthy
 
   # Move EVERY provider's storage to a new base path and delete the old base
-  # dirs, so no path in config still exists — the cross-OS restore condition.
+  # dirs, so no path in config still exists - the cross-OS restore condition.
   # No sibling stays reachable at its recorded location.
   local i
   for i in 0 1 2; do

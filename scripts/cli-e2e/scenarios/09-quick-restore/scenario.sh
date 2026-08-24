@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Restore a backup into a brand-new working directory that has never held this
 # vault (e.g. a fresh machine): recover metadata from a provider, then pull.
-# This is the supported "restore from the backup directory" path — `bfs pull`
+# This is the supported "restore from the backup directory" path - `bfs pull`
 # alone requires an existing .bfs/.
 
 SCENARIO_NAME="restore on a fresh machine"
@@ -21,7 +21,7 @@ scenario_run() {
   run_bfs "$vault" push --new
   assert_ok
 
-  # New, empty working directory — only the provider path + vault name are known.
+  # New, empty working directory - only the provider path + vault name are known.
   mkdir -p "$fresh"
   run_bfs "$fresh" recovery --provider local --name "$name" \
     --bootstrap "--path $(winpath "${PV_LOCALDIR[0]}")"

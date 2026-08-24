@@ -15,12 +15,19 @@ jobs:
       - run: npm ci
       - name: Start FTP server
         run: |
+          # vsftpd runs in the FOREGROUND: left to itself the image backgrounds
+          # it, guesses its pid with `pgrep vsftpd | tail -n 1`, and hands the
+          # guess to a watchdog that takes the whole container down when the pid
+          # it watches turns out to be a short-lived startup process. The -o
+          # flags must follow the config path, whose background=YES would
+          # otherwise win.
           docker run -d --name bfs-ftp-test \
             -p 21:21 \
             -p 21000-21010:21000-21010 \
             -e "USERS=bfsuser|bfspass" \
             --restart=always \
-            delfer/alpine-ftp-server
+            delfer/alpine-ftp-server \
+            sh -c 'exec vsftpd /etc/vsftpd/vsftpd.conf -obackground=NO -opasv_min_port=${MIN_PORT:-21000} -opasv_max_port=${MAX_PORT:-21010} ${ADDRESS:+-opasv_address=$ADDRESS}'
       - name: Wait for FTP server ready
         run: |
           for i in $(seq 1 30); do
@@ -45,7 +52,7 @@ jobs:
           skip=$(echo "$result" | grep -oE '[0-9]+ SKIP' | grep -oE '^[0-9]+' || echo '?')
           {
             echo "## Smoke Report"
-            echo "| ✅ PASS | ❌ FAIL | ⏭ SKIP |"
+            echo "| PASS | FAIL | SKIP |"
             echo "|---------|---------|--------|"
             echo "| $pass | $fail | $skip |"
           } >> "$GITHUB_STEP_SUMMARY"

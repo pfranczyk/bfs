@@ -35,7 +35,7 @@ scenario_run() {
   assert_file "${PV_LOCALDIR[2]}/$name/hdr_2.bfs.1"
 
   # Delete a non-relocated provider's sidecar (p1, stable path). Its shard
-  # payload + in-shard header stay intact — only the sidecar is gone.
+  # payload + in-shard header stay intact - only the sidecar is gone.
   local hdr="${PV_LOCALDIR[1]}/$name/hdr_1.bfs.1"
   rm -f "$hdr"
   assert_no_file "$hdr"
@@ -51,7 +51,7 @@ scenario_run() {
   assert_ok
   assert_file "$hdr"
 
-  # The advisory is gone — every reachable shard has a valid sidecar again.
+  # The advisory is gone - every reachable shard has a valid sidecar again.
   run_bfs "$vault" verify
   assert_ok
   if printf '%s' "$BFS_OUT" | grep -qF -- "--restore-headers"; then

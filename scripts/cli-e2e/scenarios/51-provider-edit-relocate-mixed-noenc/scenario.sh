@@ -15,7 +15,7 @@ scenario_run() {
   local vault="$SC_DIR/vault" base="$SC_DIR/baseline.txt" name="bfs51"
   local newlocal="$SC_DIR/relocated-local"
   make_fixtures "$vault"
-  build_pool_seq "$SC_DIR" "$name" local local ftp   # p0 L · p1 L · p2 F
+  build_pool_seq "$SC_DIR" "$name" local local ftp   # p0 L - p1 L - p2 F
 
   run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 2 --parity-shards 1 "${PROVIDER_ARGS[@]}"
@@ -27,18 +27,18 @@ scenario_run() {
   assert_manifest_health "$vault" 1 healthy
   assert_manifest_absent "$vault" 1 '"encrypted": true'
 
-  # ── Relocate the LOCAL provider p0: move its vault dir, repoint via edit ─────
+  # -- Relocate the LOCAL provider p0: move its vault dir, repoint via edit -----
   mkdir -p "$newlocal"
   mv "${PV_LOCALDIR[0]}/$name" "$newlocal/"
   assert_file "$newlocal/$name/shard_0.bfs.1"
   run_bfs "$vault" provider edit p0 --ci --path "$(winpath "$newlocal")"
   assert_ok
-  assert_out_matches 'push'   # non-secret coordinate changed → resync hint
+  assert_out_matches 'push'   # non-secret coordinate changed -> resync hint
 
-  # ── Relocate the FTP provider p2: move its remote dir, repoint via edit ──────
+  # -- Relocate the FTP provider p2: move its remote dir, repoint via edit ------
   # The new connection config goes through a JSON file (the documented
   # credential-file form), not inline --path: a lone POSIX path argument like
-  # "/bfs-e2e-…" would be rewritten to a Windows path by Git-Bash/MSYS before
+  # "/bfs-e2e-..." would be rewritten to a Windows path by Git-Bash/MSYS before
   # the native bfs process sees it. The JSON content is not subject to that.
   local e="${PV_FTP_ENDPOINT[2]}"
   local oldremote="${PV_FTP_REMOTE[2]}"
@@ -51,17 +51,17 @@ scenario_run() {
   run_bfs "$vault" provider edit p2 --ci --config-file "$(winpath "$ftpjson")"
   assert_ok
 
-  # ── Both relocated shards must be reachable at their EDITED locations ────────
+  # -- Both relocated shards must be reachable at their EDITED locations --------
   run_bfs "$vault" verify
   assert_ok
   assert_manifest_health "$vault" 1 healthy
 
-  # ── Restore v1 from the relocated providers (byte-for-byte) ─────────────────
+  # -- Restore v1 from the relocated providers (byte-for-byte) -----------------
   run_bfs "$vault" pull --force --yes
   assert_ok
   assert_restored "$vault" "$base"
 
-  # ── Push v2 to the new locations and round-trip it back ─────────────────────
+  # -- Push v2 to the new locations and round-trip it back ---------------------
   mutate_fixtures "$vault"
   local base2="$SC_DIR/baseline-v2.txt"
   snapshot_hashes "$vault" "$base2"

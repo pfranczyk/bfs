@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # bfs repair on an FTP provider whose stored PASSWORD drifted: the account
 # password was rotated on the server, so the saved credential no longer
-# authenticates. `bfs verify` sees the provider as unreachable (auth failure →
+# authenticates. `bfs verify` sees the provider as unreachable (auth failure ->
 # degraded); `bfs repair` rewrites the connection config with the current
 # password and the backup is healthy again, restoring byte-for-byte.
 
@@ -13,7 +13,7 @@ REQUIRES_FTP=1
 scenario_run() {
   local vault="$SC_DIR/vault" base="$SC_DIR/baseline.txt" name="bfs71"
   make_fixtures "$vault"
-  build_pool_seq "$SC_DIR" "$name" local local ftp   # p0 L · p1 L · p2 F
+  build_pool_seq "$SC_DIR" "$name" local local ftp   # p0 L - p1 L - p2 F
 
   run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 2 --parity-shards 1 "${PROVIDER_ARGS[@]}"

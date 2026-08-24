@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# BFS CLI end-to-end harness — drives the real `bfs` CLI through every
+# BFS CLI end-to-end harness - drives the real `bfs` CLI through every
 # create / restore / version-switch / disaster-recovery path, on local and FTP
 # storage, and verifies each restore byte-for-byte (SHA-256).
 #
@@ -37,8 +37,8 @@
 #   --local-only     Skip every scenario that requires FTP or SSH (REQUIRES_FTP
 #                    > 0 or REQUIRES_SSH > 0), selecting by metadata rather than
 #                    name. Use on runners with no FTP/SSH container (e.g.
-#                    windows-latest): all pure-local scenarios run — including
-#                    new ones — and remote scenarios are reported SKIP instead
+#                    windows-latest): all pure-local scenarios run - including
+#                    new ones - and remote scenarios are reported SKIP instead
 #                    of FAIL.
 #   --ftp-only       Inverse of --local-only: skip every scenario that needs no
 #                    FTP (REQUIRES_FTP == 0), running only FTP-requiring ones.
@@ -73,7 +73,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 export REPO_ROOT
 
-# ── Argument parsing ─────────────────────────────────────────────────────────
+# -- Argument parsing ---------------------------------------------------------
 FTP_SPECS=()
 GDRIVE_SPECS=()
 SSH_SPECS=()
@@ -133,7 +133,7 @@ if [ "$DO_CLEAN" = "1" ]; then
   exec bash "$SCRIPT_DIR/clean.sh"
 fi
 
-# ── Load library ─────────────────────────────────────────────────────────────
+# -- Load library -------------------------------------------------------------
 # shellcheck source=lib/env.sh
 . "$SCRIPT_DIR/lib/env.sh"
 # shellcheck source=lib/bfs.sh
@@ -165,7 +165,7 @@ if [ ${#GDRIVE_SPECS[@]} -gt 0 ]; then
        "in yet, so those specs are currently ignored." >&2
 fi
 
-# ── Scenario discovery ───────────────────────────────────────────────────────
+# -- Scenario discovery -------------------------------------------------------
 discover_scenarios() {
   local sc key pat
   for sc in "$SCRIPT_DIR"/scenarios/*/scenario.sh; do
@@ -183,7 +183,7 @@ discover_scenarios() {
   done | LC_ALL=C sort
 }
 
-# load_meta <scenario.sh> — source it and read its declared metadata into the
+# load_meta <scenario.sh> - source it and read its declared metadata into the
 # globals SCENARIO_NAME/DESC/REQUIRES_LOCAL/REQUIRES_FTP/REQUIRES_SSH and
 # scenario_run().
 load_meta() {
@@ -204,27 +204,27 @@ if [ "$DO_LIST" = "1" ]; then
   exit 0
 fi
 
-# ── Run ──────────────────────────────────────────────────────────────────────
+# -- Run ----------------------------------------------------------------------
 env_init
-# Clean up on normal exit AND on Ctrl+C / termination (INT/TERM exit → EXIT trap).
+# Clean up on normal exit AND on Ctrl+C / termination (INT/TERM exit -> EXIT trap).
 trap env_cleanup EXIT
 trap 'exit 130' INT TERM
 
 # --ssh-docker provisions the endpoints the SSH scenarios are gated on, from the
 # same image the docker-managed ones use. It runs after env_init because the
-# containers are named with RUN_ID — that is what env_cleanup collects — and the
+# containers are named with RUN_ID - that is what env_cleanup collects - and the
 # specs are parsed here, once they exist.
 if [ "$SSH_DOCKER_COUNT" -gt 0 ]; then
   if ! docker_available; then
     echo "--ssh-docker $SSH_DOCKER_COUNT needs a running Docker daemon." >&2
     exit 2
   fi
-  echo "[cli-e2e] starting $SSH_DOCKER_COUNT SSH container(s)…"
+  echo "[cli-e2e] starting $SSH_DOCKER_COUNT SSH container(s)..."
   while IFS= read -r spec; do
     [ -n "$spec" ] && SSH_SPECS+=("$spec")
   done < <(docker_ssh_endpoints "$SSH_DOCKER_COUNT" "$RUN_ID")
   if [ "${#SSH_SPECS[@]}" -lt "$SSH_DOCKER_COUNT" ]; then
-    echo "Could not start $SSH_DOCKER_COUNT SSH container(s) — got ${#SSH_SPECS[@]}." >&2
+    echo "Could not start $SSH_DOCKER_COUNT SSH container(s) - got ${#SSH_SPECS[@]}." >&2
     exit 2
   fi
   parse_ssh_specs
@@ -260,7 +260,7 @@ while IFS= read -r sc; do
   fi
 
   # Docker-managed scenarios self-provision their servers (real container
-  # lifecycle). Without a usable Docker daemon they cannot run — SKIP (not FAIL:
+  # lifecycle). Without a usable Docker daemon they cannot run - SKIP (not FAIL:
   # there is no user-supplied endpoint to demand, and CI always has Docker).
   if [ "$REQUIRES_DOCKER" -gt 0 ] && ! docker_available; then
     report_result SKIP "$key" "requires Docker daemon" ""
@@ -277,10 +277,10 @@ while IFS= read -r sc; do
   fi
 
   # A --ftp-only partition provides no SSH. A mixed scenario that ALSO needs SSH
-  # (e.g. cross-type migration) is out of this job's scope — SKIP it (a companion
+  # (e.g. cross-type migration) is out of this job's scope - SKIP it (a companion
   # SSH job covers it) instead of tripping the "SSH mandatory" FAIL below.
   if [ "$FTP_ONLY" = "1" ] && [ "$REQUIRES_SSH" -gt 0 ] && [ "$(ssh_count)" -eq 0 ]; then
-    report_result SKIP "$key" "also needs SSH — out of FTP-only scope" ""
+    report_result SKIP "$key" "also needs SSH - out of FTP-only scope" ""
     continue
   fi
 
@@ -292,9 +292,9 @@ while IFS= read -r sc; do
   fi
 
   # Mirror of the FTP-only guard: a --ssh-only partition provides no FTP, so a
-  # mixed scenario that ALSO needs FTP is out of scope — SKIP, not FAIL.
+  # mixed scenario that ALSO needs FTP is out of scope - SKIP, not FAIL.
   if [ "$SSH_ONLY" = "1" ] && [ "$REQUIRES_FTP" -gt 0 ] && [ "$(ftp_count)" -eq 0 ]; then
-    report_result SKIP "$key" "also needs FTP — out of SSH-only scope" ""
+    report_result SKIP "$key" "also needs FTP - out of SSH-only scope" ""
     continue
   fi
 
@@ -308,7 +308,7 @@ while IFS= read -r sc; do
   # --exclude-docker: a job supplying external --ftp/--ssh endpoints skips
   # docker-managed scenarios. Their self-registered endpoint is appended after the
   # external ones, but the round-robin pool picks endpoint 0 (external) while the
-  # scenario asserts against its own — a false failure. Run them via --docker-only.
+  # scenario asserts against its own - a false failure. Run them via --docker-only.
   if [ "$EXCLUDE_DOCKER" = "1" ] && [ "$REQUIRES_DOCKER" -gt 0 ]; then
     report_result SKIP "$key" "docker-managed (run via --docker-only)" ""
     continue
@@ -342,7 +342,7 @@ while IFS= read -r sc; do
   # --verbose streams the scenario's bfs commands + responses live (and still
   # tees to the log); otherwise output is captured and shown only on failure.
   if [ "$VERBOSE" = "1" ]; then
-    echo "  ▶ $key — $SCENARIO_NAME"
+    echo "  > $key - $SCENARIO_NAME"
     ( cd "$REPO_ROOT"; scenario_run ) 2>&1 | tee "$log"
     rc=${PIPESTATUS[0]}
   else

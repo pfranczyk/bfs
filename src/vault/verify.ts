@@ -7,7 +7,7 @@ import { VersionHealth } from '../types/index.js';
 import { readConfig } from './config.js';
 import { listManifests, readManifest, writeManifest } from './manifest.js';
 
-// ─── Report types ─────────────────────────────────────────────────────────────
+// --- Report types -------------------------------------------------------------
 
 /** Per-version advisory about location-header (sidecar) files, orthogonal to data health. */
 export interface HeaderAdvisory {
@@ -53,7 +53,7 @@ export interface VerifyOptions {
 /** Sidecar-header presence for a single shard, as observed on a reachable provider. */
 type SidecarState = 'valid' | 'missing' | 'broken' | 'n/a';
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// --- Public API ---------------------------------------------------------------
 
 /**
  * Verifies health of all manifest versions.
@@ -150,8 +150,8 @@ function severity(health: VersionHealth): number {
  * Only a deep pass reads payload bytes, so only a deep pass may put rot on record
  * or retire it: a shallow pass carries the existing record forward untouched,
  * whatever verdict it reached itself. Were it allowed to clear the record
- * whenever its own observation happened to match or exceed the stored one — a
- * medium offline for unrelated reasons is enough — the rot would stop counting
+ * whenever its own observation happened to match or exceed the stored one - a
+ * medium offline for unrelated reasons is enough - the rot would stop counting
  * the moment that medium came back, without anything having re-read the data.
  *
  * While rot is on record, a shallow pass also may not report a better verdict
@@ -208,8 +208,9 @@ function failureReason(err: unknown): string {
  * every outcome that costs the version a part.
  *
  * A count alone cannot be acted on: "2/3" reads the same whether a medium is
- * switched off, its address is stale, or the part was deleted — and those call
- * for opposite moves (bring the medium back vs `bfs repair --rebuild`). So an
+ * switched off, its address is stale, or the part was deleted - and those call
+ * for opposite moves (bring the medium back vs `bfs repair <name> "" --rebuild`,
+ * which needs the name/params pair its parser insists on). So an
  * unreachable medium, a provider the configuration no longer knows and a medium
  * with no installed adapter are reported, not swallowed, exactly as the per-file
  * failures below already are.
@@ -264,16 +265,16 @@ async function inspectShard(ms: ManifestShard, ctx: ShardCheckContext): Promise<
  * location-header sidecar. In shallow mode pulls only the header window
  * (~16 KB). In deep mode (`ctx.deep`) additionally streams the whole shard and
  * verifies its trailing SHA-256, catching payload bit-rot the header check
- * cannot see — at the cost of transferring the full shard.
+ * cannot see - at the cost of transferring the full shard.
  *
  * Availability is read from the IN-SHARD header, so it is independent of the
  * sidecar: a broken or missing sidecar never marks the shard unavailable.
  *
  * Failure modes (reported via io.warn, `available: false`):
- *   - getSize fails or returns 0   → shard missing
- *   - downloadHeader / parse fails → header truncated or corrupt
- *   - vault_id / version / shard_index / blob_hash / scheme mismatch → wrong shard
- *   - deep: trailing SHA-256 mismatch → payload corrupted (bit-rot / truncation)
+ *   - getSize fails or returns 0   -> shard missing
+ *   - downloadHeader / parse fails -> header truncated or corrupt
+ *   - vault_id / version / shard_index / blob_hash / scheme mismatch -> wrong shard
+ *   - deep: trailing SHA-256 mismatch -> payload corrupted (bit-rot / truncation)
  *
  * @returns availability plus the observed sidecar state
  */
@@ -338,7 +339,7 @@ function headerMismatches(header: ShardHeader, config: VaultConfig, manifest: Ve
  * Classifies the location-header sidecar for a shard on a reachable provider:
  * `valid` (a well-formed BFSH envelope), `missing` (no sidecar), `broken` (a
  * file that fails BFSH validation), or `n/a` (provider stores headers in place,
- * or the sidecar probe itself failed). Password-free — validates the envelope
+ * or the sidecar probe itself failed). Password-free - validates the envelope
  * (magic + checksum) without decrypting the location map.
  */
 async function probeSidecarState(provider: StorageProvider, ref: RemoteRef): Promise<SidecarState> {

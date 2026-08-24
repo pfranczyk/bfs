@@ -19,7 +19,7 @@ const require = createRequire(import.meta.url);
  */
 export const SHARD_ALIGNMENT = 8;
 
-// ─── WASM factory ─────────────────────────────────────────────────────────
+// --- WASM factory ---------------------------------------------------------
 //
 // The @subspace/reed-solomon-erasure.wasm library uses a simple bump allocator
 // in its WASM module. After many malloc/free cycles the allocator runs out of
@@ -40,7 +40,7 @@ function newRs(): ReedSolomonErasure {
   return _RSClass.fromBytes(_wasmBytes);
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────────────
+// --- Helpers ---------------------------------------------------------------
 
 /** Rounds `n` up to the nearest multiple of `SHARD_ALIGNMENT`. */
 function alignUp(n: number): number {
@@ -61,7 +61,7 @@ function validateParams(dataShards: number, parityShards: number): void {
   if (dataShards + parityShards > 256) throw new BfsError(`N+K must be <= 256, got ${dataShards + parityShards}`);
 }
 
-// ─── Public API ────────────────────────────────────────────────────────────
+// --- Public API ------------------------------------------------------------
 
 /**
  * Encodes a data blob into N+K Reed-Solomon shards.
@@ -69,7 +69,7 @@ function validateParams(dataShards: number, parityShards: number): void {
  * @param data         - input blob (any length)
  * @param dataShards   - N: number of data shards (>= 2)
  * @param parityShards - K: number of parity shards (>= 1)
- * @returns array of N+K Buffers — each is one shard payload
+ * @returns array of N+K Buffers - each is one shard payload
  * @throws BfsError on invalid parameters
  */
 export function rsEncode(data: Buffer, dataShards: number, parityShards: number): Buffer[] {
@@ -182,7 +182,7 @@ export function rsRepair(shards: Nullable<Buffer>[], dataShards: number, parityS
 }
 
 /**
- * Repairs missing shards (null slots) using striped Reed-Solomon — the
+ * Repairs missing shards (null slots) using striped Reed-Solomon - the
  * FORMAT_VERSION 2 layout, where each shard payload is a concatenation of
  * per-stripe slices. Repair runs stripe-by-stripe (mirroring rsEncodeStriped),
  * so the result is byte-identical to the original encode. Operates on PLAINTEXT
@@ -220,7 +220,7 @@ export function rsRepairStriped(shards: Nullable<Buffer>[], dataShards: number, 
   return outputs;
 }
 
-// ─── Striped RS (FORMAT_VERSION=2 pipeline) ────────────────────────────────
+// --- Striped RS (FORMAT_VERSION=2 pipeline) --------------------------------
 
 /** Result of striped RS encoding with inline SHA-256 hashing. */
 export interface RsEncodeStripedResult {
@@ -233,9 +233,12 @@ export interface RsEncodeStripedResult {
 /**
  * Encodes a blob stream into K parity shard files using striped Reed-Solomon,
  * computing SHA-256 hashes for all N+K shards inline (no extra I/O passes).
- * Data shards are slices of the original blob — not written by this function.
+ * Data shards are slices of the original blob - not written by this function.
  * Parity shards are written stripe-by-stripe to `parityPaths` temp files.
- * Peak RAM: (N+K) × stripeSize bytes (e.g. 192 MiB for N=2, K=1, stripe=64 MiB).
+ * Peak JS-heap RAM: (2N+K) x stripeSize bytes - the (N+K)-wide RS working block
+ * plus the N-wide input block (e.g. 320 MiB for N=2, K=1, stripe=64 MiB). The
+ * WASM encoder copies the working block into its own linear memory for the call,
+ * so the process peak is another (N+K) x stripeSize on top of that.
  *
  * @param source      - Readable stream of the full blob
  * @param parityPaths - K output file paths for parity shards
@@ -243,6 +246,7 @@ export interface RsEncodeStripedResult {
  * @param K           - number of parity shards
  * @param stripeSize  - bytes per shard per stripe (e.g. 64 MiB)
  * @returns SHA-256 hashes for all N data + K parity shards
+ * @throws BfsError on invalid parameters, when parityPaths.length !== K, or when RS encoding fails
  */
 export async function rsEncodeStriped(source: Readable, parityPaths: string[], N: number, K: number, stripeSize: number): Promise<RsEncodeStripedResult> {
   validateParams(N, K);
@@ -253,7 +257,7 @@ export async function rsEncodeStriped(source: Readable, parityPaths: string[], N
   const inputBlock = Buffer.alloc(N * stripeSize); // preallocated input buffer
   let inputFilled = 0;
 
-  // N+K hash contexts — mutation OK for performance (streaming hash)
+  // N+K hash contexts - mutation OK for performance (streaming hash)
   const hashers: Hash[] = Array.from({ length: N + K }, () => createHash('sha256'));
 
   const parityHandles = await Promise.all(parityPaths.map((p) => open(p, 'w')));
@@ -307,6 +311,8 @@ interface RsDecodeStripedOptions {
  * @param shardStreams - N+K decrypted shard payload streams (null = missing)
  * @param options      - decode parameters (scheme, stripe/blob sizes, optional debug log)
  * @returns Readable stream of the reconstructed blob
+ * @throws BfsError synchronously on invalid parameters; decode failures are
+ *         emitted as an `error` event on the returned stream
  */
 export function rsDecodeStriped(shardStreams: Nullable<Readable>[], options: RsDecodeStripedOptions): Readable {
   const { N, K, stripeSize, blobSize, debugLog } = options;
@@ -320,7 +326,7 @@ export function rsDecodeStriped(shardStreams: Nullable<Readable>[], options: RsD
   return output;
 }
 
-// ─── Internal helper ───────────────────────────────────────────────────────
+// --- Internal helper -------------------------------------------------------
 
 /**
  * Builds a flat Uint8Array from a shard slot array.
@@ -399,7 +405,7 @@ async function _encodeStripeWithHash(ctx: EncodeStripeCtx): Promise<void> {
     throw new BfsError(`Reed-Solomon stripe encode failed with code ${result}`);
   }
 
-  // Feed data shard slices to hashers (from inputBlock — original data incl. zero-padding)
+  // Feed data shard slices to hashers (from inputBlock - original data incl. zero-padding)
   for (let i = 0; i < N; i++) {
     hashers[i].update(Buffer.from(inputBlock.buffer, inputBlock.byteOffset + i * stripeSize, stripeSize));
   }
@@ -459,7 +465,7 @@ async function _runStripedDecode(ctx: StripedDecodeCtx): Promise<void> {
         if (reader !== null) {
           const got = await reader.readInto(flat, i * stripeSize, stripeSize);
           gotValues.push(got);
-          // got=0 means the shard returned no data for this stripe — mark it
+          // got=0 means the shard returned no data for this stripe - mark it
           // unavailable so RS reconstructs it instead of emitting zeros.
           available.push(got > 0);
         } else {
@@ -495,7 +501,7 @@ async function _runStripedDecode(ctx: StripedDecodeCtx): Promise<void> {
   }
 }
 
-/** Buffered reader for a Readable stream — allows reading exactly N bytes per call. */
+/** Buffered reader for a Readable stream - allows reading exactly N bytes per call. */
 class _ShardReader {
   private readonly iter: AsyncIterator<Buffer | Uint8Array>;
   private leftover: Buffer = Buffer.alloc(0);

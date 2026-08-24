@@ -10,7 +10,7 @@ import { hashBuffer, streamToBuffer } from '../../src/core/hash.js';
 import { buildShard, buildShardHeaderFromBytes, buildShardStream, buildSidecarBytes, matchShardIdentity, parseShardHeaderFromStream, readShardHeader, serializeShardHeader, shardChecksumMatches } from '../../src/core/shard-io.js';
 import type { RemoteRef, ShardHeader, ShardLocation, StorageProvider } from '../../src/types/index.js';
 
-// ─── Test fixtures ─────────────────────────────────────────────────────────
+// --- Test fixtures ---------------------------------------------------------
 
 const TEST_VAULT_ID = '550e8400-e29b-41d4-a716-446655440000';
 const TEST_BLOB_HASH = 'a'.repeat(64); // 32 hex-encoded bytes
@@ -56,7 +56,7 @@ function makeHeader(overrides: Partial<ShardHeader> = {}): ShardHeader {
 
 const TEST_PAYLOAD = Buffer.from('Hello, BFS shard payload! '.repeat(20));
 
-// ─── Helper: parse shard buffer and collect payload ─────────────────────────
+// --- Helper: parse shard buffer and collect payload -------------------------
 
 async function parseShard(shard: Buffer, key?: Buffer): Promise<{ header: ShardHeader; payload: Buffer }> {
   const { header, payloadStream } = await parseShardHeaderFromStream(Readable.from(shard), key);
@@ -64,7 +64,7 @@ async function parseShard(shard: Buffer, key?: Buffer): Promise<{ header: ShardH
   return { header, payload };
 }
 
-// ─── Tests ─────────────────────────────────────────────────────────────────
+// --- Tests -----------------------------------------------------------------
 
 describe('shard-io', () => {
   describe('buildShard + parseShardHeaderFromStream roundtrip (no encryption)', () => {
@@ -169,7 +169,7 @@ describe('shard-io', () => {
 
       const shard = buildShard(header, TEST_PAYLOAD, encryptionKey);
 
-      // Without key: header parses successfully — location_map stays []
+      // Without key: header parses successfully - location_map stays []
       const { header: h } = await parseShardHeaderFromStream(Readable.from(shard));
       expect(h.encrypted).toBe(true);
       expect(h.location_map).toHaveLength(0);
@@ -188,7 +188,7 @@ describe('shard-io', () => {
   });
 
   describe('parseShardHeaderFromStream (header-only, no key)', () => {
-    it('should parse metadata without key (unencrypted) — location_map populated', async () => {
+    it('should parse metadata without key (unencrypted) - location_map populated', async () => {
       const header = makeHeader({ shard_index: 3, version: 42 });
       const shard = buildShard(header, TEST_PAYLOAD);
 
@@ -205,13 +205,13 @@ describe('shard-io', () => {
       expect(h.location_map).toHaveLength(TEST_LOCATIONS.length);
     });
 
-    it('should parse metadata without key (encrypted) — location_map empty', async () => {
+    it('should parse metadata without key (encrypted) - location_map empty', async () => {
       const salt = generateSalt();
       const encryptionKey = Buffer.alloc(32, 0x55);
       const header = makeHeader({ encrypted: true, kdf_salt: salt, shard_index: 1 });
       const shard = buildShard(header, TEST_PAYLOAD, encryptionKey);
 
-      // Can call without key — should not throw, location_map stays []
+      // Can call without key - should not throw, location_map stays []
       const { header: h } = await parseShardHeaderFromStream(Readable.from(shard));
 
       expect(h.encrypted).toBe(true);
@@ -273,7 +273,7 @@ describe('shard-io', () => {
     });
   });
 
-  describe('buildShard — encrypted header validation', () => {
+  describe('buildShard - encrypted header validation', () => {
     it('should throw BfsError when encrypted=true but kdf_salt is null', () => {
       const header = makeHeader({ encrypted: true, kdf_salt: null });
       const key = Buffer.alloc(32, 0xaa);
@@ -333,7 +333,7 @@ describe('shard-io', () => {
     //
     // Determinism lever: highWaterMark 1 makes the 1 MiB source drain one
     // syscall per byte, far slower than the 50 ms window, so a live source
-    // cannot auto-destroy on 'end' in time — only the shard stream's own
+    // cannot auto-destroy on 'end' in time - only the shard stream's own
     // teardown can flip `destroyed` to true within the window. Without the
     // teardown the assertion fails deterministically.
     it('should tear down the file-backed payload source when the shard stream is destroyed', async () => {
@@ -357,7 +357,7 @@ describe('shard-io', () => {
     // Regression: on the encrypted push path the payload is
     // encryptStream(createReadStream(parityTemp)), so buildShardStream's teardown
     // sees only the cipher transform. Destroying the transform must also tear
-    // down the underlying read stream — otherwise its fd lingers open over the
+    // down the underlying read stream - otherwise its fd lingers open over the
     // parity temp that the push loop unlinks right after, the same leak the
     // teardown closes on the plaintext path. Same highWaterMark 1 determinism
     // lever: the source cannot self-drain inside the 50 ms window.
@@ -381,13 +381,13 @@ describe('shard-io', () => {
     });
   });
 
-  // ─── Backward compatibility: legacy shards without adapterPackage ────────
+  // --- Backward compatibility: legacy shards without adapterPackage --------
   //
   // Shards produced by BFS versions older than the adapterPackage addition
   // store a location map JSON that lacks this field. The parser must accept
   // them verbatim (no flag, no migration) and return adapterPackage=null for
   // every entry. This is the single most important guarantee of the adapter
-  // contract — legacy backups stay fully recoverable.
+  // contract - legacy backups stay fully recoverable.
   describe('backward compat: legacy location map JSON (no adapterPackage)', () => {
     it('should parse legacy plain JSON and fall back to adapterPackage=null', async () => {
       const header = makeHeader();
@@ -423,7 +423,7 @@ describe('shard-io', () => {
       expect(parsed.location_map).toHaveLength(TEST_LOCATIONS.length);
       for (const loc of parsed.location_map) {
         expect(loc.adapterPackage).toBeNull();
-        // Legacy shard omits required_inputs → null marks "secret still inline".
+        // Legacy shard omits required_inputs -> null marks "secret still inline".
         expect(loc.required_inputs).toBeNull();
       }
       // Other fields must round-trip unchanged.
@@ -436,15 +436,15 @@ describe('shard-io', () => {
       const salt = generateSalt();
       const header = makeHeader({ encrypted: true, kdf_salt: salt });
       // Serialize a header whose location_map is the legacy shape (no
-      // adapterPackage). serializeHeader → encryptLocationMap runs
+      // adapterPackage). serializeHeader -> encryptLocationMap runs
       // JSON.stringify on the array, so only the legacy keys hit the
-      // encrypted JSON payload — exactly the on-disk shape of a shard
+      // encrypted JSON payload - exactly the on-disk shape of a shard
       // produced by a BFS version older than adapterPackage.
       const legacyMap = TEST_LOCATIONS.map(({ adapterPackage: _ap, required_inputs: _ri, ...rest }) => rest);
 
       // We can't easily swap only the encrypted bytes in-place, so instead
       // serialize a fresh header whose `location_map` is cast to the legacy
-      // shape. serializeHeader uses JSON.stringify → the legacy keys are
+      // shape. serializeHeader uses JSON.stringify -> the legacy keys are
       // the only ones written.
       const legacyHeader: ShardHeader = { ...header, location_map: legacyMap as unknown as ShardLocation[] };
       const legacyShard = buildShard(legacyHeader, TEST_PAYLOAD, key);
@@ -454,13 +454,13 @@ describe('shard-io', () => {
       expect(parsed.location_map).toHaveLength(TEST_LOCATIONS.length);
       for (const loc of parsed.location_map) {
         expect(loc.adapterPackage).toBeNull();
-        // Legacy shard omits required_inputs → null marks "secret still inline".
+        // Legacy shard omits required_inputs -> null marks "secret still inline".
         expect(loc.required_inputs).toBeNull();
       }
     });
   });
 
-  // ─── Sidecar (BFSH) format + readShardHeader ─────────────────────────────
+  // --- Sidecar (BFSH) format + readShardHeader -----------------------------
 
   const TEST_REF: RemoteRef = { provider_id: 'p', path: 'shard_0.bfs.1' };
 
@@ -563,12 +563,12 @@ describe('shard-io', () => {
 
     // Untrusted bytes from an external provider must never escape as a raw
     // RangeError. A header whose name-length field overruns the buffer is the
-    // canonical malformed-input case — it must surface as ShardCorruptedError.
+    // canonical malformed-input case - it must surface as ShardCorruptedError.
     it('should raise ShardCorruptedError (not a raw RangeError) on a bogus name length (in-shard path)', async () => {
       const malformed = Buffer.alloc(40);
       malformed.write('BFSS', 0, 'ascii');
       malformed.writeUInt16LE(1, 4); // format_version
-      malformed.writeUInt16LE(0xffff, 22); // vault name length at offset 4+2+16 — overruns the 40-byte buffer
+      malformed.writeUInt16LE(0xffff, 22); // vault name length at offset 4+2+16 - overruns the 40-byte buffer
       const provider = stubProvider({ usesSidecar: false, inShard: malformed });
 
       await expect(readShardHeader(provider, TEST_REF)).rejects.toThrow(ShardCorruptedError);
@@ -615,11 +615,11 @@ describe('shard-io', () => {
     });
   });
 
-  // ─── rs_stripe_size clamp from an untrusted header ───────────────────────
+  // --- rs_stripe_size clamp from an untrusted header -----------------------
   //
   // rsDecodeStriped allocates memory proportional to rs_stripe_size, which is
   // read verbatim from the shard header. Push limits the stripe to
-  // V2_MAX_STRIPE_SIZE (256 MiB), but the READ path does not — a crafted header
+  // V2_MAX_STRIPE_SIZE (256 MiB), but the READ path does not - a crafted header
   // with rs_stripe_size of several GiB (or 0) drives an OOM/RangeError on pull
   // or recovery. The parser must reject rs_stripe_size == 0 and
   // > V2_MAX_STRIPE_SIZE (256 MiB) with a typed ShardCorruptedError, and accept
@@ -630,7 +630,7 @@ describe('shard-io', () => {
     it('should reject an oversized rs_stripe_size (> 256 MiB) with ShardCorruptedError', () => {
       // serializeShardHeader does NOT clamp at write time, so we can emit a
       // well-formed V2 header carrying a 512 MiB stripe. The header is
-      // structurally valid — the only thing wrong is the out-of-range stripe.
+      // structurally valid - the only thing wrong is the out-of-range stripe.
       const header = makeHeader({ encrypted: false, rs_stripe_size: 512 * 1024 * 1024 });
       const headerBytes = serializeShardHeader(header);
 
@@ -646,7 +646,7 @@ describe('shard-io', () => {
 
     it('should accept rs_stripe_size exactly at the cap (256 MiB) and reject cap+1', () => {
       // Pins the boundary so the fix must be `> cap` (cap itself legal), not
-      // `>= cap` — both would pass a 512-MiB-only test, so this nails off-by-one.
+      // `>= cap` - both would pass a 512-MiB-only test, so this nails off-by-one.
       const atCap = makeHeader({ encrypted: false, rs_stripe_size: V2_MAX_STRIPE_SIZE });
       const overCap = makeHeader({ encrypted: false, rs_stripe_size: V2_MAX_STRIPE_SIZE + 1 });
 
@@ -676,7 +676,7 @@ describe('shard-io', () => {
   });
 
   // Callers gate on this before touching a shard's header or payload, so a
-  // truncated or empty buffer must read as "damaged" rather than throw — the
+  // truncated or empty buffer must read as "damaged" rather than throw - the
   // check runs ahead of any parsing that could raise on such input.
   describe('shardChecksumMatches', () => {
     const SHA256_BYTES = 32;

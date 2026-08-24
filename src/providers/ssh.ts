@@ -20,14 +20,14 @@ const SSH_TIMEOUT_MS = 15_000;
  * Idle timeout for SFTP work after the handshake completes. ssh2's readyTimeout
  * only bounds KEX + auth; once `ready` fires, a stalled-but-alive server would
  * hang readdir/stat/read/write forever with no error. This bounds each operation
- * by INACTIVITY — reset on every received payload — so a legitimately slow large
+ * by INACTIVITY - reset on every received payload - so a legitimately slow large
  * transfer is never cut, only a genuine stall. Mirrors basic-ftp's socket timeout
  * (`FTP_TIMEOUT_MS`), which SSH otherwise lacked.
  */
 const SFTP_IDLE_TIMEOUT_MS = 10_000;
 const UPLOAD_CHUNK_SIZE = 64 * 1024;
 const DEFAULT_SSH_PORT = 22;
-/** POSIX S_IFMT mask + S_IFDIR — used to detect a directory from SFTP attrs.mode. */
+/** POSIX S_IFMT mask + S_IFDIR - used to detect a directory from SFTP attrs.mode. */
 const S_IFMT = 0o170000;
 const S_IFDIR = 0o040000;
 
@@ -60,7 +60,7 @@ function bufferToChunkedStream(buffer: Buffer, chunkSize = UPLOAD_CHUNK_SIZE): R
 /**
  * Computes the OpenSSH SHA-256 host-key fingerprint: `SHA256:` followed by the
  * base64 of the SHA-256 digest of the raw host-key buffer, with trailing '='
- * padding stripped — the exact form OpenSSH prints and `~/.ssh/known_hosts`
+ * padding stripped - the exact form OpenSSH prints and `~/.ssh/known_hosts`
  * comparisons key off.
  */
 function sshFingerprint(key: Buffer): string {
@@ -78,7 +78,7 @@ function isValidFingerprint(value: string): boolean {
 }
 
 /**
- * Host-key type preference for ordering offline known_hosts proposals — mirrors
+ * Host-key type preference for ordering offline known_hosts proposals - mirrors
  * ssh2's DEFAULT_SERVER_HOST_KEY negotiation order (ssh-ed25519 > ecdsa > ssh-rsa;
  * see ssh2/lib/protocol/constants.js). The type ssh2 negotiates first is the one
  * that must be pinned, so the highest-preference key is offered (and recommended)
@@ -116,7 +116,7 @@ function entryIsDirectory(entry: FileEntry): boolean {
 /**
  * Runs a one-shot SFTP callback op under the idle timeout. Metadata ops
  * (readdir/stat/rename/unlink/mkdir/sftp) are a single request/response, so "no
- * reply within the window" means the server stalled after the handshake — reject
+ * reply within the window" means the server stalled after the handshake - reject
  * instead of hanging forever (ssh2 has no per-op timeout once `ready` fires).
  */
 function withSftpTimeout<T>(op: string, run: (done: (err: Nullable<Error> | undefined, val?: T) => void) => void): Promise<T> {
@@ -135,7 +135,7 @@ function readdirAsync(sftp: SFTPWrapper, dir: string): Promise<FileEntry[]> {
   return withSftpTimeout<FileEntry[]>('readdir', (done) => sftp.readdir(dir, (err, list) => done(err, list)));
 }
 
-/** Promisified `sftp.stat` — returns the byte size via metadata, no payload transfer (idle-timeout bounded). */
+/** Promisified `sftp.stat` - returns the byte size via metadata, no payload transfer (idle-timeout bounded). */
 function statSizeAsync(sftp: SFTPWrapper, remotePath: string): Promise<number> {
   return withSftpTimeout<number>('stat', (done) => sftp.stat(remotePath, (err, stats) => done(err, stats?.size)));
 }
@@ -161,14 +161,14 @@ function mkdirAsync(sftp: SFTPWrapper, remotePath: string): Promise<void> {
  *
  * Resolves on `'close'` as well as `'finish'`: ssh2's SFTP write stream is built
  * with `autoDestroy`/`emitClose` off and destroys itself inside `_final`, so it
- * never emits `'finish'` — it commits the payload and emits `'close'` once the
+ * never emits `'finish'` - it commits the payload and emits `'close'` once the
  * remote handle is closed. Waiting for `'finish'` alone would hang forever. The
  * settled guard keeps the first outcome authoritative: a generic Writable (the
  * test mock) fires both `'finish'` and `'close'`, and on failure the `'error'`
  * must win over any later event.
  *
  * An idle timer (reset on each source chunk) fails the upload if no progress is
- * made for `SFTP_IDLE_TIMEOUT_MS` — a server that stalls mid-write (backpressure
+ * made for `SFTP_IDLE_TIMEOUT_MS` - a server that stalls mid-write (backpressure
  * pauses the source, so no more chunks flow) can no longer hang push forever.
  */
 function pipeToWriteStream(source: Readable, dest: Writable): Promise<void> {
@@ -200,7 +200,7 @@ function pipeToWriteStream(source: Readable, dest: Writable): Promise<void> {
 
 /**
  * Collects a read stream into a Buffer under an idle timeout that resets on every
- * received chunk — a slow-but-progressing transfer is never cut, only a genuine
+ * received chunk - a slow-but-progressing transfer is never cut, only a genuine
  * mid-transfer stall (server went silent after `ready`) fails. `transform` shapes
  * the concatenated result; the stream is destroyed on timeout.
  */
@@ -238,7 +238,7 @@ function downloadToBuffer(sftp: SFTPWrapper, remotePath: string): Promise<Buffer
 
 /**
  * Reads at most `maxBytes` from the start of a remote file using SFTP's native
- * ranged read (`{ start, end }`) — the header window is pulled without buffering
+ * ranged read (`{ start, end }`) - the header window is pulled without buffering
  * the full payload (idle-timeout bounded).
  */
 function collectRanged(sftp: SFTPWrapper, remotePath: string, maxBytes: number): Promise<Buffer> {
@@ -273,7 +273,8 @@ export class SshProvider implements StorageProvider {
   // Pinned host-key fingerprint (config.json + shard headers). Authoritative for
   // trust, but a ~/.ssh/known_hosts @revoked entry still hard-refuses it (fail-closed).
   private readonly hostKeyFingerprint: Nullable<string>;
-  // Non-interactive "trust a new host key" opt-in (`--accept-new-host-key`).
+  // "Trust a new host key" opt-in (`--accept-new-host-key`) - consent given up
+  // front, so it settles the question in every mode.
   private readonly acceptNewHostKey: boolean;
   // Set by decideHostKeyTrust when a pinned host key does NOT match the key the
   // server presented (and it is not @revoked): a changed identity is tampering.
@@ -283,7 +284,7 @@ export class SshProvider implements StorageProvider {
   private vaultName: Nullable<string> = null;
 
   constructor(config: ProviderConfig, io: ProviderIO) {
-    // Lazy init — an incomplete config is allowed so the CLI can construct a
+    // Lazy init - an incomplete config is allowed so the CLI can construct a
     // placeholder instance and call configureInteractive/configureFromFlags
     // before persisting. Validation happens in validateConfig() and at use.
     this.id = config.id;
@@ -301,7 +302,7 @@ export class SshProvider implements StorageProvider {
     this.acceptNewHostKey = c.accept_new_host_key === true;
   }
 
-  // ─── Private helpers ──────────────────────────────────────────────────────
+  // --- Private helpers ------------------------------------------------------
 
   /** Resolves ssh2 auth options for this instance, reading the private key file for key auth. */
   private async authOptions(): Promise<AuthOptions> {
@@ -320,13 +321,17 @@ export class SshProvider implements StorageProvider {
   /**
    * Decides whether to trust the presented host key. Revocation is checked first
    * and wins over everything (fail-closed): an `@revoked` entry in
-   * ~/.ssh/known_hosts hard-refuses the key — surfacing the reason — even when its
+   * ~/.ssh/known_hosts hard-refuses the key - surfacing the reason - even when its
    * fingerprint is pinned. Otherwise the pinned fingerprint is authoritative; then
-   * a `known_hosts` trust line; then interactive TOFU, or — in non-interactive
-   * mode — the `acceptNew` opt-in. `acceptNew` is passed in rather than read from
-   * the instance so the configure-time capture can honor `--accept-new-host-key`
-   * from the current invocation (the placeholder instance built for `provider add`
-   * has no such flag on it yet).
+   * a `known_hosts` trust line; then the `acceptNew` opt-in; and only with none
+   * of those, interactive TOFU (or a refusal when there is nobody to ask). The
+   * opt-in sits above the mode because it is consent given up front, not a mode:
+   * an operator who passed `--accept-new-host-key` has already answered this
+   * question, so asking again repeats it rather than deciding anything - the same
+   * order `decideCertTrust` uses for FTPS. `acceptNew` is passed in rather than
+   * read from the instance so the configure-time capture can honor
+   * `--accept-new-host-key` from the current invocation (the placeholder instance
+   * built for `provider add` has no such flag on it yet).
    */
   private async decideHostKeyTrust(io: ProviderIO, host: string, port: number, user: string, pin: Nullable<string>, key: Buffer, acceptNew: boolean): Promise<boolean> {
     const fp = sshFingerprint(key);
@@ -340,32 +345,33 @@ export class SshProvider implements StorageProvider {
     }
     if (pin !== null && pin.length > 0) {
       if (fp === pin) return true;
-      // Pin set, presented key differs, and not @revoked → the server identity
+      // Pin set, presented key differs, and not @revoked -> the server identity
       // changed under a pinned fingerprint: a possible MITM. Flag it so withClient
       // surfaces TamperDetectedError rather than a generic transport failure.
       this.hostKeyMismatch = { pin, presented: fp };
       return false;
     }
     if (known === 'trusted') return true;
-    if (io.interactive === false) return acceptNew;
+    if (acceptNew) return true;
+    if (io.interactive === false) return false;
     return io.confirm(fmtFor(io.lang, 'ssh_host_key_confirm', `${user}@${host}:${port}`, fp));
   }
 
   /**
    * Classifies `key` for `host` against ~/.ssh/known_hosts: `trusted` (a normal
-   * line matches), `revoked` (a matching `@revoked` line — the key is marked
+   * line matches), `revoked` (a matching `@revoked` line - the key is marked
    * compromised, so it must be hard-refused), or `unknown`. Handles plain
    * hostnames, `[host]:port` for non-default ports, and hashed `|1|salt|hash`
    * entries (HMAC-SHA1). `@revoked` wins over a stale trust line. Other markers
    * (e.g. `@cert-authority`) are unsupported and skipped (fail-closed). Never
-   * throws — a missing/unreadable file means `unknown`.
+   * throws - a missing/unreadable file means `unknown`.
    */
   private async knownHostsLookup(host: string, port: number, key: Buffer): Promise<'trusted' | 'revoked' | 'unknown'> {
     const keyB64 = key.toString('base64');
     let trusted = false;
     for (const entry of await this.matchingKnownHostsEntries(host, port)) {
       if (entry.keyB64 !== keyB64) continue;
-      if (entry.revoked) return 'revoked'; // compromised — takes precedence over any trust line
+      if (entry.revoked) return 'revoked'; // compromised - takes precedence over any trust line
       trusted = true;
     }
     return trusted ? 'trusted' : 'unknown';
@@ -375,7 +381,7 @@ export class SshProvider implements StorageProvider {
    * Reads ~/.ssh/known_hosts and returns every entry whose host field matches
    * `host` (plain, `[host]:port`, or hashed `|1|salt|hash`), each as
    * `{ keyType, keyB64, revoked }`. Unsupported markers (e.g. `@cert-authority`)
-   * are skipped (fail-closed). Never throws — a missing/unreadable file yields an
+   * are skipped (fail-closed). Never throws - a missing/unreadable file yields an
    * empty list. Shared by `knownHostsLookup` (classify a presented key) and
    * `knownHostsCandidates` (enumerate keys for the offline edit menu).
    */
@@ -460,7 +466,9 @@ export class SshProvider implements StorageProvider {
 
   /**
    * Opens a fresh connection + SFTP session, runs `op`, and always closes the
-   * connection. All exceptions are wrapped in ProviderError.
+   * connection. Wraps transport and auth errors in ProviderError; a
+   * ProviderError raised inside `op` passes through, and a host key that does
+   * not match the pin surfaces as TamperDetectedError.
    */
   private async withClient<T>(op: (sftp: SFTPWrapper) => Promise<T>): Promise<T> {
     const conn = new Client();
@@ -473,7 +481,7 @@ export class SshProvider implements StorageProvider {
     } catch (err) {
       if (err instanceof ProviderError) throw err;
       // A pinned host key that did not match the presented key (set by
-      // decideHostKeyTrust) is tampering — surface it as TamperDetectedError so
+      // decideHostKeyTrust) is tampering - surface it as TamperDetectedError so
       // the operator sees a MITM signal, not a generic "verification failed".
       if (this.hostKeyMismatch !== null) {
         const { pin, presented } = this.hostKeyMismatch;
@@ -488,15 +496,18 @@ export class SshProvider implements StorageProvider {
   /**
    * Connects far enough to read the host key (presented during key exchange,
    * before authentication), applies the TOFU trust decision, and returns the
-   * accepted fingerprint. Used by `configureInteractive` and by the
-   * `--accept-new-host-key` branch of `configureFromFlags` so the pin lands in
-   * the config `bfs init` / `bfs provider add` persists. `acceptNew` carries the
-   * current invocation's `--accept-new-host-key` opt-in for the non-interactive
-   * decision. Does not require the private key file to be readable: the
+   * accepted fingerprint. Used by `configureInteractive`, by
+   * `configureInteractiveForEdit`, and by the `--accept-new-host-key` branch of
+   * `configureFromFlags`, so the pin lands in the config `bfs init` /
+   * `bfs provider add` / `bfs provider edit` persists. `acceptNew` carries the
+   * current invocation's `--accept-new-host-key` opt-in, which settles the trust
+   * decision without a prompt. Does not require the private key file to be readable: the
    * fingerprint is resolved in the host-key verifier, before any credential is
    * needed. ssh2 still proceeds to a username-only auth attempt after the key is
-   * accepted — it fails on the server (a harmless failed-login entry) and we
-   * never await it. Throws ProviderError when the operator declines.
+   * accepted - it fails on the server (a harmless failed-login entry) and we
+   * never await it. Throws HostKeyDeclinedError when the operator declines or the
+   * key is `@revoked` - the edit flow relies on that type to tell a deliberate
+   * refusal from an unreachable server - and ProviderError for any other failure.
    */
   private async captureHostKey(io: ProviderIO, host: string, port: number, user: string, acceptNew: boolean): Promise<string> {
     const conn = new Client();
@@ -506,7 +517,7 @@ export class SshProvider implements StorageProvider {
         // A refused key (declined / @revoked) and ssh2's follow-up 'error' event
         // race to settle: cb(false) makes ssh2 emit a raw "verification failed"
         // transport error. Mark the refusal BEFORE cb() so whichever path settles
-        // first reports HostKeyDeclinedError — the edit flow must tell a deliberate
+        // first reports HostKeyDeclinedError - the edit flow must tell a deliberate
         // refusal (abort) apart from an unreachable server (offline fallback).
         let declined = false;
         const declinedError = (): HostKeyDeclinedError => new HostKeyDeclinedError(fmtFor(io.lang, 'ssh_host_key_declined', `${user}@${host}:${port}`));
@@ -573,7 +584,7 @@ export class SshProvider implements StorageProvider {
 
   /**
    * Builds {vaultPath}/{filename}, rejecting a filename that is not a safe path
-   * segment (traversal / separator / control char) BEFORE it is joined — so a
+   * segment (traversal / separator / control char) BEFORE it is joined - so a
    * crafted ref.path or a hostile server's readdir entry cannot escape the vault.
    */
   private remoteFile(filename: string): string {
@@ -590,7 +601,7 @@ export class SshProvider implements StorageProvider {
       try {
         await mkdirAsync(sftp, current);
       } catch {
-        // Directory already exists (or a parent the server auto-creates) — the
+        // Directory already exists (or a parent the server auto-creates) - the
         // subsequent upload surfaces any real permission failure.
       }
     }
@@ -609,17 +620,17 @@ export class SshProvider implements StorageProvider {
     }
   }
 
-  /** Silent unlink — swallows errors (used in relocate/cleanup paths). */
+  /** Silent unlink - swallows errors (used in relocate/cleanup paths). */
   private async bestEffortUnlink(sftp: SFTPWrapper, remotePath: string): Promise<void> {
     try {
       await unlinkAsync(sftp, remotePath);
     } catch {
-      // intentional — cleanup must not mask the original error
+      // intentional - cleanup must not mask the original error
     }
   }
 
   /**
-   * Unlink that treats "no such file" (SFTP status 2) as success — an
+   * Unlink that treats "no such file" (SFTP status 2) as success - an
    * already-absent shard is a no-op, not a failure. Keeps `delete` idempotent so
    * a re-run (or a shard removed out of band) does not raise a false prune
    * orphan warning; a real failure (permissions, transport) still throws.
@@ -651,7 +662,7 @@ export class SshProvider implements StorageProvider {
     }
   }
 
-  // ─── StorageProvider interface ────────────────────────────────────────────
+  // --- StorageProvider interface --------------------------------------------
 
   /**
    * Verifies SSH connectivity by connecting and listing the base path.
@@ -699,14 +710,18 @@ export class SshProvider implements StorageProvider {
   /**
    * Recovery hook: shows the operator the SSH target (user@host:port, path) and
    * the pinned host-key fingerprint BEFORE any secret is sent, and lets them
-   * decline. Once approved, a pooled secret is tried first, then the password is
-   * prompted with retry.
+   * decline. Once approved, an unencrypted key is tried as-is, then a pooled
+   * secret, then the secret is prompted with retry - the password for password
+   * auth, the private-key passphrase for key auth.
    *
    * @param io      - ProviderIO for the host confirmation and secret prompt
    * @param pool    - secrets already collected this recovery, tried before prompting
    * @param options - trustLocation skips the confirmation (unattended recovery)
-   * @returns the secret that authenticated (added to the recovery pool)
-   * @throws ProviderError when the operator declines (host or blank secret)
+   * @returns the secret that authenticated (added to the recovery pool), or null
+   *          when an unencrypted key needed none
+   * @throws ProviderError when the operator declines (host or blank secret), when
+   *         there is no operator to confirm the host, or when a run with no
+   *         operator has no secret that authenticates
    */
   async connectForRecovery(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<Nullable<string>> {
     const target = `${this.user}@${this.host}:${this.port}`;
@@ -714,6 +729,12 @@ export class SshProvider implements StorageProvider {
     const fingerprint = this.hostKeyFingerprint ?? tFor(this.io.lang, 'ssh_recovery_unpinned');
     if (options?.trustLocation === true) {
       io.info(fmtFor(this.io.lang, 'ssh_recovery_target', target, remotePath, fingerprint));
+    } else if (io.interactive === false) {
+      // See the FTP twin: the throw is swallowed by bootstrap's degraded skip,
+      // and info() disappears into the recovery spinner's text, so the reason
+      // reaches the operator through warn() or not at all.
+      io.warn(fmtFor(this.io.lang, 'ssh_recovery_no_operator', target));
+      throw new ProviderError(fmtFor(this.io.lang, 'ssh_recovery_no_operator', target));
     } else {
       const approved = await io.confirm(fmtFor(this.io.lang, 'ssh_recovery_confirm_host', target, remotePath, fingerprint));
       if (!approved) {
@@ -721,7 +742,7 @@ export class SshProvider implements StorageProvider {
       }
     }
     // The secret to collect depends on the auth method: a password for password
-    // auth, the private-key passphrase for key auth (the key body is not a secret —
+    // auth, the private-key passphrase for key auth (the key body is not a secret -
     // it lives at private_key_path, supplied by the operator out of band).
     const isKey = this.authMethod === 'key';
     const applySecret = (secret: string): void => {
@@ -729,13 +750,13 @@ export class SshProvider implements StorageProvider {
       else this.password = secret;
     };
 
-    // An unencrypted key needs no secret — try it as-is before prompting.
+    // An unencrypted key needs no secret - try it as-is before prompting.
     if (isKey) {
       try {
         await this.authenticate();
         return null;
       } catch {
-        // key is passphrase-protected (or unreachable) — collect the passphrase below
+        // key is passphrase-protected (or unreachable) - collect the passphrase below
       }
     }
 
@@ -743,9 +764,9 @@ export class SshProvider implements StorageProvider {
       applySecret(pool[i].value);
       // A transport failure (not a rejected secret) propagates out of
       // tryRecoveryAuth: the host is unreachable, so trying more secrets or
-      // prompting is pointless — surface it.
+      // prompting is pointless - surface it.
       if (await this.tryRecoveryAuth()) return pool[i].value;
-      // pooled secret rejected by the server — try the next one
+      // pooled secret rejected by the server - try the next one
     }
 
     // Non-interactive recovery has no operator to prompt: with no pooled secret
@@ -763,7 +784,7 @@ export class SshProvider implements StorageProvider {
       }
       applySecret(secret);
       if (await this.tryRecoveryAuth()) return secret;
-      // wrong secret — re-prompt
+      // wrong secret - re-prompt
     }
   }
 
@@ -773,7 +794,7 @@ export class SshProvider implements StorageProvider {
    *
    * @param shardFilename - Target filename, e.g. "shard_0.bfs.1"
    * @param data          - Readable stream of the full shard
-   * @param _size         - Total byte size (unused — SFTP needs no Content-Length)
+   * @param _size         - Total byte size (unused - SFTP needs no Content-Length)
    * @returns RemoteRef with provider_id, filename, and SHA-256 hash
    * @throws ProviderError on upload failure
    */
@@ -786,7 +807,7 @@ export class SshProvider implements StorageProvider {
       await this.ensureDir(sftp, vaultDir);
       await this.uploadBuffer(sftp, `${vaultDir}/${shardFilename}`, buffer, shardFilename);
       // A fresh shard carries a fresh in-shard header, so a stale sidecar for this
-      // filename (from a prior relocate) must go — else it would shadow the new
+      // filename (from a prior relocate) must go - else it would shadow the new
       // header on the sidecar-aware read-path.
       await this.bestEffortUnlink(sftp, `${vaultDir}/${sidecarFilename(shardFilename)}`);
     });
@@ -845,7 +866,7 @@ export class SshProvider implements StorageProvider {
    * write-once, so the shard is downloaded, modified in memory, and re-uploaded.
    *
    * @param ref        - RemoteRef of the shard to update
-   * @param headerData - New serialized header (magic … end of location map)
+   * @param headerData - New serialized header (magic ... end of location map)
    * @returns Updated RemoteRef (same path, no hash)
    * @throws ProviderError on failure or if the shard is too short
    */
@@ -882,7 +903,7 @@ export class SshProvider implements StorageProvider {
       } catch {
         return [];
       }
-      // Drop directories and any name that is not a safe segment — a hostile
+      // Drop directories and any name that is not a safe segment - a hostile
       // server could return a traversal filename from readdir (L2).
       const files = entries.filter((e) => !entryIsDirectory(e) && isSafeFilename(e.filename));
       const filtered = prefix ? files.filter((e) => e.filename.startsWith(prefix)) : files;
@@ -891,7 +912,7 @@ export class SshProvider implements StorageProvider {
   }
 
   /**
-   * Returns the size of a shard via SFTP `stat` — no payload transfer.
+   * Returns the size of a shard via SFTP `stat` - no payload transfer.
    * @param ref - RemoteRef of the shard
    * @returns Size in bytes
    * @throws ProviderError if the file is missing or `stat` fails
@@ -908,7 +929,7 @@ export class SshProvider implements StorageProvider {
   }
 
   /**
-   * Reads at most `maxBytes` bytes from the start of the shard — enough for the
+   * Reads at most `maxBytes` bytes from the start of the shard - enough for the
    * header without buffering the full payload (SFTP native ranged read).
    *
    * @param ref      - RemoteRef of the shard
@@ -953,7 +974,7 @@ export class SshProvider implements StorageProvider {
 
   /**
    * Checks whether the SSH server is reachable by connecting and disconnecting.
-   * Never throws — returns false on any error.
+   * Never throws - returns false on any error.
    */
   async healthCheck(): Promise<boolean> {
     try {
@@ -963,7 +984,7 @@ export class SshProvider implements StorageProvider {
     }
   }
 
-  // ─── Header storage strategy + verification ───────────────────────────────
+  // --- Header storage strategy + verification -------------------------------
 
   /** SSH keeps a relocated shard's header in an `hdr_` sidecar next to it. */
   usesSidecar(): boolean {
@@ -1010,8 +1031,8 @@ export class SshProvider implements StorageProvider {
   /**
    * Verifies the shard identity by reading only its header window and comparing
    * the plaintext vault_id / shard_index / version. Reads over a dedicated
-   * connection so raw ssh2 failures classify: level 'client-authentication' →
-   * auth_failed, SFTP code 2 → not_found, else unverifiable.
+   * connection so raw ssh2 failures classify: level 'client-authentication' ->
+   * auth_failed, SFTP code 2 -> not_found, else unverifiable.
    *
    * @param ref      - RemoteRef of the shard
    * @param expected - Identity the shard is expected to carry
@@ -1044,11 +1065,11 @@ export class SshProvider implements StorageProvider {
     return finishVerifyShard(header, expected, lang);
   }
 
-  // ─── Configuration lifecycle ──────────────────────────────────────────────
+  // --- Configuration lifecycle ----------------------------------------------
 
   /**
    * Prompts for the SSH connection fields (host, port, user, auth, path) via
-   * ProviderIO — everything except the host-key trust step. Shared by the add
+   * ProviderIO - everything except the host-key trust step. Shared by the add
    * flow (configureInteractive) and the edit flow (configureInteractiveForEdit).
    * The private key is collected as a PATH only, never the key body.
    * @returns the collected fields; `authFields` is spread into the final config
@@ -1077,7 +1098,7 @@ export class SshProvider implements StorageProvider {
   /**
    * Interactively prompts for all SSH fields via ProviderIO, performs the TOFU
    * host-key trust step (pinning the fingerprint), and returns a config object.
-   * TOFU lives here — not in probeConnection — because `bfs init` persists only
+   * TOFU lives here - not in probeConnection - because `bfs init` persists only
    * this result, so the pin must be captured at configure time to travel with
    * the backup.
    *
@@ -1092,7 +1113,7 @@ export class SshProvider implements StorageProvider {
   /**
    * Interactive `bfs provider edit` flow. Collects the fields, then resolves the
    * host-key pin online-first with an offline fallback:
-   *   - host AND port unchanged and already pinned → reuse the pin without
+   *   - host AND port unchanged and already pinned -> reuse the pin without
    *     contacting the server (a credential/path edit stays fully local);
    *   - otherwise dial the server for a live TOFU confirmation. A deliberate
    *     refusal (declined key or @revoked) aborts; an unreachable server drops to
@@ -1112,7 +1133,7 @@ export class SshProvider implements StorageProvider {
     const oldPort = typeof ctx.existingConfig.port === 'number' ? ctx.existingConfig.port : DEFAULT_SSH_PORT;
     const oldPin = typeof ctx.existingConfig.host_key_fingerprint === 'string' ? ctx.existingConfig.host_key_fingerprint : '';
 
-    // Server identity unchanged and already pinned → reuse the pin, no contact.
+    // Server identity unchanged and already pinned -> reuse the pin, no contact.
     if (host === oldHost && port === oldPort && oldPin.length > 0) {
       return build(oldPin);
     }
@@ -1134,8 +1155,8 @@ export class SshProvider implements StorageProvider {
    * Offline host-key menu shown when the server is unreachable during an edit.
    * Each non-revoked `~/.ssh/known_hosts` key for the host is offered as a concrete
    * proposal showing its fingerprint, ordered by ssh2 negotiation preference with
-   * the top (the type ssh2 will present) flagged recommended — so the operator does
-   * not pin a type that will not match. Returns the fingerprint to pin — an empty
+   * the top (the type ssh2 will present) flagged recommended - so the operator does
+   * not pin a type that will not match. Returns the fingerprint to pin - an empty
    * string means "save without a pin".
    * @throws HostKeyDeclinedError when the operator cancels
    */
@@ -1159,7 +1180,7 @@ export class SshProvider implements StorageProvider {
         io.warn(tFor(io.lang, 'ssh_edit_no_pin_warn'));
         return '';
       default:
-        // optExit or any unexpected selection → cancel the edit (fail-closed).
+        // optExit or any unexpected selection -> cancel the edit (fail-closed).
         throw new HostKeyDeclinedError(tFor(io.lang, 'ssh_edit_cancelled'));
     }
   }
@@ -1167,7 +1188,7 @@ export class SshProvider implements StorageProvider {
   /**
    * Prompts for an operator-pasted host-key fingerprint, re-prompting on a
    * malformed value. Empty input (the operator pressed Enter, or stdin is closed)
-   * abandons the paste and cancels the edit — so a closed/EOF stream can never
+   * abandons the paste and cancels the edit - so a closed/EOF stream can never
    * spin the loop forever.
    * @throws HostKeyDeclinedError on empty input
    */
@@ -1208,12 +1229,11 @@ export class SshProvider implements StorageProvider {
    * with neither, a default key is discovered under `~/.ssh` (id_ed25519, then
    * id_rsa). The remote path must start with `/`.
    *
-   * In non-interactive mode `--accept-new-host-key` without an explicit
-   * `--known-host` pin realizes true TOFU: it connects once to capture the host
-   * key and pins its fingerprint, so every later connection is verified against
-   * it. Without the capture the opt-in would trust any key presented on every
-   * connection with no prompt — a standing MITM window. Interactive callers are
-   * left to the per-connect confirm prompt (they already see the fingerprint).
+   * `--accept-new-host-key` without an explicit `--known-host` pin realizes true
+   * TOFU: it connects once to capture the host key and pins its fingerprint, so
+   * every later connection is verified against it. Without the capture the opt-in
+   * would trust any key presented on every connection with no prompt - a standing
+   * MITM window - so it runs whether or not the caller has a terminal.
    *
    * @throws ProviderError on unreadable/malformed config-file, invalid port,
    *   conflicting auth, missing host/path/auth, a non-absolute path, or a
@@ -1275,8 +1295,8 @@ export class SshProvider implements StorageProvider {
     if (input.rawArgs.includes('--accept-new-host-key')) {
       // Accepting a new host key means dialing the server to capture and pin it
       // (TOFU). An offline edit never contacts the medium, so it cannot complete
-      // this — refuse and point the operator at the offline-capable pin flag
-      // (--known-host <SHA256:…>) rather than persist a null pin with accept-new
+      // this - refuse and point the operator at the offline-capable pin flag
+      // (--known-host <SHA256:...>) rather than persist a null pin with accept-new
       // armed (which would trust any key on the next connection).
       if (input.offline === true) {
         throw new ProviderError(tFor(this.io.lang, 'ssh_accept_new_offline'));
@@ -1316,13 +1336,12 @@ export class SshProvider implements StorageProvider {
     // --accept-new-host-key is a first-contact opt-in: capture the presented key
     // now and pin it, so the pinned-fingerprint path (fp === pin) guards every
     // later connection. An explicit --known-host pin is authoritative and left
-    // untouched. Only the non-interactive path is captured: that is where the
-    // "trust any key every time" window lives (decideHostKeyTrust returns the
-    // opt-in without a prompt). Interactive callers already see the fingerprint
-    // via the confirm prompt on every connect, so capturing there would only add
-    // an unexpected prompt (e.g. mid-recovery when a bootstrap spec carries the
-    // flag) without closing a silent window.
-    if (this.io.interactive === false && input.rawArgs.includes('--accept-new-host-key') && typeof config.host_key_fingerprint !== 'string') {
+    // untouched. The capture does not depend on whether anyone is watching:
+    // `repair` and `provider remove --strategy` forward these flags with an
+    // interactive io and persist what comes back, so skipping the capture there
+    // would store the opt-in with a null pin - a config trusting ANY host key at
+    // that address on every later connection.
+    if (input.rawArgs.includes('--accept-new-host-key') && typeof config.host_key_fingerprint !== 'string') {
       const host = config.host as string;
       const port = config.port as number;
       const user = typeof config.user === 'string' ? config.user : '';
@@ -1341,7 +1360,7 @@ export class SshProvider implements StorageProvider {
         await fs.access(candidate);
         return candidate;
       } catch {
-        // not present — try the next candidate
+        // not present - try the next candidate
       }
     }
     return null;
@@ -1349,7 +1368,7 @@ export class SshProvider implements StorageProvider {
 
   /**
    * Validates a persisted SSH config. Returns an array of human-readable error
-   * messages; empty array means valid. Does not consult ~/.ssh — default-key
+   * messages; empty array means valid. Does not consult ~/.ssh - default-key
    * discovery is an async concern of configureFromFlags.
    */
   validateConfig(config: Record<string, unknown>): string[] {
@@ -1383,7 +1402,7 @@ export class SshProvider implements StorageProvider {
     if (!hasPassword && !hasKey) {
       errors.push(tFor(lang, 'ssh_validate_auth_required'));
     } else if (hasPassword && hasKey) {
-      // Auth is password XOR key — reject both, matching configureFromFlags, so a
+      // Auth is password XOR key - reject both, matching configureFromFlags, so a
       // hand-edited config cannot silently validate while authOptions() quietly
       // picks one by auth_method.
       errors.push(tFor(lang, 'ssh_validate_auth_conflict'));
@@ -1466,7 +1485,7 @@ export class SshProvider implements StorageProvider {
   }
 }
 
-// ─── Factory + registry ──────────────────────────────────────────────────────
+// --- Factory + registry ------------------------------------------------------
 
 const sshFactory: ProviderFactory = {
   lang: 'en',
@@ -1492,7 +1511,7 @@ const sshFactory: ProviderFactory = {
       examples: [
         'bfs provider add --ci --name nas --type ssh \\',
         '  --host ssh.example.com --port 22 --user backup \\',
-        "  --private-key ~/.ssh/id_ed25519 --path /backup --known-host 'SHA256:…'",
+        "  --private-key ~/.ssh/id_ed25519 --path /backup --known-host 'SHA256:...'",
         '',
         'bfs provider add --ci --name nas --type ssh --config-file ./nas.json',
         '# nas.json:',
@@ -1502,7 +1521,7 @@ const sshFactory: ProviderFactory = {
         '#   "user": "backup",',
         '#   "private_key_path": "/home/backup/.ssh/id_ed25519",',
         '#   "path": "/backup",',
-        '#   "host_key_fingerprint": "SHA256:…"',
+        '#   "host_key_fingerprint": "SHA256:..."',
         '# }',
       ],
     };

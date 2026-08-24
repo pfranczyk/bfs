@@ -4,32 +4,29 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// ─── Bug under test (host-key pinning MITM window) ────────────────────────────
+// --- What is pinned: --accept-new-host-key really captures the fingerprint ----
 //
-// `--accept-new-host-key` must, on FIRST contact with a new SSH host, capture and
-// PIN the server's key fingerprint into the persisted provider config
-// (`host_key_fingerprint`) — OpenSSH `accept-new` semantics — so every later
-// connection is verified against the pin (`fp === pin`).
+// `--accept-new-host-key` carries OpenSSH `accept-new` semantics: on FIRST
+// contact with a new SSH host, capture the server's key fingerprint and PIN it
+// into the persisted provider config (`host_key_fingerprint`), so every later
+// connection is verified against the pin (`fp === pin`). Persisting the opt-in
+// with a null fingerprint would instead leave every later `push`/`pull` trusting
+// ANY host key - a standing MITM + password-capture window.
 //
-// The pinning gate in `configureFromFlags` (src/providers/ssh.ts) fires only when
-// `this.io.interactive === false`. But `bfs provider add --ci` (provider-add.ts)
-// and `bfs init --ci` (init.ts → parse-provider-spec.ts) build their ProviderIO
-// via `createCliProviderIO(rootDir)` WITHOUT the second argument, so `interactive`
-// defaults to `process.stdin.isTTY === true`. Run from a real terminal (TTY),
-// `io.interactive` is therefore `true`, the pinning gate is skipped, and the
-// config is persisted with `accept_new_host_key: true` but a NULL fingerprint.
-// A later non-interactive `push`/`pull` (cron, no TTY) then trusts ANY host key —
-// a standing MITM + password-capture window.
+// What these two cases pin is the CLI wiring: `bfs provider add --ci`
+// (provider-add.ts) and `bfs init --ci` (init.ts -> parse-provider-spec.ts) hand
+// the flags through to the adapter and persist the fingerprint it captures. Both
+// commands read the flags ONLY on their `--ci` branch - without it they collect
+// every field from prompts instead - so a persisted config carrying the values
+// that were typed on the command line is also what proves that branch was taken.
 //
-// CRITICAL (testing.md → "Mock IO ≠ runtime IO"): the bug lives in the CLI layer
-// DERIVING `io.interactive` from `process.stdin.isTTY`. A test that injects
-// `interactive: false` into a mock IO bypasses the faulty path and passes falsely.
-// So this drives the REAL command via `runCmd`, with the real `createCliProviderIO`
-// and a simulated TTY (`process.stdin.isTTY = true`), and asserts on the CONTENT of
-// the persisted provider config — not on any mock-IO internal state.
-//
-// These assertions are RED today (fingerprint absent) and turn GREEN once the CLI
-// passes an explicit non-interactive flag to `createCliProviderIO` in `--ci` mode.
+// CRITICAL (a mock IO is not runtime IO): the values under test are produced by
+// the CLI layer. A test calling the adapter directly with a hand-built config
+// would bypass that layer and pass regardless of what the commands do. So this
+// drives the REAL commands via `runCmd`, with the real `createCliProviderIO` and
+// a simulated TTY (`process.stdin.isTTY = true`) - the setting under which a
+// command that fell through to prompts would be visible - and asserts on the
+// CONTENT of the persisted config, not on mock state.
 
 // Fixed host key + its OpenSSH SHA-256 fingerprint (mirrors tests/providers/ssh.test.ts).
 const SERVER_KEY = Buffer.from('mock-ssh-ed25519-host-key');
@@ -41,10 +38,9 @@ function sshFingerprint(key: Buffer): string {
 
 const SERVER_FP = sshFingerprint(SERVER_KEY);
 
-// ─── ssh2 mock: connect drives hostVerifier with the fixed host key ───────────
-// Minimal by design: the RED path never connects (the pinning gate is skipped),
-// and the eventual GREEN path only needs `captureHostKey` to resolve the
-// fingerprint via `hostVerifier` — no SFTP session is required for that.
+// --- ssh2 mock: connect drives hostVerifier with the fixed host key -----------
+// Minimal by design: `captureHostKey` only needs `hostVerifier` to hand it the
+// server key, from which it resolves the fingerprint - no SFTP session required.
 interface MockConnectConfig {
   hostVerifier?: (key: Buffer, cb: (ok: boolean) => void) => void;
 }
@@ -89,7 +85,7 @@ vi.mock('ssh2', () => {
 // accept-new opt-in). Preserve every other os member (tmpdir(), etc.).
 vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:os')>();
-  // Build the path from `actual` only — referencing the top-level `path` import
+  // Build the path from `actual` only - referencing the top-level `path` import
   // here would hit its temporal dead zone (this factory is hoisted above imports).
   const nonExistentHome = `${actual.tmpdir()}/bfs-ssh-tty-no-home-DOES-NOT-EXIST`;
   const homedir = () => nonExistentHome;
@@ -97,7 +93,9 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 // Capture the persisted config instead of touching a real `.bfs/config.json`.
-vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn(), writeConfig: vi.fn() }));
+// assertNoExistingVault is a no-op here: these runs are about how a provider spec
+// is parsed, and the working directory is a fresh mkdtemp with no backup in it.
+vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn(), writeConfig: vi.fn(), assertNoExistingVault: vi.fn() }));
 // Capture the InitOptions (incl. the built provider configs) handed to init().
 vi.mock('../../src/vault/vault-manager.js', () => ({ init: vi.fn() }));
 
@@ -113,15 +111,15 @@ import { captureConsole, makeConfig, runCmd } from './_helpers.js';
 // this accessor saves/restores the real value without `any`.
 const stdinTty = process.stdin as { isTTY?: boolean | undefined };
 
-describe('provider add --ci --type ssh on a TTY — --accept-new-host-key must pin the fingerprint', () => {
+describe('provider add --ci --type ssh on a TTY - --accept-new-host-key must pin the fingerprint', () => {
   let capture: ReturnType<typeof captureConsole>;
   let prevTTY: boolean | undefined;
 
   beforeEach(() => {
     capture = captureConsole();
     prevTTY = stdinTty.isTTY;
-    // Simulate an interactive terminal — the exact condition that surfaces the
-    // bug (createCliProviderIO defaults io.interactive to process.stdin.isTTY).
+    // A simulated terminal is the only setting that discriminates: off a TTY the
+    // IO comes out non-interactive whatever the command passes.
     stdinTty.isTTY = true;
 
     vi.mocked(readConfig).mockResolvedValue(makeConfig() as never);
@@ -145,21 +143,23 @@ describe('provider add --ci --type ssh on a TTY — --accept-new-host-key must p
   it('should persist a non-null host_key_fingerprint when adding an ssh provider with --accept-new-host-key', async () => {
     await runCmd(['provider', 'add', '--ci', '--name', 'nas', '--type', 'ssh', '--host', 'sshhost', '--user', 'sshuser', '--password', 'pw', '--path', '/backup', '--accept-new-host-key']);
 
-    // The command completed and persisted the new provider — so a failing pin
+    // The command completed and persisted the new provider - so a failing pin
     // assertion below is the bug, not an aborted command.
     expect(vi.mocked(writeConfig)).toHaveBeenCalledOnce();
     const persisted = vi.mocked(writeConfig).mock.calls[0][1];
     const nas = persisted.providers.find((p) => p.id === 'nas');
     expect(nas).toBeDefined();
 
-    // RED today: run from a TTY, createCliProviderIO sets io.interactive=true, the
-    // pinning gate in configureFromFlags is skipped, and the fingerprint is never
-    // captured — persisted as accept_new_host_key=true with a null pin (MITM window).
+    // Read off the command line, not off a prompt - the flags branch really ran.
+    expect(nas?.config.host).toBe('sshhost');
+
+    // The pin, not merely the opt-in: `accept_new_host_key` persisted with a null
+    // fingerprint would trust any host key on every later connection.
     expect(nas?.config.host_key_fingerprint).toBe(SERVER_FP);
   });
 });
 
-describe('init --ci with an ssh provider spec on a TTY — --accept-new-host-key must pin the fingerprint', () => {
+describe('init --ci with an ssh provider spec on a TTY - --accept-new-host-key must pin the fingerprint', () => {
   let capture: ReturnType<typeof captureConsole>;
   let prevTTY: boolean | undefined;
   let root: string;
@@ -204,16 +204,15 @@ describe('init --ci with an ssh provider spec on a TTY — --accept-new-host-key
       root,
     ]);
 
-    // The command reached init() with the parsed providers — so a failing pin
+    // The command reached init() with the parsed providers - so a failing pin
     // assertion below is the bug, not an aborted parse.
     expect(vi.mocked(init)).toHaveBeenCalledOnce();
     const options = vi.mocked(init).mock.calls[0][1];
     const nas = options.providers.find((p) => p.id === 'nas');
     expect(nas).toBeDefined();
 
-    // RED today: the --provider spec is parsed with createCliProviderIO(cwd) (no
-    // interactive flag) → io.interactive=true on a TTY → the pinning gate is
-    // skipped and host_key_fingerprint never lands in the built config.
+    // Same property through the other entry point: the --provider spec is parsed
+    // with an IO the command marks non-interactive, so the gate fires and pins.
     expect(nas?.config.host_key_fingerprint).toBe(SERVER_FP);
   });
 });

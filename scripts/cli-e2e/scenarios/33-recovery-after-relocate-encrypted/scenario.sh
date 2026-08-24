@@ -10,7 +10,7 @@
 # per-shard-GCM payloads.
 #
 # A normal pull right after relocate still works (it is manifest-driven and the
-# payload bytes are untouched), so the asserted sanity pull is NOT what fails —
+# payload bytes are untouched), so the asserted sanity pull is NOT what fails -
 # the failure is exclusively on the recovery-rebuilt metadata path.
 
 SCENARIO_NAME="recovery after relocate decodes (encrypted V2)"
@@ -32,14 +32,14 @@ scenario_run() {
   assert_ok
   assert_manifest_contains "$vault" 1 '"encrypted": true'
 
-  # Relocate p0 → triggers updateLocationMaps, rewriting every shard's header.
+  # Relocate p0 -> triggers updateLocationMaps, rewriting every shard's header.
   mkdir -p "$newdir"
   mv "${PV_LOCALDIR[0]}/$name" "$newdir/"
   run_bfs "$vault" provider remove p0 \
     --strategy relocate --path "$(winpath "$newdir")" --yes --password "$encpw"
   assert_ok
 
-  # Sanity: manifest-driven pull still restores — this is NOT the failure.
+  # Sanity: manifest-driven pull still restores - this is NOT the failure.
   run_bfs "$vault" pull --force --yes --password "$encpw"
   assert_ok
   assert_restored "$vault" "$base"

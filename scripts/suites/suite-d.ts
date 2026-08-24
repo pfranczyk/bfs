@@ -6,7 +6,7 @@ import { assert, runBfs, runTest } from '../smoke-runner.js';
 import type { SmokeContext, SuiteResult, TestResult } from '../smoke-types.js';
 import { fileExists, hashDir, initTestVault, verifyShaHashes } from '../smoke-vault.js';
 
-// ─── Suite D — Pull + integrity ───────────────────────────────────────────────
+// --- Suite D - Pull + integrity -----------------------------------------------
 
 export async function suiteD(ctx: SmokeContext): Promise<SuiteResult> {
   const tests: TestResult[] = [];
@@ -48,12 +48,12 @@ export async function suiteD(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── Degraded pull (missing shard_0) ───────────────────────────────────────
-  // Smoke-vault scheme: 2 data + 1 parity → loss of 1 shard tolerated by RS.
-  // Provider p1 holds shard_0 (index 0 → first registered provider).
+  // -- Degraded pull (missing shard_0) ---------------------------------------
+  // Smoke-vault scheme: 2 data + 1 parity -> loss of 1 shard tolerated by RS.
+  // Provider p1 holds shard_0 (index 0 -> first registered provider).
 
   tests.push(
-    await runTest('D5', 'delete shard_0.bfs.1 — simulate p1 failure', async () => {
+    await runTest('D5', 'delete shard_0.bfs.1 - simulate p1 failure', async () => {
       const shardPath = path.join(ctx.provider1Dir, 'smoke-vault', 'shard_0.bfs.1');
       await fs.unlink(shardPath);
       assert(!(await fileExists(shardPath)), `shard_0.bfs.1 still exists after deletion`);
@@ -61,7 +61,7 @@ export async function suiteD(ctx: SmokeContext): Promise<SuiteResult> {
   );
 
   tests.push(
-    await runTest('D6', 'bfs pull --force (zdegradowany) — exit 0, czysty komunikat warn', () => {
+    await runTest('D6', 'bfs pull --force (degraded) - exit 0, clean warn message', () => {
       const r = runBfs(['pull', '--force'], ctx.vaultDir);
       assert(r.status === 0, `expected exit 0 for degraded pull, got ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
       const combined = r.stdout + r.stderr;
@@ -76,7 +76,7 @@ export async function suiteD(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── D8: file mode + mtime restored after pull (compressed, the default path) ──
+  // -- D8: file mode + mtime restored after pull (compressed, the default path) --
   // CLI-layer regression net for the v2 per-file metadata (mode/mtime carried in
   // the file-table entry). A file is stamped with a
   // known mode + mtime, pushed and pulled through the real `bfs` process, then its
@@ -113,8 +113,8 @@ export async function suiteD(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── D9/D10: storage recorded in the backup but absent from the configuration ──
-  // The message names the storage and nothing else — a shard index is internal
+  // -- D9/D10: storage recorded in the backup but absent from the configuration --
+  // The message names the storage and nothing else - a shard index is internal
   // and must never surface in the UI, so `skipping its part of the backup` is the
   // whole of it. The cause is triggered by renaming a storage in .bfs/config.json:
   // the scheme check counts storages, so the count has to stay at three, while
@@ -122,7 +122,8 @@ export async function suiteD(ctx: SmokeContext): Promise<SuiteResult> {
   // pull completes and names the cause instead of failing.
   //
   // XDG_CONFIG_HOME is redirected because `--lang` persists the choice in the
-  // global settings file, which would otherwise be the developer's own.
+  // global settings file, which these tests would otherwise share with the rest
+  // of the run.
   //
   // Beside the skip note, the restore owes the operator a second, separate
   // warning: this is the one degradation that can be undone without touching
@@ -142,7 +143,7 @@ export async function suiteD(ctx: SmokeContext): Promise<SuiteResult> {
       const r = runBfs(['--lang', 'en', 'pull', '--force'], vaultDir, undefined, unkEnv);
       assert(r.status === 0, `expected exit 0, got ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
       const out = r.stdout + r.stderr;
-      assert(out.includes('Storage "unk-en-p3" is not in the configuration — skipping its part of the backup.'), `expected the storage-only wording in: ${out.slice(0, 400)}`);
+      assert(out.includes('Storage "unk-en-p3" is not in the configuration - skipping its part of the backup.'), `expected the storage-only wording in: ${out.slice(0, 400)}`);
       assert(!/skipping (piece )?\d/.test(out), `the message must not render a part number: ${out.slice(0, 400)}`);
       const advice = out.split(/\r?\n/).find((l) => l.includes('bfs repair'));
       if (advice === undefined) throw new Error(`expected a warning recommending \`bfs repair\` in: ${out.slice(0, 400)}`);
@@ -158,7 +159,7 @@ export async function suiteD(ctx: SmokeContext): Promise<SuiteResult> {
       const r = runBfs(['--lang', 'pl', 'pull', '--force'], vaultDir, undefined, unkEnv);
       assert(r.status === 0, `expected exit 0, got ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
       const out = r.stdout + r.stderr;
-      assert(out.includes('Nośnik "unk-pl-p3" nie istnieje w konfiguracji — pomijam jego część kopii.'), `expected the storage-only wording in: ${out.slice(0, 400)}`);
+      assert(out.includes('Nośnik "unk-pl-p3" nie istnieje w konfiguracji - pomijam jego część kopii.'), `expected the storage-only wording in: ${out.slice(0, 400)}`);
       assert(!/pomijam (część )?\d/.test(out), `the message must not render a part number: ${out.slice(0, 400)}`);
       const advice = out.split(/\r?\n/).find((l) => l.includes('bfs repair'));
       if (advice === undefined) throw new Error(`expected a warning recommending \`bfs repair\` in: ${out.slice(0, 400)}`);
@@ -167,10 +168,10 @@ export async function suiteD(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── D11: the route D9/D10 recommend is one the operator can actually walk ──
+  // -- D11: the route D9/D10 recommend is one the operator can actually walk --
   //
   // This test passes today, and that is the point of it. D9/D10 pin what the
-  // restore has to SAY; D11 pins that what it says leads somewhere — it takes
+  // restore has to SAY; D11 pins that what it says leads somewhere - it takes
   // the recommended command, runs it verbatim against the very directory D9
   // pulled, and shows the degradation gone afterwards. The migration form of
   // `bfs repair` renames the configuration entry back to the name the backup
@@ -203,7 +204,7 @@ export async function suiteD(ctx: SmokeContext): Promise<SuiteResult> {
         after.providers.some((p) => p.id === 'unk-en-p3'),
         `expected the configuration to list unk-en-p3 after the repair, got: ${after.providers.map((p) => p.id).join(', ')}`,
       );
-      assert(after.providers.length === before.providers.length, `the repair must not change the number of storages: ${before.providers.length} → ${after.providers.length}`);
+      assert(after.providers.length === before.providers.length, `the repair must not change the number of storages: ${before.providers.length} -> ${after.providers.length}`);
 
       const rp = runBfs(['--lang', 'en', 'pull', '--force'], vaultDir, undefined, unkEnv);
       assert(rp.status === 0, `pull after repair exit ${rp.status ?? 'null'}\nstdout: ${rp.stdout}\nstderr: ${rp.stderr}`);
@@ -215,7 +216,7 @@ export async function suiteD(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  return { name: 'Suite D — Pull + integrity', tests };
+  return { name: 'Suite D - Pull + integrity', tests };
 }
 
 /**

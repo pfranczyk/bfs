@@ -12,7 +12,7 @@ import { assertSafeVaultName, isEnoent } from '../core/fs-utils.js';
 import { hashBuffer, SHA256_BYTES } from '../core/hash.js';
 import { computeShardHeaderSize, readShardHeader, sidecarFilename } from '../core/shard-io.js';
 import { fmt, fmtFor, t, tFor } from '../i18n/index.js';
-import type { CliProviderInput, ProviderConfig, ProviderHelp, ProviderIO, RemoteRef, ShardHeader, ShardIdentity, StorageProvider, VerifyShardResult } from '../types/index.js';
+import type { CliProviderInput, ConfigureEditContext, ProviderConfig, ProviderHelp, ProviderIO, RemoteRef, ShardHeader, ShardIdentity, StorageProvider, VerifyShardResult } from '../types/index.js';
 import { findStringFlag, readJsonObjectFile } from './flags.js';
 import { finishVerifyShard } from './header-verify.js';
 import { type ProviderFactory, providerRegistry } from './provider.js';
@@ -37,7 +37,7 @@ export class LocalFsProvider implements StorageProvider {
   private vaultName: Nullable<string> = null;
 
   constructor(config: ProviderConfig, io: ProviderIO) {
-    // Lazy init — an incomplete config is allowed so CLI can construct a
+    // Lazy init - an incomplete config is allowed so CLI can construct a
     // placeholder instance and call configureInteractive/configureFromFlags
     // on it before persisting. Structural validation happens in
     // validateConfig(); runtime checks happen in the actual operation.
@@ -47,7 +47,7 @@ export class LocalFsProvider implements StorageProvider {
     this.basePath = typeof p === 'string' ? p : '';
   }
 
-  // ─── Private helpers ──────────────────────────────────────────────────────
+  // --- Private helpers ------------------------------------------------------
 
   /**
    * Returns the full vault directory path: {basePath}/{vaultName}.
@@ -69,7 +69,7 @@ export class LocalFsProvider implements StorageProvider {
     return path.join(this.vaultDir(), ref.path);
   }
 
-  // ─── StorageProvider interface ────────────────────────────────────────────
+  // --- StorageProvider interface --------------------------------------------
 
   /**
    * Verifies that basePath exists and is writable.
@@ -157,7 +157,7 @@ export class LocalFsProvider implements StorageProvider {
     }
 
     // A fresh shard carries a fresh in-shard header, so a stale sidecar for this
-    // filename (from a prior relocate) must go — else it would shadow the new
+    // filename (from a prior relocate) must go - else it would shadow the new
     // header on the sidecar-aware read-path.
     await fs.unlink(path.join(dir, sidecarFilename(shardFilename))).catch(() => {});
 
@@ -184,7 +184,7 @@ export class LocalFsProvider implements StorageProvider {
   /**
    * Deletes a shard file (and its header sidecar) identified by ref.
    *
-   * An already-absent shard is a no-op, not a failure — delete is idempotent
+   * An already-absent shard is a no-op, not a failure - delete is idempotent
    * (parity with FTP/SSH), so a resumed prune or an out-of-band removal does not
    * raise a false prune orphan warning.
    *
@@ -205,7 +205,8 @@ export class LocalFsProvider implements StorageProvider {
   }
 
   /**
-   * Renames a shard file (used in overwrite mode: upload .tmp → delete old → rename .tmp).
+   * Renames a shard file. Part of the provider contract; no path in BFS core
+   * calls it today - overwrite re-uploads under the same name.
    *
    * @param ref         - RemoteRef of the existing file
    * @param newFilename - New bare filename (not full path)
@@ -218,7 +219,7 @@ export class LocalFsProvider implements StorageProvider {
     try {
       await fs.rename(oldPath, newPath);
     } catch (err) {
-      throw new ProviderError(`Failed to rename "${oldPath}" → "${newPath}": ${String(err)}`);
+      throw new ProviderError(`Failed to rename "${oldPath}" -> "${newPath}": ${String(err)}`);
     }
     return { provider_id: this.id, path: newFilename };
   }
@@ -230,15 +231,15 @@ export class LocalFsProvider implements StorageProvider {
    * Strategy: full atomic rewrite via a .tmp file.
    *   1. Read the existing shard.
    *   2. Extract the payload (everything after the current header, before the 32-byte checksum).
-   *   3. Write: newHeaderData + payload + SHA-256(newHeaderData + payload) → .tmp file.
-   *   4. Rename .tmp → original path.
+   *   3. Write: newHeaderData + payload + SHA-256(newHeaderData + payload) -> .tmp file.
+   *   4. Rename .tmp -> original path.
    *
    * The payload boundary is derived from the length of headerData (the caller passes the
    * complete serialized header from magic to end of location map).
    *
    * @param ref        - RemoteRef of the shard to update
-   * @param headerData - New serialized header (magic … end of location map, no payload/checksum)
-   * @returns Updated RemoteRef (same path, no hash — caller should re-verify if needed)
+   * @param headerData - New serialized header (magic ... end of location map, no payload/checksum)
+   * @returns Updated RemoteRef (same path, no hash - caller should re-verify if needed)
    * @throws ProviderError on read/write failure
    * @throws ProviderError if the existing shard is too short to contain a valid payload
    */
@@ -281,7 +282,7 @@ export class LocalFsProvider implements StorageProvider {
   }
 
   /**
-   * Returns the size of a shard via `fs.stat()` — no content read.
+   * Returns the size of a shard via `fs.stat()` - no content read.
    *
    * @param ref - RemoteRef of the shard
    * @returns   Size in bytes
@@ -299,7 +300,7 @@ export class LocalFsProvider implements StorageProvider {
 
   /**
    * Reads at most `maxBytes` bytes from the start of the shard via
-   * `createReadStream({ start: 0, end: maxBytes - 1 })` — enough to read just
+   * `createReadStream({ start: 0, end: maxBytes - 1 })` - enough to read just
    * the header (~16 KB) without buffering the full payload.
    *
    * @param ref      - RemoteRef of the shard
@@ -333,7 +334,7 @@ export class LocalFsProvider implements StorageProvider {
    * Lists shard files in the vault directory, optionally filtered by a filename prefix.
    *
    * @param prefix - Optional filename prefix filter (e.g. "shard_0")
-   * @returns Array of RemoteRef (hash not populated — full read required for hash)
+   * @returns Array of RemoteRef (hash not populated - full read required for hash)
    * @throws ProviderError if the directory cannot be read
    */
   async list(prefix?: string): Promise<RemoteRef[]> {
@@ -382,7 +383,7 @@ export class LocalFsProvider implements StorageProvider {
     }
   }
 
-  // ─── Header storage strategy + verification ───────────────────────────────
+  // --- Header storage strategy + verification -------------------------------
 
   /** LocalFS keeps a relocated shard's header in an `hdr_` sidecar next to it. */
   usesSidecar(): boolean {
@@ -454,7 +455,7 @@ export class LocalFsProvider implements StorageProvider {
       }
       // Classify from the read failure itself, not a second stat (no TOCTOU
       // window). downloadHeader wraps the fs error in a ProviderError but keeps
-      // the original as `cause`, so ENOENT — whether raw or wrapped — means the
+      // the original as `cause`, so ENOENT - whether raw or wrapped - means the
       // shard is gone; anything else (permissions, I/O) means present-but-unreadable.
       const cause = err instanceof Error ? err.cause : undefined;
       return isEnoent(err) || isEnoent(cause)
@@ -464,11 +465,11 @@ export class LocalFsProvider implements StorageProvider {
     return finishVerifyShard(header, expected, lang);
   }
 
-  // ─── Configuration lifecycle ──────────────────────────────────────────────
+  // --- Configuration lifecycle ----------------------------------------------
 
   /**
    * Interactively prompts for the base directory path via ProviderIO.
-   * Retries on empty input, non-directory, or non-existent path — surfaces
+   * Retries on empty input, non-directory, or non-existent path - surfaces
    * the reason via `io.warn()` so the user understands why the prompt
    * re-asked.
    * @returns config fragment `{ path }` to persist in VaultConfig
@@ -495,13 +496,53 @@ export class LocalFsProvider implements StorageProvider {
   }
 
   /**
+   * Interactive `bfs provider edit` flow. Same prompt as the add flow, but an
+   * absent directory is put to the operator instead of being re-asked: the
+   * command exists for the case where the medium is NOT there - an unplugged
+   * drive, a share that moved, a mount point that differs between machines - so
+   * re-prompting until the path exists would leave nothing to type. A path that
+   * exists but is a file is still refused outright; that is a typo, not an
+   * absent medium.
+   *
+   * @param io   - ProviderIO carrying the prompt and the confirmation
+   * @param _ctx - existing connection-config (the prompt is not prefilled from it)
+   * @returns config fragment `{ path }` to persist in VaultConfig
+   */
+  async configureInteractiveForEdit(io: ProviderIO, _ctx: ConfigureEditContext): Promise<Record<string, unknown>> {
+    for (;;) {
+      const basePath = (await io.ask(t('local_path_prompt'))).trim();
+      if (basePath.length === 0) {
+        io.warn(t('path_required'));
+        continue;
+      }
+      try {
+        const stat = await fs.stat(basePath);
+        if (!stat.isDirectory()) {
+          io.warn(t('path_not_dir'));
+          continue;
+        }
+      } catch (err) {
+        // Only an absent path is offered for confirmation. A permission wall or a
+        // parent that is itself a file leaves a path that cannot be used at all,
+        // so standing behind it would buy the operator nothing.
+        if (!isEnoent(err)) {
+          io.warn(fmt('dir_not_exist', basePath));
+          continue;
+        }
+        if (!(await io.confirm(fmt('local_edit_path_missing_confirm', basePath)))) continue;
+      }
+      return { path: basePath };
+    }
+  }
+
+  /**
    * Builds a config fragment from the BFS CLI pass-through input. Three
    * grammars are accepted, in priority order:
    *
-   *   1. `--path <path>` — inline. Absolute paths used verbatim; relative
+   *   1. `--path <path>` - inline. Absolute paths used verbatim; relative
    *      paths resolve against `io.workDir`. Wins over `--config-file`.
-   *   2. `--config-file <path>` — JSON `{ "path": "<absolute>" }`.
-   *   3. neither — defaults to `~/.bfs-local/<name>/`.
+   *   2. `--config-file <path>` - JSON `{ "path": "<absolute>" }`.
+   *   3. neither - defaults to `~/.bfs-local/<name>/`.
    *
    * Empty-string values from the shell (e.g. `--path ""`) are treated as
    * absent so scripts can safely forward an unset variable.
@@ -604,7 +645,7 @@ export class LocalFsProvider implements StorageProvider {
   }
 }
 
-// ─── Factory + registry ──────────────────────────────────────────────────────
+// --- Factory + registry ------------------------------------------------------
 
 const localFsFactory: ProviderFactory = {
   lang: 'en',

@@ -2,7 +2,7 @@
 # Run inside Docker: installs bfs-vault@0.6.2 and creates a backup.
 # Provider format: "type:name --flag value"  (space-separated, new syntax)
 # Explicit --compress to test the compressed blob path.
-# 0.6.2 is the latest patch of the 0.6.x line — patches share the on-disk
+# 0.6.2 is the latest patch of the 0.6.x line - patches share the on-disk
 # format, so this fixture represents 0.6.0/0.6.1 as well.
 set -e
 BASE="$1"

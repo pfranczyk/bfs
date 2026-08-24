@@ -4,16 +4,16 @@
 # The operator migrates the shard onto the new box with `bfs repair --rebuild`,
 # which must Reed-Solomon-reconstruct shard_2 and upload it to the new location.
 #
-# Exercises the MIGRATION rebuild path (commitMigrationPairs → rebuildVersion,
-# new provider id on a new address) — distinct from 86's in-place same-id rebuild
+# Exercises the MIGRATION rebuild path (commitMigrationPairs -> rebuildVersion,
+# new provider id on a new address) - distinct from 86's in-place same-id rebuild
 # (rebuildShardInPlace). The new box is empty, so the target base directory does
-# not exist — the same condition that breaks 86; this checks whether the
+# not exist - the same condition that breaks 86; this checks whether the
 # migration path has the same gap.
 #
 # Docker-managed; SKIPs without a Docker daemon.
 
 SCENARIO_NAME="repair --rebuild: SSH server replaced, new location"
-SCENARIO_DESC="old sshd+volume destroyed; migrate p2→s9 onto a new EMPTY sshd with repair --rebuild"
+SCENARIO_DESC="old sshd+volume destroyed; migrate p2->s9 onto a new EMPTY sshd with repair --rebuild"
 REQUIRES_LOCAL=2
 REQUIRES_SSH=0
 REQUIRES_DOCKER=1
@@ -40,7 +40,7 @@ scenario_run() {
   assert_ok
   assert_manifest_health "$vault" 1 healthy
 
-  # ── The server dies for good; a NEW empty box comes up on a new port ────────
+  # -- The server dies for good; a NEW empty box comes up on a new port --------
   docker_sshd_down "$ctr_a"
   docker_volume_rm "$vol_a"
   docker_volume_reset "$vol_b"
@@ -51,7 +51,7 @@ scenario_run() {
   run_bfs "$vault" verify
   assert_manifest_health "$vault" 1 degraded
 
-  # Migrate p2 → s9 onto the new box and rebuild the lost shard there. The new box
+  # Migrate p2 -> s9 onto the new box and rebuild the lost shard there. The new box
   # is EMPTY: its base directory does not exist yet.
   local s9remote="/config/bfs-e2e-${RUN_ID}/s9-${name}"
   local sshjson="$SC_DIR/ssh-s9.json"

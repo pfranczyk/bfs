@@ -37,7 +37,7 @@ describe('verify', () => {
     vi.clearAllMocks();
   });
 
-  // ─── No versions ──────────────────────────────────────────────────────────
+  // --- No versions ----------------------------------------------------------
 
   it('should show "no versions" message when report is empty', async () => {
     mockVerifyAll.mockResolvedValue(makeReport([]));
@@ -48,7 +48,7 @@ describe('verify', () => {
     expect(capture.logs.some((l) => l.includes('No versions'))).toBe(true);
   });
 
-  // ─── Results table ────────────────────────────────────────────────────────
+  // --- Results table --------------------------------------------------------
 
   it('should display column headers', async () => {
     mockVerifyAll.mockResolvedValue(makeReport([{ version: 1, health: VersionHealth.Healthy, available_shards: 3, total_shards: 3, tolerance: 1 }]));
@@ -72,10 +72,10 @@ describe('verify', () => {
     expect(capture.logs.some((l) => l.includes('007'))).toBe(true);
   });
 
-  // ─── Health and tolerance (pipeline step 2) ───────────────────────────────
+  // --- Health and tolerance (pipeline step 2) -------------------------------
 
   it('healthy version (N+K shards): tolerance = K', async () => {
-    // Scheme 2/1 (N=2, K=1), all 3 shards available → healthy, tolerance = 3-2 = 1
+    // Scheme 2/1 (N=2, K=1), all 3 shards available -> healthy, tolerance = 3-2 = 1
     mockVerifyAll.mockResolvedValue(makeReport([{ version: 1, health: VersionHealth.Healthy, available_shards: 3, total_shards: 3, tolerance: 1 }]));
     mockListVersions.mockResolvedValue([makeManifest(1, 2, 1)] as never);
 
@@ -86,7 +86,7 @@ describe('verify', () => {
   });
 
   it('degraded version (>=N but <N+K shards): tolerance = available - N', async () => {
-    // Scheme 2/1 (N=2, K=1), 2/3 shards → degraded, tolerance = 2-2 = 0
+    // Scheme 2/1 (N=2, K=1), 2/3 shards -> degraded, tolerance = 2-2 = 0
     mockVerifyAll.mockResolvedValue(makeReport([{ version: 1, health: VersionHealth.Degraded, available_shards: 2, total_shards: 3, tolerance: 0 }]));
     mockListVersions.mockResolvedValue([makeManifest(1, 2, 1)] as never);
 
@@ -98,7 +98,7 @@ describe('verify', () => {
   });
 
   it('damaged version (<N shards): tolerance = 0', async () => {
-    // Scheme 2/1 (N=2, K=1), only 1 shard → damaged
+    // Scheme 2/1 (N=2, K=1), only 1 shard -> damaged
     mockVerifyAll.mockResolvedValue(makeReport([{ version: 1, health: VersionHealth.Damaged, available_shards: 1, total_shards: 3, tolerance: 0 }]));
     mockListVersions.mockResolvedValue([makeManifest(1, 2, 1)] as never);
 
@@ -128,7 +128,7 @@ describe('verify', () => {
     expect(capture.logs.some((l) => l.includes('?'))).toBe(true);
   });
 
-  // ─── verify errors ────────────────────────────────────────────────────────
+  // --- verify errors --------------------------------------------------------
 
   it('should abort when verifyAll throws', async () => {
     mockVerifyAll.mockRejectedValue(new Error('No vault config found'));
@@ -139,7 +139,7 @@ describe('verify', () => {
     expect(capture.errors.some((e) => e.includes('No vault config found'))).toBe(true);
   });
 
-  // ─── exit codes ───────────────────────────────────────────────────────────
+  // --- exit codes -----------------------------------------------------------
   // The code is the only signal a scheduled check can act on, and it must stay
   // distinct from the generic failure code so a monitor can tell "the backup is
   // damaged" from "the check could not run".
@@ -170,7 +170,7 @@ describe('verify', () => {
     expect(await runCmdExitCode(['verify'])).toBe(5);
   });
 
-  it('should exit 1 — not a health code — when verify itself cannot run', async () => {
+  it('should exit 1 - not a health code - when verify itself cannot run', async () => {
     mockVerifyAll.mockRejectedValue(new Error('No vault config found'));
 
     expect(await runCmdExitCode(['verify'])).toBe(1);

@@ -18,13 +18,23 @@ vi.mock('../../src/providers/provider.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/providers/provider.js')>();
   return { ...actual, createCliProviderIO: vi.fn(() => ({ ask: vi.fn(), askSecret: vi.fn(), confirm: vi.fn(), choose: vi.fn(), info: vi.fn(), warn: vi.fn(), progress: vi.fn() })) };
 });
-// scanDir uses fs/promises — return empty directory so tests don't hit disk.
-// --config-file path validation uses fs.access + fs.constants.
+// scanDir uses fs/promises - return empty directory so tests don't hit disk.
+// --config-file path validation uses fs.access + fs.constants. readFile answers
+// ENOENT by default: these tests run against a directory holding no backup, and
+// the re-init guard asks about .bfs/config.json before anything else. A test
+// that wants the other answer overrides readFile for its own run.
 vi.mock('node:fs/promises', () => {
-  const mock = { readdir: vi.fn().mockResolvedValue([]), stat: vi.fn().mockResolvedValue({ isDirectory: () => true, size: 0 }), access: vi.fn().mockResolvedValue(undefined), constants: { R_OK: 4, W_OK: 2, X_OK: 1, F_OK: 0 } };
+  const mock = {
+    readdir: vi.fn().mockResolvedValue([]),
+    stat: vi.fn().mockResolvedValue({ isDirectory: () => true, size: 0 }),
+    access: vi.fn().mockResolvedValue(undefined),
+    readFile: vi.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
+    constants: { R_OK: 4, W_OK: 2, X_OK: 1, F_OK: 0 },
+  };
   return { default: mock, ...mock };
 });
 
+import fs from 'node:fs/promises';
 import inquirer from 'inquirer';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { init } from '../../src/vault/vault-manager.js';
@@ -48,7 +58,7 @@ describe('init', () => {
     vi.clearAllMocks();
   });
 
-  // ─── CI mode — basic ─────────────────────────────────────────────────
+  // --- CI mode - basic -------------------------------------------------
 
   it('CI: should call init with vault_name from argument', async () => {
     await runCmd(ciBaseArgs);
@@ -146,7 +156,7 @@ describe('init', () => {
     expect(output).toContain('push');
   });
 
-  // ─── init errors ──────────────────────────────────────────────────────────
+  // --- init errors ----------------------------------------------------------
 
   it('CI: should abort when init throws', async () => {
     mockInit.mockRejectedValue(new Error('Scheme requires 3 providers, configured: 2'));
@@ -157,7 +167,7 @@ describe('init', () => {
     expect(capture.errors.some((e) => e.includes('Scheme requires'))).toBe(true);
   });
 
-  // ─── Input validation in CI mode (no magic defaults) ──────────────────────
+  // --- Input validation in CI mode (no magic defaults) ----------------------
 
   it('CI: should abort when --ci given without vault_name argument', async () => {
     const result = await runCmd(['init', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2', '--provider', 'local:p3 --path /mnt/d3']);
@@ -222,7 +232,7 @@ describe('init', () => {
     expect(mockPrompt).not.toHaveBeenCalled();
   });
 
-  // ─── Interactive mode — prompts ──────────────────────────────────────────
+  // --- Interactive mode - prompts ------------------------------------------
 
   it('interactive: should ask for vault name when not given as argument', async () => {
     // When vault_name is not passed as CLI arg, inquirer is called for it
@@ -270,10 +280,10 @@ describe('init', () => {
     expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ vault_name: 'myvault' }));
   });
 
-  // ─── Pass-through --provider (type:name [adapter-flags]) ──────────────────
+  // --- Pass-through --provider (type:name [adapter-flags]) ------------------
   // BFS contract: BFS only splits `type:name` off the first token and forwards
   // every remaining token verbatim as `rawArgs`. It does NOT know `--config-file`
-  // or any other flag — that is the adapter's grammar.
+  // or any other flag - that is the adapter's grammar.
 
   describe('CI: --provider pass-through grammar', () => {
     beforeEach(() => {
@@ -403,7 +413,7 @@ describe('init', () => {
     });
   });
 
-  // ─── Regression: multi-segment colon specs are rejected ──────────────────
+  // --- Regression: multi-segment colon specs are rejected ------------------
   // The dispatcher is pass-through-only: everything after the first colon
   // in the head token is the provider id, validated against
   // ^[A-Za-z0-9._-]+$. Multi-segment forms like `local:p1:/path` or
@@ -440,11 +450,11 @@ describe('init', () => {
     });
   });
 
-  // ─── Duplicate provider id rejection ─────────────────────────────────────
+  // --- Duplicate provider id rejection -------------------------------------
   // bfs init rejects two --provider specs that share an id: a duplicate would
   // otherwise reach config.json, where a lookup resolves to the first entry and
   // orphans the rest (runtime-undefined at push). Guards that the CI path
-  // aborts (exit≠0), init() is never called (no config is written), and the
+  // aborts (exit!=0), init() is never called (no config is written), and the
   // colliding id is named in the error.
 
   describe('CI: duplicate --provider id is rejected', () => {
@@ -462,7 +472,7 @@ describe('init', () => {
     });
   });
 
-  // ─── Regression: inline FTP flags ─────────────────────────────────────────
+  // --- Regression: inline FTP flags -----------------------------------------
 
   describe('CI: --provider ftp inline grammar', () => {
     it('should accept full ftp inline spec', async () => {
@@ -487,6 +497,51 @@ describe('init', () => {
       const ftp = call?.providers.find((p) => p.type === 'ftp');
       expect(ftp).toBeDefined();
       expect(ftp?.config).toEqual({ host: 'h', port: 21, user: 'u', password: 'p', path: '/b', secure: false });
+    });
+  });
+
+  // --- A directory that already holds a backup ------------------------------
+  // The refusal has to happen HERE, not only inside init(): the interactive path
+  // probes every medium from promptProvider -> probeProviderWithRecovery, and
+  // LocalFsProvider.probeConnection creates the target directory. A guard that
+  // sat only in the vault layer would let the operator fill in every medium -
+  // passwords included - and leave a sub-directory for the new name on each one,
+  // before saying no.
+
+  describe('a directory that already holds a backup', () => {
+    /** Makes .bfs/config.json readable, as if a backup had been initialized here. */
+    function existingBackup(vaultName: string): void {
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ vault_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', vault_name: vaultName, scheme: { data_shards: 2, parity_shards: 1 }, providers: [] }));
+    }
+
+    // vi.clearAllMocks() in the outer afterEach resets calls, not implementations,
+    // so the readFile above would answer for every later test in this file and
+    // refuse an init none of them set up. Put the file back out of reach here.
+    afterEach(() => {
+      vi.mocked(fs.readFile).mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    });
+
+    it('should abort before delegating to the vault layer', async () => {
+      existingBackup('docs');
+
+      const result = await runCmd(ciBaseArgs);
+
+      expect(result).toBe('abort');
+      expect(mockInit).not.toHaveBeenCalled();
+    });
+
+    it('should name the backup standing in the way, without pointing at `bfs clear`', async () => {
+      existingBackup('docs');
+
+      await runCmd(ciBaseArgs);
+
+      // Both halves belong in one test: on its own, "does not mention bfs clear"
+      // is satisfied by an empty output and would guard nothing. `bfs clear`
+      // removes the cache and the two lockfiles - never config.json - so sending
+      // the operator there would leave them exactly where they started.
+      const out = capture.errors.join('\n');
+      expect(out).toContain('docs');
+      expect(out).not.toContain('bfs clear');
     });
   });
 });

@@ -4,12 +4,12 @@ import { assert, runBfs, runTest, skipTest } from '../smoke-runner.js';
 import type { SmokeContext, SuiteResult, TestResult } from '../smoke-types.js';
 import { buildInitArgs, fileExists, readJson } from '../smoke-vault.js';
 
-// ─── Suite B — CLI init (subprocess) ─────────────────────────────────────────
+// --- Suite B - CLI init (subprocess) -----------------------------------------
 
 /**
  * Tests `bfs init <name>` as a subprocess with piped stdin.
- * Goal: catch regressions in CLI init argument parsing (e.g. --name → positional arg change).
- * Uses a separate directory from the main ctx — does not interfere with Suite C/D/E.
+ * Goal: catch regressions in CLI init argument parsing (e.g. --name -> positional arg change).
+ * Uses a separate directory from the main ctx - does not interfere with Suite C/D/E.
  *
  * CI flags bypass interactive Inquirer prompts (--no-enc, --data-shards,
  * --parity-shards, --provider, --push-mode), making the test deterministic
@@ -22,6 +22,13 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   const cliP1Dir = path.join(ctx.sourceDir, 'cli-p1');
   const cliP2Dir = path.join(ctx.sourceDir, 'cli-p2');
   const cliP3Dir = path.join(ctx.sourceDir, 'cli-p3');
+
+  // Every `bfs` run carrying `--lang` gets this config home: the flag persists
+  // the choice in the global settings file, so without it the suite would set the
+  // language for the whole process - and Suite B runs first, which would leave
+  // every later suite reading output in a language it never asked for.
+  const langDir = path.join(ctx.sourceDir, 'b-lang-config');
+  const langEnv: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: langDir };
 
   tests.push(
     await runTest('B0', 'setup: directories for CLI init', async () => {
@@ -44,7 +51,7 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   );
 
   tests.push(
-    await runTest('B1', 'bfs init <name> — positional argument + CI flags', () => {
+    await runTest('B1', 'bfs init <name> - positional argument + CI flags', () => {
       const r = runBfs(ciInitArgs, cliVaultDir);
       assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
     }),
@@ -63,15 +70,15 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   );
 
   tests.push(
-    await runTest('B2c', 'init --ci --no-enc → encryption.enabled=false in config', async () => {
+    await runTest('B2c', 'init --ci --no-enc -> encryption.enabled=false in config', async () => {
       const cfg = await readJson<{ encryption?: { enabled: boolean } }>(path.join(cliVaultDir, '.bfs', 'config.json'));
       assert(cfg.encryption?.enabled === false, `expected encryption.enabled=false with --no-enc, got: ${JSON.stringify(cfg.encryption)}`);
     }),
   );
 
-  // ── Encryption default-ON (no flag) vs opt-out ──────────────────────────────
+  // -- Encryption default-ON (no flag) vs opt-out ------------------------------
   tests.push(
-    await runTest('B2d', 'init --ci (no flag) → encryption.enabled=true by default', async () => {
+    await runTest('B2d', 'init --ci (no flag) -> encryption.enabled=true by default', async () => {
       const encVaultDir = path.join(ctx.sourceDir, 'enc-default-vault');
       const e1 = path.join(ctx.sourceDir, 'enc-p1');
       const e2 = path.join(ctx.sourceDir, 'enc-p2');
@@ -93,7 +100,7 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   );
 
   tests.push(
-    await runTest('B2e', 'init --ci --no-enc → unencrypted backup warning (EN)', async () => {
+    await runTest('B2e', 'init --ci --no-enc -> unencrypted backup warning (EN)', async () => {
       const v = path.join(ctx.sourceDir, 'warn-en-vault');
       const w1 = path.join(ctx.sourceDir, 'warn-en-p1');
       const w2 = path.join(ctx.sourceDir, 'warn-en-p2');
@@ -115,6 +122,8 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
           ),
         ],
         v,
+        undefined,
+        langEnv,
       );
       assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
       const out = r.stdout + r.stderr;
@@ -123,7 +132,7 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   );
 
   tests.push(
-    await runTest('B2f', 'init --ci --no-enc → unencrypted backup warning (PL)', async () => {
+    await runTest('B2f', 'init --ci --no-enc -> unencrypted backup warning (PL)', async () => {
       const v = path.join(ctx.sourceDir, 'warn-pl-vault');
       const w1 = path.join(ctx.sourceDir, 'warn-pl-p1');
       const w2 = path.join(ctx.sourceDir, 'warn-pl-p2');
@@ -145,6 +154,8 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
           ),
         ],
         v,
+        undefined,
+        langEnv,
       );
       assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
       const out = r.stdout + r.stderr;
@@ -175,7 +186,7 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── provider add --ci ──────────────────────────────────────────────────────
+  // -- provider add --ci ------------------------------------------------------
   const cliP4Dir = path.join(ctx.sourceDir, 'cli-p4');
 
   tests.push(
@@ -185,7 +196,7 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   );
 
   tests.push(
-    await runTest('B7', 'bfs provider add --ci (nowy provider)', async () => {
+    await runTest('B7', 'bfs provider add --ci (new provider)', async () => {
       // The minimal pass-through CLI (`bfs provider add --ci`) accepts only
       // --name, --type, and an optional --config-file. Provider-specific
       // details (like the local path) live inside the JSON config file.
@@ -199,7 +210,7 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   );
 
   tests.push(
-    await runTest('B8', 'bfs provider list — cli-p4 visible', () => {
+    await runTest('B8', 'bfs provider list - cli-p4 visible', () => {
       const r = runBfs(['provider', 'list'], cliVaultDir);
       assert(r.status === 0, `exit ${r.status ?? 'null'}\n${r.stderr}`);
       const out = r.stdout + r.stderr;
@@ -217,7 +228,7 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── provider remove --strategy remove --yes ────────────────────────────────
+  // -- provider remove --strategy remove --yes --------------------------------
 
   tests.push(
     await runTest('B9', 'bfs provider remove --strategy remove --yes', () => {
@@ -227,7 +238,7 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   );
 
   tests.push(
-    await runTest('B10', 'bfs provider list — cli-p4 removed', () => {
+    await runTest('B10', 'bfs provider list - cli-p4 removed', () => {
       const r = runBfs(['provider', 'list'], cliVaultDir);
       assert(r.status === 0, `exit ${r.status ?? 'null'}\n${r.stderr}`);
       const out = r.stdout + r.stderr;
@@ -235,10 +246,10 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── provider remove --strategy remove: the recommended next steps ──────────
+  // -- provider remove --strategy remove: the recommended next steps ----------
   // Dropping a storage leaves the backup with fewer storages than its scheme
-  // declares, and every command the removal recommends — `bfs pull`, `bfs push`,
-  // `bfs prune` — passes through the same scheme check, so all three refuse to
+  // declares, and every command the removal recommends - `bfs pull`, `bfs push`,
+  // `bfs prune` - passes through the same scheme check, so all three refuse to
   // run until the scheme matches the storages that are left. `bfs scheme set` is
   // what unblocks them, which is why it has to lead the list; `bfs provider add`
   // cannot, because it raises parity by one and so widens the very mismatch it
@@ -246,27 +257,20 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   //
   // Each test runs the real CLI in two parts. First the reality proof: the three
   // recommended commands are blocked, then `bfs scheme set` with numbers that fit
-  // the remaining storages makes `bfs pull` work — evidence that the way out
+  // the remaining storages makes `bfs pull` work - evidence that the way out
   // exists and starts where the list should point. Then the contract: the printed
   // list names those steps in that order.
-  //
-  // XDG_CONFIG_HOME is redirected because `--lang` persists the choice in the
-  // global settings file, which would otherwise be the developer's own.
-
-  const rmLangDir = path.join(ctx.sourceDir, 'rm-lang-config');
-  const rmEnv: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: rmLangDir };
 
   tests.push(
-    await runTest('B10a', 'provider remove --strategy remove — recommended steps are ordered and actionable (EN)', async () => {
-      await fs.mkdir(rmLangDir, { recursive: true });
-      const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rm-en', rmEnv);
-      const rr = runBfs(['--lang', 'en', 'provider', 'remove', 'rm-en-p4', '--strategy', 'remove', '--yes'], vaultDir, undefined, rmEnv);
+    await runTest('B10a', 'provider remove --strategy remove - recommended steps are ordered and actionable (EN)', async () => {
+      const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rm-en', langEnv);
+      const rr = runBfs(['--lang', 'en', 'provider', 'remove', 'rm-en-p4', '--strategy', 'remove', '--yes'], vaultDir, undefined, langEnv);
       assert(rr.status === 0, `remove exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
       const steps = rr.stdout + rr.stderr;
 
-      // Reality, part 1 — every recommended command is dead until the scheme is fixed.
+      // Reality, part 1 - every recommended command is dead until the scheme is fixed.
       for (const { label, args } of RECOMMENDED_AFTER_REMOVAL) {
-        const rb = runBfs(['--lang', 'en', ...args], vaultDir, undefined, rmEnv);
+        const rb = runBfs(['--lang', 'en', ...args], vaultDir, undefined, langEnv);
         const blockedOut = rb.stdout + rb.stderr;
         assert(rb.status !== 0, `expected \`${label}\` to fail after removal, got exit ${rb.status ?? 'null'}\n${blockedOut.slice(0, 400)}`);
         assert(blockedOut.includes('Scheme requires 4 providers, configured: 3'), `expected provider-count mismatch from \`${label}\`: ${blockedOut.slice(0, 400)}`);
@@ -274,13 +278,13 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
         assert(!blockedOut.includes('bfs provider add'), `\`bfs provider add\` raises the required provider count together with the pool, so it never closes this gap and must not be advised by \`${label}\`: ${blockedOut.slice(0, 400)}`);
       }
 
-      // Reality, part 2 — `bfs scheme set` is the step that opens the road.
-      const rs = runBfs(['--lang', 'en', 'scheme', 'set', '2', '1'], vaultDir, undefined, rmEnv);
+      // Reality, part 2 - `bfs scheme set` is the step that opens the road.
+      const rs = runBfs(['--lang', 'en', 'scheme', 'set', '2', '1'], vaultDir, undefined, langEnv);
       assert(rs.status === 0, `\`bfs scheme set 2 1\` exit ${rs.status ?? 'null'}\nstdout: ${rs.stdout}\nstderr: ${rs.stderr}`);
-      const rl = runBfs(['--lang', 'en', 'pull', '--force'], vaultDir, undefined, rmEnv);
+      const rl = runBfs(['--lang', 'en', 'pull', '--force'], vaultDir, undefined, langEnv);
       assert(rl.status === 0, `expected \`bfs pull\` to work after \`bfs scheme set 2 1\`, got exit ${rl.status ?? 'null'}\nstdout: ${rl.stdout}\nstderr: ${rl.stderr}`);
 
-      // Contract — the printed list leads down that same road, in that order.
+      // Contract - the printed list leads down that same road, in that order.
       assert(/1\.\s*`bfs scheme set/.test(steps), `expected step 1 to be \`bfs scheme set\` in: ${steps.slice(0, 600)}`);
       assert(/2\.\s*`bfs pull`/.test(steps), `expected step 2 to be \`bfs pull\` in: ${steps.slice(0, 600)}`);
       assert(/3\.\s*`bfs push`/.test(steps), `expected step 3 to be \`bfs push\` in: ${steps.slice(0, 600)}`);
@@ -289,15 +293,14 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   );
 
   tests.push(
-    await runTest('B10b', 'provider remove --strategy remove — recommended steps are ordered and actionable (PL)', async () => {
-      await fs.mkdir(rmLangDir, { recursive: true });
-      const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rm-pl', rmEnv);
-      const rr = runBfs(['--lang', 'pl', 'provider', 'remove', 'rm-pl-p4', '--strategy', 'remove', '--yes'], vaultDir, undefined, rmEnv);
+    await runTest('B10b', 'provider remove --strategy remove - recommended steps are ordered and actionable (PL)', async () => {
+      const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rm-pl', langEnv);
+      const rr = runBfs(['--lang', 'pl', 'provider', 'remove', 'rm-pl-p4', '--strategy', 'remove', '--yes'], vaultDir, undefined, langEnv);
       assert(rr.status === 0, `remove exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
       const steps = rr.stdout + rr.stderr;
 
       for (const { label, args } of RECOMMENDED_AFTER_REMOVAL) {
-        const rb = runBfs(['--lang', 'pl', ...args], vaultDir, undefined, rmEnv);
+        const rb = runBfs(['--lang', 'pl', ...args], vaultDir, undefined, langEnv);
         const blockedOut = rb.stdout + rb.stderr;
         assert(rb.status !== 0, `expected \`${label}\` to fail after removal, got exit ${rb.status ?? 'null'}\n${blockedOut.slice(0, 400)}`);
         assert(blockedOut.includes('Schemat wymaga 4 nośników, skonfigurowano: 3'), `expected provider-count mismatch from \`${label}\`: ${blockedOut.slice(0, 400)}`);
@@ -305,9 +308,9 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
         assert(!blockedOut.includes('bfs provider add'), `\`bfs provider add\` raises the required provider count together with the pool, so it never closes this gap and must not be advised by \`${label}\`: ${blockedOut.slice(0, 400)}`);
       }
 
-      const rs = runBfs(['--lang', 'pl', 'scheme', 'set', '2', '1'], vaultDir, undefined, rmEnv);
+      const rs = runBfs(['--lang', 'pl', 'scheme', 'set', '2', '1'], vaultDir, undefined, langEnv);
       assert(rs.status === 0, `\`bfs scheme set 2 1\` exit ${rs.status ?? 'null'}\nstdout: ${rs.stdout}\nstderr: ${rs.stderr}`);
-      const rl = runBfs(['--lang', 'pl', 'pull', '--force'], vaultDir, undefined, rmEnv);
+      const rl = runBfs(['--lang', 'pl', 'pull', '--force'], vaultDir, undefined, langEnv);
       assert(rl.status === 0, `expected \`bfs pull\` to work after \`bfs scheme set 2 1\`, got exit ${rl.status ?? 'null'}\nstdout: ${rl.stdout}\nstderr: ${rl.stderr}`);
 
       assert(/1\.\s*`bfs scheme set/.test(steps), `expected step 1 to be \`bfs scheme set\` in: ${steps.slice(0, 600)}`);
@@ -317,7 +320,7 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── provider remove: what the [R]emove strategy promises ───────────────────
+  // -- provider remove: what the [R]emove strategy promises -------------------
   // The strategy list is an Inquirer rawlist, but it is written to stdout before
   // the closed stdin cancels the prompt, so the wording is observable without a
   // terminal. Dropping a storage leaves the scheme untouched, so the [R]emove
@@ -326,37 +329,34 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   // columns and the break lands mid-word, hence the whitespace-collapsed compare.
 
   tests.push(
-    await runTest('B10c', 'provider remove — [R]emove strategy sends the operator to `bfs scheme set` (EN)', async () => {
-      await fs.mkdir(rmLangDir, { recursive: true });
-      const r = runBfs(['--lang', 'en', 'provider', 'remove', 'cli-p1'], cliVaultDir, '', rmEnv);
+    await runTest('B10c', 'provider remove - [R]emove strategy sends the operator to `bfs scheme set` (EN)', () => {
+      const r = runBfs(['--lang', 'en', 'provider', 'remove', 'cli-p1'], cliVaultDir, '', langEnv);
       const listed = collapseWhitespace(r.stdout + r.stderr);
-      assert(listed.includes('[R]emove—removeproviderwithoutreplacement(matchtheN/Kschemeafterwardswith`bfsschemeset`)'), `expected the [R]emove strategy to point at \`bfs scheme set\`: ${(r.stdout + r.stderr).slice(0, 800)}`);
+      assert(listed.includes('[R]emove-removeproviderwithoutreplacement(matchtheN/Kschemeafterwardswith`bfsschemeset`)'), `expected the [R]emove strategy to point at \`bfs scheme set\`: ${(r.stdout + r.stderr).slice(0, 800)}`);
       assert(!listed.includes('withoutreplacement,updateN/Kscheme'), `removal leaves the scheme untouched, so [R]emove must not promise to update it: ${(r.stdout + r.stderr).slice(0, 800)}`);
     }),
   );
 
   tests.push(
-    await runTest('B10d', 'provider remove — [R]emove strategy sends the operator to `bfs scheme set` (PL)', async () => {
-      await fs.mkdir(rmLangDir, { recursive: true });
-      const r = runBfs(['--lang', 'pl', 'provider', 'remove', 'cli-p1'], cliVaultDir, '', rmEnv);
+    await runTest('B10d', 'provider remove - [R]emove strategy sends the operator to `bfs scheme set` (PL)', () => {
+      const r = runBfs(['--lang', 'pl', 'provider', 'remove', 'cli-p1'], cliVaultDir, '', langEnv);
       const listed = collapseWhitespace(r.stdout + r.stderr);
-      assert(listed.includes('[R]emove—usuńnośnikbezzastępstwa(schematN/Kdopasujpotemprzez`bfsschemeset`)'), `expected the [R]emove strategy to point at \`bfs scheme set\`: ${(r.stdout + r.stderr).slice(0, 800)}`);
+      assert(listed.includes('[R]emove-usuńnośnikbezzastępstwa(schematN/Kdopasujpotemprzez`bfsschemeset`)'), `expected the [R]emove strategy to point at \`bfs scheme set\`: ${(r.stdout + r.stderr).slice(0, 800)}`);
       assert(!listed.includes('bezzastępstwa,zaktualizujschematN/K'), `removal leaves the scheme untouched, so [R]emove must not promise to update it: ${(r.stdout + r.stderr).slice(0, 800)}`);
     }),
   );
 
-  // ── a scheme that cannot be used at all ────────────────────────────────────
+  // -- a scheme that cannot be used at all ------------------------------------
   // A data_shards below the format minimum can only reach the config by hand,
-  // and no command can run with it. `bfs provider add` cannot repair it either —
-  // it grows the pool and the required total together — so the message has one
+  // and no command can run with it. `bfs provider add` cannot repair it either -
+  // it grows the pool and the required total together - so the message has one
   // way out to offer, `bfs scheme set`. `bfs push` validates the scheme before it
   // reads a single file, so an unpushed vault is enough to reach the message.
 
   tests.push(
-    await runTest('B10e', 'unusable data_shards — the fix offered is `bfs scheme set` alone (EN)', async () => {
-      await fs.mkdir(rmLangDir, { recursive: true });
-      const vaultDir = await initVaultWithBrokenScheme(ctx.sourceDir, 'bs-en', rmEnv);
-      const r = runBfs(['--lang', 'en', 'push'], vaultDir, undefined, rmEnv);
+    await runTest('B10e', 'unusable data_shards - the fix offered is `bfs scheme set` alone (EN)', async () => {
+      const vaultDir = await initVaultWithBrokenScheme(ctx.sourceDir, 'bs-en', langEnv);
+      const r = runBfs(['--lang', 'en', 'push'], vaultDir, undefined, langEnv);
       const out = r.stdout + r.stderr;
       assert(r.status !== 0, `expected \`bfs push\` to refuse an unusable scheme, got exit ${r.status ?? 'null'}\n${out.slice(0, 400)}`);
       assert(out.includes('Invalid scheme: data_shards must be an integer >= 2, got "1"'), `expected the invalid-scheme message in: ${out.slice(0, 400)}`);
@@ -366,10 +366,9 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   );
 
   tests.push(
-    await runTest('B10f', 'unusable data_shards — the fix offered is `bfs scheme set` alone (PL)', async () => {
-      await fs.mkdir(rmLangDir, { recursive: true });
-      const vaultDir = await initVaultWithBrokenScheme(ctx.sourceDir, 'bs-pl', rmEnv);
-      const r = runBfs(['--lang', 'pl', 'push'], vaultDir, undefined, rmEnv);
+    await runTest('B10f', 'unusable data_shards - the fix offered is `bfs scheme set` alone (PL)', async () => {
+      const vaultDir = await initVaultWithBrokenScheme(ctx.sourceDir, 'bs-pl', langEnv);
+      const r = runBfs(['--lang', 'pl', 'push'], vaultDir, undefined, langEnv);
       const out = r.stdout + r.stderr;
       assert(r.status !== 0, `expected \`bfs push\` to refuse an unusable scheme, got exit ${r.status ?? 'null'}\n${out.slice(0, 400)}`);
       assert(out.includes('Nieprawidłowy schemat: data_shards musi być liczbą całkowitą >= 2, podano "1"'), `expected the invalid-scheme message in: ${out.slice(0, 400)}`);
@@ -378,19 +377,29 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // ── init --ci --provider pass-through grammar ────────────────────────────
+  // -- init --ci --provider pass-through grammar ----------------------------
   // type:name + shell-style flags. Credentials live in JSON files, not argv.
 
   const ptVaultDir = path.join(ctx.sourceDir, 'cli-pt-vault');
   const ptDirs = [path.join(ctx.sourceDir, 'cli-pt-p1'), path.join(ctx.sourceDir, 'cli-pt-p2'), path.join(ctx.sourceDir, 'cli-pt-p3')];
+  // The runs that check how a bad command line is reported need a directory with
+  // the same fixture files but NO backup in it. `bfs init` settles the state of
+  // the working directory before it looks at the command line - rightly, since a
+  // corrected command line would be refused there anyway - so sharing the
+  // directory B12 initializes would answer each of them with the re-init refusal
+  // instead of the message under test.
+  const argVaultDir = path.join(ctx.sourceDir, 'cli-arg-vault');
 
   tests.push(
     await runTest('B11', 'setup: directories + config files for pass-through', async () => {
       await fs.mkdir(ptVaultDir, { recursive: true });
+      await fs.mkdir(argVaultDir, { recursive: true });
       for (const d of ptDirs) await fs.mkdir(d, { recursive: true });
       await fs.writeFile(path.join(ptVaultDir, 'pt-test.txt'), 'pass-through smoke');
+      await fs.writeFile(path.join(argVaultDir, 'pt-test.txt'), 'pass-through smoke');
       for (let i = 0; i < ptDirs.length; i++) {
         await fs.writeFile(path.join(ptVaultDir, `p${i + 1}.json`), JSON.stringify({ path: ptDirs[i] }), 'utf8');
+        await fs.writeFile(path.join(argVaultDir, `p${i + 1}.json`), JSON.stringify({ path: ptDirs[i] }), 'utf8');
       }
     }),
   );
@@ -446,7 +455,7 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
           '--provider',
           'local:pt-p3 --config-file ./p3.json',
         ],
-        ptVaultDir,
+        argVaultDir,
       );
       assert(r.status !== 0, `expected non-zero exit for name with space, got ${r.status}`);
       const out = r.stdout + r.stderr;
@@ -459,7 +468,7 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   // bfs init flag. The error must show the correct shell-quoted spec syntax.
   tests.push(
     await runTest('B15', 'bfs init --ci ftp:nas (no host) shows --provider syntax in error message (EN)', () => {
-      const r = runBfs(['--lang', 'en', 'init', 'cli-ftp-bad-vault', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'ftp:truenas'], ptVaultDir);
+      const r = runBfs(['--lang', 'en', 'init', 'cli-ftp-bad-vault', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'ftp:truenas'], argVaultDir, undefined, langEnv);
       assert(r.status !== 0, `expected non-zero exit for missing --host, got ${r.status}`);
       const out = r.stdout + r.stderr;
       assert(out.includes('--provider "ftp:nas --host'), `expected --provider syntax hint in: ${out.slice(0, 400)}`);
@@ -468,14 +477,50 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
 
   tests.push(
     await runTest('B16', 'bfs init --ci ftp:nas (no host) shows --provider syntax in error message (PL)', () => {
-      const r = runBfs(['--lang', 'pl', 'init', 'cli-ftp-bad-vault-pl', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'ftp:truenas'], ptVaultDir);
+      const r = runBfs(['--lang', 'pl', 'init', 'cli-ftp-bad-vault-pl', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'ftp:truenas'], argVaultDir, undefined, langEnv);
       assert(r.status !== 0, `expected non-zero exit for missing --host, got ${r.status}`);
       const out = r.stdout + r.stderr;
       assert(out.includes('wewnątrz spec --provider'), `expected Polish --provider syntax message in: ${out.slice(0, 400)}`);
     }),
   );
 
-  // ── provider edit --ci (RED: command not implemented yet) ──────────────────
+  // B16b/B16c: `--ci` declares that nobody can answer a question, and FTPS is
+  // the default - so a spec carrying neither a pinned fingerprint nor
+  // --accept-new-cert asks for two incompatible things. The refusal has to name
+  // both ways out, in whichever language the operator is running.
+  tests.push(
+    await runTest('B16b', 'bfs init --ci ftp without a way to trust the server -> refused, names both flags (EN)', () => {
+      const r = runBfs(
+        ['--lang', 'en', 'init', 'cli-ftp-notrust', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'ftp:nas --host 127.0.0.1 --port 2199 --user u --password p --path /backup'],
+        argVaultDir,
+        undefined,
+        langEnv,
+      );
+      assert(r.status !== 0, `expected non-zero exit for a storage with no basis of trust, got ${r.status}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('Conflicting instructions'), `expected the conflict to be named in: ${out.slice(0, 400)}`);
+      assert(out.includes('--accept-new-cert') && out.includes('--cert-fingerprint'), `expected both ways out in: ${out.slice(0, 400)}`);
+      // Decided from the settings - the dead port is never contacted.
+      assert(!out.includes('FTP operation failed'), `expected no transport error in: ${out.slice(0, 400)}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('B16c', 'bfs init --ci ftp without a way to trust the server -> refused (PL)', () => {
+      const r = runBfs(
+        ['--lang', 'pl', 'init', 'cli-ftp-notrust-pl', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'ftp:nas --host 127.0.0.1 --port 2199 --user u --password p --path /backup'],
+        argVaultDir,
+        undefined,
+        langEnv,
+      );
+      assert(r.status !== 0, `expected non-zero exit for a storage with no basis of trust, got ${r.status}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('Sprzeczne polecenia'), `expected the Polish conflict message in: ${out.slice(0, 400)}`);
+      assert(out.includes('--accept-new-cert') && out.includes('--cert-fingerprint'), `expected both ways out in: ${out.slice(0, 400)}`);
+    }),
+  );
+
+  // -- provider edit --ci (RED: command not implemented yet) ------------------
   // Offline, local-only edit of an existing provider's connection-config.
   // Same id, same type; no medium contact. These assertions are RED until
   // `bfs provider edit` ships in GREEN.
@@ -494,7 +539,7 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   );
 
   tests.push(
-    await runTest('B18', 'bfs provider edit --ci (new path) — exit 0 + id in output', async () => {
+    await runTest('B18', 'bfs provider edit --ci (new path) - exit 0 + id in output', async () => {
       const configFile = path.join(ctx.sourceDir, 'cli-p5-new-config.json');
       await fs.writeFile(configFile, JSON.stringify({ path: cliP5NewDir }), 'utf8');
       const r = runBfs(['provider', 'edit', 'cli-p5', '--ci', '--config-file', configFile], cliVaultDir);
@@ -505,7 +550,7 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   );
 
   tests.push(
-    await runTest('B19', 'bfs provider list — cli-p5 shows the new path', () => {
+    await runTest('B19', 'bfs provider list - cli-p5 shows the new path', () => {
       const r = runBfs(['provider', 'list'], cliVaultDir);
       assert(r.status === 0, `exit ${r.status ?? 'null'}\n${r.stderr}`);
       const out = r.stdout + r.stderr;
@@ -514,19 +559,19 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   );
 
   tests.push(
-    await runTest('B20', 'bfs provider edit nonexistent id — non-zero exit', () => {
+    await runTest('B20', 'bfs provider edit nonexistent id - non-zero exit', () => {
       const configFile = path.join(ctx.sourceDir, 'cli-p5-new-config.json');
       const r = runBfs(['provider', 'edit', 'does-not-exist', '--ci', '--config-file', configFile], cliVaultDir);
       assert(r.status !== 0, `expected non-zero exit for nonexistent provider, got ${r.status}`);
     }),
   );
 
-  // ── excluded entries (symlinks / special files) ────────────────────────────
+  // -- excluded entries (symlinks / special files) ----------------------------
   // push refuses entries that can never be in a backup, listing them and
   // pointing at .bfsignore; --allow-excluded backs up everything else.
   tests.push(
     await runTest('B21', 'bfs push --help lists --allow-excluded (EN)', () => {
-      const r = runBfs(['--lang', 'en', 'push', '--help'], cliVaultDir);
+      const r = runBfs(['--lang', 'en', 'push', '--help'], cliVaultDir, undefined, langEnv);
       assert(r.status === 0, `exit ${r.status ?? 'null'}\n${r.stderr}`);
       const out = r.stdout + r.stderr;
       assert(out.includes('--allow-excluded'), `expected --allow-excluded flag in help: ${out.slice(0, 500)}`);
@@ -536,7 +581,7 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
 
   tests.push(
     await runTest('B22', 'bfs push --help shows Polish --allow-excluded description (PL)', () => {
-      const r = runBfs(['--lang', 'pl', 'push', '--help'], cliVaultDir);
+      const r = runBfs(['--lang', 'pl', 'push', '--help'], cliVaultDir, undefined, langEnv);
       assert(r.status === 0, `exit ${r.status ?? 'null'}\n${r.stderr}`);
       const out = r.stdout + r.stderr;
       assert(/dowiązaniami symbolicznymi/.test(out), `expected Polish --allow-excluded description in help: ${out.slice(0, 500)}`);
@@ -587,7 +632,7 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     );
   }
 
-  return { name: 'Suite B — CLI init (subprocess)', tests };
+  return { name: 'Suite B - CLI init (subprocess)', tests };
 }
 
 /**
@@ -606,7 +651,7 @@ const RECOMMENDED_AFTER_REMOVAL: Array<{ label: string; args: string[] }> = [
  * pushed versions. `provider remove --strategy remove` refuses to drop a storage
  * from a pool of three or fewer, the pushed versions make the removal act on a
  * real backup, and the second version keeps `bfs prune 1` from being refused for
- * deleting the only restorable version — so prune reaches the scheme check.
+ * deleting the only restorable version - so prune reaches the scheme check.
  *
  * @param sourceDir - Smoke temp root that holds the vault and provider dirs
  * @param name      - Prefix for the vault dir, vault name and provider names
@@ -634,7 +679,7 @@ async function initVaultForRemoval(sourceDir: string, name: string, env: NodeJS.
 
 /**
  * Creates an isolated vault whose stored scheme is unusable: `data_shards` is
- * lowered to 1 in `.bfs/config.json`, below the minimum the format allows — a
+ * lowered to 1 in `.bfs/config.json`, below the minimum the format allows - a
  * state only hand-editing produces. No push is needed, because `bfs push`
  * validates the scheme before it touches any data.
  *
@@ -662,7 +707,7 @@ async function initVaultWithBrokenScheme(sourceDir: string, name: string, env: N
 
 /**
  * Removes every whitespace run from CLI output so a substring assertion survives
- * the hard wrap Inquirer applies to a piped (non-TTY) stdout at 80 columns — the
+ * the hard wrap Inquirer applies to a piped (non-TTY) stdout at 80 columns - the
  * break lands mid-word, which a plain `includes` would miss.
  *
  * @param text - Raw stdout+stderr of a `bfs` run

@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { LockConcurrentActiveError, LockPartialStatePushError } from '../../src/core/errors.js';
+import { LockConcurrentActiveError, LockPartialStatePushError, LockReservationUnreadableError } from '../../src/core/errors.js';
 import { writeJsonAtomic } from '../../src/core/fs-utils.js';
 import {
   acquireCachePushLock,
@@ -199,7 +199,7 @@ describe('isLockLive', () => {
   });
 });
 
-describe('acquirePushLock — fresh push', () => {
+describe('acquirePushLock - fresh push', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -226,7 +226,7 @@ describe('acquirePushLock — fresh push', () => {
 
   // The core regression guard: two GENUINELY concurrent acquisitions race for the
   // same path. The exclusive create (O_EXCL) is the reservation, so exactly one
-  // wins — a non-atomic read-then-write would let BOTH through (both read no lock,
+  // wins - a non-atomic read-then-write would let BOTH through (both read no lock,
   // both write) and corrupt version state. This is the test that goes RED on a
   // regression to non-atomic acquisition; the sequential case above would not.
   it('should admit exactly one of two concurrent acquisitions (TOCTOU race closed)', async () => {
@@ -274,7 +274,7 @@ describe('acquirePushLock — fresh push', () => {
   });
 });
 
-describe('acquireCachePushLock — push --cache resume', () => {
+describe('acquireCachePushLock - push --cache resume', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -339,12 +339,63 @@ describe('acquireRepairLock', () => {
 
   // With no pre-existing lock, two concurrent repairs race for repair.lock and
   // the exclusive create admits exactly one. (Takeover of a *pre-existing* stale
-  // lock under concurrency retains a narrow residual race — see decisions.md.)
+  // lock under concurrency retains a narrow residual race.)
   it('should admit exactly one of two concurrent acquisitions (TOCTOU race closed)', async () => {
     const results = await Promise.allSettled([acquireRepairLock(tmpDir, makeRepairLock()), acquireRepairLock(tmpDir, makeRepairLock())]);
 
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+  });
+
+  // The exclusive create returns before the JSON payload lands, so a peer that
+  // just won the race is visible on disk as a zero-byte file. Reading that
+  // emptiness as "dead leftover" and deleting it admits BOTH callers - the
+  // second one recreates the lock while the first writes into an unlinked
+  // handle, and two repairs rewrite the same version's location maps.
+  it('should refuse instead of deleting a repair.lock a peer reserved but has not written', async () => {
+    await fs.writeFile(repairLockPath(tmpDir), '', 'utf-8');
+
+    await expect(acquireRepairLock(tmpDir, makeRepairLock())).rejects.toThrow(LockReservationUnreadableError);
+    expect(existsSync(repairLockPath(tmpDir))).toBe(true);
+  });
+
+  // Same defect observed through the peer's eyes: the window is held open with a
+  // real exclusive-create handle, and the peer's payload must be what survives
+  // on disk - not the payload of a caller that deleted the reservation.
+  it('should leave the reserving peer as the owner when its write lands late', async () => {
+    const lockPath = repairLockPath(tmpDir);
+    const handle = await fs.open(lockPath, 'wx', 0o600);
+    const peerWrite = (async () => {
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        await handle.writeFile(JSON.stringify(makeRepairLock({ version_range: '7-9' }), null, 2), { encoding: 'utf-8' });
+      } finally {
+        await handle.close();
+      }
+    })();
+
+    const second = acquireRepairLock(tmpDir, makeRepairLock({ version_range: 'latest' }));
+
+    await expect(second).rejects.toThrow(LockConcurrentActiveError);
+    await peerWrite;
+    const onDisk = await readLock<RepairLock>(lockPath);
+    expect(onDisk?.version_range).toBe('7-9');
+  });
+
+  // Counterpart of the two above: a reservation nobody is going to write (the
+  // creator died between the create and the write) must still be takeable, or a
+  // zero-byte file would wedge every later repair. Age separates the two states,
+  // since their content is identical.
+  it('should take over an empty repair.lock abandoned long ago', async () => {
+    const lockPath = repairLockPath(tmpDir);
+    await fs.writeFile(lockPath, '', 'utf-8');
+    const abandoned = new Date(Date.now() - 10 * 60 * 1000);
+    await fs.utimes(lockPath, abandoned, abandoned);
+
+    await acquireRepairLock(tmpDir, makeRepairLock());
+
+    const written = await readLock<RepairLock>(lockPath);
+    expect(written?.pid).toBe(process.pid);
   });
 
   it('should take over a stale repair.lock (idempotent retry)', async () => {

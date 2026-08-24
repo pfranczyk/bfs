@@ -1,10 +1,10 @@
 # shellcheck shell=bash
 # Documented limitation: an OFFLINE `bfs provider edit` rewrites only the local
-# config — it does NOT touch the location map inside the stored backup pieces.
+# config - it does NOT touch the location map inside the stored backup pieces.
 # So if the local metadata is then lost and rebuilt with `bfs recovery` (which
 # reconstructs the config from the pieces' headers), the edit is gone: recovery
 # restores the provider's ORIGINAL address, not the edited one. The remedy is to
-# `bfs push` after editing (a push re-stamps the headers) — or to re-apply the
+# `bfs push` after editing (a push re-stamps the headers) - or to re-apply the
 # edit after recovery. This scenario pins that behavior so a future change can't
 # silently alter it.
 
@@ -25,7 +25,7 @@ scenario_run() {
   snapshot_hashes "$vault" "$base"
   run_bfs "$vault" push --new; assert_ok            # v1 headers encode p0's ORIGINAL path
 
-  # Physically relocate p0 and repoint it offline — but do NOT push, so the
+  # Physically relocate p0 and repoint it offline - but do NOT push, so the
   # backup pieces still carry the original location map.
   mkdir -p "$newloc"
   mv "${PV_LOCALDIR[0]}/$name" "$newloc/"
@@ -38,12 +38,12 @@ scenario_run() {
   assert_no_file "$vault/.bfs/config.json"
 
   # Rebuild from a surviving provider (p1, untouched). Recovery reconstructs the
-  # config from the pieces' headers → p0 comes back at its ORIGINAL address.
+  # config from the pieces' headers -> p0 comes back at its ORIGINAL address.
   run_bfs "$vault" recovery --provider local --name "$name" \
     --bootstrap "--path $(winpath "${PV_LOCALDIR[1]}")"
   assert_ok
   assert_file "$vault/.bfs/config.json"
-  # The offline edit did not survive — recovery used the headers, not the lost
+  # The offline edit did not survive - recovery used the headers, not the lost
   # local config. This is the limitation being pinned.
   if grep -qF 'relocated-p0' "$vault/.bfs/config.json"; then
     _fail "recovered config kept the offline edit (relocated-p0); recovery must rebuild from backup headers"
@@ -55,7 +55,7 @@ scenario_run() {
   assert_ok
   assert_restored "$vault" "$base"
 
-  # Remedy: re-apply the edit after recovery → the relocated p0 is healthy again.
+  # Remedy: re-apply the edit after recovery -> the relocated p0 is healthy again.
   run_bfs "$vault" provider edit p0 --ci --path "$(winpath "$newloc")"
   assert_ok
   run_bfs "$vault" verify

@@ -31,7 +31,7 @@ function _cleanup(): void {
     try {
       fs.unlinkSync(filePath);
     } catch {
-      // best-effort — file may not exist yet
+      // best-effort - file may not exist yet
     }
   }
   process.exit(130);

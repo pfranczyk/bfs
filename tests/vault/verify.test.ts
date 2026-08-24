@@ -63,7 +63,7 @@ const ENCRYPTED_PASSWORD = 'verify-deep-pass-123';
 /**
  * Builds a real 2/1 local vault with encryption enabled and pushes version 1,
  * supplying the password through the push options. Mirrors setupVault for the
- * encrypted path — used to prove deep verify is password-free.
+ * encrypted path - used to prove deep verify is password-free.
  */
 async function setupEncryptedVault(): Promise<{ root: string; providerDirs: string[]; io: ProviderIO; warnings: string[] }> {
   const root = await tmp();
@@ -84,8 +84,8 @@ async function setupEncryptedVault(): Promise<{ root: string; providerDirs: stri
 }
 
 /**
- * Flips a single byte in the middle of a shard's RS payload — the region
- * between the in-shard header and the trailing 32-byte SHA-256 checksum —
+ * Flips a single byte in the middle of a shard's RS payload - the region
+ * between the in-shard header and the trailing 32-byte SHA-256 checksum -
  * leaving the header untouched and NOT recomputing the checksum. This
  * simulates bit-rot: the trailing SHA-256 no longer matches, yet a
  * header-only (shallow) verify stays blind to it because the header window
@@ -125,7 +125,7 @@ describe('verifyVersion (integrity check)', () => {
   it('should mark a shard unavailable when its file is empty (size 0)', async () => {
     const setup = await setupVault();
     dirs = [setup.root, ...setup.providerDirs];
-    // Truncate shard_0 on provider p0 to 0 bytes — getSize returns 0.
+    // Truncate shard_0 on provider p0 to 0 bytes - getSize returns 0.
     const truncated = path.join(setup.providerDirs[0], 'verify-test', 'shard_0.bfs.1');
     await fs.writeFile(truncated, Buffer.alloc(0));
 
@@ -154,7 +154,7 @@ describe('verifyVersion (integrity check)', () => {
     expect(warning).toBeDefined();
     expect(warning).toContain('"p2"');
     expect(warning).toContain('missing or unreadable');
-    // A medium that answered is not accused of failing an integrity check —
+    // A medium that answered is not accused of failing an integrity check -
     // nothing was read, so nothing about the bytes was learned.
     expect(warning).not.toContain('failed integrity check');
   });
@@ -230,11 +230,11 @@ describe('verifyVersion (integrity check)', () => {
     // refuse it.
     const tampered = path.join(setup.providerDirs[1], 'verify-test', 'shard_1.bfs.1');
     const buf = await fs.readFile(tampered);
-    // Find the version field — magic(4) + format_version(1) + uuid(16) +
+    // Find the version field - magic(4) + format_version(1) + uuid(16) +
     // vault_name_len(2) + vault_name(N) + blob_size(8) + blob_hash(32) +
     // N(1) + K(1) + shard_index(1) = byte offset of version. Easier: just
     // flip the magic byte so parseShardHeaderFromStream rejects the stream
-    // outright — covers the same failure path.
+    // outright - covers the same failure path.
     buf[0] ^= 0xff;
     await fs.writeFile(tampered, buf);
 
@@ -263,7 +263,7 @@ describe('verifyVersion (integrity check)', () => {
   it('should stay Healthy in shallow mode under the same payload corruption (blind spot)', async () => {
     const setup = await setupVault();
     dirs = [setup.root, ...setup.providerDirs];
-    // Same payload bit-rot as the deep test — proves the header-only check is
+    // Same payload bit-rot as the deep test - proves the header-only check is
     // blind to payload corruption. Stays green after the deep implementation
     // because shallow mode never streams the payload.
     const shardPath = path.join(setup.providerDirs[0], 'verify-test', 'shard_0.bfs.1');
@@ -307,7 +307,7 @@ describe('verifyVersion (integrity check)', () => {
     const setup = await setupEncryptedVault();
     dirs = [setup.root, ...setup.providerDirs];
     // Deep verify streams ciphertext and checks the trailing SHA-256 over the raw
-    // bytes — an intact encrypted vault must verify Healthy without any password.
+    // bytes - an intact encrypted vault must verify Healthy without any password.
     const status = await verifyVersion(setup.root, 1, setup.io, { deep: true });
 
     expect(status.health).toBe(VersionHealth.Healthy);
@@ -336,26 +336,26 @@ describe('verifyVersion (integrity check)', () => {
   });
 });
 
-// ─── Header-sidecar advisory detection ────────────────────────────────────────
+// --- Header-sidecar advisory detection ----------------------------------------
 //
 // verify exposes a per-version `header_advisory: Nullable<{ missing; broken }>`,
 // computed over reachable providers only. Rule (asymmetry): report counts only
-// when at least one shard has a VALID sidecar AND ≥1 shard has a MISSING or
-// BROKEN one; all-valid, all-missing, and non-sidecar providers → null.
+// when at least one shard has a VALID sidecar AND >=1 shard has a MISSING or
+// BROKEN one; all-valid, all-missing, and non-sidecar providers -> null.
 //
 // Sidecar state per shard: VALID = downloadHeaderSidecar returns bytes that
 // extractSidecarHeaderBytes parses; MISSING = returns null; BROKEN = returns
 // bytes that extractSidecarHeaderBytes rejects (ShardCorruptedError).
 //
 // Data health is read from the IN-SHARD header, so it is immune to sidecar
-// state: a BROKEN sidecar keeps the version Healthy with full availability —
+// state: a BROKEN sidecar keeps the version Healthy with full availability -
 // only header_advisory reflects it.
 
 const SIDECAR_VAULT = 'verify-test';
 
 /**
  * Writes a VALID hdr_ sidecar next to shard_i by re-serializing the shard's own
- * (unencrypted) in-shard header into BFSH form — so it parses cleanly and its
+ * (unencrypted) in-shard header into BFSH form - so it parses cleanly and its
  * identity matches the manifest.
  */
 async function writeValidSidecar(providerDir: string, shardIndex: number, version = 1): Promise<void> {
@@ -398,7 +398,7 @@ describe('verifyVersion header_advisory (sidecar header detection)', () => {
   it('should report header_advisory=null when no shard has a sidecar (no valid sibling)', async () => {
     const setup = await setupVault();
     dirs = [setup.root, ...setup.providerDirs];
-    // A fresh push writes no sidecars — every shard is MISSING, none VALID.
+    // A fresh push writes no sidecars - every shard is MISSING, none VALID.
 
     const status = await verifyVersion(setup.root, 1, setup.io);
 
@@ -411,7 +411,7 @@ describe('verifyVersion header_advisory (sidecar header detection)', () => {
     dirs = [setup.root, ...setup.providerDirs];
     await writeValidSidecar(setup.providerDirs[0], 0);
     await writeValidSidecar(setup.providerDirs[1], 1);
-    // shard_2: no sidecar → MISSING.
+    // shard_2: no sidecar -> MISSING.
 
     const status = await verifyVersion(setup.root, 1, setup.io);
 
@@ -431,7 +431,7 @@ describe('verifyVersion header_advisory (sidecar header detection)', () => {
   });
 
   // The in-shard header is intact, so a broken sidecar must NOT reduce
-  // availability — the version stays Healthy and full. Kept separate from the
+  // availability - the version stays Healthy and full. Kept separate from the
   // advisory assertion so it stands on its own.
   it('should keep a broken-sidecar version Healthy with full availability', async () => {
     const setup = await setupVault();
@@ -458,11 +458,11 @@ class NoSidecarLocalProvider extends LocalFsProvider {
   }
 
   async uploadHeaderSidecar(): Promise<void> {
-    throw new Error('usesSidecar() is false — sidecar methods must not be called');
+    throw new Error('usesSidecar() is false - sidecar methods must not be called');
   }
 
   async downloadHeaderSidecar(): Promise<Nullable<Buffer>> {
-    throw new Error('usesSidecar() is false — sidecar methods must not be called');
+    throw new Error('usesSidecar() is false - sidecar methods must not be called');
   }
 }
 
@@ -497,7 +497,7 @@ async function setupNoSidecarVault(): Promise<{ root: string; providerDirs: stri
   return { root, providerDirs, io };
 }
 
-describe('verifyVersion header_advisory — non-sidecar providers', () => {
+describe('verifyVersion header_advisory - non-sidecar providers', () => {
   let dirs: string[];
 
   beforeEach(() => {
@@ -582,7 +582,7 @@ describe('verifyVersion health verdict provenance', () => {
 
     // A shallow pass while a *different* part happens to be unreachable lands on
     // the same verdict for an unrelated reason. Nothing about the rot was
-    // re-checked, so the record of it must survive — otherwise the rot silently
+    // re-checked, so the record of it must survive - otherwise the rot silently
     // stops counting once that part comes back.
     const away = path.join(setup.providerDirs[1], 'verify-test', 'shard_1.bfs.1');
     const parked = await fs.readFile(away);
@@ -599,7 +599,7 @@ describe('verifyVersion health verdict provenance', () => {
   it('should not freeze a verdict caused by an unreachable part', async () => {
     const setup = await setupVault();
     dirs = [setup.root, ...setup.providerDirs];
-    // The part is gone rather than rotted — the medium was offline, its bytes
+    // The part is gone rather than rotted - the medium was offline, its bytes
     // were never read. Nothing about the payload was established, so the verdict
     // must retire as soon as the part is back.
     const away = path.join(setup.providerDirs[0], 'verify-test', 'shard_0.bfs.1');

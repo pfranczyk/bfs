@@ -7,7 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { parseBlobFileTable, parseBlobFileTableFromFile, unpackBlob, unpackBlobFromFile } from '../core/blob-unpack.js';
 import { trackFile, untrackFile } from '../core/cleanup.js';
 import { decryptBlob, decryptStream, deriveKey, deriveShardNonce } from '../core/crypto.js';
-import { BfsError, ProviderError, PullSkippedError, ShardCorruptedError } from '../core/errors.js';
+import { BfsError, ProviderError, PullSkippedError, ShardCorruptedError, TamperDetectedError } from '../core/errors.js';
 import { hashBuffer, hashFileExcludingTail, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
 import { DEFAULT_BFSIGNORE_CONTENT } from '../core/ignore-defaults.js';
 import { calcShardPayloadSize, rsDecode, rsDecodeStriped, rsRepair } from '../core/reed-solomon.js';
@@ -18,11 +18,13 @@ import { providerRegistry } from '../providers/provider.js';
 import type { FileEntry, ManifestShard, ProviderConfig, ProviderIO, PullResult, ShardHeader, SkippedFile, StorageProvider, VaultConfig, VaultState, VersionManifest } from '../types/index.js';
 import { type PushMode, VersionHealth } from '../types/index.js';
 import { checkVersionMismatch, detectMissingAdapters, formatMissingAdaptersMessage } from './adapter-preflight.js';
-import { assertSchemeValid, readConfig, writeConfig } from './config.js';
-import { applyHealthChange, deleteManifest, listManifests, readManifest, writeManifest } from './manifest.js';
+import { parseVersionFromFilename } from './bootstrap.js';
+import { assertNoExistingVault, assertSchemeValid, readConfig, writeConfig } from './config.js';
+import { applyHealthChange, deleteManifest, listManifests, listUnrecoveredVersions, readManifest, writeManifest } from './manifest.js';
 import { confirmRecoveredLocations } from './recovered-locations.js';
 import { DEFAULT_STATE, readState, writeState } from './state.js';
 import { assertNoForeignVault } from './vault-collision.js';
+import { rebuildVersionManifest, type VersionShardEntry } from './version-rebuild.js';
 
 // Public push entry points, re-exported from the push pipeline module.
 export {
@@ -31,12 +33,12 @@ export {
   push,
 } from './push-pipeline.js';
 
-// ─── V2 pipeline constants ────────────────────────────────────────────────────
+// --- V2 pipeline constants ----------------------------------------------------
 
 /** Fallback stripe size for manifests that predate rs_stripe_size. */
 const V2_STRIPE_SIZE = 64 * 1024 * 1024;
 
-// ─── Option types ─────────────────────────────────────────────────────────────
+// --- Option types -------------------------------------------------------------
 
 export interface InitOptions {
   vault_name: string;
@@ -77,7 +79,7 @@ export interface PullOptions {
   /**
    * When true, pull continues even if some external adapters are missing
    * and Reed-Solomon redundancy can decode from whatever providers remain
-   * reachable. Missing built-in providers (local, ftp) always abort —
+   * reachable. Missing built-in providers (local, ftp, ssh) always abort -
    * their absence indicates a broken BFS installation, not a plugin gap.
    */
   allowMissingAdapters?: boolean;
@@ -126,6 +128,99 @@ export interface StatusInfo {
   encryption_enabled: boolean;
 }
 
+/**
+ * Appends the way out to a refusal: the newest version this directory can restore
+ * right now.
+ *
+ * A refusal that names only the version it cannot restore leaves an operator
+ * whose newest version stayed sealed with nowhere to go - while an older one sits
+ * right here, ready. The way out belongs in the same breath as the refusal, on
+ * every path that turns a restore down.
+ *
+ * @returns `reason` with the pointer appended, or unchanged when nothing is restorable
+ */
+async function _withRestorableHint(rootDir: string, reason: string): Promise<string> {
+  const restorable = (await listManifests(rootDir)).map((m) => m.version);
+  if (restorable.length === 0) return reason;
+  const newest = String(Math.max(...restorable));
+  return `${reason} ${fmt('pull_restorable_hint', newest, newest)}`;
+}
+
+/**
+ * Explains why a version has no manifest to restore from.
+ *
+ * Reached only for a version this directory has no record of at all - one that
+ * carries a marker is rebuilt from the storage instead, and refuses in its own
+ * words if that fails.
+ */
+async function _describeMissingVersion(rootDir: string, version: number): Promise<string> {
+  return _withRestorableHint(rootDir, fmt('version_not_found', String(version)));
+}
+
+/** A manifest rebuilt on the spot, plus the password that opened its location map. */
+interface LazyRebuiltVersion {
+  manifest: VersionManifest;
+  password: Nullable<string>;
+}
+
+/**
+ * Rebuilds the manifest of a version this directory knows only as a marker -
+ * recovery found it on the storage but no password it had opened its location
+ * map. Lists the configured storages for that version's parts and reads the map
+ * out of a header; nothing is written here, because a manifest is worth recording
+ * only once the data it describes is actually out.
+ *
+ * The password that opens the map is the same one that decrypts the data, so it
+ * comes back with the manifest and the caller reuses it - asking twice would read
+ * as the first answer having been rejected. The pool holds at most the one
+ * password given plus whatever the operator types: `bfs pull` names a single
+ * version, so it takes a single password (see decisions.md -> "Pula haseł należy
+ * do `recovery`, nie do `pull`").
+ *
+ * @returns the rebuilt version, or null when this directory has no record of it
+ * @throws BfsError when the version is recorded but cannot be rebuilt
+ */
+async function _rebuildMarkedVersion(rootDir: string, config: VaultConfig, version: number, options: PullOptions): Promise<Nullable<LazyRebuiltVersion>> {
+  if (!(await listUnrecoveredVersions(rootDir)).includes(version)) return null;
+
+  const io = options.io;
+  const entries: VersionShardEntry[] = [];
+  for (const pc of config.providers) {
+    try {
+      const provider = providerRegistry.create(pc, io);
+      await provider.authenticate();
+      provider.setVaultName(config.vault_name);
+      for (const ref of await provider.list('shard_')) {
+        const parsed = parseVersionFromFilename(ref.path);
+        if (parsed?.version === version) entries.push({ shardIndex: parsed.shardIndex, provider });
+      }
+    } catch (err: unknown) {
+      // A medium presenting an identity we pinned against is a security signal,
+      // not an absent medium: swallowing it here would report "no parts found"
+      // for a storage that answered with someone else's certificate or host key.
+      if (err instanceof TamperDetectedError) throw err;
+      // Anything else - unreachable, refused, empty - is simply a medium that
+      // cannot help. Every part of a version carries the same map, so a sibling
+      // can still supply it.
+    }
+  }
+  if (entries.length === 0) throw new BfsError(await _withRestorableHint(rootDir, fmt('pull_version_parts_missing', String(version))));
+
+  const passwordPool = options.password !== undefined ? [options.password] : [];
+  const passwordSupplied = passwordPool.length > 0;
+  const result = await rebuildVersionManifest(version, entries, { vaultName: config.vault_name, vaultId: config.vault_id, passwordPool, caller: 'pull', io });
+  switch (result.outcome) {
+    case 'recovered':
+      // Whatever opened the map is last in the pool: either the one password
+      // supplied, or the one the operator typed, which is appended on acceptance.
+      return { manifest: result.manifest, password: passwordPool[passwordPool.length - 1] ?? null };
+    case 'map_unopened':
+      throw new BfsError(await _withRestorableHint(rootDir, passwordSupplied ? fmt('pull_version_map_unopened', String(version)) : fmt('pull_version_password_required', String(version))));
+    case 'unusable':
+      throw new BfsError(await _withRestorableHint(rootDir, fmt('pull_version_parts_unreadable', String(version))));
+  }
+}
+
 /** Validates that a configured directory (or its parent) exists before use. */
 async function _validateConfigDir(dir: string, configFlag: string): Promise<void> {
   const target = path.dirname(dir) === dir ? dir : path.dirname(dir);
@@ -140,7 +235,7 @@ async function _validateConfigDir(dir: string, configFlag: string): Promise<void
   }
 }
 
-// ─── Shard failure diagnostics ───────────────────────────────────────────────
+// --- Shard failure diagnostics -----------------------------------------------
 
 type ShardFailureReason = 'provider_unreachable' | 'file_missing' | 'adapter_missing' | 'corrupt' | 'provider_not_configured';
 
@@ -149,7 +244,7 @@ type ShardFailureReason = 'provider_unreachable' | 'file_missing' | 'adapter_mis
  *
  * The distinction is what the operator acts on: unreadable content calls for a
  * repair, an unreachable medium for reconnecting it. Anything unrecognised is
- * reported as absent — the conservative reading, since a part that could not be
+ * reported as absent - the conservative reading, since a part that could not be
  * obtained is, as far as the restore is concerned, not there.
  *
  * @param err - Error thrown while fetching or parsing the shard
@@ -167,7 +262,7 @@ function _failureReason(err: unknown): ShardFailureReason {
  * anything else is read as absent. Calling damage "absent" would send the
  * operator hunting for a medium that never left, instead of at the repair.
  *
- * {@link _failureReason} does not stand in here — it maps every ProviderError to
+ * {@link _failureReason} does not stand in here - it maps every ProviderError to
  * an unreachable medium, which at this point would blame a medium that responded
  * moments earlier.
  *
@@ -182,18 +277,16 @@ function _downloadFailureReason(err: unknown): ShardFailureReason {
  * Builds the sentence naming which media failed and how, for a restore that
  * cannot go ahead.
  *
- * What the operator does next depends entirely on the cause — a medium that could
+ * What the operator does next depends entirely on the cause - a medium that could
  * not be reached calls for reconnecting it, damaged data for a look at which
- * versions survived — so each cause names its own media instead of the whole set
+ * versions survived - so each cause names its own media instead of the whole set
  * being blamed on one guess. Rebuilding is deliberately not offered here: this
  * runs only below the reconstruction threshold, where a repair cannot succeed
- * either (see `architecture/decisions.md` → "Nieudany pull: przyczyna per nośnik,
- * rada tylko wykonalna"). Only the medium's name is disclosed: its address and
- * credentials are the provider's business, and BFS-core does not read them (see
- * `architecture/decisions.md` → "Provider jest właścicielem sekretu…").
+ * either. Only the medium's name is disclosed: its address and credentials are
+ * the provider's business, and BFS-core does not read them.
  *
  * @param manifest - Version manifest, to map shard indexes to medium names
- * @param failures - Shard index → why that shard could not be used
+ * @param failures - Shard index -> why that shard could not be used
  * @returns a sentence per cause, or an empty string when nothing was recorded
  */
 function _describeShardFailures(manifest: VersionManifest, failures: Map<number, ShardFailureReason>): string {
@@ -218,7 +311,7 @@ function _describeShardFailures(manifest: VersionManifest, failures: Map<number,
  * records for them.
  *
  * @param manifest - Version manifest, to map shard indexes to medium names
- * @param failures - Shard index → why that shard could not be used
+ * @param failures - Shard index -> why that shard could not be used
  * @param reason - The cause to collect media for
  * @returns the medium names recorded for that cause
  */
@@ -231,13 +324,13 @@ function _mediaFailingWith(manifest: VersionManifest, failures: Map<number, Shar
 
 /** Inputs for {@link _notEnoughShards}. */
 interface NotEnoughShardsOptions {
-  /** Version manifest being restored — maps shard indexes to medium names. */
+  /** Version manifest being restored - maps shard indexes to medium names. */
   manifest: VersionManifest;
   /** Parts required to reconstruct (N). */
   needed: number;
   /** Parts actually usable. */
   have: number;
-  /** Shard index → why that shard could not be used. */
+  /** Shard index -> why that shard could not be used. */
   failures: Map<number, ShardFailureReason>;
 }
 
@@ -257,7 +350,7 @@ function _notEnoughShards(options: NotEnoughShardsOptions): BfsError {
 /**
  * Emits appropriate degradation warnings based on shard failure reasons.
  *
- * @param failures - Shard index → why that shard could not be used
+ * @param failures - Shard index -> why that shard could not be used
  * @param manifest - Version manifest, to name the media the configuration lost;
  *   that one warning is withheld when it is unavailable, since a name the
  *   operator cannot act on is worse than silence
@@ -277,8 +370,8 @@ function _emitDegradedWarnings(failures: Map<number, ShardFailureReason>, manife
   if (reasons.some((r) => r === 'corrupt')) {
     io.warn(t('vault_degraded_corrupt'));
   }
-  // A medium the backup records but the configuration has lost reads two ways —
-  // a name lost by accident, or one the operator deliberately removed — and this
+  // A medium the backup records but the configuration has lost reads two ways -
+  // a name lost by accident, or one the operator deliberately removed - and this
   // code cannot tell them apart. Naming the medium and offering both routes lets
   // the operator pick; assuming the first would tell someone who just ran
   // `provider remove` to undo it.
@@ -290,7 +383,7 @@ function _emitDegradedWarnings(failures: Map<number, ShardFailureReason>, manife
 
 /**
  * Drains one shard's payload to finalize its trailing SHA-256, then returns the
- * per-version blob_size and kdf_salt from its header — or null if the checksum
+ * per-version blob_size and kdf_salt from its header - or null if the checksum
  * fails. The salt is shared across a version's shards, so any checksum-clean
  * shard is an authoritative source; a bit-rotted kdf_salt also corrupts this
  * checksum, so a damaged shard is rejected here and a healthy sibling supplies
@@ -300,7 +393,7 @@ function _emitDegradedWarnings(failures: Map<number, ShardFailureReason>, manife
  * @param payloadStream - checksum-verified payload stream from parseShardHeaderFromStream
  * @param header        - parsed shard header carrying blob_size and kdf_salt
  * @returns `meta` with the version's blob_size and kdf_salt, or null `meta` when
- *   the read did not complete; `corrupt` tells the two apart — true only for a
+ *   the read did not complete; `corrupt` tells the two apart - true only for a
  *   failed checksum, false for a read that broke for any other reason and says
  *   nothing about the bytes
  */
@@ -321,7 +414,7 @@ async function _adoptSaltFromVerifiedShard(payloadStream: Readable, header: Shar
     }
     payloadStream.destroy();
     // Only a failed checksum condemns the part. A read that broke for any other
-    // reason — a file briefly locked by a scanner, an I/O hiccup — says nothing
+    // reason - a file briefly locked by a scanner, an I/O hiccup - says nothing
     // about the bytes, so it must not be reported as damage; the part keeps its
     // place and is read again, independently, by _validateShardIntegrity.
     return { meta: null, corrupt: err instanceof ShardCorruptedError };
@@ -331,7 +424,7 @@ async function _adoptSaltFromVerifiedShard(payloadStream: Readable, header: Shar
 /**
  * Phase 1 of V2 pull: downloads all available shards to temp files.
  * Parses each shard header to extract `blobSize` and `kdf_salt`.
- * Populates `tmpPaths` map with shard_index → tmpPath for successfully downloaded shards.
+ * Populates `tmpPaths` map with shard_index -> tmpPath for successfully downloaded shards.
  *
  * @returns blobSize, kdf_salt, and failures map with reasons for each failed shard
  */
@@ -357,7 +450,7 @@ async function _downloadShardsToTempFiles(
     }
     // Adapter for pc.type may be unregistered (an external adapter left
     // uninstalled after passing preflight with --allow-missing-adapters).
-    // create() throws for an unknown type — skip the shard so Reed-Solomon
+    // create() throws for an unknown type - skip the shard so Reed-Solomon
     // decodes from the remaining providers, mirroring bootstrap's connectOne.
     let probe: StorageProvider;
     try {
@@ -428,9 +521,9 @@ async function _downloadShardsToTempFiles(
   return { blobSize, kdf_salt, failures };
 }
 
-/** Inputs for {@link _decodeFromTempFiles} — phase 2 of the V2 pull. */
+/** Inputs for {@link _decodeFromTempFiles} - phase 2 of the V2 pull. */
 interface DecodeFromTempFilesOptions {
-  /** Map of shard_index → temp file path (only present shards). */
+  /** Map of shard_index -> temp file path (only present shards). */
   tmpPaths: Map<number, string>;
   /** Number of data shards. */
   N: number;
@@ -452,7 +545,7 @@ interface DecodeFromTempFilesOptions {
 
 /**
  * Phase 2 of V2 pull: opens fresh streams from temp files, RS-decodes, writes blob.
- * Each shard stream is opened independently — no cross-stream race conditions.
+ * Each shard stream is opened independently - no cross-stream race conditions.
  */
 async function _decodeFromTempFiles(options: DecodeFromTempFilesOptions): Promise<void> {
   const { tmpPaths, N, K, stripeSize, blobSize, targetVersion, encKey, outputPath, io } = options;
@@ -462,7 +555,7 @@ async function _decodeFromTempFiles(options: DecodeFromTempFilesOptions): Promis
     // attached the instant its stream is created (no gap before the eager
     // pipe inside decryptStream). On a wrong key every shard's decrypt flush
     // throws; only the shard the RS decoder is actively reading surfaces the
-    // error to the caller (async-iterator rejection → output.destroy →
+    // error to the caller (async-iterator rejection -> output.destroy ->
     // pipeline reject). These sinks keep the sibling streams from emitting
     // 'error' to no listener and aborting the process. Silent unless --debug,
     // where they aid diagnosis. (decryptStream also self-sinks its transform.)
@@ -494,24 +587,24 @@ async function _decodeFromTempFiles(options: DecodeFromTempFilesOptions): Promis
   // is no `await` between rsDecodeStriped() (which begins decoding on a future
   // microtask) and pipeline() attaching its error handler. Otherwise a decode
   // error (e.g. a wrong-key DecryptionError on the actively-read shard) could
-  // destroy blobStream during the mkdir await → 'error' emitted with no
-  // listener → unhandled exception crashing the process.
+  // destroy blobStream during the mkdir await -> 'error' emitted with no
+  // listener -> unhandled exception crashing the process.
   await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
   const blobStream = rsDecodeStriped(payloadStreams, { N, K, stripeSize, blobSize, debugLog });
-  // outputPath is pull.blob.pending — a full plaintext copy of the restored
+  // outputPath is pull.blob.pending - a full plaintext copy of the restored
   // data; create it owner-only and tighten an already-existing inode (no-op on
   // Windows NTFS).
   await pipeline(blobStream, createWriteStream(outputPath, { mode: 0o600 }));
   await fs.chmod(outputPath, 0o600).catch(() => {});
 }
 
-/** Inputs for {@link _validateShardIntegrity} — phase 1.5 of the V2 pull. */
+/** Inputs for {@link _validateShardIntegrity} - phase 1.5 of the V2 pull. */
 interface ValidateShardsOptions {
-  /** shard_index → temp path (present shards); corrupt entries are removed in place. */
+  /** shard_index -> temp path (present shards); corrupt entries are removed in place. */
   tmpPaths: Map<number, string>;
   /** AES-256-GCM key when the vault is encrypted; undefined otherwise. */
   encKey: Buffer | undefined;
-  /** Version being decoded — derives the per-shard nonce. */
+  /** Version being decoded - derives the per-shard nonce. */
   targetVersion: number;
   /** Shard failure map; corrupt shards are added with reason 'corrupt'. */
   failures: Map<number, ShardFailureReason>;
@@ -523,13 +616,13 @@ interface ValidateShardsOptions {
 
 /**
  * Phase 1.5 of V2 pull: reads each downloaded shard end-to-end through the SAME
- * integrity path the decoder uses — trailing-checksum verification plus, when
+ * integrity path the decoder uses - trailing-checksum verification plus, when
  * encrypted, per-shard GCM decryption. A shard that fails is dropped from
  * `tmpPaths` and recorded as 'corrupt', so Reed-Solomon reconstructs it from the
  * remaining healthy shards + parity, exactly as it does for a missing shard.
  * Without this, a present-but-corrupt shard would surface its error mid-decode
  * and abort the whole restore even when the redundancy to survive it is intact.
- * Streams are drained, never buffered — peak RAM stays O(chunk), not O(shard).
+ * Streams are drained, never buffered - peak RAM stays O(chunk), not O(shard).
  * Each rejected part names its medium, so a restore that survives on redundancy
  * still tells the operator where the damage is.
  *
@@ -545,7 +638,7 @@ async function _validateShardIntegrity(options: ValidateShardsOptions): Promise<
       const { payloadStream } = await parseShardHeaderFromStream(fileStream);
       payloadStream.on('error', () => {});
       // Same read-path as decode: checksum-verified payload, then per-shard GCM
-      // when encrypted. Drain into a null sink — the trailing SHA-256 (and GCM
+      // when encrypted. Drain into a null sink - the trailing SHA-256 (and GCM
       // auth tag) are finalized at end-of-stream, so a clean drain proves the
       // shard decodes; any mismatch rejects the pipeline.
       const validated = encKey ? decryptStream(payloadStream, encKey, deriveShardNonce(encKey, targetVersion, shardIdx)) : payloadStream;
@@ -560,7 +653,7 @@ async function _validateShardIntegrity(options: ValidateShardsOptions): Promise<
     } catch (err) {
       // Only a physically corrupt shard (bad trailing checksum / truncation) is
       // excluded and reconstructed from parity. A GCM DecryptionError with an
-      // intact checksum means the bytes are sound but authentication failed — a
+      // intact checksum means the bytes are sound but authentication failed - a
       // wrong password fails this way on every shard, so rethrow it to surface a
       // clear password error instead of a misleading "not enough shards".
       if (!(err instanceof ShardCorruptedError)) throw err;
@@ -568,7 +661,7 @@ async function _validateShardIntegrity(options: ValidateShardsOptions): Promise<
       failures.set(shardIdx, 'corrupt');
       // Which medium holds the damage is the one thing the operator can act on,
       // and a restore that survives on redundancy is exactly where it would
-      // otherwise go unsaid — the summary sentence only appears when the restore
+      // otherwise go unsaid - the summary sentence only appears when the restore
       // fails outright.
       const damaged = manifest.shards.find((s) => s.shard_index === shardIdx)?.provider_id;
       if (damaged !== undefined) io.warn(fmt('vault_shard_damaged_on_provider', damaged));
@@ -580,22 +673,23 @@ async function _validateShardIntegrity(options: ValidateShardsOptions): Promise<
 }
 
 /**
- * V2 pull path: two-phase approach — first downloads all shards to temp files,
- * then opens fresh file streams for RS decode. Eliminates race conditions between
- * background SHA-256 verification and rsDecodeStriped that caused `got=0` on last stripe.
+ * V2 pull path: two-phase approach - every shard is first downloaded to a temp
+ * file, then re-opened as a fresh stream for the RS decode, so verifying one
+ * shard's trailing SHA-256 can never race the decoder reading another.
  *
  * @param config     - Vault configuration with provider list
  * @param manifest   - Version manifest describing the shards to download
  * @param options    - Pull options including io, password, and tempDir
  * @param outputPath - Destination file for the decoded blob
- * @returns { isDegraded } — true if fewer than N+K shards were available
+ * @returns { isDegraded, failures } - degradation flag (fewer than N+K shards
+ *          usable) plus shard index -> why that shard could not be used
  * @throws BfsError if fewer than N shards available, password missing, or kdf_salt not found
  */
 async function _pullV2(config: VaultConfig, manifest: VersionManifest, options: PullOptions, outputPath: string): Promise<{ isDegraded: boolean; failures: Map<number, ShardFailureReason> }> {
   const { data_shards: N, parity_shards: K } = manifest.scheme;
   const targetVersion = manifest.version;
   const stripeSize = manifest.rs_stripe_size ?? V2_STRIPE_SIZE;
-  // tmpDir inside cache dir (or user-specified tempDir) — cleaned up in finally
+  // tmpDir inside cache dir (or user-specified tempDir) - cleaned up in finally
   const tmpBase = options.tempDir ?? config.temp_dir ?? path.dirname(outputPath);
   await _validateConfigDir(tmpBase, 'temp-dir');
   const tmpDir = path.join(tmpBase, `pull-v2-${targetVersion}-${Date.now()}`);
@@ -633,7 +727,7 @@ async function _pullV2(config: VaultConfig, manifest: VersionManifest, options: 
   }
 }
 
-// ─── Internal helpers ─────────────────────────────────────────────────────────
+// --- Internal helpers ---------------------------------------------------------
 
 /**
  * Extracts the RS payload bytes from a raw shard buffer without decrypting.
@@ -690,7 +784,7 @@ async function downloadShardSlots(
     try {
       const shardData = await fetchShard({ pc, ms, config, cacheDir, targetVersion, io });
       // fetchShard returns null for a part whose bytes no longer match the hash
-      // recorded for it — the part is there and readable, its contents are not
+      // recorded for it - the part is there and readable, its contents are not
       // what they should be. That is damage, and the failure report must say so
       // rather than leave this medium unaccounted for.
       if (!shardData) {
@@ -708,7 +802,7 @@ async function downloadShardSlots(
       if (!kdf_salt && meta.kdf_salt) kdf_salt = meta.kdf_salt;
       io.progress(fmt('vault_download_shard_progress', String(ms.shard_index + 1), String(N + K)), ((ms.shard_index + 1) / (N + K)) * 100);
     } catch (err) {
-      // The per-medium notice has to agree with the cause recorded for it —
+      // The per-medium notice has to agree with the cause recorded for it -
       // otherwise one run tells the operator "missing" here and "damaged" in the
       // closing sentence, about the same medium.
       const reason = _failureReason(err);
@@ -744,13 +838,13 @@ async function fetchShard(options: FetchShardOptions): Promise<Nullable<Buffer>>
   const filename = `shard_${ms.shard_index}.bfs.${targetVersion}`;
   const cacheFile = path.join(cacheDir, filename);
 
-  // Try cache first — avoid network round-trip if payload hash matches
+  // Try cache first - avoid network round-trip if payload hash matches
   try {
     const cached = await fs.readFile(cacheFile);
     if (hashBuffer(extractShardPayload(cached)) === ms.shard_hash) return cached;
     await fs.unlink(cacheFile).catch(() => {});
   } catch {
-    // cache miss — proceed to provider download
+    // cache miss - proceed to provider download
   }
 
   const provider = providerRegistry.create(pc, io);
@@ -827,17 +921,30 @@ async function decodeAndDecrypt(args: DecodeAndDecryptArgs): Promise<{ plainBlob
   return { plainBlob: await decryptBlob(rsOutput, password, kdf_salt), isDegraded };
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// --- Public API ---------------------------------------------------------------
 
 /**
- * Initialises a new vault in rootDir.
+ * Initialises a new vault in rootDir. Refuses a directory that already describes
+ * one, so an existing backup's configuration is never replaced.
  * Creates .bfs/, .bfs/manifests/, config.json, state.json.
  * Writes default .bfsignore if missing.
- * Authenticates each provider to surface configuration errors early.
+ * Probes each provider (probeConnection creates the base directory and
+ * round-trips a probe file) and refuses a location that already holds a
+ * different backup, so configuration errors surface before config.json is
+ * written and before the first push.
  *
+ * @throws VaultAlreadyInitializedError if rootDir already holds .bfs/config.json.
  * @throws BfsError if providers.length !== data_shards + parity_shards.
+ * @throws ProviderError if a provider's location cannot be provisioned or reached.
+ * @throws VaultCollisionError if a provider's location already holds a different backup.
  */
 export async function init(rootDir: string, options: InitOptions): Promise<void> {
+  // Before anything else, and before any medium is touched: a directory that
+  // already describes a backup is not a place to set one up. registerInit checks
+  // this too, early enough to spare the operator the questionnaire; this one
+  // covers every other caller of the vault API.
+  await assertNoExistingVault(rootDir);
+
   const { data_shards: N, parity_shards: K } = options.scheme;
   if (options.providers.length !== N + K) {
     throw new BfsError(fmt('scheme_provider_count_mismatch', String(N + K), String(options.providers.length)));
@@ -858,7 +965,7 @@ export async function init(rootDir: string, options: InitOptions): Promise<void>
 
   // Set up and verify every provider BEFORE writing config: probeConnection()
   // creates the target directory and round-trips a probe file, so a provider
-  // whose base path is missing/unwritable — or whose type is unknown — fails
+  // whose base path is missing/unwritable - or whose type is unknown - fails
   // here instead of leaving a corrupted config on disk, and instead of only
   // surfacing at the first push. Runs for --ci too, where the interactive
   // pre-probe (probeProviderWithRecovery in init.ts) never ran. setVaultName()
@@ -890,7 +997,7 @@ export async function init(rootDir: string, options: InitOptions): Promise<void>
   await writeState(rootDir, { ...DEFAULT_STATE });
 }
 
-// ─── pull() private helpers ───────────────────────────────────────────────────
+// --- pull() private helpers ---------------------------------------------------
 
 async function _runPullPreflight(config: VaultConfig, options: PullOptions): Promise<void> {
   const missing = detectMissingAdapters(config.providers);
@@ -957,6 +1064,12 @@ async function _downloadAndVerifyBlob({
   options,
 }: DownloadVerifyBlobOptions): Promise<{ plainBlob: Buffer; shardFailures: Map<number, ShardFailureReason> }> {
   if (!options.force && !options.yes && workingVersion !== 0) {
+    // --yes and --force are exactly the channel for this consent, so a run with
+    // nobody in it is told to use one instead of being handed a cancellation it
+    // never chose and a retry that would end the same way.
+    if (options.io.interactive === false) {
+      throw new BfsError(fmt('pull_overwrite_no_operator', String(workingVersion), String(targetVersion)));
+    }
     const cont = await options.io.confirm(fmt('vault_pull_overwrite_confirm', String(workingVersion), String(targetVersion)));
     if (!cont) throw new BfsError(t('pull_cancelled'));
   }
@@ -1071,13 +1184,25 @@ interface FinalizePullStateOptions {
 
 async function _finalizePullState({ rootDir, cacheDir, state, targetVersion, manifest: passedManifest, isV2, plainBlob, blobCachePath, shardFailures, io }: FinalizePullStateOptions): Promise<void> {
   const manifest = passedManifest ?? (await readManifest(rootDir, targetVersion));
+  // Both manifests that reach here with no file count are written now, and for the
+  // same reason: this is the first moment their numbers are known. One came from a
+  // recovery, which cannot read them out of a shard header; the other was rebuilt
+  // during this very pull and has never been on disk at all - until the data is
+  // out, that version stays a marker, so an attempt cut short leaves the next one
+  // a clean starting point instead of a record of a restore that never finished.
   if (manifest && (manifest.file_count === null || manifest.total_size === null)) {
     const fileEntries = isV2 ? await parseBlobFileTableFromFile(blobCachePath) : parseBlobFileTable(plainBlob);
     manifest.file_count = fileEntries.length;
     manifest.total_size = fileEntries.reduce((s, e) => s + Number(e.size), 0);
     await writeManifest(rootDir, manifest);
   }
-  await writeState(rootDir, { latest_version: Math.max(state.latest_version, targetVersion), working_version: targetVersion });
+  // The rest of the state rides along. `writeState` replaces the file, so naming
+  // only the two fields a pull owns would drop `locations_confirmed` - and an
+  // absent flag reads as confirmed, retiring the gate that makes the first write
+  // path show the operator where a recovered config points. Reading from those
+  // storages is not that approval: Reed-Solomon lets a pull finish while one of
+  // them was never reached at all.
+  await writeState(rootDir, { ...state, latest_version: Math.max(state.latest_version, targetVersion), working_version: targetVersion });
   if (shardFailures.size === 0) {
     try {
       const cacheEntries = await fs.readdir(cacheDir);
@@ -1086,7 +1211,7 @@ async function _finalizePullState({ rootDir, cacheDir, state, targetVersion, man
         await fs.unlink(path.join(cacheDir, entry)).catch(() => {});
       }
     } catch {
-      // cache dir may not exist — fine
+      // cache dir may not exist - fine
     }
   } else {
     _emitDegradedWarnings(shardFailures, manifest, io);
@@ -1120,20 +1245,33 @@ export async function pull(rootDir: string, options: PullOptions): Promise<PullR
   const targetVersion = options.version ?? state.latest_version;
   if (targetVersion === 0) throw new BfsError(t('no_versions_available'));
 
-  // Priority: CLI flag → config.json → default
+  // Priority: CLI flag -> config.json -> default
   const cacheDir = options.cacheDir ?? config.cache_dir ?? path.join(rootDir, '.bfs', 'cache');
   const blobCachePath = path.join(cacheDir, 'pull.blob.pending');
   await _validateConfigDir(cacheDir, 'cache-dir');
 
-  const manifest = await readManifest(rootDir, targetVersion);
+  // A version recovery met but could not open has no manifest - only a marker
+  // saying it is out there. Rebuild it from the parts before anything else: the
+  // password that opens its location map is the same one that decrypts its data,
+  // so the operator reaching for this version supplies it either way. This runs
+  // ahead of the cached-blob path on purpose - letting `--cache` past it would
+  // unpack the data and leave the version still marked, restored and unrecovered
+  // at once.
+  const stored = await readManifest(rootDir, targetVersion);
+  const lazy = stored === null ? await _rebuildMarkedVersion(rootDir, config, targetVersion, options) : null;
+  const manifest = stored ?? lazy?.manifest ?? null;
   const isV2 = manifest?.rs_striped === true;
 
   const { loadedFromCache, plainBlob: cachedBlob } = await _loadBlobFromCache(isV2, blobCachePath, options.io, options.fromCache);
   let shardFailures = new Map<number, ShardFailureReason>();
   let plainBlob = cachedBlob;
   if (!loadedFromCache) {
-    if (!manifest) throw new BfsError(fmt('version_not_found', String(targetVersion)));
-    const result = await _downloadAndVerifyBlob({ config, manifest, rootDir, cacheDir, blobCachePath, isV2, targetVersion, workingVersion: state.working_version, options });
+    if (!manifest) throw new BfsError(await _describeMissingVersion(rootDir, targetVersion));
+    // The password that opened the location map decrypts the data too, so it
+    // carries over - asking a second time would read as the first answer having
+    // been rejected.
+    const downloadOptions: PullOptions = lazy?.password != null ? { ...options, password: lazy.password } : options;
+    const result = await _downloadAndVerifyBlob({ config, manifest, rootDir, cacheDir, blobCachePath, isV2, targetVersion, workingVersion: state.working_version, options: downloadOptions });
     plainBlob = result.plainBlob;
     shardFailures = result.shardFailures;
   }
@@ -1149,8 +1287,8 @@ export async function pull(rootDir: string, options: PullOptions): Promise<PullR
  *
  * Housekeeping picks versions by number, so `--keep-last 1` over a backup whose
  * newest version rotted deletes the operator's only good copy and keeps the
- * unrecoverable one. The verdict comes from what the last verify recorded — the
- * only knowledge available without pulling every version over the network — so a
+ * unrecoverable one. The verdict comes from what the last verify recorded - the
+ * only knowledge available without pulling every version over the network - so a
  * backup that has never been verified deeply may still hold surprises; the
  * message says as much. Nothing is refused when no restorable version exists in
  * the first place: unrecoverable versions must stay deletable.
@@ -1200,7 +1338,7 @@ export async function prune(rootDir: string, options: PruneOptions): Promise<voi
     // trust policy (pinned fingerprint / accept_new_host_key for SSH) instead of
     // prompting. Without this signal an SSH host-key decision takes the
     // interactive path, is declined by the confirm() below, and the delete fails
-    // — silently orphaning the shard on the medium.
+    // - silently orphaning the shard on the medium.
     interactive: false,
     ask: async () => '',
     askSecret: async () => '',
@@ -1225,7 +1363,7 @@ export async function prune(rootDir: string, options: PruneOptions): Promise<voi
         provider.setVaultName(config.vault_name);
         await provider.delete({ provider_id: ms.provider_id, path: `shard_${ms.shard_index}.bfs.${version}` });
       } catch {
-        // Delete is best-effort — the shard may already be gone. But a genuine
+        // Delete is best-effort - the shard may already be gone. But a genuine
         // failure (permissions, unreachable medium) would otherwise orphan the
         // data on the medium silently; surface it so the operator can reclaim it.
         options.io?.warn(fmt('prune_orphan_warn', String(version), ms.provider_id));
@@ -1234,12 +1372,17 @@ export async function prune(rootDir: string, options: PruneOptions): Promise<voi
     await deleteManifest(rootDir, version).catch(() => {});
   }
 
-  // Update state if latest was pruned
+  // Update state if latest was pruned. Versions present on the storage but not
+  // recovered count too: they still occupy their numbers, and lowering the
+  // counter under one of them would hand the next push a number that is taken.
+  // The rest of the state rides along - dropping `locations_confirmed` here would
+  // quietly retire the confirmation gate a recovery put up.
   const remaining = await listManifests(rootDir);
-  const newLatest = remaining.length > 0 ? remaining[remaining.length - 1]?.version : 0;
+  const unrecovered = await listUnrecoveredVersions(rootDir);
+  const newLatest = Math.max(0, ...remaining.map((m) => m.version), ...unrecovered);
   if (newLatest !== state.latest_version) {
     const newWorking = state.working_version > newLatest ? 0 : state.working_version;
-    await writeState(rootDir, { latest_version: newLatest, working_version: newWorking });
+    await writeState(rootDir, { ...state, latest_version: newLatest, working_version: newWorking });
   }
 }
 
@@ -1261,7 +1404,7 @@ export async function removeProvider(rootDir: string, providerId: string, option
   const config = await readConfig(rootDir);
   if (!config) throw new BfsError(t('push_no_config'));
 
-  // No assertSchemeValid — rebuild flow needs providers.length > N+K transiently.
+  // No assertSchemeValid - rebuild flow needs providers.length > N+K transiently.
 
   if (!config.providers.find((p) => p.id === providerId)) {
     throw new BfsError(fmt('provider_not_found_in_config', providerId));

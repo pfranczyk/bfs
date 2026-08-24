@@ -1,5 +1,6 @@
 import type { Command } from 'commander';
-import { t } from '../../i18n/index.js';
+import { fmt, t } from '../../i18n/index.js';
+import { listUnrecoveredVersions } from '../../vault/manifest.js';
 import { listVersions } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { CommandAbort, error, formatBytes, formatHealth, table } from '../ui.js';
@@ -19,8 +20,12 @@ export function registerVersions(program: Command): void {
 
       try {
         const manifests = await listVersions(rootDir);
+        // Versions the storage holds but this directory could not open have no
+        // scheme, part count or size to put in a column - they get a line of
+        // their own below the table, so the operator learns they are there.
+        const unrecovered = await listUnrecoveredVersions(rootDir);
 
-        if (manifests.length === 0) {
+        if (manifests.length === 0 && unrecovered.length === 0) {
           console.log(t('versions_empty'));
           return;
         }
@@ -32,12 +37,18 @@ export function registerVersions(program: Command): void {
           m.shards.length.toString(),
           m.file_count !== null ? m.file_count.toString() : '?',
           m.total_size !== null ? formatBytes(m.total_size) : '?',
-          m.pushed_at ? new Date(m.pushed_at).toLocaleString() : '—',
+          m.pushed_at ? new Date(m.pushed_at).toLocaleString() : '-',
         ]);
 
         console.log();
-        table([t('versions_col_version'), t('versions_col_status'), t('versions_col_scheme'), t('versions_col_shards'), t('versions_col_files'), t('versions_col_size'), t('versions_col_pushed_at')], rows);
-        console.log();
+        if (rows.length > 0) {
+          table([t('versions_col_version'), t('versions_col_status'), t('versions_col_scheme'), t('versions_col_shards'), t('versions_col_files'), t('versions_col_size'), t('versions_col_pushed_at')], rows);
+          console.log();
+        }
+        if (unrecovered.length > 0) {
+          console.log(fmt('versions_unrecovered', unrecovered.map((v) => `v${String(v).padStart(3, '0')}`).join(', ')));
+          console.log();
+        }
       } catch (err) {
         error(err instanceof Error ? err.message : String(err));
         throw new CommandAbort();

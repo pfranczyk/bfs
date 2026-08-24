@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Hybrid vault (local, ftp, local, ftp) where disaster recovery bootstraps from
 # an FTP provider that is NOT shard_0. Confirms that an FTP shard's header
-# carries the full location map and can rebuild .bfs/ for a mixed vault — the
+# carries the full location map and can rebuild .bfs/ for a mixed vault - the
 # case grouped layouts (always bootstrapping from a local shard_0) never reach.
 
 SCENARIO_NAME="hybrid recovery via FTP bootstrap"

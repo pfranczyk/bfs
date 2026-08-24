@@ -5,19 +5,19 @@
 # The promise protected: extending an existing backup with another storage is
 # not a brittle all-or-nothing keystroke marathon. When the new provider's
 # connectivity probe fails, the operator is offered a recovery choice (retry /
-# re-enter / abort) and fixes that one provider in place — the entered config is
+# re-enter / abort) and fixes that one provider in place - the entered config is
 # preserved and the add completes, instead of crashing out with the work lost.
 #
 # This scenario stands up a healthy 2/1 FTP vault (3 providers) via interactive
 # init + push, then drives interactive `bfs provider add` through a PTY for a
 # 4th FTP provider, deterministically fumbling its PASSWORD. A wrong password
-# makes authenticate() fail with 530 on every compliant server — unlike a wrong
-# path, which a permissive server may silently create and never reject — so the
+# makes authenticate() fail with 530 on every compliant server - unlike a wrong
+# path, which a permissive server may silently create and never reject - so the
 # probe failure is deterministic. The scenario then RE-ENTERs the correct
 # password + path, asserts the add completes, and confirms a push/pull roundtrip
 # (now rebalanced to 2/2) restores byte-for-byte (SHA-256).
 #
-# Coupling: the recovery prompt must contain RECOVERY_ANCHOR below — the same
+# Coupling: the recovery prompt must contain RECOVERY_ANCHOR below - the same
 # substring scenarios 40 / 42 use, from the i18n key probe_failed_prompt
 # (src/i18n/en.ts + pl.ts). If that wording changes, update RECOVERY_ANCHOR in
 # all three scenarios to match the en.ts value.
@@ -25,16 +25,16 @@
 # Mechanism: interactive `bfs provider add` routes its connectivity probe through
 # the same recovery loop init uses. A wrong password fails the probe with 530
 # mid-flow, the "Reconnection options" prompt appears, and RE-ENTER with the
-# correct password lets the add finish — the entered config is fixed in place
+# correct password lets the add finish - the entered config is fixed in place
 # instead of the whole command aborting with the work lost.
 #
-# Run me (FTP required — local Docker FTP truncates parallel transfers, use the
+# Run me (FTP required - local Docker FTP truncates parallel transfers, use the
 # real test server):
 #   bash scripts/cli-e2e/run.sh --ftp "<your-ftp-url>" \
 #     --filter 43-provider-add-interactive-ftp-wrong-password
 
 SCENARIO_NAME="interactive provider add recovers from a bad FTP password mid-flow"
-SCENARIO_DESC="wrong FTP password during provider add → recovery prompt → re-enter → add completes, restore"
+SCENARIO_DESC="wrong FTP password during provider add -> recovery prompt -> re-enter -> add completes, restore"
 REQUIRES_LOCAL=0
 REQUIRES_FTP=1
 
@@ -109,11 +109,11 @@ scenario_run() {
   local wrong="definitely-wrong-${RUN_ID}"
 
   # Interactive `bfs provider add` for the 4th FTP provider. Prompt order:
-  #   "New provider name:" → "Provider type:" (ftp=2) → FTP host / Port /
+  #   "New provider name:" -> "Provider type:" (ftp=2) -> FTP host / Port /
   #   Username / Password / Base path / Use FTPS.
-  # The FIRST password is WRONG → authenticate() fails 530 → recovery prompt →
-  # RE-ENTER (choice 2: RETRY=1 / RE-ENTER=2 / ABORT=3) → the provider's
-  # configure prompts re-run with the CORRECT password → success.
+  # The FIRST password is WRONG -> authenticate() fails 530 -> recovery prompt ->
+  # RE-ENTER (choice 2: RETRY=1 / RE-ENTER=2 / ABORT=3) -> the provider's
+  # configure prompts re-run with the CORRECT password -> success.
   local add_answers
   add_answers='[
     {"anchor":"New provider name","value":"p3"},
@@ -134,12 +134,12 @@ scenario_run() {
   ]'
   run_bfs_pty "$vault" "$add_answers" --lang en provider add
   assert_ok
-  # The recovery prompt rendered and every scripted answer was fed — the bad
+  # The recovery prompt rendered and every scripted answer was fed - the bad
   # credential surfaced mid-flow as a recoverable prompt, not a crash.
   assert_out_contains "$RECOVERY_ANCHOR"
   assert_out_contains "PROMPTS_FED=15/15"
 
-  # The add persisted a 4th provider and bumped parity (2/1 → 2/2).
+  # The add persisted a 4th provider and bumped parity (2/1 -> 2/2).
   if ! grep -q '"id": "p3"' "$vault/.bfs/config.json"; then
     _fail "provider p3 not persisted in config.json
 --- config ---

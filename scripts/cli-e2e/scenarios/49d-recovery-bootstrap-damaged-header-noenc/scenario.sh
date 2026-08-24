@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 #
 # The same fault on an UNENCRYPTED backup: the bootstrap provider's location map
-# has rotted. No password exists here, so there is nothing to misattribute — the
+# has rotted. No password exists here, so there is nothing to misattribute - the
 # risk is the opposite one, that the operator is handed the parser's own words
 # ("Location map JSON is invalid or corrupted") and no next step.
 #
@@ -9,10 +9,10 @@
 # carries the same map, so bootstrapping from any of them rebuilds .bfs/ (the
 # damaged provider is then reported and the version comes back degraded).
 #
-# Keeping the two modes on one message is what .claude/rules/audit-findings.md
-# asks of a FIX, not only of a finding: the same physical fault must not produce
-# a helpful sentence on an encrypted backup and a dead end on an unencrypted one.
-# No checksum is read on this path — the JSON does not parse, so the damage is
+# Both modes have to carry the same message: the same physical fault must not
+# produce a helpful sentence on an encrypted backup and a dead end on an
+# unencrypted one.
+# No checksum is read on this path - the JSON does not parse, so the damage is
 # already established where the message is produced.
 
 SCENARIO_NAME="recovery refuses an unencrypted bootstrap provider whose map rotted, and names the way out"
@@ -39,7 +39,7 @@ scenario_run() {
   rm -rf "$vault/.bfs"
   assert_no_file "$vault/.bfs/config.json"
 
-  # Rot the plain location map of p0 — the shard recovery is about to bootstrap
+  # Rot the plain location map of p0 - the shard recovery is about to bootstrap
   # from. Unlike the encrypted case the map is JSON in the clear, so the damage
   # surfaces at parse time rather than as a failed decryption.
   local shard0v1

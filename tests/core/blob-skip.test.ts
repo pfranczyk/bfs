@@ -21,7 +21,7 @@ import { packBlob } from '../../src/core/blob-pack.js';
 import { parseBlobFileTable, unpackBlob } from '../../src/core/blob-unpack.js';
 import { createIgnoreFilter } from '../../src/core/ignore.js';
 
-describe('blob-pack / blob-unpack — skip behavior', () => {
+describe('blob-pack / blob-unpack - skip behavior', () => {
   let srcDir: string;
   let outDir: string;
 

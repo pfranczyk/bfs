@@ -39,7 +39,7 @@ scenario_run() {
   assert_ok
   assert_restored "$vault" "$base"
 
-  # Propagation proof: recover from sibling p1 — its re-encrypted header must
+  # Propagation proof: recover from sibling p1 - its re-encrypted header must
   # point p0 at the new path and decrypt with the same password.
   rm -rf "$vault/.bfs"
   run_bfs "$vault" recovery --provider local --name "$name" \

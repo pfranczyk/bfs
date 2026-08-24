@@ -1,14 +1,14 @@
 # shellcheck shell=bash
 # A restore that cannot go ahead must say WHY, naming the media it is talking
-# about — that is what decides the operator's next move.
+# about - that is what decides the operator's next move.
 #
 # pull knows exactly which parts failed and how: it builds that map to exclude
-# them from the decode, and the failure it raises carries the same knowledge —
+# them from the decode, and the failure it raises carries the same knowledge -
 # otherwise someone goes checking cables while the real problem is rot on a disk
 # that is plugged in and answering.
 #
 # Layout: 3 LOCAL providers, 2 data + 1 parity, unencrypted. Two parts rot (below
-# N — unrecoverable), the third stays sound and must NOT be implicated. A second
+# N - unrecoverable), the third stays sound and must NOT be implicated. A second
 # pass turns one of the two into a missing file, so the message has to keep the
 # two causes apart rather than lumping them together.
 
@@ -42,7 +42,7 @@ scenario_run() {
   run_bfs "$vault" --lang en pull --force --yes
   assert_fail
   assert_out_matches "Damaged backup data on: *p0, *p1"
-  # Guard the sentences the other causes actually print — the word "offline"
+  # Guard the sentences the other causes actually print - the word "offline"
   # appears in none of them, so grepping for it proves nothing.
   if printf '%s' "$BFS_OUT" | grep -qF "Storage not reachable:"; then
     _fail "failure blamed an unreachable medium although the media answered and the data is damaged:
@@ -61,7 +61,7 @@ $BFS_OUT"
   rm "$(shard_file 1 1)"
   run_bfs "$vault" --lang en pull --force --yes
   assert_fail
-  # Anchor on the attribution sentences: "missing on storage …" is also a
+  # Anchor on the attribution sentences: "missing on storage ..." is also a
   # per-shard warning emitted regardless, so only the colon form proves the
   # failure itself separated the two causes.
   assert_out_matches "Damaged backup data on: *p0"

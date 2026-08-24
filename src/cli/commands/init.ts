@@ -8,14 +8,16 @@ import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO, providerRegistry, validateProviderId, validateVaultName } from '../../providers/provider.js';
 import type { ProviderConfig, ProviderIO } from '../../types/index.js';
 import { PushMode } from '../../types/index.js';
+import { assertNoExistingVault } from '../../vault/config.js';
 import { init } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
+import { isCiRun } from '../interactive-mode.js';
 import { parseInitProviderSpec, validateProviderIdsUnique } from '../parse-provider-spec.js';
 import { isPromptCancellation, promptWithRawMode } from '../prompt.js';
 import { probeProviderWithRecovery } from '../provider-probe.js';
 import { CommandAbort, error, formatBytes, info, success, warn } from '../ui.js';
 
-// ─── Provider config prompts ───────────────────────────────────────────────────
+// --- Provider config prompts ---------------------------------------------------
 
 /**
  * Interactively prompts the user to configure a single provider.
@@ -94,7 +96,7 @@ async function scanDir(dir: string): Promise<{ count: number; size: number }> {
   return { count, size };
 }
 
-// ─── Command ───────────────────────────────────────────────────────────────────
+// --- Command -------------------------------------------------------------------
 
 interface InitCiOpts {
   ci?: boolean;
@@ -140,7 +142,20 @@ export function registerInit(program: Command): void {
     .option('--max-ram <mb>', t('init_opt_max_ram'))
     .action(async (argName: string | undefined, ciOpts: InitCiOpts, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
-      const isCi = ciOpts.ci === true;
+
+      // First thing, before the directory scan and before a single prompt: the
+      // interactive path probes every medium from promptProvider, and probing
+      // creates the target sub-directory. Refusing later would mean taking the
+      // operator through the whole questionnaire - passwords included - and
+      // leaving a directory for the new name on each medium, only to say no.
+      try {
+        await assertNoExistingVault(rootDir);
+      } catch (err) {
+        error(err instanceof Error ? err.message : String(err));
+        throw new CommandAbort();
+      }
+
+      const isCi = isCiRun(cmd, ciOpts.ci);
 
       // CI mode validates ALL flags up front so we abort before scanning the
       // directory; interactive mode only parses the optional --provider specs
@@ -154,7 +169,12 @@ export function registerInit(program: Command): void {
         ciParityShards = ci.parityShards;
         ciProviders = ci.providers;
       } else {
-        ciProviders = await _parseProviderSpecs(ciOpts.provider ?? [], createCliProviderIO(rootDir, !isCi));
+        // No second argument: leave the answer to the TTY check inside
+        // createCliProviderIO. This branch only runs when --ci is absent, so a
+        // literal `!isCi` would claim a terminal for every run - including one
+        // whose stdin is a pipe, where an adapter reading the field would ask a
+        // question nobody can answer instead of refusing outright.
+        ciProviders = await _parseProviderSpecs(ciOpts.provider ?? [], createCliProviderIO(rootDir));
       }
 
       const vaultName = await _resolveVaultName(argName);
@@ -176,7 +196,7 @@ export function registerInit(program: Command): void {
       console.log(chalk.dim(fmt('init_providers_needed', String(total), String(dataShardsN), String(parityK))));
 
       const providers = isCi ? ciProviders : await _promptProviders(total, rootDir, vaultName);
-      // Provider ids must be unique — a duplicate would silently orphan shards
+      // Provider ids must be unique - a duplicate would silently orphan shards
       // (lookup by id resolves to the first match). Covers CI and interactive.
       try {
         validateProviderIdsUnique(providers.map((p) => p.id));
@@ -188,8 +208,14 @@ export function registerInit(program: Command): void {
       const pushMode = await _resolvePushMode(ciOpts, isCi);
       const maxRamMb = await _resolveMaxRam(ciOpts, isCi);
 
-      // Execute
-      const io = createCliProviderIO(rootDir);
+      // Execute. `init` in src/vault/vault-manager.ts probes every storage under
+      // this IO, and that is where a server identity gets settled - so `--ci`
+      // has to state outright that nobody is at the keyboard, or FTPS and SSH
+      // reach the rung of their trust ladder that asks instead of the one that
+      // refuses. Anything other than `--ci` leaves the answer to the TTY check
+      // inside createCliProviderIO, the other half of the contract at
+      // `ProviderIO.interactive`.
+      const io = createCliProviderIO(rootDir, isCi ? false : undefined);
       try {
         await init(rootDir, {
           vault_name: vaultName,
@@ -210,7 +236,7 @@ export function registerInit(program: Command): void {
     });
 }
 
-// ─── Section resolvers (private) ─────────────────────────────────────────────────
+// --- Section resolvers (private) -------------------------------------------------
 
 /**
  * Parses --provider specs into provider configs, aborting the command with a
@@ -328,7 +354,7 @@ async function _resolveCompression(ciOpts: InitCiOpts, isCi: boolean, rootDir: s
 }
 
 /**
- * Resolves the N/K Reed-Solomon scheme — pre-validated CI values or interactive
+ * Resolves the N/K Reed-Solomon scheme - pre-validated CI values or interactive
  * prompts. CI values are guaranteed non-null by _resolveCiInputs.
  */
 async function _resolveScheme(isCi: boolean, ciDataShards: Nullable<number>, ciParityShards: Nullable<number>): Promise<{ dataShardsN: number; parityK: number }> {
@@ -373,7 +399,7 @@ async function _promptProviders(total: number, rootDir: string, vaultName: strin
   return providers;
 }
 
-/** Resolves the push mode — validated CI flag or interactive choice. */
+/** Resolves the push mode - validated CI flag or interactive choice. */
 async function _resolvePushMode(ciOpts: InitCiOpts, isCi: boolean): Promise<PushMode> {
   if (isCi) {
     const m = ciOpts.pushMode ?? PushMode.NewVersion;
@@ -400,7 +426,7 @@ async function _resolvePushMode(ciOpts: InitCiOpts, isCi: boolean): Promise<Push
 }
 
 /**
- * Resolves the RAM ceiling in MiB — the CI flag (or null) or an interactive
+ * Resolves the RAM ceiling in MiB - the CI flag (or null) or an interactive
  * prompt pre-filled with 25% of detected memory (capped at 4096).
  */
 async function _resolveMaxRam(ciOpts: InitCiOpts, isCi: boolean): Promise<Nullable<number>> {

@@ -17,11 +17,11 @@ import { verifyVersion } from '../../src/vault/verify.js';
 // 89-repair-disk-failure-ftp control green). `uploadRepairedShard` in
 // src/vault/heal.ts calls the target provider's authenticate() BEFORE upload.
 // SSH's authenticate() (src/providers/ssh.ts) lists the base path and hard-fails
-// when it is absent — the exact state of a rebuild target after a disk wipe / on
+// when it is absent - the exact state of a rebuild target after a disk wipe / on
 // a fresh server. upload() would create the directory itself (ensureDir), so the
 // pre-upload authenticate() is what breaks rebuild. Local and FTP are immune
 // because their authenticate() provisions (local) or lists leniently (FTP), so
-// this must be proven at the heal level, not in a provider unit — the defect is
+// this must be proven at the heal level, not in a provider unit - the defect is
 // in how the rebuild path drives the provider, not in any provider.
 
 const STRICT_TYPE = 'strict-readdir-ssh-test';
@@ -30,7 +30,7 @@ const STRICT_TYPE = 'strict-readdir-ssh-test';
  * Local-disk provider that models SSH's authenticate() (src/providers/ssh.ts):
  * it lists the base path and hard-fails (ENOENT) when the base directory is
  * absent, WITHOUT provisioning it. The inherited upload() still creates the
- * directory tree (mkdir), mirroring SSH's ensureDir — so the medium is
+ * directory tree (mkdir), mirroring SSH's ensureDir - so the medium is
  * provisionable by the upload itself, and the only thing standing in the way is
  * the strict pre-upload authenticate(). Contrast LocalFsProvider.authenticate,
  * which creates the missing directory (the built-in A/B control below).
@@ -142,10 +142,10 @@ describe('repair --rebuild onto a medium whose base dir is absent', () => {
 
   // A/B control: an identical rebuild onto a provisioning medium (built-in local,
   // whose authenticate() creates the missing base dir) succeeds on the same code
-  // path — proving the strict pre-upload authenticate() is the discriminator, not
+  // path - proving the strict pre-upload authenticate() is the discriminator, not
   // "rebuild to a missing dir" in general. Mirrors 89-repair-disk-failure-ftp
   // (green) beside 86 (red).
-  it('should rebuild in place onto a provisioning medium (local) with a wiped base dir — control', async () => {
+  it('should rebuild in place onto a provisioning medium (local) with a wiped base dir - control', async () => {
     const { root, providerDirs, io } = await setupVault('local');
     dirs = [root, ...providerDirs];
 

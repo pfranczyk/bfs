@@ -5,7 +5,7 @@
 # --no-enc keeps the fixture unencrypted like every other version here; unlike
 # the older lines, 0.7.0 enables encryption by default, so the opt-out is
 # explicit (otherwise push would block on an interactive password prompt).
-# 0.7.0 is the latest patch of the 0.7.x line — patches share the on-disk
+# 0.7.0 is the latest patch of the 0.7.x line - patches share the on-disk
 # format, so this fixture represents the whole line.
 set -e
 BASE="$1"

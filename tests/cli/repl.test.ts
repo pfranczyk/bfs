@@ -13,7 +13,7 @@ import { CommandAbort } from '../../src/cli/ui.js';
 vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn().mockResolvedValue(null) }));
 vi.mock('../../src/vault/state.js', () => ({ readState: vi.fn().mockResolvedValue({ latest_version: 0, working_version: 0 }) }));
 
-// ─── Fake readline factory ─────────────────────────────────────────────────
+// --- Fake readline factory -------------------------------------------------
 
 type QuestionCb = (input: string) => void;
 
@@ -69,7 +69,7 @@ describe('REPL', () => {
     vi.restoreAllMocks();
   });
 
-  // ─── Exit ──────────────────────────────────────────────────────────────
+  // --- Exit --------------------------------------------------------------
 
   it('should close readline when user types "exit"', async () => {
     const { rl } = withFakeRl(['exit']);
@@ -89,7 +89,7 @@ describe('REPL', () => {
     expect(logs.some((l) => l.includes('Goodbye'))).toBe(true);
   });
 
-  // ─── Empty lines ──────────────────────────────────────────────────────────
+  // --- Empty lines ----------------------------------------------------------
 
   it('should ignore empty lines and not call runCommand', async () => {
     const called: string[][] = [];
@@ -101,7 +101,7 @@ describe('REPL', () => {
     expect(rl.close).toHaveBeenCalled();
   });
 
-  // ─── Help ─────────────────────────────────────────────────────────────────
+  // --- Help -----------------------------------------------------------------
 
   it('should print help listing push, pull, provider commands', async () => {
     const { logs } = withFakeRl(['help', 'exit']);
@@ -112,7 +112,7 @@ describe('REPL', () => {
     expect(all).toContain('provider remove');
   });
 
-  // ─── CommandAbort — stays in the REPL ───────────────────────────────────────
+  // --- CommandAbort - stays in the REPL ---------------------------------------
 
   it('should stay in REPL after CommandAbort', async () => {
     let calls = 0;
@@ -134,7 +134,7 @@ describe('REPL', () => {
     expect(errors.some((l) => l.includes('Błąd:'))).toBe(false);
   });
 
-  // ─── Generic Error — stays in the REPL ──────────────────────────────────────
+  // --- Generic Error - stays in the REPL --------------------------------------
 
   it('should stay in REPL after generic Error', async () => {
     let calls = 0;
@@ -155,7 +155,7 @@ describe('REPL', () => {
     expect(errors.some((l) => l.includes('test-error-message'))).toBe(true);
   });
 
-  // ─── CommanderError (help) — stays in the REPL ───────────────────────────────
+  // --- CommanderError (help) - stays in the REPL -------------------------------
 
   it('should stay in REPL after CommanderError for help', async () => {
     const helpErr = Object.assign(new Error('(outputHelp)'), { code: 'commander.help' });
@@ -179,7 +179,7 @@ describe('REPL', () => {
     expect(all).not.toContain('outputHelp');
   });
 
-  // ─── Command order ─────────────────────────────────────────────────────
+  // --- Command order -----------------------------------------------------
 
   it('should dispatch commands in sequence', async () => {
     const received: string[][] = [];
@@ -212,11 +212,11 @@ describe('REPL', () => {
     expect(received).toEqual([['good', 'arg']]);
   });
 
-  // ─── stdin management for Inquirer ───────────────────────────────────────
+  // --- stdin management for Inquirer ---------------------------------------
 
   it('should pause readline before dispatching command so Inquirer gets exclusive stdin access', async () => {
     // Bug: when readline (REPL) is actively listening to stdin while Inquirer
-    // also tries to use stdin, they compete — Inquirer prompt never renders.
+    // also tries to use stdin, they compete - Inquirer prompt never renders.
     // Fix: rl.pause() must be called before runCommand so readline releases stdin.
     const { rl } = withFakeRl(['cmd', 'exit']);
     let rlWasPausedWhenCommandRan = false;
@@ -246,7 +246,7 @@ describe('REPL', () => {
       order.push('command');
     });
 
-    // pause → command → resume (in this order)
+    // pause -> command -> resume (in this order)
     const cmdIdx = order.indexOf('command');
     const lastPauseBeforeCmd = order.lastIndexOf('pause', cmdIdx - 1);
     const firstResumeAfterCmd = order.indexOf('resume', cmdIdx + 1);

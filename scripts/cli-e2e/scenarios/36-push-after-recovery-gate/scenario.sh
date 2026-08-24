@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# S3 — "unconfirmed config after recovery" gate, exercised through the FIRST
+# S3 - "unconfirmed config after recovery" gate, exercised through the FIRST
 # push after a disaster recovery.
 #
 # With encryption off, a shard's location_map is raw JSON guarded only by an
@@ -9,12 +9,12 @@
 # host can land in the operator's local config.
 #
 # Escalation under test: the NEXT `bfs push` packs the local directory and ships
-# a shard to whatever the recovered config says — i.e. to the attacker's host —
+# a shard to whatever the recovered config says - i.e. to the attacker's host -
 # leaking the operator's own data (and any reused transport secret) to the trap.
 #
 # Setup models the net effect: a clean recovery rebuilds config from the remote
 # headers (recovery's own connect-to-attacker behaviour is covered by 34a/34b),
-# then one recovered provider entry is rewritten to point at the FTP trap — the
+# then one recovered provider entry is rewritten to point at the FTP trap - the
 # untrusted coordinate an attacker would have planted in the location map. The
 # assertion is on the FIRST push after recovery.
 #
@@ -25,7 +25,7 @@
 # contacting the attacker host. Therefore the trap log stays EMPTY after push.
 #
 # RED contract (today): push has no gate, so it connects to the rewritten FTP
-# provider and tries to log in — the trap captures the USER/PASS handshake. A
+# provider and tries to log in - the trap captures the USER/PASS handshake. A
 # non-empty trap log after the first push is the RED FAIL.
 
 SCENARIO_NAME="push after recovery gate (untrusted recovered host must not leak first push)"
@@ -52,7 +52,7 @@ scenario_run() {
   run_bfs "$vault" push --new
   assert_ok
 
-  # ── Start the attacker trap server on an ephemeral 127.0.0.1 port ──────────
+  # -- Start the attacker trap server on an ephemeral 127.0.0.1 port ----------
   : >"$trap_log"
   node "$(winpath "$trap_driver")" "$(winpath "$trap_log")" 0 >"$trap_out" 2>&1 &
   local trap_pid=$!
@@ -101,19 +101,19 @@ $(cat "$trap_out" 2>/dev/null)"
   grep -qF '"127.0.0.1"' "$cfg" || _fail "trap host was not written into recovered config:
 $(cat "$cfg")"
 
-  # ── FIRST push after recovery (non-interactive: no TTY for confirmation) ───
+  # -- FIRST push after recovery (non-interactive: no TTY for confirmation) ---
   run_bfs "$vault" push --new
 
   # Give the trap a beat to flush any captured handshake to disk.
   sleep 0.3
 
-  # ── RED assertion: the first push must NOT reach the attacker host ─────────
+  # -- RED assertion: the first push must NOT reach the attacker host ---------
   # GREEN gate (unconfirmed config) forces a confirmation the non-interactive
-  # push cannot satisfy → push aborts before any FTP login → trap log empty.
-  # RED today: push connects to the redirected provider and logs in → USER/PASS
+  # push cannot satisfy -> push aborts before any FTP login -> trap log empty.
+  # RED today: push connects to the redirected provider and logs in -> USER/PASS
   # land in the trap log.
   if [ -s "$trap_log" ]; then
-    _fail "first push after recovery reached the attacker host without confirmation — trap captured:
+    _fail "first push after recovery reached the attacker host without confirmation - trap captured:
 $(cat "$trap_log")"
   fi
 

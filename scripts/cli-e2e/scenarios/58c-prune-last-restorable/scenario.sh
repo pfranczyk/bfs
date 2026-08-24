@@ -5,7 +5,7 @@
 # looks at health, so a routine `--keep-last 1` on a backup whose newest version
 # rotted deletes the operator's only good copy and keeps the unrecoverable one.
 # This is the point where a stale or erased health verdict stops being a
-# reporting problem and starts destroying data — prune is the first command that
+# reporting problem and starts destroying data - prune is the first command that
 # acts on that value.
 #
 # The guard must stay narrow: deleting a damaged version while a restorable one
@@ -13,7 +13,7 @@
 # out (--force), so a backup can still be wiped deliberately.
 #
 # Layout: 3 LOCAL providers, 2 data + 1 parity, unencrypted, two versions. v2
-# rots on two of three media (below N — unrecoverable), v1 stays intact.
+# rots on two of three media (below N - unrecoverable), v1 stays intact.
 
 SCENARIO_NAME="prune refuses to delete the last restorable version"
 SCENARIO_DESC="damaged versions stay prunable and --force still wipes, but the last good copy is protected"
@@ -62,7 +62,7 @@ scenario_run() {
   assert_ok
   assert_restored "$vault" "$base"
 
-  # Deleting the damaged version is ordinary housekeeping — it must go through.
+  # Deleting the damaged version is ordinary housekeeping - it must go through.
   run_bfs "$vault" --lang en prune 2 --yes
   assert_ok
   assert_no_file "$(shard_file 0 2)"

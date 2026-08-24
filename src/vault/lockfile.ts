@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { LockConcurrentActiveError, LockPartialStatePushError } from '../core/errors.js';
+import { LockConcurrentActiveError, LockPartialStatePushError, LockReservationUnreadableError } from '../core/errors.js';
 import { isEnoent, writeJsonAtomic } from '../core/fs-utils.js';
 
 /** Schema version of push.lock / repair.lock JSON. */
@@ -99,8 +99,8 @@ export function repairLockPath(rootDir: string): string {
 
 /**
  * Reads a lockfile and parses its JSON. Returns null when the file does not
- * exist (also tolerates ENOENT mid-flight when a concurrent `bfs clear`
- * removes the file between stat and read).
+ * exist - including one a concurrent `bfs clear` removes between the caller's
+ * decision to read it and the read itself.
  */
 export async function readLock<T>(filePath: string): Promise<Nullable<T>> {
   try {
@@ -131,7 +131,7 @@ export async function removeLock(filePath: string): Promise<void> {
  * POSIX and Windows both implement `process.kill(pid, 0)` as a liveness
  * check (ESRCH = dead, EPERM = alive but not ours).
  *
- * Pessimistic default: any unexpected throw → false (treat as dead). This
+ * Pessimistic default: any unexpected throw -> false (treat as dead). This
  * surfaces stale partial state to the user instead of blocking a fresh
  * push when our liveness probe itself fails.
  */
@@ -163,7 +163,7 @@ const LOCK_ACQUIRE_ATTEMPTS = 10;
 
 /**
  * True when a lock's owning process is alive AND the lock is younger than
- * LOCK_STALE_MS — i.e. someone is actively holding it right now.
+ * LOCK_STALE_MS - i.e. someone is actively holding it right now.
  */
 export function isLockLive(lock: { pid: number; started_at: string }): boolean {
   return isPidAlive(lock.pid) && !isLockStale(lock.started_at);
@@ -172,9 +172,10 @@ export function isLockLive(lock: { pid: number; started_at: string }): boolean {
 /**
  * Reads and parses a lockfile, returning null for BOTH a missing file and a
  * torn/unparseable one. Used after an exclusive create loses the race: the peer
- * that just won may be mid-write, leaving a briefly empty file. Treating that as
- * "no readable owner" lets the caller classify it as leftover state instead of
- * crashing on JSON.parse.
+ * that just won may be mid-write, leaving a briefly empty file. Collapsing both
+ * to "no readable owner" keeps the caller off JSON.parse; separating a peer
+ * mid-write from an abandoned reservation is then the caller's job, since the
+ * two look identical on disk.
  */
 async function readLockSafe<T>(filePath: string): Promise<Nullable<T>> {
   try {
@@ -184,6 +185,40 @@ async function readLockSafe<T>(filePath: string): Promise<Nullable<T>> {
     if (isEnoent(err) || err instanceof SyntaxError) return null;
     throw err;
   }
+}
+
+/**
+ * How long a lockfile may carry no readable owner before it counts as
+ * abandoned. The exclusive create returns before the JSON payload is written, so
+ * a peer that just won the race is visible on disk as a zero-byte file for the
+ * width of one write; a file still unreadable this much later was left by a
+ * creator that died inside that window. Content cannot separate the two states -
+ * both are empty - so age is the only available criterion. The value sits far
+ * above the write it covers (microseconds) and far below any operator's patience.
+ */
+const LOCK_RESERVATION_GRACE_MS = 60 * 1000;
+
+/** Pause between retries while a peer's reservation payload has not landed. */
+const LOCK_RESERVATION_RETRY_MS = 25;
+
+/**
+ * True when a lockfile carrying no readable owner has sat that way longer than a
+ * peer could need to write its payload. A file that vanished meanwhile counts as
+ * abandoned too - the caller's next exclusive create simply claims it.
+ */
+async function isReservationAbandoned(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(filePath);
+    return Date.now() - stat.mtimeMs > LOCK_RESERVATION_GRACE_MS;
+  } catch (err: unknown) {
+    if (isEnoent(err)) return true;
+    throw err;
+  }
+}
+
+/** Resolves after the given number of milliseconds. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -213,7 +248,7 @@ async function createLockExclusive<T>(filePath: string, lock: T): Promise<boolea
 /**
  * Atomically acquires .bfs/push.lock for a fresh push, writing `lock` as the
  * forensic payload. The exclusive create serialises concurrent pushes: exactly
- * one wins the race, the losers are rejected — closing the TOCTOU window that a
+ * one wins the race, the losers are rejected - closing the TOCTOU window that a
  * read-then-write pre-flight left open.
  *
  * @throws LockConcurrentActiveError when a live push or repair already holds the vault
@@ -262,11 +297,14 @@ export async function acquireCachePushLock(rootDir: string, lock: PushLock): Pro
 /**
  * Atomically acquires .bfs/repair.lock, writing `lock` as the forensic payload.
  * The exclusive create serialises concurrent repairs; a dead/stale repair.lock
- * is taken over (idempotent retry). A live push holds the vault, so repair
- * refuses (first-to-start wins); a dead/stale push.lock is leftover partial
- * state that repair is meant to recover, so it does not block.
+ * is taken over (idempotent retry), and so is one left unreadable long enough to
+ * count as abandoned. A repair.lock a peer has only just reserved is waited on,
+ * never dropped. A live push holds the vault, so repair refuses (first-to-start
+ * wins); a dead/stale push.lock is leftover partial state that repair is meant to
+ * recover, so it does not block.
  *
  * @throws LockConcurrentActiveError when a live push, or a live repair, already holds the vault
+ * @throws LockReservationUnreadableError when repair.lock stays reserved without a readable owner for the whole retry budget
  */
 export async function acquireRepairLock(rootDir: string, lock: RepairLock): Promise<void> {
   const pushLock = await readLock<PushLock>(pushLockPath(rootDir));
@@ -277,14 +315,28 @@ export async function acquireRepairLock(rootDir: string, lock: RepairLock): Prom
   for (let attempt = 0; attempt < LOCK_ACQUIRE_ATTEMPTS; attempt++) {
     if (await createLockExclusive(lockPath, lock)) return;
     const existing = await readLockSafe<RepairLock>(lockPath);
-    if (existing !== null && isLockLive(existing)) {
+    if (existing === null) {
+      // No readable owner: either a peer that won the exclusive create and has
+      // not written its payload yet, or a reservation nobody will ever finish.
+      // Deleting the first case hands the vault to two repairs at once - the
+      // loser drops the winner's file and recreates it, while the winner writes
+      // into an unlinked handle - so only an abandoned one may be dropped.
+      if (await isReservationAbandoned(lockPath)) {
+        await removeLock(lockPath);
+        continue;
+      }
+      await delay(LOCK_RESERVATION_RETRY_MS);
+      continue;
+    }
+    if (isLockLive(existing)) {
       throw new LockConcurrentActiveError('repair', existing.pid, existing.started_at);
     }
-    // Dead / stale / torn leftover — drop it and retry the exclusive create. A
-    // peer that recreates it first re-triggers the liveness check next round.
+    // Dead / stale leftover - drop it and retry the exclusive create. A peer
+    // that recreates it first re-triggers the liveness check next round.
     await removeLock(lockPath);
   }
-  // Persistent contention: a peer keeps re-acquiring — treat as active.
+  // Persistent contention: a peer keeps re-acquiring - treat as active.
   const existing = await readLockSafe<RepairLock>(lockPath);
-  throw new LockConcurrentActiveError('repair', existing?.pid ?? 0, existing?.started_at ?? new Date().toISOString());
+  if (existing === null) throw new LockReservationUnreadableError('repair');
+  throw new LockConcurrentActiveError('repair', existing.pid, existing.started_at);
 }

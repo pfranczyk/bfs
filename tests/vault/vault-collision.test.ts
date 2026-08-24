@@ -157,7 +157,7 @@ function providers(foreign: boolean): ProviderConfig[] {
   return [0, 1, 2].map((i) => ({ id: `p${i}`, type: FAKE_TYPE, adapterPackage: null, config: { path: `/m/p${i}`, foreign } }));
 }
 
-describe('init — foreign vault collision guard', () => {
+describe('init - foreign vault collision guard', () => {
   let root: string;
 
   beforeEach(async () => {
@@ -177,7 +177,7 @@ describe('init — foreign vault collision guard', () => {
       init(root, { vault_name: 'docs', scheme: { data_shards: 2, parity_shards: 1 }, encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' }, providers: providers(true), push_mode: PushMode.NewVersion, io }),
     ).rejects.toThrow(VaultCollisionError);
 
-    // Config must NOT be written — the collision is caught before persist.
+    // Config must NOT be written - the collision is caught before persist.
     expect(await readConfig(root)).toBeNull();
   });
 
@@ -284,7 +284,7 @@ describe('assertNoForeignVault', () => {
     await expect(assertNoForeignVault(makeProbeProvider('p0', { refs: [] }), 'docs', OUR_VAULT_ID, io)).resolves.toBeUndefined();
   });
 
-  it('should pass when the location holds our OWN backup (matching vault_id) — normal re-push', async () => {
+  it('should pass when the location holds our OWN backup (matching vault_id) - normal re-push', async () => {
     const { io } = createMockProviderIO({}, root, false);
     await expect(assertNoForeignVault(makeProbeProvider('p0', { refs: ['shard_0.bfs.1'], headerVaultId: OUR_VAULT_ID }), 'docs', OUR_VAULT_ID, io)).resolves.toBeUndefined();
   });
@@ -314,13 +314,13 @@ describe('assertNoForeignVault', () => {
     await expect(assertNoForeignVault(makeProbeProvider('p0', { refs: ['shard_readme.txt', 'shard_notes'] }), 'docs', OUR_VAULT_ID, io)).resolves.toBeUndefined();
   });
 
-  // Regression: a location whose listing FAILS (e.g. the vault path is a file →
+  // Regression: a location whose listing FAILS (e.g. the vault path is a file ->
   // readdir ENOTDIR on Linux) must not abort the caller. list() throwing is not
   // proof of a foreign vault, so the guard proceeds and the operation's own error
-  // handling (a failing upload → degraded push) stays intact. Caught by smoke
+  // handling (a failing upload -> degraded push) stays intact. Caught by smoke
   // Suite N (partial push) on Linux; latent on Windows where readdir does not
   // raise ENOTDIR the same way.
-  it('should proceed (not throw) on push/add when list() fails — a non-listable location is not proof of a foreign vault', async () => {
+  it('should proceed (not throw) on push/add when list() fails - a non-listable location is not proof of a foreign vault', async () => {
     const { io } = createMockProviderIO({}, root, false);
     await expect(assertNoForeignVault(makeProbeProvider('p0', { listThrows: true }), 'docs', OUR_VAULT_ID, io)).resolves.toBeUndefined();
   });

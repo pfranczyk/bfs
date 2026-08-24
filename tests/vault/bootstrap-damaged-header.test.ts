@@ -9,39 +9,39 @@ import { createMockProviderIO, providerRegistry } from '../../src/providers/prov
 import type { ProviderConfig, RemoteRef, ShardHeader, ShardLocation, StorageProvider } from '../../src/types/index.js';
 import { bootstrapFromProvider } from '../../src/vault/bootstrap.js';
 
-// ─── Contract under test ────────────────────────────────────────────────────
+// --- Contract under test ----------------------------------------------------
 //
 // A bootstrap provider whose copy of the backup does not check out must be
-// reported as such, with the way out named — never as a password problem, and
+// reported as such, with the way out named - never as a password problem, and
 // never as a raw internal parser literal.
 //
 // bootstrapFromProvider (src/vault/bootstrap.ts) reads only the header window
 // (readShardHeaderBytes in src/core/shard-io.ts) and destroys the
 // checksum-verified payload stream, so the shard's trailing SHA-256 is not
-// available there. Every way a header can rot — the Argon2id salt, the sealed
-// map, the sidecar that supersedes both — surfaces as "the key does not open the
+// available there. Every way a header can rot - the Argon2id salt, the sealed
+// map, the sidecar that supersedes both - surfaces as "the key does not open the
 // map", which is also exactly what a wrong password looks like. Only the
 // checksum separates them, and it is taken ONLY once an attempt to open the map
 // has already failed:
 //
-//   map opened            → nothing else happens, no extra read
-//   map failed, sum ok    → the password really is wrong → keep prompting
-//   map failed, sum wrong → this copy does not check out → refuse, name the way out
+//   map opened            -> nothing else happens, no extra read
+//   map failed, sum ok    -> the password really is wrong -> keep prompting
+//   map failed, sum wrong -> this copy does not check out -> refuse, name the way out
 //
 // Taking it earlier would put a full shard read in front of every interactive
 // recovery of an encrypted backup, against the closed decision "verification on
-// demand — opt-in, default shallow", and would condemn a shard whose payload
+// demand - opt-in, default shallow", and would condemn a shard whose payload
 // rotted while its header is intact: recovery reads headers only, and RS repairs
 // that payload at pull time.
 //
 // The checksum covers the header together with the payload, so it cannot say
-// WHICH of them rotted — and when a rotted payload coincides with a wrong
+// WHICH of them rotted - and when a rotted payload coincides with a wrong
 // password it cannot even say the medium is at fault alone. The refusal
 // therefore claims neither: it reports that this copy does not check out and
 // sends the operator to a sibling, which is the right move under every reading
 // (a wrong password announces itself as such there).
 //
-// The copy is never at risk — every sibling carries the version's real salt and
+// The copy is never at risk - every sibling carries the version's real salt and
 // the same map (proved end-to-end by 49c-recovery-bootstrap-damaged-header and
 // 49d-recovery-bootstrap-damaged-header-noenc).
 //
@@ -90,7 +90,7 @@ function unregisterMockProvider(): void {
   entries.delete(MOCK_TYPE);
 }
 
-/** A 2/1 version's three entries — the shape a real backup of this scheme has. */
+/** A 2/1 version's three entries - the shape a real backup of this scheme has. */
 function locationMap(): ShardLocation[] {
   return [BOOTSTRAP_ID, 'p1', 'p2'].map((id, index) => ({
     shard_index: index,
@@ -104,7 +104,7 @@ function locationMap(): ShardLocation[] {
   }));
 }
 
-/** Flips one bit at the given offset — bit-rot, with no checksum recomputed. */
+/** Flips one bit at the given offset - bit-rot, with no checksum recomputed. */
 function flipByteAt(shard: Buffer, at: number): void {
   const byte = shard[at];
   assert(byte !== undefined, 'the byte to flip must lie inside the shard buffer');
@@ -138,8 +138,8 @@ function shardHeader(salt: Buffer): ShardHeader {
  * trailing checksum stops matching in every damaged variant.
  *
  * `salt` hits the Argon2id salt, so the key derived from the correct password no
- * longer opens the map. `map` hits the last byte of the sealed map — the tail of
- * its GCM tag — so no key opens it at all. Both leave the header parsable and
+ * longer opens the map. `map` hits the last byte of the sealed map - the tail of
+ * its GCM tag - so no key opens it at all. Both leave the header parsable and
  * are indistinguishable from a wrong password without the checksum. `payload`
  * leaves the header, and therefore the map, perfectly readable.
  */
@@ -232,7 +232,7 @@ describe('bootstrapFromProvider when the bootstrap copy does not check out', () 
     const err = await bootstrapError(bootstrapProvider(shard), { io, passwords: [PASSWORD] });
 
     // Asking for a password that cannot work is the defect itself, so its
-    // absence is asserted on top of the message — a revert brings it back.
+    // absence is asserted on top of the message - a revert brings it back.
     expect(err.message).toContain('on this provider failed its integrity check');
     expect(askSecret).not.toHaveBeenCalled();
   });
@@ -257,7 +257,7 @@ describe('bootstrapFromProvider when the bootstrap copy does not check out', () 
     const err = await bootstrapError(bootstrapProvider(shard), { io, passwords: [PASSWORD] });
 
     // A check that compares this shard's salt against a sibling's would answer
-    // the salt case and leave this one looping forever — the map's own GCM tag
+    // the salt case and leave this one looping forever - the map's own GCM tag
     // is what broke, and every key fails against it.
     expect(err.message).toContain('on this provider failed its integrity check');
   });
@@ -303,7 +303,7 @@ describe('bootstrapFromProvider when the bootstrap copy does not check out', () 
     const err = await bootstrapError(bootstrapProvider(shard), { io, passwords: [PASSWORD] });
 
     // The message reaches the operator through error(err.message) in
-    // src/cli/commands/recovery.ts, so i18n.md applies. Pinning both halves stops
+    // src/cli/commands/recovery.ts, so both halves are translated. Pinning them stops
     // a fix that translates the first sentence and leaves the advice in English.
     expect(err.message).toContain('nie przechodzą kontroli integralności');
     expect(err.message).toContain('Odzyskaj z innego nośnika');
@@ -320,7 +320,7 @@ describe('bootstrapFromProvider when the bootstrap copy does not check out', () 
 
     // The shard is intact, so the map failing to open means exactly what it says.
     // Blaming the medium here would send an operator with a typo to a different
-    // provider — where the same typo waits for them.
+    // provider - where the same typo waits for them.
     expect(err.message).not.toContain('integrity check');
     expect(askSecret).toHaveBeenCalled();
   });
@@ -353,11 +353,11 @@ describe('bootstrapFromProvider when the bootstrap copy does not check out', () 
     const err = await bootstrapError(provider, { io, passwords: [PASSWORD] });
 
     // A read that broke for any other reason says nothing about the bytes. Only
-    // a checksum that verifiably fails condemns a medium — a catch-all here
+    // a checksum that verifiably fails condemns a medium - a catch-all here
     // would report a healthy provider as damaged after a dropped connection.
     expect(err.message).not.toContain('failed its integrity check');
     // Nor may it end the recovery. The read is diagnostic; when it cannot answer,
-    // the run carries on exactly as it did before there was a check at all —
+    // the run carries on exactly as it did before there was a check at all -
     // otherwise a dropped transfer turns a healthy backup into a failed restore.
     expect(askSecret).toHaveBeenCalled();
   });
@@ -386,7 +386,7 @@ describe('bootstrapFromProvider when the bootstrap copy does not check out', () 
 
     const result = await bootstrapFromProvider(bootstrapProvider(shard), { vaultName: VAULT_NAME, io, passwords: [PASSWORD] });
 
-    // Recovery reads headers, never payloads — RS repairs this payload at pull
+    // Recovery reads headers, never payloads - RS repairs this payload at pull
     // time. Its trailing checksum is broken all the same, so a check taken before
     // the map is tried would throw away a perfectly usable bootstrap source.
     expect(result.vault_id).toBe(VAULT_ID);
@@ -413,7 +413,7 @@ describe('bootstrapFromProvider when the bootstrap copy does not check out', () 
 
     const result = await bootstrapFromProvider(provider, { vaultName: VAULT_NAME, io, passwords: [PASSWORD] });
 
-    // The closed decision "verification on demand — opt-in, default shallow"
+    // The closed decision "verification on demand - opt-in, default shallow"
     // keeps full payload transfers off the healthy path; on FTP/SSH this is real
     // bandwidth on every recovery. Widening the header budget is the same
     // transfer by another route, so the budget is pinned too.

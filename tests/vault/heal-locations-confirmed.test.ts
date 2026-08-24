@@ -12,9 +12,9 @@ import { readConfig, writeConfig } from '../../src/vault/config.js';
 import { readState, writeState } from '../../src/vault/state.js';
 import { init, push, removeProvider } from '../../src/vault/vault-manager.js';
 
-// ─── Contract under test (RED) ──────────────────────────────────────────────
+// --- Contract under test (RED) ----------------------------------------------
 //
-// S3 (heal half) — "unconfirmed config after recovery" gate, write paths other
+// S3 (heal half) - "unconfirmed config after recovery" gate, write paths other
 // than push.
 //
 // recover() reconstructs .bfs/config.json from a `--no-enc` shard's UNKEYED
@@ -35,8 +35,8 @@ import { init, push, removeProvider } from '../../src/vault/vault-manager.js';
 //      (locations_confirmed===true) so later operations run unprompted.
 //   3. An absent flag (legacy state) = confirmed: no gate (covered by heal.test).
 //
-// Today (RED): removeProvider has no gate. A denied confirmation is ignored —
-// relocate rewrites config and rebuild removes the provider — and the flag is
+// Today (RED): removeProvider has no gate. A denied confirmation is ignored -
+// relocate rewrites config and rebuild removes the provider - and the flag is
 // never cleared. confirm() is never called, so the assertions below fail.
 
 const VAULT_NAME = 'heal-test';
@@ -70,7 +70,7 @@ function confirmingIO(verdict: boolean): { io: ProviderIO; confirms: string[] } 
 /**
  * Stands up a `--no-enc` 2/1 vault on three local providers, pushes v1, then
  * registers a fourth (unused) provider as a heal target and forces
- * state.locations_confirmed=false — the post-recovery condition the gate keys on.
+ * state.locations_confirmed=false - the post-recovery condition the gate keys on.
  * Returns the four provider dirs (index 3 = rebuild target).
  */
 async function setupUnconfirmed(): Promise<{ root: string; dirs: string[] }> {
@@ -110,7 +110,7 @@ describe('removeProvider gates heal write paths on an unconfirmed recovered conf
   it('relocate should require location confirmation and abort without writing when declined', async () => {
     const { root, dirs } = await setupUnconfirmed();
     const newDir = await tmp();
-    // Place p0's shard at the new address so relocate WOULD succeed if ungated —
+    // Place p0's shard at the new address so relocate WOULD succeed if ungated -
     // that is what makes the decline meaningful (without the gate, config is
     // rewritten despite the denial).
     await fs.cp(path.join(dirs[0] ?? '', VAULT_NAME), path.join(newDir, VAULT_NAME), { recursive: true });

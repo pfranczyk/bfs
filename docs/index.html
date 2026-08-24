@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BFS — Distributed Backup CLI</title>
+  <title>BFS - Distributed Backup CLI</title>
   <meta name="description" content="Split your backups across multiple drives, FTP and SSH/SFTP servers with Reed-Solomon erasure coding. Lose drives, not data. AES-256-GCM encryption, ZIP compression, versioned snapshots. Free, open-source CLI." />
-  <meta property="og:title" content="BFS — Your drives will fail. Your data won't." />
+  <meta property="og:title" content="BFS - Your drives will fail. Your data won't." />
   <meta property="og:description" content="Distributed backup with erasure coding. Split across drives, FTP and SSH/SFTP servers, lose some, recover everything. No cloud lock-in. Free CLI tool." />
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -17,7 +17,7 @@
 </head>
 <body class="bg-slate-950 text-gray-100 font-sans antialiased">
 
-  <!-- ─── LANG TOGGLE ───────────────────────────────────────────────────── -->
+  <!-- --- LANG TOGGLE ----------------------------------------------------- -->
   <div class="fixed top-4 right-4 z-50">
     <button
       type="button"
@@ -28,11 +28,11 @@
     </button>
   </div>
 
-  <!-- ─── HERO ─────────────────────────────────────────────────────────── -->
+  <!-- --- HERO ----------------------------------------------------------- -->
   <section class="min-h-screen flex flex-col items-center justify-center px-6 text-center">
     <div class="max-w-3xl">
       <div class="inline-block mb-6 px-3 py-1 rounded-full border border-slate-700 text-xs text-slate-400 tracking-widest uppercase">
-        v0.13.0 &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; Node.js &gt;= 24
+        v0.14.0 &nbsp;-&nbsp; AGPL-3.0 &nbsp;-&nbsp; Node.js &gt;= 24
       </div>
 
       <h1 class="text-7xl font-black tracking-tight mb-4 bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
@@ -55,7 +55,7 @@
           <button
             type="button"
             id="copy-btn"
-            onclick="navigator.clipboard.writeText('npm install -g bfs-vault'); this.textContent='✓'; setTimeout(()=>this.setAttribute('data-i18n','copy_btn'),1500); setTimeout(()=>applyLang(currentLang),1500)"
+            onclick="navigator.clipboard.writeText('npm install -g bfs-vault'); this.textContent='OK'; setTimeout(()=>this.setAttribute('data-i18n','copy_btn'),1500); setTimeout(()=>applyLang(currentLang),1500)"
             class="text-xs text-slate-400 hover:text-white transition-colors border border-slate-600 rounded px-2 py-1"
             data-i18n="copy_btn"
           >copy</button>
@@ -74,7 +74,7 @@
     </div>
   </section>
 
-  <!-- ─── FEATURES ─────────────────────────────────────────────────────── -->
+  <!-- --- FEATURES ------------------------------------------------------- -->
   <section class="py-24 px-6">
     <div class="max-w-4xl mx-auto">
       <h2 class="text-3xl font-bold text-center mb-14 text-white" data-i18n="why_title">Why BFS?</h2>
@@ -85,7 +85,7 @@
           <h3 class="text-lg font-semibold mb-2" data-i18n="feat2_title">Survive Drive Failures</h3>
           <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat2_desc">
             Your backup is split into <span class="text-white font-mono">N+K</span> pieces using Reed-Solomon
-            erasure coding — the same math that keeps CDs readable despite scratches.
+            erasure coding - the same math that keeps CDs readable despite scratches.
             Lose up to K drives and still recover everything from any N.
           </p>
         </div>
@@ -94,7 +94,7 @@
           <div class="text-3xl mb-3">🔐</div>
           <h3 class="text-lg font-semibold mb-2" data-i18n="feat1_title">Your Eyes Only</h3>
           <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat1_desc">
-            AES-256-GCM encryption with Argon2id key derivation, on by default —
+            AES-256-GCM encryption with Argon2id key derivation, on by default -
             opt out with <span class="text-white font-mono">--no-enc</span>.
             Each drive holds one piece: encrypted, incomplete, and useless on its own.
           </p>
@@ -106,7 +106,7 @@
           <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat0_desc">
             ZIP/Deflate compression is on by default.
             BFS detects already-compressed files (photos, videos, archives)
-            and skips them — no wasted CPU, smaller pieces.
+            and skips them - no wasted CPU, smaller pieces.
           </p>
         </div>
 
@@ -115,7 +115,7 @@
           <h3 class="text-lg font-semibold mb-2" data-i18n="feat3_title">Use Whatever Storage You Have</h3>
           <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat3_desc">
             USB drives, external HDDs, NAS, FTP/FTPS and SSH/SFTP servers,
-            network folders — anything that can hold a file. Mix and match across providers.
+            network folders - anything that can hold a file. Mix and match across providers.
             No cloud subscription required. No vendor lock-in.
           </p>
         </div>
@@ -135,7 +135,7 @@
           <h3 class="text-lg font-semibold mb-2" data-i18n="feat6_title">Failures Don't Stop a Backup</h3>
           <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat6_desc">
             One drive offline mid-backup? BFS doesn't give up.
-            It keeps uploading to the rest and remembers exactly which ones failed —
+            It keeps uploading to the rest and remembers exactly which ones failed -
             so later you fix and retry only those, not the whole thing.
           </p>
         </div>
@@ -144,11 +144,12 @@
         <div class="sm:col-span-2 bg-gradient-to-r from-slate-900 to-slate-800 border border-indigo-500/40 rounded-2xl p-6 flex gap-5 items-start">
           <div class="text-4xl mt-0.5 shrink-0">🕸️</div>
           <div>
-            <h3 class="text-lg font-semibold mb-2" data-i18n="feat5_title">Lost Everything? One Piece Is Enough</h3>
+            <h3 class="text-lg font-semibold mb-2" data-i18n="feat5_title">Lost Everything? One Piece Finds the Rest</h3>
             <p class="text-slate-400 text-sm leading-relaxed" data-i18n="feat5_desc">
               Every piece of your backup carries a map to all the others.
-              Find one surviving drive, run <span class="text-white font-mono">bfs recovery</span> —
-              your config, your files, everything comes back.
+              Find one surviving drive, run <span class="text-white font-mono">bfs recovery</span> -
+              your setup is back and BFS knows where the other pieces live. Restoring the files
+              themselves then needs N of them reachable.
             </p>
           </div>
         </div>
@@ -157,7 +158,7 @@
     </div>
   </section>
 
-  <!-- ─── QUICK START ───────────────────────────────────────────────────── -->
+  <!-- --- QUICK START ----------------------------------------------------- -->
   <section class="py-24 px-6 bg-slate-900/50">
     <div class="max-w-3xl mx-auto">
       <h2 class="text-3xl font-bold text-center mb-14 text-white" data-i18n="qs_title">Quick Start</h2>
@@ -186,7 +187,7 @@
             <span class="text-slate-300 font-medium" data-i18n="step2_label">Backup &amp; restore</span>
           </div>
           <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step2_comment"># Each push creates a new versioned snapshot</span>
-<span class="code-cmd">bfs</span> push  <span class="code-comment" data-i18n="step2_c1"># backup → new version</span>
+<span class="code-cmd">bfs</span> push  <span class="code-comment" data-i18n="step2_c1"># backup -> new version</span>
 <span class="code-cmd">bfs</span> pull  <span class="code-comment" data-i18n="step2_c2"># restore latest version</span></code></pre>
         </div>
 
@@ -194,10 +195,10 @@
         <div>
           <div class="flex items-center gap-3 mb-3">
             <span class="w-7 h-7 rounded-full bg-slate-700 text-sm font-bold flex items-center justify-center text-white">3</span>
-            <span class="text-slate-300 font-medium" data-i18n="step3_label">Machine failure or disk swap? Recover from any one provider</span>
+            <span class="text-slate-300 font-medium" data-i18n="step3_label">Machine failure or disk swap? Rebuild the setup from any one provider</span>
           </div>
-          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step3_comment"># ANY ONE provider is enough — BFS reads the recovery map and finds the rest.
-# --name = backup name (same as `bfs init mybackup`); --bootstrap = same adapter flags.</span>
+          <pre class="bg-slate-900 border border-slate-700 rounded-xl p-5 text-sm overflow-x-auto"><code><span class="code-comment" data-i18n="step3_comment"># ANY ONE provider rebuilds the configuration - BFS reads the map from its piece.
+# Restoring the files then needs N providers reachable (3 of 5 in this scheme).</span>
 <span class="code-cmd">bfs</span> recovery <span class="code-flag">--provider</span> ssh <span class="code-flag">--name</span> <span class="code-string">mybackup</span> \
   <span class="code-flag">--bootstrap</span> <span class="code-string">"--config-file ./vps.json"</span>
 <span class="code-cmd">bfs</span> pull  <span class="code-comment" data-i18n="step3_c1"># restore files as usual</span></code></pre>
@@ -207,7 +208,7 @@
     </div>
   </section>
 
-  <!-- ─── COMMANDS ─────────────────────────────────────────────────────── -->
+  <!-- --- COMMANDS ------------------------------------------------------- -->
   <section class="py-24 px-6">
     <div class="max-w-3xl mx-auto">
       <h2 class="text-3xl font-bold text-center mb-14 text-white" data-i18n="cmd_title">Commands</h2>
@@ -226,7 +227,7 @@
             </tr>
             <tr class="hover:bg-slate-900/50 transition-colors">
               <td class="px-6 py-4 font-mono text-green-400">bfs push</td>
-              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_push">Backup current directory → new version</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_push">Backup current directory -> new version</td>
             </tr>
             <tr class="hover:bg-slate-900/50 transition-colors">
               <td class="px-6 py-4 font-mono text-green-400">bfs pull</td>
@@ -246,7 +247,7 @@
             </tr>
             <tr class="hover:bg-slate-900/50 transition-colors">
               <td class="px-6 py-4 font-mono text-green-400">bfs repair</td>
-              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_repair">Fix storage locations without re-uploading — repoint a moved device, rebuild a lost piece, or restore missing/damaged header files</td>
+              <td class="px-6 py-4 text-slate-300" data-i18n="cmd_repair">Fix storage locations without re-uploading - repoint a moved device, rebuild a lost piece, or restore missing/damaged header files</td>
             </tr>
             <tr class="hover:bg-slate-900/50 transition-colors">
               <td class="px-6 py-4 font-mono text-green-400">bfs prune</td>
@@ -262,24 +263,24 @@
     </div>
   </section>
 
-  <!-- ─── FOOTER ────────────────────────────────────────────────────────── -->
+  <!-- --- FOOTER ---------------------------------------------------------- -->
   <footer class="border-t border-slate-800 py-10 px-6 text-center text-slate-500 text-sm">
     <p class="mb-2">
       <span class="text-white font-semibold">BFS</span>
-      &nbsp;v0.13.0
-      &nbsp;·&nbsp;
+      &nbsp;v0.14.0
+      &nbsp;-&nbsp;
       <a href="https://github.com/pfranczyk/BFS/blob/main/LICENSE" class="hover:text-white transition-colors">AGPL-3.0</a>
-      &nbsp;·&nbsp;
+      &nbsp;-&nbsp;
       Node.js &gt;= 24
     </p>
     <p>
       <a href="https://github.com/pfranczyk/BFS" class="hover:text-white transition-colors">github.com/pfranczyk/BFS</a>
-      &nbsp;·&nbsp;
+      &nbsp;-&nbsp;
       <span class="font-mono">npm install -g bfs-vault</span>
     </p>
   </footer>
 
-  <!-- ─── I18N ──────────────────────────────────────────────────────────── -->
+  <!-- --- I18N ------------------------------------------------------------ -->
   <script>
     const translations = {
                                               en: {
@@ -288,13 +289,13 @@
                                                 copy_btn:      'copy',
                                                 why_title:     'Why BFS?',
                                                 feat2_title:   'Survive Drive Failures',
-                                                feat2_desc:    'Your backup is split into <span class="text-white font-mono">N+K</span> pieces using Reed-Solomon erasure coding — the same math that keeps CDs readable despite scratches. Lose up to K drives and still recover everything from any N.',
+                                                feat2_desc:    'Your backup is split into <span class="text-white font-mono">N+K</span> pieces using Reed-Solomon erasure coding - the same math that keeps CDs readable despite scratches. Lose up to K drives and still recover everything from any N.',
                                                 feat1_title:   'Your Eyes Only',
-                                                feat1_desc:    'AES-256-GCM encryption with Argon2id key derivation, on by default — opt out with <span class="text-white font-mono">--no-enc</span>. Each drive holds one piece: encrypted, incomplete, and useless on its own.',
+                                                feat1_desc:    'AES-256-GCM encryption with Argon2id key derivation, on by default - opt out with <span class="text-white font-mono">--no-enc</span>. Each drive holds one piece: encrypted, incomplete, and useless on its own.',
                                                 feat0_title:   'Smaller Backups, Automatically',
-                                                feat0_desc:    'ZIP/Deflate compression is on by default. BFS detects already-compressed files (photos, videos, archives) and skips them — no wasted CPU, smaller pieces.',
+                                                feat0_desc:    'ZIP/Deflate compression is on by default. BFS detects already-compressed files (photos, videos, archives) and skips them - no wasted CPU, smaller pieces.',
                                                 feat3_title:   'Use Whatever Storage You Have',
-                                                feat3_desc:    'USB drives, external HDDs, NAS, FTP/FTPS and SSH/SFTP servers, network folders — anything that can hold a file. Mix and match across providers. No cloud subscription required. No vendor lock-in.',
+                                                feat3_desc:    'USB drives, external HDDs, NAS, FTP/FTPS and SSH/SFTP servers, network folders - anything that can hold a file. Mix and match across providers. No cloud subscription required. No vendor lock-in.',
                                                 feat4_title:   'Every Push Is a Snapshot',
                                                 feat4_desc:    'Each backup creates a new numbered version. Keep the last 7, or 30, or all of them. Verify health, prune old ones, restore from any point.',
                                                 qs_title:      'Quick Start',
@@ -302,41 +303,41 @@
                                                 step1_comment: '# 3 data + 2 parity = 5 providers (local, FTP, SSH)',
                                                 step2_label:   'Backup &amp; restore',
                                                 step2_comment: '# Each push creates a new versioned snapshot',
-                                                step2_c1:      '# backup → new version',
+                                                step2_c1:      '# backup -> new version',
                                                 step2_c2:      '# restore latest version',
-                                                step3_label:   'Machine failure or disk swap? Recover from any one provider',
-                                                step3_comment: '# ANY ONE provider is enough — BFS reads the recovery map and finds the rest.\n# --name = backup name (same as `bfs init mybackup`); --bootstrap = same adapter flags.',
+                                                step3_label:   'Machine failure or disk swap? Rebuild the setup from any one provider',
+                                                step3_comment: '# ANY ONE provider rebuilds the configuration - BFS reads the map from its piece.\n# Restoring the files then needs N providers reachable (3 of 5 in this scheme).',
                                                 step3_c1:      '# restore files as usual',
                                                 cmd_title:     'Commands',
                                                 cmd_th_cmd:    'Command',
                                                 cmd_th_desc:   'Description',
                                                 cmd_init:      'Initialize a backup in the current directory',
-                                                cmd_push:      'Backup current directory → new version',
+                                                cmd_push:      'Backup current directory -> new version',
                                                 cmd_pull:      'Restore files from backup',
                                                 cmd_status:    'Show backup health and version info',
                                                 cmd_verify:    "Check piece availability and health across providers; flag missing/damaged header files. Exits 0 healthy, 4 degraded, 5 damaged; --deep verifies every piece's full data and catches damage the header check cannot see",
                                                 cmd_recovery:  'Rebuild backup config from provider pieces',
-                                                cmd_repair:    'Fix storage locations without re-uploading — repoint a moved device, rebuild a lost piece, or restore missing/damaged header files',
+                                                cmd_repair:    'Fix storage locations without re-uploading - repoint a moved device, rebuild a lost piece, or restore missing/damaged header files',
                                                 cmd_prune:     'Delete old backup versions',
                                                 cmd_versions:  'List all versions with health status',
-                                                feat5_title:   'Lost Everything? One Piece Is Enough',
-                                                feat5_desc:    'Every piece of your backup carries a map to all the others. Find one surviving drive, run <span class="text-white font-mono">bfs recovery</span> — your config, your files, everything comes back.',
+                                                feat5_title:   'Lost Everything? One Piece Finds the Rest',
+                                                feat5_desc:    'Every piece of your backup carries a map to all the others. Find one surviving drive, run <span class="text-white font-mono">bfs recovery</span> - your setup is back and BFS knows where the other pieces live. Restoring the files themselves then needs N of them reachable.',
                                                 feat6_title:   'Failures Don\'t Stop a Backup',
-                                                feat6_desc:    'One drive offline mid-backup? BFS doesn\'t give up. It keeps uploading to the rest and remembers exactly which ones failed — so later you fix and retry only those, not the whole thing.',
+                                                feat6_desc:    'One drive offline mid-backup? BFS doesn\'t give up. It keeps uploading to the rest and remembers exactly which ones failed - so later you fix and retry only those, not the whole thing.',
                                               },
                                               pl: {
                                                 hero_subtitle: 'Twoje dyski padną. Twoje dane przetrwają.',
-                                                hero_desc:     'Rozdziel backup na wiele dysków — żaden z nich nie ma kompletnych danych. Stracisz dysk? Podłącz nowy, odtwórz, działaj dalej. To matematyka, nie szczęście.',
+                                                hero_desc:     'Rozdziel backup na wiele dysków - żaden z nich nie ma kompletnych danych. Stracisz dysk? Podłącz nowy, odtwórz, działaj dalej. To matematyka, nie szczęście.',
                                                 copy_btn:      'kopiuj',
                                                 why_title:     'Dlaczego BFS?',
                                                 feat2_title:   'Odporność na awarie dysków',
-                                                feat2_desc:    'Backup jest dzielony na <span class="text-white font-mono">N+K</span> fragmentów za pomocą kodowania Reed-Solomona — tej samej matematyki, dzięki której porysowane CD wciąż działają. Stracisz do K dysków i nadal odtworzysz wszystko z dowolnych N.',
+                                                feat2_desc:    'Backup jest dzielony na <span class="text-white font-mono">N+K</span> fragmentów za pomocą kodowania Reed-Solomona - tej samej matematyki, dzięki której porysowane CD wciąż działają. Stracisz do K dysków i nadal odtworzysz wszystko z dowolnych N.',
                                                 feat1_title:   'Tylko dla Twoich oczu',
-                                                feat1_desc:    'Szyfrowanie AES-256-GCM z Argon2id, domyślnie włączone — wyłączysz je flagą <span class="text-white font-mono">--no-enc</span>. Każdy dysk przechowuje jeden fragment: zaszyfrowany, niekompletny i bezużyteczny sam w sobie.',
+                                                feat1_desc:    'Szyfrowanie AES-256-GCM z Argon2id, domyślnie włączone - wyłączysz je flagą <span class="text-white font-mono">--no-enc</span>. Każdy dysk przechowuje jeden fragment: zaszyfrowany, niekompletny i bezużyteczny sam w sobie.',
                                                 feat0_title:   'Mniejsze backupy, automatycznie',
-                                                feat0_desc:    'Kompresja ZIP (deflate) domyślnie włączona. BFS wykrywa już skompresowane pliki (zdjęcia, filmy, archiwa) i je pomija — bez marnowania CPU, mniejsze fragmenty.',
+                                                feat0_desc:    'Kompresja ZIP (deflate) domyślnie włączona. BFS wykrywa już skompresowane pliki (zdjęcia, filmy, archiwa) i je pomija - bez marnowania CPU, mniejsze fragmenty.',
                                                 feat3_title:   'Użyj czegokolwiek, co masz',
-                                                feat3_desc:    'Pendrive, dysk zewnętrzny, NAS, serwer FTP/FTPS i SSH/SFTP, folder sieciowy — wszystko, co trzyma pliki. Mieszaj nośniki dowolnie. Bez subskrypcji chmury. Bez uzależnienia od dostawcy.',
+                                                feat3_desc:    'Pendrive, dysk zewnętrzny, NAS, serwer FTP/FTPS i SSH/SFTP, folder sieciowy - wszystko, co trzyma pliki. Mieszaj nośniki dowolnie. Bez subskrypcji chmury. Bez uzależnienia od dostawcy.',
                                                 feat4_title:   'Każdy push to snapshot',
                                                 feat4_desc:    'Każdy backup tworzy nową numerowaną wersję. Zachowaj ostatnie 7, 30 lub wszystkie. Sprawdzaj stan, usuwaj stare, odtwarzaj z dowolnego momentu.',
                                                 qs_title:      'Szybki start',
@@ -344,27 +345,27 @@
                                                 step1_comment: '# 3 fragmenty danych + 2 parzystości = 5 nośników (lokalne, FTP, SSH)',
                                                 step2_label:   'Backup i odtworzenie',
                                                 step2_comment: '# Każdy push tworzy nowy snapshot z numerem wersji',
-                                                step2_c1:      '# backup → nowa wersja',
+                                                step2_c1:      '# backup -> nowa wersja',
                                                 step2_c2:      '# odtworzenie najnowszej wersji',
-                                                step3_label:   'Awaria maszyny lub wymiana dysku? Odtworzysz z jednego nośnika',
-                                                step3_comment: '# Wystarczy JEDEN dowolny nośnik — BFS przeczyta mapę z jego fragmentu i znajdzie resztę.\n# --name = nazwa backupu (jak `bfs init mybackup`); --bootstrap = te same flagi adaptera.',
+                                                step3_label:   'Awaria maszyny lub wymiana dysku? Odtwórz konfigurację z jednego nośnika',
+                                                step3_comment: '# JEDEN dowolny nośnik odtwarza konfigurację - BFS czyta mapę z jego fragmentu.\n# Odtworzenie samych plików wymaga już N osiągalnych nośników (tu 3 z 5).',
                                                 step3_c1:      '# odtworzenie plików jak zwykle',
                                                 cmd_title:     'Komendy',
                                                 cmd_th_cmd:    'Komenda',
                                                 cmd_th_desc:   'Opis',
                                                 cmd_init:      'Inicjalizacja kopii zapasowej w bieżącym katalogu',
-                                                cmd_push:      'Backup bieżącego katalogu → nowa wersja',
+                                                cmd_push:      'Backup bieżącego katalogu -> nowa wersja',
                                                 cmd_pull:      'Odtworzenie plików z backupu',
                                                 cmd_status:    'Pokaż stan kopii zapasowej i informacje o wersjach',
                                                 cmd_verify:    'Sprawdź dostępność i stan fragmentów na nośnikach; sygnalizuj brakujące/uszkodzone pliki nagłówków. Kody wyjścia: 0 zdrowa, 4 zdegradowana, 5 uszkodzona; --deep sprawdza pełne dane każdego fragmentu i wykrywa uszkodzenia niewidoczne w nagłówku',
                                                 cmd_recovery:  'Odbuduj konfigurację kopii zapasowej z fragmentów',
-                                                cmd_repair:    'Napraw lokalizacje nośników bez ponownego wysyłania — wskaż przeniesiony nośnik, odbuduj utracony fragment lub odtwórz brakujące/uszkodzone pliki nagłówków',
+                                                cmd_repair:    'Napraw lokalizacje nośników bez ponownego wysyłania - wskaż przeniesiony nośnik, odbuduj utracony fragment lub odtwórz brakujące/uszkodzone pliki nagłówków',
                                                 cmd_prune:     'Usuń stare wersje backupu',
                                                 cmd_versions:  'Wylistuj wszystkie wersje ze stanem zdrowia',
-                                                feat5_title:   'Straciłeś wszystko? Wystarczy jeden fragment',
-                                                feat5_desc:    'Każdy fragment backupu zawiera mapę do wszystkich pozostałych. Znajdź jeden ocalały dysk, uruchom <span class="text-white font-mono">bfs recovery</span> — konfiguracja, pliki, wszystko wraca.',
+                                                feat5_title:   'Straciłeś wszystko? Jeden fragment odnajdzie resztę',
+                                                feat5_desc:    'Każdy fragment kopii zawiera mapę do wszystkich pozostałych. Znajdź jeden ocalały dysk, uruchom <span class="text-white font-mono">bfs recovery</span> - konfiguracja wraca, a BFS wie, gdzie leżą pozostałe fragmenty. Odtworzenie samych plików wymaga już N osiągalnych nośników.',
                                                 feat6_title:   'Awaria nie przerywa backupu',
-                                                feat6_desc:    'Jeden nośnik padł w trakcie? BFS nie poddaje się. Kończy upload na pozostałych i pamięta dokładnie, które padły — później naprawiasz i ponawiasz tylko te, nie cały backup.',
+                                                feat6_desc:    'Jeden nośnik padł w trakcie? BFS nie poddaje się. Kończy upload na pozostałych i pamięta dokładnie, które padły - później naprawiasz i ponawiasz tylko te, nie cały backup.',
                                               },
                                             };
 

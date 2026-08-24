@@ -32,7 +32,7 @@ describe('clear', () => {
     vi.clearAllMocks();
   });
 
-  // ─── Default cache dir ────────────────────────────────────────────────────
+  // --- Default cache dir ----------------------------------------------------
 
   it('should delete push.blob.pending from default cache dir when no config', async () => {
     const result = await runCmd(['clear']);
@@ -49,7 +49,7 @@ describe('clear', () => {
     expect(calledPaths.some((p: string) => p.includes('.bfs') && p.endsWith('pull.blob.pending'))).toBe(true);
   });
 
-  // ─── config.cache_dir fallback ────────────────────────────────────────────
+  // --- config.cache_dir fallback --------------------------------------------
 
   it('should use config.cache_dir when set in config.json', async () => {
     const customDir = path.join(path.sep, 'custom', 'cache');
@@ -62,7 +62,7 @@ describe('clear', () => {
     expect(calledPaths).toContain(expectedPush);
   });
 
-  // ─── --cache-dir flag priority ────────────────────────────────────────────
+  // --- --cache-dir flag priority --------------------------------------------
 
   it('should use --cache-dir flag over config.cache_dir', async () => {
     const configDir = path.join(path.sep, 'config', 'cache');
@@ -79,7 +79,7 @@ describe('clear', () => {
     expect(calledPaths.every((p: string) => !p.startsWith(configDir))).toBe(true);
   });
 
-  // ─── Tolerates missing files ──────────────────────────────────────────────
+  // --- Tolerates missing files ----------------------------------------------
 
   it('should succeed even when files do not exist (unlink rejects)', async () => {
     const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
@@ -90,7 +90,7 @@ describe('clear', () => {
     expect(result).toBe('ok');
   });
 
-  // ─── Success message ────────────────────────────────────────────────────
+  // --- Success message ----------------------------------------------------
 
   it('should print clear_done on success', async () => {
     await runCmd(['clear']);
@@ -99,7 +99,7 @@ describe('clear', () => {
     expect(all.toLowerCase()).toMatch(/cache cleared|cache wyczyszczony/i);
   });
 
-  // ─── Lockfile cleanup (PR1: push.lock + repair.lock) ──────────────────────
+  // --- Lockfile cleanup (PR1: push.lock + repair.lock) ----------------------
 
   it('should delete .bfs/push.lock', async () => {
     await runCmd(['clear']);
@@ -135,7 +135,7 @@ describe('clear', () => {
     expect(result).toBe('abort');
   });
 
-  // ─── --cwd × cache paths ──────────────────────────────────────────────────
+  // --- --cwd x cache paths --------------------------------------------------
   // Guards against any regression where clear (or anything it calls)
   // ignores --cwd and falls back to process.cwd() for the artifact paths.
 

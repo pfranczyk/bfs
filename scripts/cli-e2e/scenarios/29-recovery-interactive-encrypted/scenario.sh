@@ -7,7 +7,7 @@
 #      prompt for the FTP transport password (stripped from headers by K2); the
 #      second sibling confirms its host but reuses the pooled password.
 # All answered through a real pseudo-terminal. Proves multi-prompt works end to
-# end through real `bfs` — exactly the case a piped stdin cannot drive (inquirer
+# end through real `bfs` - exactly the case a piped stdin cannot drive (inquirer
 # feeds only the first prompt per process under a pipe).
 
 SCENARIO_NAME="interactive recovery, 2 prompts (encryption + FTP password)"
@@ -33,9 +33,9 @@ scenario_run() {
   rm -rf "$vault/.bfs"
   assert_no_file "$vault/.bfs/config.json"
 
-  # No --password flag → recovery prompts for the encryption password first (to
+  # No --password flag -> recovery prompts for the encryption password first (to
   # decrypt the location map), then reconnects each FTP sibling: confirm host (y)
-  # → FTP password for the first sibling, then confirm host (y) for the second
+  # -> FTP password for the first sibling, then confirm host (y) for the second
   # sibling (its password is reused from the pool, so no second password prompt).
   # Answers are fed in that order as each prompt's anchor appears.
   local answers

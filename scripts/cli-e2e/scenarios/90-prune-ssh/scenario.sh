@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Prune old versions from an SSH provider and confirm the pruned versions' shards
-# are actually DELETED from the server — not just dropped from the manifest. The
+# are actually DELETED from the server - not just dropped from the manifest. The
 # local prune scenario (06) only checks manifests; this exercises the SSH delete
 # path and guards against orphaned remote shards (a silent storage leak).
 
@@ -30,7 +30,7 @@ scenario_run() {
   [ -n "$(ssh_sha "$e" "${sdir}/shard_2.bfs.2")" ] || _fail "v2 SSH shard missing after push"
   [ -n "$(ssh_sha "$e" "${sdir}/shard_2.bfs.3")" ] || _fail "v3 SSH shard missing after push"
 
-  # Prune v1 by id — its remote shard must be deleted from the server.
+  # Prune v1 by id - its remote shard must be deleted from the server.
   run_bfs "$vault" prune 1 --yes
   assert_ok
   assert_no_file "$vault/.bfs/manifests/v001.json"
@@ -39,7 +39,7 @@ scenario_run() {
   fi
   [ -n "$(ssh_sha "$e" "${sdir}/shard_2.bfs.2")" ] || _fail "v2 SSH shard wrongly removed by prune of v1"
 
-  # Keep only the latest — v2's remote shard must go too.
+  # Keep only the latest - v2's remote shard must go too.
   run_bfs "$vault" prune --keep-last 1 --yes
   assert_ok
   assert_no_file "$vault/.bfs/manifests/v002.json"

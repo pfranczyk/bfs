@@ -15,7 +15,7 @@ const KEY_SIZE = 32;
  * Maximum plaintext bytes that may be encrypted under a single AES-GCM
  * (key, nonce) pair. AES-GCM counts blocks with a 32-bit counter, so one
  * (key, nonce) covers at most 2^32 - 2 blocks of 16 bytes (~64 GiB) before the
- * counter wraps and the keystream repeats — a catastrophic confidentiality
+ * counter wraps and the keystream repeats - a catastrophic confidentiality
  * break. Each shard is encrypted with the shared data key and its own
  * deterministic nonce (deriveShardNonce), so the limit applies per shard.
  * 60 GiB leaves headroom below the ~64 GiB hard wrap; the 16-byte auth tag is
@@ -25,7 +25,7 @@ export const GCM_MAX_PLAINTEXT_BYTES = 60 * 1024 ** 3;
 
 /**
  * Returns true when `plaintextBytes` exceeds the safe AES-GCM per-(key, nonce)
- * plaintext limit (GCM_MAX_PLAINTEXT_BYTES). Pure comparison — allocates
+ * plaintext limit (GCM_MAX_PLAINTEXT_BYTES). Pure comparison - allocates
  * nothing, so callers can guard the encrypt path without materializing the data.
  */
 export function exceedsGcmPlaintextLimit(plaintextBytes: number): boolean {
@@ -72,6 +72,8 @@ export async function encryptBlob(data: Buffer, password: string): Promise<{ enc
  * @param encrypted - nonce(12B) + ciphertext + tag(16B)
  * @param password  - original password
  * @param salt      - kdf_salt from shard header
+ * @returns the decrypted plaintext
+ * @throws DecryptionError if the password is wrong or the ciphertext is corrupted
  */
 export async function decryptBlob(encrypted: Buffer, password: string, salt: Buffer): Promise<Buffer> {
   const key = await deriveKey(password, salt);
@@ -89,6 +91,11 @@ export function encryptLocationMap(map: ShardLocation[], key: Buffer): Buffer {
 
 /**
  * Decrypts a location map encrypted with encryptLocationMap.
+ *
+ * @returns the decoded ShardLocation entries, with absent `adapterPackage` /
+ *          `required_inputs` normalized to null
+ * @throws DecryptionError if the key is wrong, the payload is corrupted, or the
+ *         decrypted bytes are not valid JSON
  */
 export function decryptLocationMap(data: Buffer, key: Buffer): ShardLocation[] {
   const json = decryptWithKey(data, key);
@@ -99,20 +106,20 @@ export function decryptLocationMap(data: Buffer, key: Buffer): ShardLocation[] {
     throw new DecryptionError('Location map JSON is invalid after decryption');
   }
   // Backward compat: shards serialized before a field existed omit it.
-  // adapterPackage undefined → null (legacy shards came from built-in providers).
-  // required_inputs undefined → null marks a legacy shard whose secret is still
+  // adapterPackage undefined -> null (legacy shards came from built-in providers).
+  // required_inputs undefined -> null marks a legacy shard whose secret is still
   // inline in connection_config, so recovery uses it directly instead of
   // prompting.
   return parsed.map((loc) => ({ ...loc, adapterPackage: loc.adapterPackage ?? null, required_inputs: loc.required_inputs ?? null }));
 }
 
-// ─── Streaming per-shard crypto (FORMAT_VERSION=2) ────────────────────────
+// --- Streaming per-shard crypto (FORMAT_VERSION=2) ------------------------
 
 /**
  * Derives a deterministic 12-byte AES-GCM nonce for a specific shard.
  * Formula: HMAC-SHA256(key, "shard_nonce" || uint32LE(version) || uint8(shardIndex))[:12]
- * Uniqueness guaranteed: different version → different KDF salt → different key;
- *                        same version → different shardIndex → different nonce.
+ * Uniqueness guaranteed: different version -> different KDF salt -> different key;
+ *                        same version -> different shardIndex -> different nonce.
  * @param key        - 32-byte AES key derived by deriveKey()
  * @param version    - snapshot version number (from shard header)
  * @param shardIndex - shard index 0..N+K-1
@@ -133,7 +140,7 @@ export function deriveShardNonce(key: Buffer, version: number, shardIndex: numbe
 /**
  * Creates a Readable stream that encrypts data from `input` with AES-256-GCM.
  * Output format: [ciphertext chunks...][auth tag 16B]
- * The 16-byte GCM auth tag is appended as the last bytes of the stream —
+ * The 16-byte GCM auth tag is appended as the last bytes of the stream -
  * compatible with decryptStream which extracts it via tail-buffer.
  * @param input - plaintext Readable stream
  * @param key   - 32-byte AES-256 key
@@ -153,7 +160,7 @@ export function encryptStream(input: Readable, key: Buffer, nonce: Buffer): Read
     },
   });
   input.on('error', (err) => transform.destroy(err));
-  // pipe() propagates source→dest but not teardown dest→source: when a consumer
+  // pipe() propagates source->dest but not teardown dest->source: when a consumer
   // destroys the returned transform (e.g. a failed shard upload releases the
   // stream), the underlying source would keep its fd open over a soon-unlinked
   // file. Tear the source down too so nothing lingers on the failure path.
@@ -177,7 +184,7 @@ export function encryptStream(input: Readable, key: Buffer, nonce: Buffer): Read
  */
 export function decryptStream(input: Readable, key: Buffer, nonce: Buffer): Readable {
   const decipher = createDecipheriv('aes-256-gcm', key, nonce);
-  // tail holds the last TAG_SIZE bytes seen so far — may be the auth tag
+  // tail holds the last TAG_SIZE bytes seen so far - may be the auth tag
   let tail = Buffer.alloc(0);
 
   const transform = new Transform({
@@ -188,21 +195,21 @@ export function decryptStream(input: Readable, key: Buffer, nonce: Buffer): Read
         tail = combined.subarray(combined.length - TAG_SIZE);
         cb(null, decipher.update(toProcess));
       } else {
-        // Not enough data yet — accumulate in tail, nothing to emit yet
+        // Not enough data yet - accumulate in tail, nothing to emit yet
         tail = combined;
         cb();
       }
     },
     flush(cb: TransformCallback) {
       if (tail.length !== TAG_SIZE) {
-        cb(new DecryptionError('Encrypted stream too short — missing GCM auth tag'));
+        cb(new DecryptionError('Encrypted stream too short - missing GCM auth tag'));
         return;
       }
       decipher.setAuthTag(tail);
       try {
         cb(null, decipher.final());
       } catch {
-        cb(new DecryptionError('Decryption failed — wrong key or corrupted data'));
+        cb(new DecryptionError('Decryption failed - wrong key or corrupted data'));
       }
     },
   });
@@ -213,7 +220,7 @@ export function decryptStream(input: Readable, key: Buffer, nonce: Buffer): Read
 
 /**
  * Encrypts a shard payload with AES-256-GCM using a caller-supplied deterministic
- * nonce (deriveShardNonce). Output layout: ciphertext || 16-byte GCM tag — the
+ * nonce (deriveShardNonce). Output layout: ciphertext || 16-byte GCM tag - the
  * exact FORMAT_VERSION 2 per-shard payload form, identical to what encryptStream
  * produces. Used by heal to re-encrypt a repaired shard in memory.
  * @param plaintext - raw striped RS shard payload
@@ -238,7 +245,7 @@ export function encryptShardPayload(plaintext: Buffer, key: Buffer, nonce: Buffe
  */
 export function decryptShardPayload(payload: Buffer, key: Buffer, nonce: Buffer): Buffer {
   if (payload.length < TAG_SIZE) {
-    throw new DecryptionError('Shard payload too short — missing GCM auth tag');
+    throw new DecryptionError('Shard payload too short - missing GCM auth tag');
   }
   const tag = payload.subarray(payload.length - TAG_SIZE);
   const ciphertext = payload.subarray(0, payload.length - TAG_SIZE);
@@ -247,11 +254,11 @@ export function decryptShardPayload(payload: Buffer, key: Buffer, nonce: Buffer)
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   } catch {
-    throw new DecryptionError('Decryption failed — wrong key or corrupted data');
+    throw new DecryptionError('Decryption failed - wrong key or corrupted data');
   }
 }
 
-// ─── Internal helpers ──────────────────────────────────────────────────────
+// --- Internal helpers ------------------------------------------------------
 
 /**
  * Encrypts data with AES-256-GCM using the provided key.
@@ -283,6 +290,6 @@ function decryptWithKey(encrypted: Buffer, key: Buffer): Buffer {
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   } catch {
-    throw new DecryptionError('Decryption failed — wrong key or corrupted data');
+    throw new DecryptionError('Decryption failed - wrong key or corrupted data');
   }
 }

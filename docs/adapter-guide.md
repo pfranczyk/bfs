@@ -1,17 +1,17 @@
 # BFS provider adapter guide
 
 This guide is for developers publishing external storage-provider adapters
-for BFS — cloud backends such as `bfs-adapter-s3` or `@acme/bfs-adapter-gdrive`,
+for BFS - cloud backends such as `bfs-adapter-s3` or `@acme/bfs-adapter-gdrive`,
 or any community storage backend. BFS core is blind to concrete provider
-types — everything a new storage backend needs is declared via the
+types - everything a new storage backend needs is declared via the
 `StorageProvider` / `ProviderFactory` contract.
 
-**Built-in transports vs adapters.** Non-cloud transports — local disk,
-FTP/FTPS, SSH/SFTP, WebDAV, SMB — ship *inside* BFS core, not as adapters.
-They are stable, protocol-level backends every user gets without installing
-anything, and a backup must stay recoverable without depending on a plugin
-registry. External adapters are the delivery mechanism for **cloud** storage
-(Google Drive, OneDrive, Dropbox, S3/Backblaze B2, …), whose provider-controlled
+**Built-in transports vs adapters.** Non-cloud transports belong *inside* BFS
+core, not in adapters: local disk, FTP/FTPS and SSH/SFTP ship today, with WebDAV
+and SMB to follow. They are stable, protocol-level backends every user gets
+without installing anything, and a backup must stay recoverable without
+depending on a plugin registry. External adapters are the delivery mechanism for **cloud** storage
+(Google Drive, OneDrive, Dropbox, S3/Backblaze B2, ...), whose provider-controlled
 APIs change on the vendor's schedule. Keeping cloud backends as adapters lets
 that API churn update independently, without forcing a new BFS release.
 
@@ -49,19 +49,39 @@ Everything re-exported from `bfs-vault/provider` is covered by
 Every adapter class implements the full `StorageProvider` interface.
 The interface splits into two groups of methods:
 
-- **Runtime I/O** — `authenticate`, `setVaultName`, `upload`, `download`,
+- **Runtime I/O** - `authenticate`, `setVaultName`, `upload`, `download`,
   `delete`, `rename`, `updateShardHeader`, `list`, `getSize`, `downloadHeader`,
   `listVaults`, `healthCheck`.
-- **Header storage & verification** — `usesSidecar`, `uploadHeaderSidecar`,
+- **Header storage & verification** - `usesSidecar`, `uploadHeaderSidecar`,
   `downloadHeaderSidecar`, `verifyShard`. Declare via `usesSidecar()` whether
-  you rewrite the header in place inside the shard (return `false`, like the
-  built-in disk/FTP adapters — the two sidecar methods then MUST throw) or keep
-  it in a sidecar file next to the shard (return `true` — implement both, using
-  the standard BFSH bytes BFS hands you). `verifyShard` checks a shard's
+  you keep the updated header in a sidecar file next to the shard (return
+  `true`, like the built-in disk/FTP/SSH adapters - implement both sidecar
+  methods, using the standard BFSH bytes BFS hands you) or rewrite it in place
+  inside the shard (return `false` - the two sidecar methods then MUST throw,
+  and BFS calls `updateShardHeader` instead). `verifyShard` checks a shard's
   identity (vault id, index, version) on your medium and returns a structured
   verdict instead of throwing for the expected outcomes.
-- **Configuration lifecycle** — `configureInteractive`, `configureFromFlags`,
+- **Configuration lifecycle** - `configureInteractive`, `configureFromFlags`,
   `validateConfig`, `describeConfig`, `getSecretFields`, `probeConnection`.
+- **Optional members** - `configureInteractiveForEdit(io, ctx)` is an edit-aware
+  variant of `configureInteractive` that receives the stored settings. It asks
+  the same questions; what it gains is the ability to compare answers against
+  what is on record - to tell an identity-defining change (a different host) from
+  a benign one (a rotated password), and to carry over values a full-replacement
+  edit would drop. The built-in SSH adapter uses it to reuse a pinned host key
+  when host and port did not move, so a password rotation needs no server at all.
+  `connectForRecovery(io, pool, options?)` is the recovery hook where your
+  adapter - not BFS - shows the operator which host a secret is about to reach,
+  then tries the candidate secrets. BFS dispatches to it whenever you implement
+  it, regardless of what the location map declares, so the guard cannot be
+  routed around. Both members are optional, but the fallbacks are weaker: edit
+  falls back to `configureInteractive`, which cannot see the stored settings and
+  so treats every edit as a fresh target, and recovery falls back to BFS prompting
+  for the declared inputs itself - without showing the host.
+  Implement `connectForRecovery` if your medium takes a secret. Their parameter types
+  (`ConfigureEditContext`, `RecoverySecret`) are exported from
+  `bfs-vault/provider`, as is `CliProviderInput.offline`, which marks a flow
+  that must not touch the network.
 
 The configuration-lifecycle methods let the CLI stay blind to provider
 type. The CLI calls them polymorphically from `bfs init`, `bfs provider
@@ -87,34 +107,34 @@ export class MyProvider implements StorageProvider {
   private readonly io: ProviderIO;
 
   constructor(config: ProviderConfig, io: ProviderIO) {
-    // Lazy init — BFS may construct a placeholder instance with config:{}
+    // Lazy init - BFS may construct a placeholder instance with config:{}
     // to call configureInteractive, so don't throw on empty fields here.
     this.id = config.id;
     this.io = io;
-    // …read config.config into fields with safe defaults…
+    // ...read config.config into fields with safe defaults...
   }
 
-  // ─── Runtime I/O ─────────────────────────────────────────────────────
-  async authenticate(): Promise<void> { /* … */ }
-  setVaultName(name: string): void { /* … */ }
-  async upload(filename, data, size): Promise<RemoteRef> { /* … */ }
-  async download(ref): Promise<Readable> { /* … */ }
-  async delete(ref): Promise<void> { /* … */ }
-  async rename(ref, newFilename): Promise<RemoteRef> { /* … */ }
-  async updateShardHeader(ref, headerData): Promise<RemoteRef> { /* … */ }
-  async list(prefix?): Promise<RemoteRef[]> { /* … */ }
-  async getSize(ref): Promise<number> { /* … */ }
-  async downloadHeader(ref, maxBytes): Promise<Buffer> { /* … */ }
-  async listVaults(): Promise<string[]> { /* … */ }
-  async healthCheck(): Promise<boolean> { /* … */ }
+  // --- Runtime I/O -----------------------------------------------------
+  async authenticate(): Promise<void> { /* ... */ }
+  setVaultName(name: string): void { /* ... */ }
+  async upload(filename, data, size): Promise<RemoteRef> { /* ... */ }
+  async download(ref): Promise<Readable> { /* ... */ }
+  async delete(ref): Promise<void> { /* ... */ }
+  async rename(ref, newFilename): Promise<RemoteRef> { /* ... */ }
+  async updateShardHeader(ref, headerData): Promise<RemoteRef> { /* ... */ }
+  async list(prefix?): Promise<RemoteRef[]> { /* ... */ }
+  async getSize(ref): Promise<number> { /* ... */ }
+  async downloadHeader(ref, maxBytes): Promise<Buffer> { /* ... */ }
+  async listVaults(): Promise<string[]> { /* ... */ }
+  async healthCheck(): Promise<boolean> { /* ... */ }
 
-  // ─── Header storage & verification ───────────────────────────────────
-  usesSidecar(): boolean { return false; } // true → keep header in a sidecar file
+  // --- Header storage & verification -----------------------------------
+  usesSidecar(): boolean { return false; } // true -> keep header in a sidecar file
   async uploadHeaderSidecar(ref, sidecarBytes): Promise<void> { /* throw when usesSidecar()=false */ }
   async downloadHeaderSidecar(ref, maxBytes): Promise<Buffer | null> { /* throw when usesSidecar()=false */ }
-  async verifyShard(ref, expected): Promise<VerifyShardResult> { /* … */ }
+  async verifyShard(ref, expected): Promise<VerifyShardResult> { /* ... */ }
 
-  // ─── Configuration lifecycle ─────────────────────────────────────────
+  // --- Configuration lifecycle -----------------------------------------
 
   async configureInteractive(io: ProviderIO): Promise<Record<string, unknown>> {
     // Use io.ask / io.askSecret / io.confirm to collect fields.
@@ -124,11 +144,11 @@ export class MyProvider implements StorageProvider {
   async configureFromFlags(
     input: CliProviderInput,
   ): Promise<Record<string, unknown>> {
-    // Non-interactive CI mode — see "CI configuration" below.
+    // Non-interactive CI mode - see "CI configuration" below.
   }
 
   validateConfig(config: Record<string, unknown>): string[] {
-    // Purely structural checks — do not touch the network or fs here.
+    // Purely structural checks - do not touch the network or fs here.
     // Return [] when valid; non-empty human-readable messages otherwise.
   }
 
@@ -142,27 +162,27 @@ export class MyProvider implements StorageProvider {
 
   async probeConnection(): Promise<void> {
     // Full write / read / compare / cleanup against the real remote.
-    // Called by CLI BEFORE persisting config — a throw here keeps the
+    // Called by CLI BEFORE persisting config - a throw here keeps the
     // user's vault config untouched.
     // Wrap each step's failure in a ProviderError with step context.
   }
 }
 ```
 
-### Upload integrity — verify writes you can't trust
+### Upload integrity - verify writes you can't trust
 
-Whenever the transport behind `upload()` is not byte-exact — cloud APIs that retry on flaky connections,
-object-storage PUTs over HTTPS, anything that sits on the network — **re-read
+Whenever the transport behind `upload()` is not byte-exact - cloud APIs that retry on flaky connections,
+object-storage PUTs over HTTPS, anything that sits on the network - **re-read
 the file immediately after writing and compare it hash-for-hash before
 returning a `RemoteRef`**. BFS's shard format carries its own trailing
 SHA-256, so silent mid-stream corruption will eventually surface as
 `Shard checksum mismatch` during `bfs pull`, but only after the backup
 has been "confirmed" written and perhaps kept for months.
 
-**Chunk the buffer — never `Readable.from(buffer)` to a socket.** A multi-MB
+**Chunk the buffer - never `Readable.from(buffer)` to a socket.** A multi-MB
 single-chunk stream piped to a TCP/TLS/SFTP/HTTP transport can silently drop
 bytes under backpressure (observed: 61 799 B lost on a 263 MB shard via
-Docker-bridged vsftpd). Emit the payload as fixed ≤ 64 KB chunks instead — the
+Docker-bridged vsftpd). Emit the payload as fixed <= 64 KB chunks instead - the
 same size `createReadStream` uses. The built-in FTP adapter wraps the buffer in
 a small `Readable`:
 
@@ -202,7 +222,7 @@ async upload(
 
   await this.withClient(async (client) => {
     await client.ensureDir(this.vaultPath());
-    // Chunked stream, NOT Readable.from(buffer) — see bufferToChunkedStream above.
+    // Chunked stream, NOT Readable.from(buffer) - see bufferToChunkedStream above.
     await client.uploadFrom(bufferToChunkedStream(buffer), remotePath);
 
     // Round-trip verify: any byte loss / byte flip / size mismatch
@@ -217,7 +237,7 @@ async upload(
     }
     if (hashBuffer(roundTripped) !== hash) {
       throw new ProviderError(
-        `Upload hash mismatch for ${shardFilename} — data corrupted in transit`,
+        `Upload hash mismatch for ${shardFilename} - data corrupted in transit`,
       );
     }
   });
@@ -226,13 +246,13 @@ async upload(
 }
 ```
 
-`Readable.from(buffer)` is fine only for payloads that stay in-process or are
-≤ 64 KB (probes, handshakes). Anything larger headed for a socket must be
+`Readable.from(buffer)` is fine only for payloads that stay in-process or are at
+most 64 KB (probes, handshakes). Anything larger headed for a socket must be
 chunked.
 
 Skip verification only when the transport itself provides an integrity
 guarantee you trust (e.g. the backend's response includes a strong
-content hash you've already checked against). When in doubt, verify —
+content hash you've already checked against). When in doubt, verify -
 the cost is one extra read per shard during push, and the benefit is
 catching corruption at write time instead of during disaster recovery.
 
@@ -241,23 +261,23 @@ catching corruption at write time instead of during disaster recovery.
 BFS exposes the active UI language to adapters in two complementary
 places, depending on context:
 
-- **`ProviderIO.lang`** — used during runtime methods that have access
+- **`ProviderIO.lang`** - used during runtime methods that have access
   to a `ProviderIO` instance: `configureInteractive`, `authenticate`,
   `upload`, `download`, etc. Read it to localize your own prompts and
   messages routed through `io.ask` / `io.info` / `io.warn`.
-- **`factory.lang`** — used inside `ProviderFactory.help()`, which has
+- **`factory.lang`** - used inside `ProviderFactory.help()`, which has
   no `ProviderIO`. BFS keeps the field in sync with the user's `--lang`
   setting via `providerRegistry.setLang()` before any help is rendered.
 
-Both fields hold a BCP-47 tag (`'en'`, `'pl'`, …). They are
-informational — adapters that don't care about i18n simply return
+Both fields hold a BCP-47 tag (`'en'`, `'pl'`, ...). They are
+informational - adapters that don't care about i18n simply return
 English-only strings everywhere. BFS does not prescribe a translation
 API; pick whatever you like (`i18next`, plain object dictionaries, JSON
-files, …).
+files, ...).
 
 ### Working directory (`io.workDir`)
 
-`ProviderIO.workDir` is an absolute path — the same working directory
+`ProviderIO.workDir` is an absolute path - the same working directory
 BFS itself uses, respecting the global `bfs --cwd <dir>` flag. Use it
 whenever your adapter accepts a relative path via its own flags or
 prompts so that the user's working context is honored:
@@ -272,19 +292,34 @@ const absolute = path.isAbsolute(raw)
 Reaching for `process.cwd()` instead will produce the wrong path when
 BFS was launched from a different directory via `--cwd`.
 
+### Interactive mode (`io.interactive`)
+
+`false` means nobody is there to answer: `--ci`, or no TTY. Flags that merely
+supply data a command would otherwise ask for (`--bootstrap`, `--strategy`) do
+not set it - at a terminal such a run is still asked for what it is missing.
+Your adapter MUST NOT block on `confirm`/`ask`/`askSecret`/`choose` there -
+a prompt would hang or abort a scripted run. Pick a safe default instead, the
+way the built-in disk adapter creates a missing base directory rather than
+asking whether to. When the flag is absent, treat it as interactive.
+
+Safe does not mean permissive: where the default would be to trust something
+unverified, refuse instead. The built-in FTPS adapter takes that route - with no
+pinned certificate and nobody to confirm one, it fails closed rather than
+trusting whatever the server presents.
+
 ## CI configuration (`CliProviderInput`)
 
-`bfs provider add --ci` and `bfs init --ci --provider "type:name …"`
+`bfs provider add --ci` and `bfs init --ci --provider "type:name ..."`
 recognize exactly three BFS-level flags:
 
 - `--ci`
-- `--name <name>` — user-chosen identifier for this provider entry (for
+- `--name <name>` - user-chosen identifier for this provider entry (for
   the `init` grammar this is the part after `type:` in the spec token)
-- `--type <type>` — provider type string (matches what you pass to
+- `--type <type>` - provider type string (matches what you pass to
   `providerRegistry.register`; for `init` it is the part before `:`)
 
 **Every other CLI token is forwarded verbatim** to your adapter through
-`CliProviderInput.rawArgs`. BFS never interprets them — `--config-file`,
+`CliProviderInput.rawArgs`. BFS never interprets them - `--config-file`,
 `--bucket`, `--endpoint`, anything you define is your adapter's
 grammar, not BFS's. BFS calls your adapter like this:
 
@@ -299,34 +334,34 @@ await myProvider.configureFromFlags({
 });
 ```
 
-You choose how to interpret the input — read a file, fetch a URL, parse
+You choose how to interpret the input - read a file, fetch a URL, parse
 flags, derive from `name` alone. Typical patterns:
 
-1. **Config-file flag** — parse `rawArgs` for your `--config-file <path>`
+1. **Config-file flag** - parse `rawArgs` for your `--config-file <path>`
    (or `--config`, `--config-url`, whatever you document), resolve it
    against `io.workDir`, read the file, validate. The built-in FTP and
    LocalFS adapters use this pattern.
-2. **Raw-args only** — parse `rawArgs` with your own mini-parser or a
+2. **Raw-args only** - parse `rawArgs` with your own mini-parser or a
    library like `minimist`. Example for S3: `--bucket`, `--region`,
    `--access-key-id`.
-3. **Either / both** — e.g. a baseline config file whose entries can be
+3. **Either / both** - e.g. a baseline config file whose entries can be
    overridden by individual flags. Up to the adapter to document.
 
 ### Convenience helpers
 
 BFS ships `src/providers/flags.ts` with two helpers adapters can opt into
-(they are not part of the contract — adapters may ignore them):
+(they are not part of the contract - adapters may ignore them):
 
-- `findStringFlag(rawArgs, '--config-file') → string | null`
-- `readJsonObjectFile(absolutePath, adapterLabel) → Promise<Record<string, unknown>>`
-  — `async`; reads + parses + validates that the result is a plain object
+- `findStringFlag(rawArgs, '--config-file') -> string | null`
+- `readJsonObjectFile(absolutePath, adapterLabel) -> Promise<Record<string, unknown>>` -
+  `async`; reads + parses + validates that the result is a plain object
   (`await` it). Throws `ProviderError` with the label prefix on any failure.
 
 ### Secrets recommendation
 
 Reference secrets, don't embed them. Take a path to a credentials file
 or an env-var name (`--secret-key-env`, `--token-env`) rather than
-shipping the secret itself as a flag value — `ps`, `.bash_history` and
+shipping the secret itself as a flag value - `ps`, `.bash_history` and
 `ConsoleHost_history.txt` retain command lines.
 
 ## Provider help (`ProviderHelp`)
@@ -334,19 +369,19 @@ shipping the secret itself as a flag value — `ps`, `.bash_history` and
 `ProviderFactory.help()` is **required** and returns a structured help
 object. BFS renders each registered provider uniformly under
 `bfs provider -h` in an "Available providers:" section. BFS prepends
-`Usage: bfs provider add --name <name> --type <type>` automatically —
+`Usage: bfs provider add --name <name> --type <type>` automatically -
 fill the suffix in `usage`.
 
 The adapter MAY read `this.lang` to localize its `description` and flag
 descriptions. BFS keeps `factory.lang` in sync with the user's `--lang`
 setting via `providerRegistry.setLang()`, so by the time `help()` is
 called the field already holds the active language tag (`'en'`, `'pl'`,
-…). Adapters that don't support i18n simply ignore `this.lang` and
+...). Adapters that don't support i18n simply ignore `this.lang` and
 return English-only strings.
 
-`displayName` is the provider's own name (proper noun / brand —
+`displayName` is the provider's own name (proper noun / brand -
 `OneDrive`, `Backblaze B2`, `My Storage Backend`) and is **NOT
-translated** — proper nouns stay identical across UI languages.
+translated** - proper nouns stay identical across UI languages.
 `examples` are CLI commands (typically copy-pasteable verbatim) and
 also stay in their canonical English form.
 
@@ -354,10 +389,10 @@ also stay in their canonical English form.
 const factory: ProviderFactory = {
   lang: 'en',
   displayName: 'S3-compatible storage',
-  // …
+  // ...
 
   help(): ProviderHelp {
-    // Adapter-local i18n. The shape of `dict` is up to you — separate
+    // Adapter-local i18n. The shape of `dict` is up to you - separate
     // JSON files, inlined object, fetched from a translation service,
     // anything. BFS only requires that `help()` returns a ProviderHelp.
     const dict = this.lang === 'pl' ? plStrings : enStrings;
@@ -374,7 +409,7 @@ const factory: ProviderFactory = {
       ],
       examples: [
         'bfs provider add --ci --name cloud --type s3 \\',
-        '  --bucket my-backups --region eu-central-1 --access-key-id AKIA… --secret-key-env S3_SECRET',
+        '  --bucket my-backups --region eu-central-1 --access-key-id AKIA... --secret-key-env S3_SECRET',
       ],
       // Optional. When omitted, BFS falls back to
       // `npm install -g ${packageName}` derived from registration meta.
@@ -386,7 +421,7 @@ const factory: ProviderFactory = {
 };
 ```
 
-For adapters that only support English, just return literal strings —
+For adapters that only support English, just return literal strings -
 the contract requires the `lang` field to exist on the factory but does
 not require the adapter to act on it:
 
@@ -419,7 +454,7 @@ import { MyProvider } from './provider.js';
 
 const factory: ProviderFactory = {
   lang: 'en',                              // BFS overwrites via providerRegistry.setLang()
-  displayName: 'My Storage Backend',       // proper noun / brand — NOT translated
+  displayName: 'My Storage Backend',       // proper noun / brand - NOT translated
   requiresApiVersion: 2,                   // minimum BFS provider API version (v2 added sidecar + verifyShard)
   create: (config, io) => new MyProvider(config, io),
   help() { /* see "Provider help" section */ },
@@ -433,14 +468,14 @@ providerRegistry.register('my-backend', factory, {
 
 Call `providerRegistry.register()` at module load time. The adapter
 package's main entry should perform the registration, so users activate
-the adapter simply by importing it (or BFS auto-loads it — see "Loading"
+the adapter simply by importing it (or BFS auto-loads it - see "Loading"
 below).
 
 **Built-in vs external:** `adapterPackage` on the persisted
-`ProviderConfig` is `null` for built-in providers (local, ftp) and
+`ProviderConfig` is `null` for built-in providers (local, ftp, ssh) and
 `"<packageName>@<packageVersion>"` for adapters that passed
 `AdapterRegistrationMeta`. The flag determines whether disaster recovery
-prints a `npm install -g …` hint or a "BFS installation broken" error
+prints a `npm install -g ...` hint or a "BFS installation broken" error
 when the type is missing from the registry.
 
 ## Disaster recovery and adapter versioning
@@ -453,8 +488,8 @@ discovers which adapters are needed, and produces a report:
 ```
 The following adapters are required but not installed:
 
-  gdrive       — install: npm install -g bfs-adapter-gdrive@1.0.1
-  acme-cloud   — install: npm install -g @acme/bfs-adapter-cloud@2.3.0
+  gdrive       - install: npm install -g bfs-adapter-gdrive@1.0.1
+  acme-cloud   - install: npm install -g @acme/bfs-adapter-cloud@2.3.0
 
 Install them and retry. Alternatively, if enough shards are available
 via already-installed providers, pass --allow-missing-adapters to try
@@ -463,25 +498,25 @@ Reed-Solomon recovery from what is present.
 
 **Version mismatch** (installed version differs from recorded):
 
-- Patch/minor difference → soft warning, recovery continues.
-- Major difference → strong warning with a suggested pin command;
+- Patch/minor difference -> soft warning, recovery continues.
+- Major difference -> strong warning with a suggested pin command;
   user decides whether to pin the exact version or proceed.
 
 **Recommendation for adapter authors:** keep the shape of
 `ProviderConfig.config` backwards compatible within a major semver
-bump. Breaking the config format is fine for a `2.0.0 → 3.0.0` release
-but avoid it in patch/minor — legacy shards otherwise fail when decoded
+bump. Breaking the config format is fine for a `2.0.0 -> 3.0.0` release
+but avoid it in patch/minor - legacy shards otherwise fail when decoded
 by the newer adapter.
 
 ### Storage format and migration portability
 
 BFS hands your adapter opaque shard bytes (`upload(filename, data, size)`) and
-trusts `download(ref)` to return them byte-for-byte. That round-trip fidelity —
-through the SAME adapter — is the only guarantee. HOW you store the bytes is your
+trusts `download(ref)` to return them byte-for-byte. That round-trip fidelity -
+through the SAME adapter - is the only guarantee. HOW you store the bytes is your
 choice: a raw file, a wrapped container, an at-rest-encrypted blob, a metadata
 field, or one object holding both the shard and its header sidecar.
 
-This freedom has one consequence to weigh — two migration paths exist:
+This freedom has one consequence to weigh - two migration paths exist:
 
 - **BFS-mediated** (format-agnostic): `bfs repair` / provider relocation reads
   from the old provider (`download`) and writes to the new one (`upload`), so each
@@ -491,14 +526,14 @@ This freedom has one consequence to weigh — two migration paths exist:
   it to a different provider): works ONLY if both providers share the same
   on-medium layout. The built-in `local`/`ftp`/`ssh` providers store raw canonical
   bytes named `shard_{i}.bfs.{V}` with the sidecar `hdr_{i}.bfs.{V}`, so manual
-  moves between them work — but a custom format is unreadable to them.
+  moves between them work - but a custom format is unreadable to them.
 
 If you want users to be able to lift raw storage onto another provider, store
 shards as raw bytes in that canonical layout. If a custom format suits your medium
-better (legitimate), only BFS-mediated migration applies — consider documenting an
+better (legitimate), only BFS-mediated migration applies - consider documenting an
 export path.
 
-Related: your `verifyShard` may return `unverifiable` — you are a blind courier of
+Related: your `verifyShard` may return `unverifiable` - you are a blind courier of
 BFS's bytes and are NOT expected to parse the shard format. BFS-core verifies shard
 content itself when it reads; `verifyShard` is only a cheap identity probe.
 
@@ -512,11 +547,11 @@ const factory: ProviderFactory = {
   displayName: 'Foo',
   requiresApiVersion: 2,
   create: (config, io) => new FooProvider(config, io),
-  help() { /* … */ },
+  help() { /* ... */ },
 };
 ```
 
-The current contract is **v2** — it added the header-storage and
+The current contract is **v2** - it added the header-storage and
 verification methods (`usesSidecar`, `uploadHeaderSidecar`,
 `downloadHeaderSidecar`, `verifyShard`) listed above. An adapter that
 implements them declares `requiresApiVersion: 2`.
@@ -536,13 +571,13 @@ console.log(`Running on BFS ${BFS_VERSION}, contract v${BFS_PROVIDER_API_VERSION
 
 ### Semver policy for the contract
 
-- **Patch bump of BFS** — no contract change. Your adapter keeps working.
-- **Minor bump of BFS** — new *optional* methods may be added to the
+- **Patch bump of BFS** - no contract change. Your adapter keeps working.
+- **Minor bump of BFS** - new *optional* methods may be added to the
   contract. `BFS_PROVIDER_API_VERSION` is incremented; older adapters
   keep registering successfully (their `requiresApiVersion` is still
   satisfied). BFS only calls the new methods when the provider
   implements them.
-- **Major bump of BFS** — breaking change. Old adapters fail the
+- **Major bump of BFS** - breaking change. Old adapters fail the
   `requiresApiVersion` check at registration with a clear error message
   pointing at the version mismatch.
 
@@ -556,7 +591,7 @@ console.log(`Running on BFS ${BFS_VERSION}, contract v${BFS_PROVIDER_API_VERSION
 - **Contract version**: set `requiresApiVersion` on your factory to the
   current `BFS_PROVIDER_API_VERSION` that your adapter targets. Read
   `BFS_PROVIDER_API_VERSION` from `bfs-vault/provider` to check at
-  build time — this way your adapter stays honest about what it needs
+  build time - this way your adapter stays honest about what it needs
   regardless of which BFS minor release you publish against.
 - **Registration meta**: always pass `{ packageName, packageVersion }` to
   `providerRegistry.register`. Without it, BFS treats the adapter as

@@ -4,7 +4,7 @@
 # providers, and the backup still restores byte-for-byte.
 
 SCENARIO_NAME="repair: multi-pair migration (two providers at once)"
-SCENARIO_DESC="3L 2/1; move p1→q1 and p2→q2 in one repair, verify+pull, both renamed"
+SCENARIO_DESC="3L 2/1; move p1->q1 and p2->q2 in one repair, verify+pull, both renamed"
 REQUIRES_LOCAL=3
 REQUIRES_FTP=0
 

@@ -11,38 +11,39 @@ const FORMAT_VERSION_1 = 1;
 const FORMAT_VERSION_2 = 2;
 const CHECKSUM_SIZE = SHA256_BYTES;
 const SALT_SIZE = 16;
-// Minimum bytes needed to determine header size (magic + version + uuid + name_len = 24)
+// Bytes read up front from a shard stream before the header is parsed - a header
+// runs from a few hundred bytes to a few KB, so this covers it in a single read.
 const INITIAL_READ_SIZE = 4096;
 
 /**
  * Maximum striped-RS stripe size a V2 shard header may declare (256 MiB).
- * rsDecodeStriped allocates (N+K) × stripe_size on the read path, so a crafted
+ * rsDecodeStriped allocates (N+K) x stripe_size on the read path, so a crafted
  * header carrying a multi-GiB stripe would drive an OOM during pull/recovery.
  * Push never writes above this cap (push-pipeline imports it); the header parser
- * rejects anything above it — or zero — as a corrupted shard.
+ * rejects anything above it - or zero - as a corrupted shard.
  */
 export const V2_MAX_STRIPE_SIZE = 256 * 1024 * 1024;
 
 /**
- * Default byte budget for header reads — both the in-shard header (downloadHeader)
+ * Default byte budget for header reads - both the in-shard header (downloadHeader)
  * and the sidecar (downloadHeaderSidecar). A shard header is a few hundred bytes
  * to a few KB; 16 KB is a comfortable bound that avoids pulling the full payload.
  */
 export const SHARD_HEADER_READ_BYTES = 16384;
 
-// ─── Sidecar header (BFSH) binary layout ──────────────────────────────────
+// --- Sidecar header (BFSH) binary layout ----------------------------------
 //
 // 0x00   4     Magic: "BFSH" (distinct from the shard magic "BFSS")
 // 0x04   4     Format version: uint32 LE (1)
-// 0x08   var   Serialized header: output of buildHeaderBytes() — a full shard
-//              header (magic … end of location map), without payload or the
+// 0x08   var   Serialized header: output of buildHeaderBytes() - a full shard
+//              header (magic ... end of location map), without payload or the
 //              shard's trailing checksum
 // EOF-32 32    SHA-256 of everything above (checksum)
 const BFSH_MAGIC = 'BFSH';
 const BFSH_FORMAT_VERSION = 1;
 const BFSH_PREFIX_SIZE = 8; // magic(4) + format_version(4)
 
-// ─── Shard header size helper ─────────────────────────────────────────────
+// --- Shard header size helper ---------------------------------------------
 
 /**
  * Computes the byte length of the shard header by walking the binary layout
@@ -74,7 +75,7 @@ export function computeShardHeaderSize(data: Buffer): number {
   pos += 51;
   // Bounds: the encrypted flag sits at pos-1. A bogus nameLen blows pos past EOF.
   if (pos > data.length) {
-    throw new ShardCorruptedError('Shard header is truncated (fixed fields exceed buffer — likely a bogus name length)');
+    throw new ShardCorruptedError('Shard header is truncated (fixed fields exceed buffer - likely a bogus name length)');
   }
   const encrypted = data.readUInt8(pos - 1) !== 0;
   if (encrypted) pos += SALT_SIZE;
@@ -100,8 +101,8 @@ export function computeShardHeaderSize(data: Buffer): number {
  * bytes, which cover the header and the payload together.
  *
  * This is what separates accidental damage from deliberate substitution: bit-rot
- * anywhere in the shard — including header fields that carry no cryptographic
- * protection of their own, such as kdf_salt — breaks this checksum, while an
+ * anywhere in the shard - including header fields that carry no cryptographic
+ * protection of their own, such as kdf_salt - breaks this checksum, while an
  * attacker rewriting a shard recomputes it and passes. A caller that compares
  * sibling shards against each other must run this first, or it cannot tell the
  * two cases apart.
@@ -116,7 +117,7 @@ export function shardChecksumMatches(data: Buffer): boolean {
   return hashBuffer(body) === stored;
 }
 
-// ─── UUID helpers ──────────────────────────────────────────────────────────
+// --- UUID helpers ----------------------------------------------------------
 
 /** Converts a UUID string (e.g. "550e8400-e29b-41d4-a716-446655440000") to a 16-byte Buffer. */
 export function uuidToBuffer(uuid: string): Buffer {
@@ -129,14 +130,14 @@ function bufferToUuid(buf: Buffer): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
-// ─── Shard header binary layout ───────────────────────────────────────────
+// --- Shard header binary layout -------------------------------------------
 //
 // 0x00   4    Magic: "BFSS"
-// 0x04   2    Format version: uint16 LE (1)
+// 0x04   2    Format version: uint16 LE (1 or 2)
 // 0x06   16   Vault UUID: 16 bytes binary
 // 0x16   2    Vault name length: uint16 LE
 // 0x18   var  Vault name: UTF-8
-// var    8    Blob size: uint64 LE
+// var    8    Blob size: uint64 LE (V2: the plain blob, encryption is per-shard)
 // var+8  32   Blob hash: SHA-256 as 32 binary bytes
 // var+40 2    Data shards N: uint16 LE
 // var+42 2    Parity shards K: uint16 LE
@@ -145,12 +146,14 @@ function bufferToUuid(buf: Buffer): string {
 // var+50 1    Encryption flag: uint8
 //             --- if encrypted=1: ---
 // var+51 16   KDF salt
-// var+67 4    Location map length: uint32 LE
-// var+71 var  Location map: 12B nonce + ciphertext + 16B auth tag
+// var+67 4    RS stripe size: uint32 LE (format_version 2 only)
+// var+71 4    Location map length: uint32 LE (var+67 for format_version 1)
+// var+75 var  Location map: 12B nonce + ciphertext + 16B auth tag
 //             --- if encrypted=0: ---
-// var+51 4    Location map length: uint32 LE
-// var+55 var  Location map: raw JSON bytes
-// ...    var  Shard data payload
+// var+51 4    RS stripe size: uint32 LE (format_version 2 only)
+// var+55 4    Location map length: uint32 LE (var+51 for format_version 1)
+// var+59 var  Location map: raw JSON bytes
+// ...    var  Shard data payload (V2 encrypted: ciphertext + 16B GCM tag)
 // EOF-32 32   SHA-256 of everything above (checksum)
 
 /**
@@ -261,7 +264,10 @@ function serializeHeader(header: ShardHeader, encryptionKey?: Buffer, fmtVersion
 }
 
 /**
- * Builds a complete shard binary from a header and RS payload.
+ * Builds a complete FORMAT_VERSION 1 shard binary from a header and RS payload.
+ * The header is always serialized as V1 regardless of `header.format_version`,
+ * so a V2 header passed here silently loses its rs_stripe_size - use
+ * {@link buildShardV2} for V2 shards.
  * Layout: [header][payload][SHA-256 checksum (32 bytes)]
  *
  * @param header        - Shard metadata including location map
@@ -269,7 +275,7 @@ function serializeHeader(header: ShardHeader, encryptionKey?: Buffer, fmtVersion
  * @param encryptionKey - 32-byte AES-256-GCM key for encrypting the location map.
  *                        Must be provided when header.encrypted=true.
  * @returns Complete shard Buffer ready for storage
- * @throws Error if header.encrypted=true but kdf_salt is missing
+ * @throws BfsError if header.encrypted=true but kdf_salt is missing
  */
 export function buildShard(header: ShardHeader, payload: Buffer, encryptionKey?: Buffer): Buffer {
   const headerBuf = serializeHeader(header, encryptionKey, FORMAT_VERSION_1);
@@ -280,7 +286,7 @@ export function buildShard(header: ShardHeader, payload: Buffer, encryptionKey?:
 
 /**
  * Builds a complete FORMAT_VERSION 2 shard binary from a header and its final
- * stored payload. Layout: [V2 header][payload][SHA-256 checksum] — the same
+ * stored payload. Layout: [V2 header][payload][SHA-256 checksum] - the same
  * assembly as buildShardStream, in buffer form. The payload must already be in
  * stored form (the encrypted ciphertext+GCM tag for an encrypted vault, or the
  * raw striped RS bytes otherwise); this function does NOT encrypt the payload.
@@ -321,7 +327,7 @@ export function buildHeaderBytes(header: ShardHeader, encryptionKey?: Buffer): B
   // format_version to 1) whenever updateShardHeader rewrites it during heal
   // (relocate / rebuild's surviving-shard refresh). A normal pull tolerates that
   // (it reads the stripe size from the local manifest), but disaster recovery
-  // rebuilds the manifest FROM the shard header — it would then mis-read a V2
+  // rebuilds the manifest FROM the shard header - it would then mis-read a V2
   // shard as legacy V1 and fail to decode the striped, per-shard-encrypted payload.
   return serializeHeader(header, encryptionKey, header.format_version);
 }
@@ -355,7 +361,7 @@ export function buildSidecarBytes(header: ShardHeader, encryptionKey?: Buffer): 
 
 /**
  * Maps a shard filename to its header-sidecar filename by swapping the leading
- * `shard_` for `hdr_` (e.g. "shard_0.bfs.1" → "hdr_0.bfs.1"). The distinct
+ * `shard_` for `hdr_` (e.g. "shard_0.bfs.1" -> "hdr_0.bfs.1"). The distinct
  * prefix keeps sidecars out of every `list('shard_')` scan structurally, so no
  * shard version parser ever mistakes a sidecar for a shard.
  *
@@ -368,7 +374,9 @@ export function sidecarFilename(shardFilename: string): string {
 
 /**
  * Serializes a shard header into a binary Buffer with FORMAT_VERSION=2.
- * FORMAT_VERSION=2 shards have layout: [header][encrypted_payload][GCM tag 16B][SHA-256 32B]
+ * FORMAT_VERSION=2 shards have layout: [header][payload][SHA-256 32B], where the
+ * payload is the raw striped RS bytes, or ciphertext + 16B GCM tag when the
+ * vault is encrypted.
  *
  * @param header        - Shard metadata including location map
  * @param encryptionKey - 32-byte key to encrypt the location map (when header.encrypted=true)
@@ -429,8 +437,8 @@ export function buildShardStream(serializedHeader: Buffer, payloadStream: Readab
  * Supports FORMAT_VERSION 1 (legacy) and 2 (streaming pipeline with rs_stripe_size).
  * Returns the parsed header and a payloadStream for the remaining bytes.
  *
- * payloadStream (v1): [RS_payload bytes] — verified against trailing SHA-256
- * payloadStream (v2): [encrypted_payload + GCM tag 16B] — verified against trailing SHA-256
+ * payloadStream (v1): [RS_payload bytes] - verified against trailing SHA-256
+ * payloadStream (v2): [encrypted_payload + GCM tag 16B] - verified against trailing SHA-256
  *
  * @param stream        - Full shard Readable stream
  * @param encryptionKey - 32-byte key to decrypt the location map (optional)
@@ -439,7 +447,7 @@ export function buildShardStream(serializedHeader: Buffer, payloadStream: Readab
  * @throws DecryptionError if map is encrypted but provided key is wrong
  */
 export async function parseShardHeaderFromStream(stream: Readable, encryptionKey?: Buffer): Promise<{ header: ShardHeader; payloadStream: Readable }> {
-  // ── Step 1: collect initial bytes for header parsing ──────────────────
+  // -- Step 1: collect initial bytes for header parsing ------------------
   const iter = stream[Symbol.asyncIterator]() as AsyncIterator<Buffer | Uint8Array>;
   const initialChunks: Buffer[] = [];
   let initialSize = 0;
@@ -458,7 +466,7 @@ export async function parseShardHeaderFromStream(stream: Readable, encryptionKey
     throw new ShardCorruptedError('Shard stream too short to be valid');
   }
 
-  // ── Step 2: verify magic and parse the header ────────────────────────
+  // -- Step 2: verify magic and parse the header ------------------------
   // Explicit magic check gives a clearer "expected BFSS, got X" message than
   // the generic one computeShardHeaderSize would raise for the same condition.
   const magic = initial.subarray(0, 4).toString('ascii');
@@ -471,7 +479,7 @@ export async function parseShardHeaderFromStream(stream: Readable, encryptionKey
   }
   const header = buildShardHeaderFromBytes(initial.subarray(0, headerSize), encryptionKey);
 
-  // ── Step 3: build payload stream with checksum verification ──────────
+  // -- Step 3: build payload stream with checksum verification ----------
   const headerBuf = initial.subarray(0, headerSize);
   const afterHeader = initial.subarray(headerSize); // remaining bytes after header
 
@@ -497,7 +505,7 @@ export async function parseShardHeaderFromStream(stream: Readable, encryptionKey
  * @throws DecryptionError if the map is encrypted but the key is wrong
  */
 export async function readShardHeader(provider: StorageProvider, ref: RemoteRef, vaultKey?: Buffer): Promise<ShardHeader> {
-  // The bytes come back sidecar-aware; parsing is synchronous — the header
+  // The bytes come back sidecar-aware; parsing is synchronous - the header
   // window has no payload stream to verify or discard.
   return buildShardHeaderFromBytes(await readShardHeaderBytes(provider, ref), vaultKey);
 }
@@ -510,14 +518,14 @@ export async function readShardHeader(provider: StorageProvider, ref: RemoteRef,
  * so a caller that must try several vault keys against the same buffer
  * (recovery's MRU password pool) can re-parse without re-fetching.
  *
- * Every read path that needs the CURRENT location map — recovery, bootstrap,
- * consensus — must go through this, not provider.downloadHeader directly, or it
+ * Every read path that needs the CURRENT location map - recovery, bootstrap,
+ * consensus - must go through this, not provider.downloadHeader directly, or it
  * would read a relocated shard's stale in-shard map instead of its sidecar.
  *
  * @param provider - Provider holding the shard
  * @param ref      - RemoteRef of the shard
  * @param maxBytes - Byte budget for the read (in-shard window or sidecar cap)
- * @returns Serialized header bytes (magic … end of location map)
+ * @returns Serialized header bytes (magic ... end of location map)
  * @throws ShardCorruptedError if a present sidecar has a bad magic/checksum
  */
 export async function readShardHeaderBytes(provider: StorageProvider, ref: RemoteRef, maxBytes = SHARD_HEADER_READ_BYTES): Promise<Buffer> {
@@ -540,13 +548,13 @@ export async function readShardHeaderBytes(provider: StorageProvider, ref: Remot
  * credential, and blames the wrong thing.
  *
  * The payload is drained rather than buffered, so this function adds O(chunk),
- * not O(shard) — but the true peak is whatever the provider's `download` yields:
+ * not O(shard) - but the true peak is whatever the provider's `download` yields:
  * built-in FTP and SSH materialize a shard into a Buffer before handing back a
  * stream, so on those media the peak is the shard (blob_size/N), as it already is
  * for pull and heal.
  *
  * Only a failed checksum condemns the shard. A read that broke for any other
- * reason — a dropped connection, a file briefly locked — says nothing about the
+ * reason - a dropped connection, a file briefly locked - says nothing about the
  * bytes and is rethrown; the caller decides whether that is fatal.
  *
  * @param provider - Provider holding the shard
@@ -558,7 +566,7 @@ export async function shardIntegrityFailure(provider: StorageProvider, ref: Remo
   const stream = await provider.download(ref);
   try {
     const { payloadStream } = await parseShardHeaderFromStream(stream);
-    // Drain to a discarding sink with backpressure — the trailing-checksum
+    // Drain to a discarding sink with backpressure - the trailing-checksum
     // verification runs as a side effect of consuming the whole stream.
     await pipeline(payloadStream, new Writable({ write: (_chunk, _enc, cb) => cb() }));
     return null;
@@ -599,7 +607,7 @@ export function matchShardIdentity(header: ShardHeader, expected: ShardIdentity)
  * Validates a sidecar (BFSH) buffer and returns the serialized header bytes it
  * carries. Checks the magic first, then the trailing SHA-256 checksum, then
  * strips the 8-byte BFSH prefix and 32-byte checksum to yield exactly the
- * embedded shard-header bytes (magic … end of location map). Returns bytes, not
+ * embedded shard-header bytes (magic ... end of location map). Returns bytes, not
  * a parsed header, so callers can re-parse the same buffer with different vault
  * keys (recovery's MRU password pool).
  *
@@ -619,15 +627,15 @@ export function extractSidecarHeaderBytes(sidecar: Buffer): Buffer {
   const storedChecksum = sidecar.subarray(sidecar.length - CHECKSUM_SIZE);
   const computed = Buffer.from(hashBuffer(body), 'hex');
   if (!computed.equals(storedChecksum)) {
-    throw new ShardCorruptedError('Sidecar checksum mismatch — file is corrupted or tampered');
+    throw new ShardCorruptedError('Sidecar checksum mismatch - file is corrupted or tampered');
   }
   return sidecar.subarray(BFSH_PREFIX_SIZE, sidecar.length - CHECKSUM_SIZE);
 }
 
-// ─── Private parsing helpers ──────────────────────────────────────────────
+// --- Private parsing helpers ----------------------------------------------
 
 /**
- * Parses a complete shard header buffer (magic … end of location map, no
+ * Parses a complete shard header buffer (magic ... end of location map, no
  * payload, no checksum) into a ShardHeader.
  *
  * @param data          - Buffer containing exactly the serialized header
@@ -658,7 +666,7 @@ export function buildShardHeaderFromBytes(data: Buffer, encryptionKey?: Buffer):
     } else if (!common.encrypted) {
       locationMap = readLocationMap(data, common.pos, common.map_length, false, undefined).locationMap;
     }
-    // encrypted && no key → locationMap stays [] (caller decrypts if needed)
+    // encrypted && no key -> locationMap stays [] (caller decrypts if needed)
   }
 
   return {
@@ -725,7 +733,7 @@ function parseCommonHeaderFields(data: Buffer, startPos: number) {
     rs_stripe_size = data.readUInt32LE(pos);
     pos += 4;
     // Clamp the untrusted stripe size before it feeds rsDecodeStriped's
-    // (N+K) × stripe_size allocation. Zero is invalid; anything above the cap
+    // (N+K) x stripe_size allocation. Zero is invalid; anything above the cap
     // push enforces is a crafted/corrupted header, not a recoverable shard.
     if (rs_stripe_size === 0 || rs_stripe_size > V2_MAX_STRIPE_SIZE) {
       throw new ShardCorruptedError(`rs_stripe_size ${rs_stripe_size} is out of range (1..${V2_MAX_STRIPE_SIZE})`);
@@ -749,7 +757,7 @@ function readLocationMap(data: Buffer, pos: number, mapLength: number, encrypted
 
   if (encrypted) {
     if (!encryptionKey) {
-      throw new DecryptionError('This shard is encrypted — provide the encryption key (derive it from the password and kdf_salt)');
+      throw new DecryptionError('This shard is encrypted - provide the encryption key (derive it from the password and kdf_salt)');
     }
     return { locationMap: decryptLocationMap(mapPayload, encryptionKey), endPos };
   }
@@ -757,8 +765,8 @@ function readLocationMap(data: Buffer, pos: number, mapLength: number, encrypted
   try {
     const parsed = JSON.parse(mapPayload.toString('utf8')) as ShardLocation[];
     // Backward compat: older shards omit fields added later. adapterPackage
-    // undefined → null (legacy shards come from built-in providers). required_inputs
-    // undefined → null marks a legacy shard whose secret is still inline in
+    // undefined -> null (legacy shards come from built-in providers). required_inputs
+    // undefined -> null marks a legacy shard whose secret is still inline in
     // connection_config, so recovery uses it directly instead of prompting.
     // Keep this the ONLY normalization point for plain (unencrypted) location
     // maps.
@@ -815,15 +823,15 @@ function _buildChecksumVerifiedStream(iter: AsyncIterator<Buffer | Uint8Array>, 
 
       // tail is now the stored checksum (CHECKSUM_SIZE bytes)
       if (tail.length !== CHECKSUM_SIZE) {
-        throw new ShardCorruptedError(`Shard stream ended before checksum — data is truncated (read ${totalBytes} B, ` + `expected at least header + ${CHECKSUM_SIZE} B trailer)`);
+        throw new ShardCorruptedError(`Shard stream ended before checksum - data is truncated (read ${totalBytes} B, ` + `expected at least header + ${CHECKSUM_SIZE} B trailer)`);
       }
       const computed = hasher.digest();
       if (!computed.equals(tail)) {
         const expectedPrefix = tail.toString('hex').slice(0, 16);
         const computedPrefix = computed.toString('hex').slice(0, 16);
         throw new ShardCorruptedError(
-          `Shard checksum mismatch — data is corrupted or tampered ` +
-            `(expected ${expectedPrefix}…, computed ${computedPrefix}…, ` +
+          `Shard checksum mismatch - data is corrupted or tampered ` +
+            `(expected ${expectedPrefix}..., computed ${computedPrefix}..., ` +
             `shard size ${totalBytes} B). Compare shard sizes across providers ` +
             'to spot transport-level truncation.',
         );

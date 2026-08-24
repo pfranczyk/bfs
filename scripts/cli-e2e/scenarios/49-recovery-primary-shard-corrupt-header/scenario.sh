@@ -4,14 +4,14 @@
 #
 # Recovery rebuilds each version's manifest from the shard headers it finds on
 # the providers. Within a version every shard carries the SAME kdf_salt and the
-# SAME location map — only the map's ciphertext differs, each sealed under its
-# own random nonce — so the map of a version is readable from any of its shards.
+# SAME location map - only the map's ciphertext differs, each sealed under its
+# own random nonce - so the map of a version is readable from any of its shards.
 #
-# processVersion in src/vault/recovery.ts resolves the map from the first shard
+# rebuildVersionManifest in src/vault/version-rebuild.ts resolves the map from the first shard
 # it collected (the bootstrap provider's), so damaging just that one shard's
 # encrypted map decides the fate of its whole version: tryDecryptLocationMap
 # (src/vault/password-pool.ts) exhausts the password pool, recovery warns
-# (recovery_decrypt_skip) and drops the version — while the untouched siblings
+# (recovery_decrypt_skip) and drops the version - while the untouched siblings
 # of that same version still hold a map that opens with the very password
 # already in the pool.
 #
@@ -54,7 +54,7 @@ scenario_run() {
   rm -rf "$vault/.bfs"
   assert_no_file "$vault/.bfs/config.json"
 
-  # Damage the header — not the payload — of p0's v1 shard only. The flipped
+  # Damage the header - not the payload - of p0's v1 shard only. The flipped
   # byte is the last byte of the GCM tag over its encrypted location map, so the
   # header still parses but no password opens its map.
   local shard0v1
@@ -74,7 +74,7 @@ scenario_run() {
   # very password that opens every shard of this backup, so no operator input is
   # needed for any version: v1's map is readable from either healthy sibling with
   # exactly that password. The run goes through a PTY so that a prompt would be a
-  # real, visible prompt — the blank answer is a safety net that keeps a prompting
+  # real, visible prompt - the blank answer is a safety net that keeps a prompting
   # run from hanging on it, not an expected input.
   local answers
   answers='[{"anchor":"Enter password for version","value":""}]'
@@ -84,12 +84,12 @@ scenario_run() {
   assert_file "$vault/.bfs/config.json"
 
   # Asking for the version password here asks the operator for something they
-  # already supplied — and something two undamaged shards accept.
+  # already supplied - and something two undamaged shards accept.
   if printf '%s' "$BFS_OUT" | grep -qF "Enter password for version"; then
     _fail "recovery prompted for the v1 password although --password already opens v1 on both healthy siblings"
   fi
 
-  # Control — the undamaged version is recovered and restores byte-for-byte.
+  # Control - the undamaged version is recovered and restores byte-for-byte.
   assert_file "$vault/.bfs/manifests/v002.json"
   run_bfs "$vault" pull --force --yes --password "$pw"
   assert_ok

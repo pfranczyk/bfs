@@ -13,7 +13,7 @@ import { init, push } from '../../src/vault/vault-manager.js';
 // updateLocationMaps rewrites every sibling shard's header with a new location
 // map after a relocate/rebuild. Its loop catches ALL errors as "skip unavailable
 // providers", so a provider that is REACHABLE but whose header write fails (disk
-// full, read-only remount, transient 5xx) is skipped silently — leaving that
+// full, read-only remount, transient 5xx) is skipped silently - leaving that
 // shard's map stale with no signal, indistinguishable from a genuinely-down
 // provider. This guards that a post-authenticate failure is surfaced, while a
 // truly unreachable provider is still skipped quietly.
@@ -29,7 +29,7 @@ class HeaderWriteFailsProvider extends LocalFsProvider {
   }
 }
 
-/** Local-disk provider reachable at push time whose authenticate() can be toggled to fail — models a provider that goes down before the later heal. */
+/** Local-disk provider reachable at push time whose authenticate() can be toggled to fail - models a provider that goes down before the later heal. */
 class ToggleAuthProvider extends LocalFsProvider {
   async authenticate(): Promise<void> {
     if (authUnreachable) throw new ProviderError('unreachable (test)');
@@ -120,10 +120,10 @@ describe('updateLocationMaps surfaces a header write failure on a reachable prov
       push_mode: PushMode.NewVersion,
       io: setupIo,
     });
-    await push(root, { io: setupIo }); // p2 reachable here — push succeeds
+    await push(root, { io: setupIo }); // p2 reachable here - push succeeds
 
     // p2 goes down before the heal: authenticate() now throws. This is the
-    // "unavailable provider" case that MUST stay a quiet skip — the warn is
+    // "unavailable provider" case that MUST stay a quiet skip - the warn is
     // reserved for a reachable provider whose write fails (test above).
     authUnreachable = true;
 

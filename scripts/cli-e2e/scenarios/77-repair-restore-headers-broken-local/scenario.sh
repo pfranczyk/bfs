@@ -37,7 +37,7 @@ scenario_run() {
 
   # Corrupt a non-relocated provider's sidecar (p1, stable path) with non-BFSH
   # bytes so extractSidecarHeaderBytes rejects it. The shard payload + in-shard
-  # header stay intact — only the sidecar file is broken.
+  # header stay intact - only the sidecar file is broken.
   local hdr="${PV_LOCALDIR[1]}/$name/hdr_1.bfs.1"
   printf 'GARBAGE-NOT-BFSH' > "$hdr"
   assert_file "$hdr"
@@ -53,7 +53,7 @@ scenario_run() {
   assert_ok
   assert_file "$hdr"
 
-  # The advisory is gone — the overwritten sidecar is a valid BFSH envelope again
+  # The advisory is gone - the overwritten sidecar is a valid BFSH envelope again
   # (verify's sidecar probe parses it).
   run_bfs "$vault" verify
   assert_ok

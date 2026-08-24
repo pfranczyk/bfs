@@ -24,7 +24,7 @@ describe('status', () => {
     vi.clearAllMocks();
   });
 
-  // ─── Displayed data ───────────────────────────────────────────────────────
+  // --- Displayed data -------------------------------------------------------
 
   it('should display vault name', async () => {
     mockStatus.mockResolvedValue(makeStatusInfo() as never);
@@ -78,7 +78,7 @@ describe('status', () => {
     expect(capture.logs.some((l) => l.includes('5'))).toBe(true);
   });
 
-  // ─── Push-disabled scheme warn ────────────────────────────────────────────
+  // --- Push-disabled scheme warn --------------------------------------------
 
   it('should NOT print push-disabled warn when scheme is 2/1', async () => {
     mockStatus.mockResolvedValue(makeStatusInfo({ scheme: { data_shards: 2, parity_shards: 1 } }) as never);
@@ -109,7 +109,7 @@ describe('status', () => {
     expect(all).toMatch(/1\/0/);
   });
 
-  // ─── status errors ────────────────────────────────────────────────────────
+  // --- status errors --------------------------------------------------------
 
   it('should abort when vault config is missing', async () => {
     mockStatus.mockRejectedValue(new Error('No vault config found'));

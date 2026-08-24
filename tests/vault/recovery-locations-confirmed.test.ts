@@ -11,19 +11,19 @@ import { readState, writeState } from '../../src/vault/state.js';
 import { init, push } from '../../src/vault/vault-manager.js';
 import { registerSecretProvider, SecretLocalProvider, secretProviderConfig, unregisterSecretProvider } from '../helpers/secret-local-provider.js';
 
-// ─── Contract under test (RED) ──────────────────────────────────────────────
+// --- Contract under test (RED) ----------------------------------------------
 //
-// S3 — "unconfirmed config after recovery" gate.
+// S3 - "unconfirmed config after recovery" gate.
 //
 // With encryption off, a shard's location_map is raw JSON guarded only by an
 // UNKEYED trailing SHA-256. `recover()` reconstructs .bfs/config.json straight
 // from that untrusted map (host/path of every provider). If an attacker forged
 // one shard, the recovered config now points a provider at the attacker's host.
 // The escalation: the NEXT `bfs push` packs the local directory and ships shards
-// to the attacker — a credential/data leak triggered by the operator's own push.
+// to the attacker - a credential/data leak triggered by the operator's own push.
 //
 // GREEN contract:
-//   1. recover() marks the recovered config as UNCONFIRMED — a flag in
+//   1. recover() marks the recovered config as UNCONFIRMED - a flag in
 //      state.json (VaultState.locations_confirmed === false).
 //   2. The FIRST write operation to a medium after recovery (push) must show the
 //      operator the provider locations and REQUIRE confirmation BEFORE uploading
@@ -34,7 +34,7 @@ import { registerSecretProvider, SecretLocalProvider, secretProviderConfig, unre
 //
 // Today (RED): VaultState has no locations_confirmed field, recover() never
 // writes it, and push() never gates on it. The tests below therefore fail
-// behaviourally — recovery leaves the flag absent and push uploads to the
+// behaviourally - recovery leaves the flag absent and push uploads to the
 // (attacker) provider without asking. The new field is referenced through a
 // local cast so typecheck stays green until the GREEN code adds it to the type.
 
@@ -200,7 +200,7 @@ describe('push() gates on an unconfirmed recovered config', () => {
     const state = await readStateWithFlag(root);
     expect(state.locations_confirmed).toBe(true);
 
-    // Config is intact (sanity — recovery rebuilt the three providers).
+    // Config is intact (sanity - recovery rebuilt the three providers).
     const config = await readConfig(root);
     expect(config?.providers).toHaveLength(3);
 

@@ -6,7 +6,7 @@
 # expected-failure cases), so we drive failure explicitly instead.
 
 _fail() {
-  echo "  ✗ assertion failed: $*"
+  echo "  [[X]] assertion failed: $*"
   exit 1
 }
 
@@ -28,7 +28,7 @@ assert_exit() {
 $BFS_OUT"
 }
 
-# assert_fail — last bfs call must have exited non-zero (expected error path).
+# assert_fail - last bfs call must have exited non-zero (expected error path).
 assert_fail() {
   [ "${BFS_EXIT:-0}" != "0" ] || _fail "expected non-zero exit, got 0. Output:
 $BFS_OUT"
@@ -60,23 +60,23 @@ assert_dir() {
   [ -d "$1" ] || _fail "expected directory to exist: $1"
 }
 
-# assert_lock_exists <vault> — fail unless .bfs/push.lock is present.
+# assert_lock_exists <vault> - fail unless .bfs/push.lock is present.
 assert_lock_exists() {
   [ -f "$1/.bfs/push.lock" ] || _fail "expected push.lock to exist in $1"
 }
 
-# assert_lock_absent <vault> — fail if .bfs/push.lock is present.
+# assert_lock_absent <vault> - fail if .bfs/push.lock is present.
 assert_lock_absent() {
   [ ! -e "$1/.bfs/push.lock" ] || _fail "expected push.lock to be absent in $1"
 }
 
 # spawn_live_pid_holder <pid-out-file>
 # Starts a detached node process whose only job is to stay alive and print its
-# native OS pid. Reads that pid back and exports it as LIVE_PID — the bash $!
+# native OS pid. Reads that pid back and exports it as LIVE_PID - the bash $!
 # of the holder is also exported as HOLDER_SHELL_PID for cleanup.
 #
 # Why: bash $$ / $! under Git Bash for Windows are POSIX-emulated pids that
-# Node's process.kill(pid, 0) cannot see — they always trip the stale-lock
+# Node's process.kill(pid, 0) cannot see - they always trip the stale-lock
 # branch instead of the concurrent-active branch. process.pid printed BY the
 # spawned node IS a native pid that isPidAlive() recognises across Linux,
 # WSL, Git Bash and macOS, so concurrent-lock scenarios become deterministic
@@ -97,7 +97,7 @@ spawn_live_pid_holder() {
   export LIVE_PID HOLDER_SHELL_PID
 }
 
-# cleanup_live_pid_holder — kill the live holder. Uses node's process.kill so
+# cleanup_live_pid_holder - kill the live holder. Uses node's process.kill so
 # the native pid resolves correctly on Git Bash (where bash kill syscall does
 # not see native Windows pids). Also clears the bash bg entry. Idempotent.
 cleanup_live_pid_holder() {
@@ -117,7 +117,7 @@ assert_manifest_health() {
     _fail "v$version health != $want. Got: $(grep '"health"' "$mf" || echo '<none>')"
 }
 
-# assert_manifest_contains <vault> <version> <literal> — generic JSON line check
+# assert_manifest_contains <vault> <version> <literal> - generic JSON line check
 # (e.g. '"compressed": true', '"encrypted": true').
 assert_manifest_contains() {
   local vault="$1" version="$2" want="$3" mf
@@ -128,7 +128,7 @@ assert_manifest_contains() {
 $(cat "$mf")"
 }
 
-# assert_manifest_absent <vault> <version> <literal> — fail if the literal IS
+# assert_manifest_absent <vault> <version> <literal> - fail if the literal IS
 # present (e.g. assert a version is NOT compressed).
 assert_manifest_absent() {
   local vault="$1" version="$2" unwanted="$3" mf
@@ -139,7 +139,7 @@ assert_manifest_absent() {
   fi
 }
 
-# assert_state <vault> <field> <value> — checks .bfs/state.json field.
+# assert_state <vault> <field> <value> - checks .bfs/state.json field.
 assert_state() {
   local vault="$1" field="$2" want="$3" sf="$1/.bfs/state.json"
   [ -f "$sf" ] || _fail "state.json missing: $sf"
@@ -147,7 +147,7 @@ assert_state() {
     _fail "state.$field != $want. Got: $(grep "\"$field\"" "$sf" || echo '<none>')"
 }
 
-# assert_file_mtime_epoch <file> <epoch> — fail unless <file>'s mtime, in whole
+# assert_file_mtime_epoch <file> <epoch> - fail unless <file>'s mtime, in whole
 # seconds, equals <epoch>. GNU/MSYS `stat -c %Y` reads the same value on Windows
 # Git Bash and on Linux, so mtime fidelity is asserted uniformly across OSes.
 assert_file_mtime_epoch() {
@@ -157,7 +157,7 @@ assert_file_mtime_epoch() {
   [ "$got" = "$want" ] || _fail "mtime epoch for $file: expected $want, got $got"
 }
 
-# assert_file_mode <file> <octal> — fail unless <file>'s POSIX permission bits
+# assert_file_mode <file> <octal> - fail unless <file>'s POSIX permission bits
 # equal <octal>. No-op on Windows (Git Bash / Cygwin / MSYS), where POSIX mode
 # is not a real ACL and chmod does not take effect; there the check is skipped.
 assert_file_mode() {

@@ -5,7 +5,7 @@ import { DecryptionError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
 import type { ShardLocation } from '../../src/types/index.js';
 
-// Argon2id with production parameters (64 MiB) is slow — higher timeout.
+// Argon2id with production parameters (64 MiB) is slow - higher timeout.
 const TIMEOUT = 30_000;
 
 const SAMPLE_LOCATIONS: ShardLocation[] = [
@@ -133,7 +133,7 @@ describe('crypto', () => {
         const { encrypted: e1, salt: s1 } = await encryptBlob(data, 'pw');
         const { encrypted: e2, salt: s2 } = await encryptBlob(data, 'pw');
 
-        // Different nonce → different ciphertext (even if password and data are identical)
+        // Different nonce -> different ciphertext (even if password and data are identical)
         expect(e1.equals(e2)).toBe(false);
         // Each version has its own salt
         expect(s1.equals(s2)).toBe(false);
@@ -163,11 +163,11 @@ describe('crypto', () => {
         const password = 'recovery-password';
         const salt = generateSalt();
 
-        // Encryption — as in push
+        // Encryption - as in push
         const keyForEncrypt = await deriveKey(password, salt);
         const encrypted = encryptLocationMap(SAMPLE_LOCATIONS, keyForEncrypt);
 
-        // Decryption — as in recovery: salt from the shard header, password from the user
+        // Decryption - as in recovery: salt from the shard header, password from the user
         const keyForDecrypt = await deriveKey(password, salt);
         const decrypted = decryptLocationMap(encrypted, keyForDecrypt);
 
@@ -189,7 +189,7 @@ describe('crypto', () => {
     );
 
     // For an encrypted vault the GCM auth tag is the ONLY integrity protection of
-    // the location_map — bootstrap consensus deliberately skips comparing
+    // the location_map - bootstrap consensus deliberately skips comparing
     // encrypted maps and relies on decryption catching tampering. So a flipped
     // byte must be rejected even with the CORRECT key (not just a wrong key).
     // Layout from encryptWithKey: nonce(12B) + ciphertext + tag(16B).
@@ -256,7 +256,7 @@ describe('crypto', () => {
       expect(nA.equals(nB)).toBe(false);
     });
 
-    it('should be deterministic — same inputs yield same nonce', () => {
+    it('should be deterministic - same inputs yield same nonce', () => {
       const key = Buffer.alloc(32, 0xab);
       const n1 = deriveShardNonce(key, 7, 3);
       const n2 = deriveShardNonce(key, 7, 3);

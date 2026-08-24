@@ -16,7 +16,7 @@ export function createIgnoreFilter(rootDir: string): IgnoreFilter {
     const content = readFileSync(join(rootDir, '.bfsignore'), 'utf-8');
     ig.add(content);
   } catch {
-    // .bfsignore does not exist — skip
+    // .bfsignore does not exist - skip
   }
 
   return (relativePath: string) => ig.ignores(relativePath);
@@ -54,7 +54,7 @@ export async function appendToBfsignore(rootDir: string, paths: readonly string[
   try {
     existing = await readFile(bfsignorePath, 'utf-8');
   } catch {
-    // .bfsignore does not exist yet — appendFile creates it.
+    // .bfsignore does not exist yet - appendFile creates it.
   }
   const leadingNl = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
   const patterns = paths.map(toBfsignorePattern).join('\n');

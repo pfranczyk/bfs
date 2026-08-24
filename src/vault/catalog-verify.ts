@@ -1,5 +1,5 @@
 /**
- * Catalog drift verification — detects whether a packed blob still matches the
+ * Catalog drift verification - detects whether a packed blob still matches the
  * source directory 1:1 (currency), independent of single-read internal
  * consistency (recoverability).
  *
@@ -18,12 +18,12 @@ import type { CatalogDrift, CatalogSnapshot, IgnoreFilter } from '../types/index
 /**
  * Captures the current size + mtime of every non-ignored file under rootDir.
  * Uses the same scan + ignore logic as packing, so the file set matches the
- * blob's. A file that cannot be stat'd (vanished/unreadable) is omitted — the
+ * blob's. A file that cannot be stat'd (vanished/unreadable) is omitted - the
  * diff then surfaces it as vanished/appeared naturally.
  *
  * @param rootDir      - Directory to snapshot
  * @param ignoreFilter - Filter: returns true = ignore the relative path
- * @returns Map of relative path (forward-slash) → { size, mtimeMs }
+ * @returns Map of relative path (forward-slash) -> { size, mtimeMs }
  */
 export async function snapshotCatalog(rootDir: string, ignoreFilter: IgnoreFilter): Promise<CatalogSnapshot> {
   const metas = await scanDir(rootDir, ignoreFilter);
@@ -33,7 +33,7 @@ export async function snapshotCatalog(rootDir: string, ignoreFilter: IgnoreFilte
       const stat = await fs.stat(path.join(rootDir, meta.relativePath));
       snapshot.set(meta.relativePath, { size: stat.size, mtimeMs: Math.round(stat.mtimeMs) });
     } catch {
-      // Unreadable/vanished between scan and stat — omit; diff reports it.
+      // Unreadable/vanished between scan and stat - omit; diff reports it.
     }
   }
   return snapshot;

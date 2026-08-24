@@ -79,7 +79,7 @@ describe('assertSchemeValid', () => {
   });
 
   it('should check scheme first (before providers count)', () => {
-    // A config that fails BOTH scheme and providers count — should report
+    // A config that fails BOTH scheme and providers count - should report
     // scheme error first (more specific root cause).
     const cfg = makeConfig({ scheme: { data_shards: null as unknown as number, parity_shards: null as unknown as number }, providers: [] });
     expect(() => assertSchemeValid(cfg)).toThrow(/data_shards must be/);
@@ -115,7 +115,7 @@ describe('writeConfig', () => {
     expect(stat.mode & 0o777).toBe(0o600);
   });
 
-  // The chmod after writeFile is what restricts an already-existing inode —
+  // The chmod after writeFile is what restricts an already-existing inode -
   // writeFile's mode only applies on creation. Pre-create world-readable to
   // prove the chmod path, not just the create-time mode, narrows permissions.
   it.skipIf(process.platform === 'win32')('should restrict an existing config.json to 0600 on overwrite', async () => {

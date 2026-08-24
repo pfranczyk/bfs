@@ -1,19 +1,19 @@
 # shellcheck shell=bash
-# bfs repair migration local→FTP with --rebuild: a local provider's shard is lost
+# bfs repair migration local->FTP with --rebuild: a local provider's shard is lost
 # and its role moves to a brand-new FTP provider. Reed-Solomon reconstructs the
 # shard, uploads it to the new FTP provider over the network, and swaps the
 # provider in the config + every manifest. The backup restores byte-for-byte from
 # the migrated FTP shard.
 
 SCENARIO_NAME="repair: migrate a lost local shard onto a new FTP provider (--rebuild)"
-SCENARIO_DESC="3L 2/1; lose p2 local shard, repair migrate p2→FTP f9 --rebuild, verify+pull, manifest renamed"
+SCENARIO_DESC="3L 2/1; lose p2 local shard, repair migrate p2->FTP f9 --rebuild, verify+pull, manifest renamed"
 REQUIRES_LOCAL=3
 REQUIRES_FTP=1
 
 scenario_run() {
   local vault="$SC_DIR/vault" base="$SC_DIR/baseline.txt" name="bfs69"
   make_fixtures "$vault"
-  build_pool "$SC_DIR" 3 0 "$name"   # p0 L · p1 L · p2 L
+  build_pool "$SC_DIR" 3 0 "$name"   # p0 L - p1 L - p2 L
 
   run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 2 --parity-shards 1 "${PROVIDER_ARGS[@]}"

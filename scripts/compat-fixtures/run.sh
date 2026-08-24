@@ -9,8 +9,8 @@
 #   bash scripts/compat-fixtures/run.sh --verbose    # run all, always show logs
 #   bash scripts/compat-fixtures/run.sh 0.5.0 -v     # run one version verbosely
 #
-# Requires: docker, bfs (current version — see setup below)
-# Windows note: run from WSL, not Git Bash — Docker volume mounts need Linux paths.
+# Requires: docker, bfs (current version - see setup below)
+# Windows note: run from WSL, not Git Bash - Docker volume mounts need Linux paths.
 #
 # WSL setup (one-time, or after code changes):
 #   cd /mnt/d/projects/BFS
@@ -55,7 +55,7 @@ if ! bfs -V >/dev/null 2>&1; then
   exit 1
 fi
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# -- Helpers -------------------------------------------------------------------
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -116,8 +116,8 @@ _run_docker() {
   return $rc
 }
 
-_tick() { printf '  \033[32m✓\033[0m\n'; }
-_cross(){ printf '  \033[31m✗\033[0m\n'; }
+_tick() { printf '  \033[32mOK\033[0m\n'; }
+_cross(){ printf '  \033[31m[[X]]\033[0m\n'; }
 
 _verify_files() {
   local dir="$1" ok=1
@@ -134,14 +134,14 @@ _verify_files() {
   h=$(sha256sum "$dir/binary.bin"        | awk '{print $1}'); [ "$h" = "$HASH_BINARY" ] || { echo "  HASH MISMATCH: binary.bin"        >&2; return 1; }
 }
 
-# ── Test one version ──────────────────────────────────────────────────────────
+# -- Test one version ----------------------------------------------------------
 
 test_version() {
   local OLD_VERSION="$1"
   local BASE="/tmp/bfs-compat-$(echo "$OLD_VERSION" | tr '.' '-')"
   local VAULT_NAME="mytest"
 
-  printf '\033[1mbfs@%s\033[0m → current\n' "$OLD_VERSION"
+  printf '\033[1mbfs@%s\033[0m -> current\n' "$OLD_VERSION"
 
   local VERSION_SCRIPT="$SCRIPT_DIR/v${OLD_VERSION}.sh"
   if [ ! -f "$VERSION_SCRIPT" ]; then
@@ -171,7 +171,7 @@ test_version() {
 
   local failed=0
 
-  # Step 1 — Docker: create backup with old BFS
+  # Step 1 - Docker: create backup with old BFS
   printf '  [1/3] Docker: bfs@%s init + push... ' "$OLD_VERSION"
   if _run_docker "docker bfs@${OLD_VERSION}" "$BASE" "$VAULT_NAME" "$VERSION_SCRIPT"; then
     sudo chown -R "$(id -u):$(id -g)" "$BASE"
@@ -182,7 +182,7 @@ test_version() {
   fi
 
   if [ $failed -eq 0 ]; then
-    # Step 2 — Scenario A: pull
+    # Step 2 - Scenario A: pull
     printf '  [2/3] Scenario A: bfs pull...       '
     rm -f "$BASE/src/hello.txt" "$BASE/src/readme.md" \
           "$BASE/src/subdir/nested.txt" "$BASE/src/binary.bin"
@@ -195,7 +195,7 @@ test_version() {
   fi
 
   if [ $failed -eq 0 ]; then
-    # Step 3 — Scenario B: recovery + pull
+    # Step 3 - Scenario B: recovery + pull
     printf '  [3/3] Scenario B: bfs recovery...   '
     if _run "bfs recovery" bfs --cwd "$BASE/recovery-dir" recovery \
         --provider local --name "$VAULT_NAME" \
@@ -218,7 +218,7 @@ test_version() {
   fi
 }
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# -- Main ----------------------------------------------------------------------
 
 for v in "${VERSIONS[@]}"; do
   test_version "$v"
@@ -226,9 +226,9 @@ done
 
 echo ""
 if [ $FAIL_COUNT -eq 0 ]; then
-  printf '\033[32m✓ All %d version(s) passed\033[0m\n' "$PASS_COUNT"
+  printf '\033[32mOK All %d version(s) passed\033[0m\n' "$PASS_COUNT"
   exit 0
 else
-  printf '\033[31m✗ %d failed, %d passed\033[0m\n' "$FAIL_COUNT" "$PASS_COUNT"
+  printf '\033[31m[[X]] %d failed, %d passed\033[0m\n' "$FAIL_COUNT" "$PASS_COUNT"
   exit 1
 fi

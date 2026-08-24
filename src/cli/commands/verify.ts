@@ -6,6 +6,7 @@ import { VersionHealth } from '../../types/index.js';
 import { listVersions } from '../../vault/vault-manager.js';
 import { verifyAll } from '../../vault/verify.js';
 import { resolveCwd } from '../cwd.js';
+import { isCiRun } from '../interactive-mode.js';
 import { createSpinnerIo } from '../spinner-io.js';
 import { CommandAbort, error, formatHealth, table, warn } from '../ui.js';
 
@@ -29,9 +30,9 @@ export function registerVerify(program: Command): void {
     .action(async (opts: Record<string, unknown>, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
       const spinner = ora(t('verify_spinner')).start();
-      const io = createCliProviderIO(rootDir);
+      const io = createCliProviderIO(rootDir, isCiRun(cmd) ? false : undefined);
       // Every reason a part is lost is reported while the spinner animates, so
-      // the reasons must pause it — an unreachable medium is a routine finding
+      // the reasons must pause it - an unreachable medium is a routine finding
       // here, not a rarity, and its line would otherwise be drawn over.
       const wrappedIo = createSpinnerIo(io, spinner);
 
@@ -68,8 +69,8 @@ export function registerVerify(program: Command): void {
           warn(fmt('verify_header_advisory', `v${String(v.version).padStart(3, '0')}`, String(count)));
         }
 
-        // A retained verdict looks contradictory in the table — "damaged" beside
-        // a full shard count — because this run never read the data. Say where it
+        // A retained verdict looks contradictory in the table - "damaged" beside
+        // a full shard count - because this run never read the data. Say where it
         // came from, so the operator knows what to run to refresh it.
         for (const v of report.versions) {
           if (v.retained_from_deep) warn(fmt('verify_verdict_retained', `v${String(v.version).padStart(3, '0')}`));
@@ -77,7 +78,7 @@ export function registerVerify(program: Command): void {
 
         // The exit code carries the worst verdict, so a scheduled check can alarm
         // without parsing the table. Distinct from the generic failure code (1),
-        // which means verify itself could not run — a monitor must be able to tell
+        // which means verify itself could not run - a monitor must be able to tell
         // "the backup is damaged" from "the check never happened". Header advisory
         // stays out of it: it is orthogonal to whether the data is recoverable.
         if (report.versions.some((v) => v.health === VersionHealth.Damaged)) throw new CommandAbort(EXIT_DAMAGED);

@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # REAL SSH server address change, data intact. The sshd holding shard_2 is
 # stopped and restarted on a NEW port, its data preserved in a named volume (a
-# genuine "the box moved to a new address" — not a faked failure). `bfs repair`
+# genuine "the box moved to a new address" - not a faked failure). `bfs repair`
 # repoints the provider to the new port WITHOUT --rebuild: the shard is still
 # there, so repair only rewrites config + the location map in every shard's
 # header. The before/after hash proves the payload was not re-uploaded, and the
@@ -44,25 +44,25 @@ scenario_run() {
   before="$(ssh_sha "$se" "$sshshard")"
   [ -n "$before" ] || _fail "could not read shard body before the address change"
 
-  # ── The server moves: restart on port_b, SAME volume (data persists) ────────
+  # -- The server moves: restart on port_b, SAME volume (data persists) --------
   docker_sshd_down "$ctr"
   docker_sshd_up "$ctr" "$port_b" "$vol" || _fail "could not restart sshd on port $port_b"
   set_ssh_endpoint_port "$se" "$port_b"
 
-  # The stored coordinate (port_a) is now dead → verify sees the provider down.
+  # The stored coordinate (port_a) is now dead -> verify sees the provider down.
   run_bfs "$vault" verify
   assert_manifest_health "$vault" 1 degraded
 
   # Repair repoints p2 to port_b. Data is intact, so NO --rebuild: repair rewrites
-  # config + the location map in every shard's header (--ci + --accept-new-host-key
-  # so the new host:port is trusted non-interactively).
+  # config + the location map in every shard's header (--ci for an unattended run,
+  # --accept-new-host-key to authorize the key at the new host:port).
   local sshjson="$SC_DIR/ssh-p2.json"
   printf '{"host":"127.0.0.1","port":%s,"user":"bfsuser","password":"bfspass","path":"%s"}\n' \
     "$port_b" "${PV_SSH_REMOTE[2]}" >"$sshjson"
   run_bfs "$vault" repair --ci --version all p2 "--config-file $(winpath "$sshjson") --accept-new-host-key"
   assert_ok
 
-  # Payload not re-uploaded — the shard on port_b is byte-identical to before.
+  # Payload not re-uploaded - the shard on port_b is byte-identical to before.
   local after
   after="$(ssh_sha "$se" "$sshshard")"
   [ "$after" = "$before" ] || _fail "shard body changed after address-change repair (unexpected re-upload): $before -> $after"

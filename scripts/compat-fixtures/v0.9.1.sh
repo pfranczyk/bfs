@@ -5,7 +5,7 @@
 # --no-enc keeps the fixture unencrypted like every other version here; 0.9.x
 # enables encryption by default, so the opt-out is explicit (otherwise push would
 # block on an interactive password prompt).
-# 0.9.1 is the latest patch of the 0.9.x line — patches share the on-disk format,
+# 0.9.1 is the latest patch of the 0.9.x line - patches share the on-disk format,
 # so this fixture represents 0.9.0/0.9.1 as well.
 set -e
 BASE="$1"

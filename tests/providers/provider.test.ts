@@ -52,7 +52,7 @@ describe('createMockProviderIO', () => {
   });
 });
 
-describe('ProviderRegistry.create — provider API completeness guard', () => {
+describe('ProviderRegistry.create - provider API completeness guard', () => {
   function fakeConfig(type: string): ProviderConfig {
     return { id: 'x', type, adapterPackage: null, config: {} };
   }
@@ -74,7 +74,7 @@ describe('ProviderRegistry.create — provider API completeness guard', () => {
             usesSidecar: () => false,
             uploadHeaderSidecar: async () => {},
             downloadHeaderSidecar: async () => null,
-            // verifyShard intentionally absent — predates provider API v2
+            // verifyShard intentionally absent - predates provider API v2
           }) as unknown as StorageProvider,
       ),
     );

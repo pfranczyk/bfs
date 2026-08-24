@@ -85,7 +85,7 @@ export function assertSafeFilename(name: string): void {
   }
 }
 
-/** Boolean form of {@link assertSafeFilename} — for filtering a server's readdir output. */
+/** Boolean form of {@link assertSafeFilename} - for filtering a server's readdir output. */
 export function isSafeFilename(name: string): boolean {
   try {
     assertSafeFilename(name);
@@ -110,7 +110,7 @@ export async function writeJsonAtomic(filePath: string, data: unknown): Promise<
   const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true });
   // The temp file is always freshly created, so its create-time mode sticks and
-  // the atomic rename carries 0600 to the destination — keeping forensic lock
+  // the atomic rename carries 0600 to the destination - keeping forensic lock
   // files owner-only on POSIX (no-op on Windows NTFS).
   await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), { encoding: 'utf-8', mode: 0o600 });
   await fs.rename(tmpPath, filePath);

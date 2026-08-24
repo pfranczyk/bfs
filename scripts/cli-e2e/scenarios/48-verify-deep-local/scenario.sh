@@ -2,14 +2,14 @@
 #
 # verify is blind to payload rot; `verify --deep` must catch it (path D2, local).
 #
-# Shallow `bfs verify` only inspects each shard's HEADER window — a
+# Shallow `bfs verify` only inspects each shard's HEADER window - a
 # length-preserving bit-flip in the PAYLOAD (past the header, before the
 # trailing SHA-256) leaves the header intact, so shallow verify keeps reporting
 # healthy. `bfs verify --deep` streams the whole shard and checks its trailing
 # SHA-256, demoting the rotted data-shard to unavailable.
 #
-# Scheme 2/1 with one corrupt data-shard leaves exactly N=2 healthy shards ⇒
-# degraded (still recoverable) — the health deep verify records after demoting
+# Scheme 2/1 with one corrupt data-shard leaves exactly N=2 healthy shards =>
+# degraded (still recoverable) - the health deep verify records after demoting
 # the rotted shard.
 
 SCENARIO_NAME="verify --deep catches payload rot (local)"
@@ -36,7 +36,7 @@ scenario_run() {
   run_bfs "$vault" push --new
   assert_ok
 
-  # Baseline: all 3 shards present and header-consistent → healthy.
+  # Baseline: all 3 shards present and header-consistent -> healthy.
   run_bfs "$vault" verify
   assert_ok
   assert_manifest_health "$vault" 1 healthy
@@ -53,8 +53,8 @@ scenario_run() {
     _fail "corrupt-shard driver did not report success: $BFS_OUT"
   fi
 
-  # Shallow verify is header-only → blind to the payload rot → stays healthy.
-  # (This assertion stays GREEN even after deep verify lands — proof the shallow
+  # Shallow verify is header-only -> blind to the payload rot -> stays healthy.
+  # (This assertion stays GREEN even after deep verify lands - proof the shallow
   # path legitimately cannot see payload corruption.)
   run_bfs "$vault" verify
   assert_ok

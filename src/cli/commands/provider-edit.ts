@@ -5,6 +5,7 @@ import { createCliProviderIO, providerRegistry } from '../../providers/provider.
 import type { CliProviderInput, ProviderConfig } from '../../types/index.js';
 import { readConfig, writeConfig } from '../../vault/config.js';
 import { resolveCwd } from '../cwd.js';
+import { isCiRun } from '../interactive-mode.js';
 import { promptWithRawMode } from '../prompt.js';
 import { CommandAbort, error, info, success } from '../ui.js';
 
@@ -54,13 +55,15 @@ function extractAdapterArgs(cmd: Command): string[] {
  *
  * Edits an existing provider's connection-config in `.bfs/config.json`. The
  * provider type and id are kept; only the connection settings are replaced (full
- * replacement, not a per-field merge). There is no healthCheck / probeConnection
- * and no write to the medium, and the edit is guaranteed to complete even when
- * the storage is unreachable (an unplugged USB drive, a path that differs between
- * machines, a downed server). A provider may still make a best-effort contact it
- * can degrade offline — SSH does an online-first host-key confirmation via
- * `configureInteractiveForEdit`, falling back to an offline menu when the server
- * is down. Structural validation via the adapter's `validateConfig` still runs.
+ * replacement, not a per-field merge). This command itself runs no healthCheck /
+ * probeConnection and writes nothing to the medium, so nothing here depends on
+ * the storage being reachable - every `--ci` path completes with the medium
+ * gone. Interactively it is the adapter's configure flow that decides, and all
+ * three built-ins implement `configureInteractiveForEdit` for it: SSH and FTPS
+ * reuse the pinned host key / certificate when host and port did not move, and
+ * degrade to an offline menu when a genuinely new target is unreachable; LocalFs
+ * offers a directory that does not exist yet for confirmation instead of
+ * re-asking. Structural validation via the adapter's `validateConfig` still runs.
  * The scheme and version manifests are left untouched; a credential change is
  * fully local (secrets never reach shards), while a non-secret coordinate change
  * is synced into shard headers by the next `bfs push`.
@@ -72,14 +75,20 @@ export function registerProviderEdit(providerCmd: Command): void {
     .command('edit [id]')
     .description(t('cmd_provider_edit_desc'))
     // allowUnknownOption / allowExcessArguments: adapter-specific flags
-    // (e.g. --path, --config-file) pass through as cmd.args → rawArgs.
+    // (e.g. --path, --config-file) pass through as cmd.args -> rawArgs.
     .allowUnknownOption(true)
     .allowExcessArguments(true)
     .option('--ci', t('provider_edit_opt_ci'))
     .action(async (providerId: string | undefined, opts: ProviderEditOpts, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
-      const io = createCliProviderIO(rootDir);
-      const isCi = opts.ci === true;
+      const isCi = isCiRun(cmd, opts.ci);
+      // `--ci` states non-interactive outright; anything else leaves the answer
+      // to the TTY check inside createCliProviderIO. Both halves are the contract
+      // at `ProviderIO.interactive` (src/types/index.ts): false under `--ci` OR
+      // with no terminal attached - a data-carrying flag like `--bootstrap` never
+      // sets it. A plain `!isCi` covers only the first half and would claim
+      // interactivity for an edit whose stdin is a pipe.
+      const io = createCliProviderIO(rootDir, isCi ? false : undefined);
 
       const config = await readConfig(rootDir);
       if (!config) {
@@ -121,7 +130,7 @@ export function registerProviderEdit(providerCmd: Command): void {
       const instance = factory.create({ id: existing.id, type: existing.type, adapterPackage: existing.adapterPackage, config: {} }, io);
 
       // Interactive only: show the current config so the operator knows what they
-      // are changing. describeConfig masks secret fields — no plaintext leak.
+      // are changing. describeConfig masks secret fields - no plaintext leak.
       if (!isCi) {
         info(fmt('provider_edit_current', existing.id));
         info(instance.describeConfig(existing.config));
@@ -130,7 +139,7 @@ export function registerProviderEdit(providerCmd: Command): void {
       let newConfig: Record<string, unknown>;
       if (isCi) {
         try {
-          // Offline by contract — no medium contact. An adapter flag that needs a
+          // Offline by contract - no medium contact. An adapter flag that needs a
           // live connection (SSH --accept-new-host-key) must refuse here.
           const input: CliProviderInput = { name: existing.id, rawArgs: extractAdapterArgs(cmd), offline: true };
           newConfig = await instance.configureFromFlags(input);
@@ -139,10 +148,9 @@ export function registerProviderEdit(providerCmd: Command): void {
           throw new CommandAbort();
         }
       } else {
-        // Edit routes through the provider's edit-aware flow when present (SSH:
-        // online-first host-key with offline fallback); a deliberate host-key
-        // refusal aborts without persisting. Providers without it (local, ftp)
-        // fall back to the add-time flow.
+        // Edit routes through the provider's edit-aware flow when present; a
+        // deliberate host-key refusal aborts without persisting. The fallback is
+        // for external adapters that predate the hook - every built-in has it.
         try {
           newConfig = instance.configureInteractiveForEdit ? await instance.configureInteractiveForEdit(io, { existingConfig: existing.config }) : await instance.configureInteractive(io);
         } catch (err) {

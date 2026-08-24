@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # A push.lock present in the vault must NOT block read-side operations. Only
-# `push` acquires the lock (acquirePushLock) — pull / verify / versions /
+# `push` acquires the lock (acquirePushLock) - pull / verify / versions /
 # provider list must keep working even while a push appears to be in flight. Control
 # assertion at the end confirms that the same lock IS recognized as live by
 # a real push (LockConcurrentActiveError).
@@ -23,7 +23,7 @@ scenario_run() {
     --data-shards 3 --parity-shards 1 "${PROVIDER_ARGS[@]}"
   assert_ok
   # Baseline AFTER init so .bfsignore (created by init, round-trips via blob)
-  # is captured — hash_tree skips only .bfs/, not .bfsignore.
+  # is captured - hash_tree skips only .bfs/, not .bfsignore.
   snapshot_hashes "$vault" "$base"
   run_bfs "$vault" push --new
   assert_ok
@@ -50,7 +50,7 @@ scenario_run() {
 EOF
   assert_lock_exists "$vault"
 
-  # Read commands keep working — none of them acquire the push lock.
+  # Read commands keep working - none of them acquire the push lock.
   run_bfs "$vault" verify
   assert_ok
   assert_manifest_health "$vault" 1 healthy

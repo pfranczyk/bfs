@@ -9,8 +9,8 @@ import type { SkippedFile } from './errors.js';
 import { BfsError } from './errors.js';
 import { hashBuffer, SHA256_BYTES } from './hash.js';
 
-// BFS Blob header: 70 bytes (unchanged between v1 and v2 — the version bump lives
-// in the file-table entry, which gains a `kind` byte and a `created_at` field).
+// BFS Blob header: 70 bytes, identical for every blob format version - the
+// version-specific fields live in the per-file table below, not here.
 // 0x00  4  Magic: "BFS\0"
 // 0x04  2  Format version: uint16 LE (2)
 // 0x06  16 Vault UUID: 16 bytes binary
@@ -26,7 +26,7 @@ import { hashBuffer, SHA256_BYTES } from './hash.js';
 // EOF-32 32 SHA-256 checksum
 const HEADER_SIZE = 70;
 
-/** One included file discovered by scanDir — its path relative to the scan root. */
+/** One included file discovered by scanDir - its path relative to the scan root. */
 export interface FileMeta {
   relativePath: string;
 }
@@ -60,7 +60,7 @@ export async function scanDir(rootDir: string, ignoreFilter: IgnoreFilter): Prom
  *
  * @param rootDir      - Directory to scan
  * @param ignoreFilter - Filter: returns true = ignore the relative path
- * @returns { files, excluded } — files to pack and entries excluded by type
+ * @returns { files, excluded } - files to pack and entries excluded by type
  */
 export async function scanDirClassified(rootDir: string, ignoreFilter: IgnoreFilter): Promise<ScanResult> {
   const files: FileMeta[] = [];
@@ -78,10 +78,10 @@ export async function scanDirClassified(rootDir: string, ignoreFilter: IgnoreFil
       } else if (entry.isSymbolicLink()) {
         // readdir uses lstat semantics, so a symlink is neither file nor
         // directory. A link is never packed (it may point outside the tree or
-        // form a loop) — record it for the push excluded gate.
+        // form a loop) - record it for the push excluded gate.
         excluded.push({ path: relPath, reason: 'symlink' });
       } else {
-        // Neither file, directory, nor symlink — a special file (socket, FIFO,
+        // Neither file, directory, nor symlink - a special file (socket, FIFO,
         // block/char device). Not representable in a blob; record it too.
         excluded.push({ path: relPath, reason: 'special' });
       }
@@ -143,7 +143,7 @@ interface BlobHeaderFields {
 }
 
 /**
- * Builds the fixed 70-byte BFS blob header (magic … data-section length).
+ * Builds the fixed 70-byte BFS blob header (magic ... data-section length).
  * File-table and data-section offsets are derived from HEADER_SIZE +
  * fileTableLength; the created timestamp is stamped at call time. Throws if the
  * written size drifts from HEADER_SIZE (off-by-one guard).
@@ -191,7 +191,7 @@ function _buildBlobHeader(fields: BlobHeaderFields): Buffer {
  * @param ignoreFilter - Filter function (returns true = ignore the file)
  * @param vaultId      - Optional 16-byte vault UUID (defaults to zeros)
  * @param compressed   - When true, deflate-compress all files into a ZIP data section
- * @returns `{ blob, skipped }` — the packed buffer and any files that could not be read
+ * @returns `{ blob, skipped }` - the packed buffer and any files that could not be read
  */
 export async function packBlob(rootDir: string, ignoreFilter: IgnoreFilter, vaultId?: Buffer, compressed?: boolean): Promise<{ blob: Buffer; skipped: SkippedFile[] }> {
   // 1. Scan directory recursively
@@ -206,7 +206,7 @@ export async function packBlob(rootDir: string, ignoreFilter: IgnoreFilter, vaul
   return _packBlobRaw(metas, rootDir, vaultId, skipped);
 }
 
-/** Raw (uncompressed) RAM path — one file-table entry per file (kind NEW_FILE). */
+/** Raw (uncompressed) RAM path - one file-table entry per file (kind NEW_FILE). */
 async function _packBlobRaw(metas: FileMeta[], rootDir: string, vaultId: Buffer | undefined, skipped: SkippedFile[]): Promise<{ blob: Buffer; skipped: SkippedFile[] }> {
   const fileDataList: Buffer[] = [];
   const fileEntries: FileEntry[] = [];
@@ -248,7 +248,7 @@ async function _packBlobRaw(metas: FileMeta[], rootDir: string, vaultId: Buffer 
 }
 
 /**
- * Compressed RAM path — one file-table entry per user file (kind NEW_FILE); the
+ * Compressed RAM path - one file-table entry per user file (kind NEW_FILE); the
  * data section is a single ZIP. `data_offset` is unused (0) and `size`/`hash`
  * describe the UNCOMPRESSED content, giving per-file integrity on top of the ZIP
  * CRC; restore matches ZIP entries to table entries by path (the COMPRESSED flag
@@ -297,7 +297,7 @@ function _assembleBlobBuffer(fileCount: number, flags: number, fileTable: Buffer
 
 /**
  * Estimates the total byte size of a BFS blob for the given directory.
- * Scans recursively and stats each file — does NOT read file contents.
+ * Scans recursively and stats each file - does NOT read file contents.
  * Used to decide between RAM path (packBlob) and disk path (packBlobToFile).
  * @returns Estimated blob size in bytes (exact: based on paths + stat sizes)
  */
@@ -313,7 +313,7 @@ export async function estimateBlobSize(rootDir: string, ignoreFilter: IgnoreFilt
       total += 2 + pathLen + 69;
       total += stat.size;
     } catch {
-      // Unreadable files are skipped — they won't appear in the blob
+      // Unreadable files are skipped - they won't appear in the blob
     }
   }
   return total;
@@ -323,16 +323,16 @@ export async function estimateBlobSize(rootDir: string, ignoreFilter: IgnoreFilt
  * Packs a directory into a BFS blob written directly to a file on disk.
  * Each file is read exactly once: a single streaming pass computes its SHA-256
  * and writes its bytes to the blob in one go, so the file-table hash always
- * matches the bytes actually stored — a file changing between scan and write
+ * matches the bytes actually stored - a file changing between scan and write
  * can never produce a hash/bytes divergence that makes the backup unrestorable.
  * The blob is never fully loaded into RAM.
  *
  * The header + file table are reserved as a zero placeholder first (its byte
  * length is fixed by the scanned paths), then overwritten in place with the real
- * hashes, sizes and offsets once the write pass finishes — the same scheme as
+ * hashes, sizes and offsets once the write pass finishes - the same scheme as
  * packBlobToFileZipped. All data is written at explicit positions, so a file
- * that becomes unreadable — including a fault partway through its stream, after
- * some bytes were written — is skipped and listed in `skipped` without desyncing
+ * that becomes unreadable - including a fault partway through its stream, after
+ * some bytes were written - is skipped and listed in `skipped` without desyncing
  * later offsets: its partial bytes are overwritten by the next file or dropped by
  * a final truncate. A failure writing the output aborts the pack. Peak RAM:
  * approximately one read-chunk per file.
@@ -340,7 +340,8 @@ export async function estimateBlobSize(rootDir: string, ignoreFilter: IgnoreFilt
  * @param outputPath   - Destination file (e.g. .bfs/cache/push.blob.pending)
  * @param ignoreFilter - Filter: returns true = ignore path
  * @param vaultId      - Optional 16-byte vault UUID (defaults to zeros)
- * @returns blobSize in bytes, fileCount of included files, and any skipped entries
+ * @returns blobSize in bytes, fileCount of included files, totalSize (sum of the
+ *          packed file sizes), and any skipped entries
  */
 export async function packBlobToFile(rootDir: string, outputPath: string, ignoreFilter: IgnoreFilter, vaultId?: Buffer): Promise<{ blobSize: number; fileCount: number; totalSize: number; skipped: SkippedFile[] }> {
   const metas = await scanDir(rootDir, ignoreFilter);
@@ -362,11 +363,11 @@ export async function packBlobToFile(rootDir: string, outputPath: string, ignore
   const outputHandle = await fs.open(outputPath, 'w');
   try {
     // Reserve header + file table region (overwritten after the write pass). All
-    // writes use explicit positions, so the file cursor is never load-bearing —
+    // writes use explicit positions, so the file cursor is never load-bearing -
     // a partial write from a mid-stream failure cannot desync later offsets.
     await outputHandle.write(Buffer.alloc(dataStartOffset), 0, dataStartOffset, 0);
 
-    // ── Single pass: read each file once, hashing + writing the same bytes ──
+    // -- Single pass: read each file once, hashing + writing the same bytes --
     let currentDataOffset = 0n;
     for (const meta of metas) {
       const absPath = path.join(rootDir, meta.relativePath);
@@ -376,7 +377,7 @@ export async function packBlobToFile(rootDir: string, outputPath: string, ignore
         results.push({ path: meta.relativePath, kind: BLOB_ENTRY_KIND.NEW_FILE, size, data_offset: currentDataOffset, hash: hashHex, mode, modified_at: modifiedAt, created_at: createdAt });
         currentDataOffset += size;
       } catch (e: unknown) {
-        if (e instanceof BfsError) throw e; // output write failure — cannot continue, abort the pack
+        if (e instanceof BfsError) throw e; // output write failure - cannot continue, abort the pack
         // Input read failure (unreadable / vanished / mid-stream I/O fault): skip
         // this file. currentDataOffset is unchanged, so its partial bytes at
         // fileStartPos are overwritten by the next file, or dropped by the
@@ -391,7 +392,7 @@ export async function packBlobToFile(rootDir: string, outputPath: string, ignore
     // have left past the real end of the data section.
     await outputHandle.truncate(hashEnd);
 
-    // ── Overwrite placeholder with the real header + file table ─────────────
+    // -- Overwrite placeholder with the real header + file table -------------
     // fileTableLength stays at placeholderTableLength so dataSectionOffset keeps
     // pointing at dataStartOffset even when a skipped file shortens the table.
     const fileTableParts = results.map((fe) => buildFileTableEntry(fe, Buffer.from(fe.hash, 'hex')));
@@ -402,8 +403,8 @@ export async function packBlobToFile(rootDir: string, outputPath: string, ignore
       await outputHandle.write(fileTable, 0, fileTable.length, HEADER_SIZE);
     }
 
-    // ── Trailing checksum: re-read header + table + data. The header/table are
-    //    overwritten after the data, so a running hasher cannot cover them. ──
+    // -- Trailing checksum: re-read header + table + data. The header/table are
+    //    overwritten after the data, so a running hasher cannot cover them. --
     const blobHasher = createHash('sha256');
     const readHandle = await fs.open(outputPath, 'r');
     try {
@@ -520,7 +521,7 @@ export async function packBlobToFileZipped(rootDir: string, outputPath: string, 
   }
 }
 
-// ─── Private helpers for packBlobToFile ───────────────────────────────────
+// --- Private helpers for packBlobToFile -----------------------------------
 
 /**
  * Streams a source file once to the output handle: writes its bytes at explicit

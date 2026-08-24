@@ -6,7 +6,27 @@ import { captureConsole, runCmd } from './_helpers.js';
 vi.mock('../../src/vault/recovery.js', () => ({ recover: vi.fn() }));
 vi.mock('../../src/providers/provider.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/providers/provider.js')>();
-  return { ...actual, createCliProviderIO: vi.fn(() => ({ lang: 'en', workDir: process.cwd(), ask: vi.fn(), askSecret: vi.fn(), confirm: vi.fn(), choose: vi.fn(), info: vi.fn(), warn: vi.fn(), progress: vi.fn() })) };
+  // `interactive` is resolved exactly as the real constructor does - an explicit
+  // value when the command passes one, otherwise from the terminal. Adapters
+  // branch on it, and under Vitest there is no TTY, so a mock that left it
+  // undefined would report an operator who is not there and let this suite pass
+  // on paths the real command refuses.
+  return {
+    ...actual,
+    createCliProviderIO: vi.fn((_workDir: string, interactive?: boolean) => ({
+      lang: 'en',
+      workDir: process.cwd(),
+      interactive: interactive ?? process.stdin.isTTY === true,
+      ask: vi.fn(),
+      askSecret: vi.fn(),
+      confirm: vi.fn(),
+      choose: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      progress: vi.fn(),
+    })),
+  };
 });
 vi.mock('inquirer', () => ({
   default: { prompt: vi.fn() },
@@ -31,7 +51,11 @@ const recoveryReport = {
     { version: 2, health: VersionHealth.Healthy, consensus: true },
     { version: 3, health: VersionHealth.Degraded, consensus: true },
   ],
+  unrecovered_versions: [],
 };
+
+/** The same run, having met one version whose password nobody supplied. */
+const partialRecoveryReport = { ...recoveryReport, unrecovered_versions: [4] };
 
 describe('recovery', () => {
   let capture: ReturnType<typeof captureConsole>;
@@ -42,7 +66,7 @@ describe('recovery', () => {
     mockRecover.mockResolvedValue(recoveryReport as never);
     // Interactive flow falls back to LocalFsProvider.configureInteractive,
     // mocked to skip the provider's own prompts. configureFromFlags is the
-    // real implementation — it parses bootstrap spec tokens directly.
+    // real implementation - it parses bootstrap spec tokens directly.
     vi.spyOn(LocalFsProvider.prototype, 'configureInteractive').mockResolvedValue({ path: '/mnt/usb' });
     // Replace providerRegistry.create with a spy returning a fake provider;
     // recovery only calls authenticate/setVaultName on the bootstrap provider.
@@ -74,7 +98,7 @@ describe('recovery', () => {
     vi.restoreAllMocks();
   });
 
-  // ─── CI mode: full --bootstrap path ───────────────────────────────────
+  // --- CI mode: full --bootstrap path -----------------------------------
 
   it('should run without prompts when --bootstrap, --provider, --name provided', async () => {
     await runCmd(['recovery', '--provider', 'local', '--name', 'my-vault', '--bootstrap', '--path /mnt/usb']);
@@ -106,8 +130,21 @@ describe('recovery', () => {
     expect(output).toContain('pull');
   });
 
-  // ─── CI mode: parse adapter flags via configureFromFlags ──────────────────
-  // Regression for the user's bug report — `bfs recovery --provider ftp
+  // A run that skipped a version cannot sign off with "restore the latest" - the
+  // latest is the one that stayed sealed, and that command would refuse. The
+  // closing line has to name a version this directory can actually restore.
+  it('should close by naming a restorable version when one was skipped', async () => {
+    mockRecover.mockResolvedValue(partialRecoveryReport as never);
+
+    await runCmd(['recovery', '--provider', 'local', '--name', 'my-vault', '--bootstrap', '--path /mnt/usb']);
+
+    const output = capture.logs.join('\n');
+    expect(output).toContain('pull --version 3');
+    expect(output).toContain('v004');
+  });
+
+  // --- CI mode: parse adapter flags via configureFromFlags ------------------
+  // Regression for the user's bug report - `bfs recovery --provider ftp
   // --path bfsuser@host/ftp/bfsuser` returned "530 Login incorrect" because
   // adapter flags never reached configureFromFlags. After the refactor,
   // bootstrap spec is parsed by parseRecoveryBootstrapSpec and the resulting
@@ -120,12 +157,48 @@ describe('recovery', () => {
   });
 
   it('should parse ftp adapter flags from bootstrap spec into provider config', async () => {
-    await runCmd(['recovery', '--provider', 'ftp', '--name', 'my-vault', '--bootstrap', '--host nas.local --port 21 --user bob --password secret --path /storage']);
+    // `--accept-new-cert` belongs to a usable FTPS bootstrap: nobody can be asked
+    // here, so without it - or a pinned fingerprint - there is no way to trust
+    // the server and the adapter refuses (see the test below).
+    await runCmd(['recovery', '--provider', 'ftp', '--name', 'my-vault', '--bootstrap', '--host nas.local --port 21 --user bob --password secret --path /storage --accept-new-cert']);
 
-    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ host: 'nas.local', port: 21, user: 'bob', password: 'secret', path: '/storage', secure: true }) }), expect.anything());
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ config: expect.objectContaining({ host: 'nas.local', port: 21, user: 'bob', password: 'secret', path: '/storage', secure: true, accept_new_cert: true }) }),
+      expect.anything(),
+    );
   });
 
-  // ─── CI mode: flag validation ─────────────────────────────────────────────
+  // Recovery starts from one storage whose address the operator types in, so it
+  // is exactly where an unattended run can find itself with no basis for trust.
+  // Refusing here costs nothing: nothing has been rebuilt yet.
+  it('should refuse an FTPS bootstrap with no way to trust the server', async () => {
+    const result = await runCmd(['recovery', '--provider', 'ftp', '--name', 'my-vault', '--bootstrap', '--host nas.local --port 21 --user bob --password secret --path /storage']);
+
+    expect(result).toBe('abort');
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(capture.errors.join('\n')).toContain('--accept-new-cert');
+  });
+
+  it('should leave --bootstrap runs interactive when a terminal is attached', async () => {
+    // --bootstrap supplies the first storage's settings; it does not declare that
+    // nobody is watching. Recovering a machine is an operator's job, so on a
+    // terminal the vault password, the host gate and the stripped secrets are
+    // still asked for. Forcing the run non-interactive here would silently take
+    // those away - and the scenarios that drive recovery through a real
+    // pseudo-terminal would be testing a path no operator can reach.
+    const originalIsTty = process.stdin.isTTY;
+    process.stdin.isTTY = true;
+    try {
+      await runCmd(['recovery', '--provider', 'local', '--name', 'my-vault', '--bootstrap', '--path /mnt/usb']);
+    } finally {
+      process.stdin.isTTY = originalIsTty;
+    }
+
+    const io = mockRecover.mock.calls[0]?.[1]?.io;
+    expect(io?.interactive).toBe(true);
+  });
+
+  // --- CI mode: flag validation ---------------------------------------------
 
   it('should reject --bootstrap without --provider', async () => {
     const result = await runCmd(['recovery', '--bootstrap', '--path /mnt/usb', '--name', 'my-vault']);
@@ -164,7 +237,7 @@ describe('recovery', () => {
     expect(capture.errors.some((l) => l.includes('host') && l.toLowerCase().includes('required'))).toBe(true);
   });
 
-  // ─── Interactive mode (without --bootstrap) ──────────────────────────────────
+  // --- Interactive mode (without --bootstrap) ----------------------------------
 
   it('should ask for provider type when --provider missing', async () => {
     // promptWithRawMode calls: provider type + vaultName.
@@ -187,7 +260,7 @@ describe('recovery', () => {
     expect(mockPrompt).toHaveBeenCalledTimes(1);
   });
 
-  // ─── Cancellation ───────────────────────────────────────────────────────────
+  // --- Cancellation -----------------------------------------------------------
 
   it('should cancel when __cancel__ selected in provider type prompt', async () => {
     mockPrompt.mockResolvedValueOnce({ providerType: '__cancel__' } as never);
@@ -208,7 +281,7 @@ describe('recovery', () => {
     expect(mockRecover).not.toHaveBeenCalled();
   });
 
-  // ─── recover errors ────────────────────────────────────────────────────────
+  // --- recover errors --------------------------------------------------------
 
   it('should abort and show error when recover throws', async () => {
     mockRecover.mockRejectedValue(new Error('Nie znaleziono shardów'));
@@ -219,7 +292,7 @@ describe('recovery', () => {
     expect(capture.errors.some((l) => l.includes('Nie znaleziono'))).toBe(true);
   });
 
-  // ─── Vault password ───────────────────────────────────────────────────────
+  // --- Vault password -------------------------------------------------------
 
   it('should pass --password (vault encryption) to recover', async () => {
     await runCmd(['recovery', '--provider', 'local', '--name', 'my-vault', '--bootstrap', '--path /mnt/usb', '--password', 'tajne']);
@@ -233,14 +306,14 @@ describe('recovery', () => {
     expect(mockRecover).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ passwords: ['one', 'two'] }));
   });
 
-  // ─── --password in bootstrap does not clash with --password in recovery ──────────
+  // --- --password in bootstrap does not clash with --password in recovery ----------
   // Vault `--password` (recovery flag, variadic, encryption key) and FTP
   // `--password` (inside --bootstrap, single-value, login credential)
   // coexist because the latter lives inside a quoted string Commander
   // never sees as a top-level token.
 
   it('should keep vault --password and bootstrap --password independent', async () => {
-    await runCmd(['recovery', '--provider', 'ftp', '--name', 'my-vault', '--bootstrap', '--host nas --user bob --password ftp-secret --path /a', '--password', 'vault-secret']);
+    await runCmd(['recovery', '--provider', 'ftp', '--name', 'my-vault', '--bootstrap', '--host nas --user bob --password ftp-secret --path /a --accept-new-cert', '--password', 'vault-secret']);
 
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ password: 'ftp-secret' }) }), expect.anything());
     expect(mockRecover).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ passwords: ['vault-secret'] }));

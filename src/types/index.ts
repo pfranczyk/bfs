@@ -4,7 +4,7 @@ import type { SkippedFile } from '../core/errors.js';
 import type { PushLockFailedEntry } from '../vault/lockfile.js';
 
 /**
- * `T` or explicit `null` — the project's canonical "present but not set" type.
+ * `T` or explicit `null` - the project's canonical "present but not set" type.
  * Also available as a global ambient (`src/types/global.d.ts`); it is defined
  * and exported here as well so the provider contract's `Nullable` references
  * survive tsup's .d.ts bundling into `dist/lib.d.ts` (global ambients are
@@ -13,7 +13,7 @@ import type { PushLockFailedEntry } from '../vault/lockfile.js';
  */
 export type Nullable<T> = T | null;
 
-// ─── Enums ────────────────────────────────────────────────────
+// --- Enums ----------------------------------------------------
 
 /** Bitfield constants for BlobHeader.flags (uint32 LE). */
 export const BLOB_FLAGS = { ENCRYPTED: 0x01, COMPRESSED: 0x02 } as const;
@@ -22,7 +22,7 @@ export const BLOB_FLAGS = { ENCRYPTED: 0x01, COMPRESSED: 0x02 } as const;
  * Blob format version written by pack. v2 keeps the 70-byte header but extends
  * each file-table entry with a `kind` discriminator and a `created_at` timestamp,
  * so a single per-file table carries location, integrity AND full metadata
- * (mode/mtime/created_at) for both the raw and compressed paths — no separate
+ * (mode/mtime/created_at) for both the raw and compressed paths - no separate
  * metadata stream. v1 blobs (fixed entry, no kind/created_at) stay fully
  * readable; the file-table parser dispatches on this version.
  */
@@ -33,13 +33,13 @@ export const BLOB_FORMAT_VERSION = 2;
  * emits: the entry carries the file's location, integrity and metadata, and its
  * bytes live in the data section. `METADATA_ONLY` (attributes changed, content
  * inherited from the base) and `DELETED` (tombstone) are reserved for incremental
- * backups — the format documents their shapes and the parser rejects them until
+ * backups - the format documents their shapes and the parser rejects them until
  * incremental restore is implemented, so they can be added additively within
  * format_version 2 (no further bump).
  */
 export const BLOB_ENTRY_KIND = { NEW_FILE: 0, METADATA_ONLY: 1, DELETED: 2 } as const;
 
-/** Push behavior mode — what to do with the existing version. */
+/** Push behavior mode - what to do with the existing version. */
 export enum PushMode {
   NewVersion = 'new_version',
   Overwrite = 'overwrite',
@@ -54,7 +54,7 @@ export enum VersionHealth {
   Unknown = 'unknown',
 }
 
-// ─── Vault configuration (.bfs/config.json) ──────────────────
+// --- Vault configuration (.bfs/config.json) ------------------
 
 export interface VaultConfig {
   vault_id: string; // UUID v4
@@ -81,11 +81,11 @@ export interface VaultConfig {
 
 export interface ProviderConfig {
   id: string; // user-assigned name from init/provider-add, e.g. "backup-firma", "dysk-usb"
-  type: string; // "local" | "gdrive" | "onedrive" | "ftp" | "ssh" | "smb"
+  type: string; // built-in: "local" | "ftp" | "ssh"; external adapters register their own
   /**
    * Full npm spec of the adapter package for external adapters (e.g.
    * "bfs-adapter-ssh@1.0.1" or "@corp/bfs-adapter-x@2.0.0"). null for
-   * built-in providers (local, ftp) — they ship with BFS itself.
+   * built-in providers (local, ftp, ssh) - they ship with BFS itself.
    *
    * Persisted in .bfs/config.json, manifest and shard header location map.
    * Recovery preflight reads this to tell the user which `npm install -g`
@@ -117,7 +117,7 @@ export interface RepairPair {
   readonly newConfig: Nullable<ProviderConfig>;
 }
 
-// ─── Vault state (.bfs/state.json) ───────────────────────────
+// --- Vault state (.bfs/state.json) ---------------------------
 
 export interface VaultState {
   latest_version: number; // highest version present on providers (0 = no pushes)
@@ -128,8 +128,8 @@ export interface VaultState {
   locations_confirmed?: boolean;
 }
 
-// ─── Version manifest (.bfs/manifests/vNNN.json) ─────────────
-// Each version has its own manifest — a snapshot of the configuration at
+// --- Version manifest (.bfs/manifests/vNNN.json) -------------
+// Each version has its own manifest - a snapshot of the configuration at
 // push time. This allows: different N/K schemes per version, different
 // provider sets, jumping between versions without downloading shards.
 
@@ -147,16 +147,18 @@ export interface VersionManifest {
   shards: ManifestShard[]; // 1..N+K entries (partial-committed versions hold fewer)
   health: VersionHealth; // push: healthy/degraded/damaged from uploaded vs N+K; recovery: degraded (until verify)
   /**
-   * true when the recorded `health` rests on payload corruption a deep verify
-   * actually read off the media. Such a verdict outlives a later shallow verify,
-   * which inspects only the header window and is blind to rot by construction —
-   * without this, the cheap check would erase the expensive one's finding. A
-   * verdict caused by an unreachable shard does NOT set it: nothing was
-   * established about the bytes, so it must retire as soon as the shard is back.
+   * true when the recorded `health` rests on payload corruption someone actually
+   * read off the media - a deep verify, or a repair, which streams every sibling
+   * in full to reconstruct the lost part and checks each against its own trailing
+   * checksum. Such a verdict outlives a later shallow verify, which inspects only
+   * the header window and is blind to rot by construction - without this, the
+   * cheap check would erase the expensive one's finding. A verdict caused by an
+   * unreachable shard does NOT set it: nothing was established about the bytes,
+   * so it must retire as soon as the shard is back.
    * Absent on manifests written before this field existed = no rot recorded.
    */
   health_deep_rot?: boolean;
-  /** ISO 8601 timestamp of the verify pass that produced `health`. */
+  /** ISO 8601 timestamp of the pass or repair that produced `health`. */
   health_checked_at?: string;
   // Streaming pipeline fields (FORMAT_VERSION=2 shards). Absent = legacy format.
   rs_striped?: boolean; // true = striped RS encoding (always for new pushes)
@@ -174,15 +176,15 @@ export interface ManifestShard {
   provider_type: string; // "local" | "gdrive" | "ftp" | "ssh" | ...
   remote_path: string; // path on the provider
   shard_hash: string; // SHA-256 of the shard PAYLOAD (RS data only, no header, no trailing checksum)
-  // The payload is immutable — the header can change (heal, relocate)
+  // The payload is immutable - the header can change (heal, relocate)
   // but the RS data cannot. Hence the hash covers payload only.
 }
 
-// ─── Skip results ─────────────────────────────────────────────
+// --- Skip results ---------------------------------------------
 
 export type { SkippedFile };
 
-// ─── Catalog drift (blob ↔ directory currency) ────────────────
+// --- Catalog drift (blob <-> directory currency) ----------------
 
 /** One file's identity in a catalog snapshot: byte size + rounded mtime. */
 export interface CatalogSnapshotEntry {
@@ -190,7 +192,7 @@ export interface CatalogSnapshotEntry {
   mtimeMs: number;
 }
 
-/** Relative path (forward-slash) → file identity, capturing a directory at one instant. */
+/** Relative path (forward-slash) -> file identity, capturing a directory at one instant. */
 export type CatalogSnapshot = Map<string, CatalogSnapshotEntry>;
 
 /**
@@ -208,7 +210,7 @@ export interface CatalogDrift {
 
 /**
  * A directory entry excluded from a backup because it is neither a regular file
- * nor a directory — a symbolic link, or a special file (socket, FIFO, block or
+ * nor a directory - a symbolic link, or a special file (socket, FIFO, block or
  * character device). Such entries are never packed into a blob (a link may be a
  * loop; a device is not a file). The push surfaces them so the user can add them
  * to .bfsignore or pass --allow-excluded.
@@ -220,7 +222,7 @@ export interface ExcludedEntry {
   reason: 'symlink' | 'special';
 }
 
-/** Result returned by push() — successful, partial, or damaged. */
+/** Result returned by push() - successful, partial, or damaged. */
 export interface PushResult {
   version: number;
   file_count: number;
@@ -233,11 +235,11 @@ export interface PushResult {
   uploaded_count: number;
   /** Shards whose upload failed; mirrors .bfs/push.lock.failed for callers that need detail without re-reading the lock. */
   failed: PushLockFailedEntry[];
-  /** Healthy when uploaded_count === N+K; Degraded when >= N; Damaged when < N (and ≥ 1). */
+  /** Healthy when uploaded_count === N+K; Degraded when >= N; Damaged when < N (and >= 1). */
   health: VersionHealth;
 }
 
-/** Options for push() — pack, encrypt, RS-encode, and upload to all providers. */
+/** Options for push() - pack, encrypt, RS-encode, and upload to all providers. */
 export interface PushOptions {
   /** Overrides config.push_mode. If absent, config.push_mode is used. */
   mode?: PushMode.NewVersion | PushMode.Overwrite;
@@ -261,7 +263,7 @@ export interface PushOptions {
    */
   interactive?: boolean;
   /**
-   * When true, accepts a detected blob↔directory drift (files changed on disk
+   * When true, accepts a detected blob<->directory drift (files changed on disk
    * during packing) and proceeds with the upload. The blob stays fully
    * restorable regardless; the flag waives only currency, never recoverability.
    * When false/absent: interactive mode prompts, non-interactive mode throws
@@ -281,6 +283,16 @@ export interface PushOptions {
   cacheDir?: string;
   /** Overrides config.max_ram_mb for this push operation. */
   maxRamMb?: number;
+  /**
+   * Pre-consents to the version-switch confirmation - the gate reached when the
+   * working directory sits on an older version than the latest on providers
+   * (working_version < latest_version). With it, an unattended run creates the
+   * new version without a prompt; without it, a run with no operator refuses and
+   * names this flag. Orthogonal to `ProviderIO.interactive`: supplying consent
+   * does not declare that nobody is watching, so it never suppresses other
+   * prompts.
+   */
+  yes?: boolean;
   io: ProviderIO;
 }
 
@@ -292,15 +304,15 @@ export interface PullResult {
   skipped: SkippedFile[];
 }
 
-// ─── Ignore filter ────────────────────────────────────────────
+// --- Ignore filter --------------------------------------------
 
 export type IgnoreFilter = (relativePath: string) => boolean;
 
-// ─── BFS Blob — binary format ────────────────────────────────
+// --- BFS Blob - binary format --------------------------------
 
 export interface BlobHeader {
   magic: 'BFS\0'; // 4 bytes
-  format_version: number; // 2 bytes (uint16, current value: 2 — v2 file-table entries carry kind + created_at)
+  format_version: number; // 2 bytes (uint16, current value: 2 - v2 file-table entries carry kind + created_at)
   vault_id: string; // 16 bytes (UUID as binary)
   flags: number; // 4 bytes (bitfield: bit 0 = encrypted, bit 1 = compressed)
   created_at: bigint; // 8 bytes (unix timestamp ms, uint64 LE)
@@ -310,7 +322,7 @@ export interface BlobHeader {
   data_offset: bigint; // 8 bytes
   data_length: bigint; // 8 bytes
 }
-// Total header size: 70 bytes (unchanged between v1 and v2 — the version bump is in the file-table entry)
+// Total header size: 70 bytes (unchanged between v1 and v2 - the version bump is in the file-table entry)
 
 export interface FileEntry {
   path: string; // relative path (UTF-8, / separators)
@@ -323,25 +335,25 @@ export interface FileEntry {
   created_at: bigint; // unix timestamp ms, 8 bytes (uint64 LE; v2+; 0 = unavailable / v1)
 }
 
-// ─── Shard — binary format ───────────────────────────────────
+// --- Shard - binary format -----------------------------------
 
 export interface ShardHeader {
   magic: 'BFSS'; // 4 bytes
   format_version: number; // 2 bytes (uint16)
   vault_id: string; // 16 bytes (UUID binary)
   vault_name: string; // variable (length-prefixed)
-  blob_size: bigint; // 8 bytes — size of the data fed into RS-encode
+  blob_size: bigint; // 8 bytes - size of the data fed into RS-encode
   // (post-encryption when enabled, plain blob otherwise)
   // Used to trim padding after RS-decode
-  blob_hash: string; // 32 bytes — SHA-256 of the PLAIN blob (before encryption/RS)
+  blob_hash: string; // 32 bytes - SHA-256 of the PLAIN blob (before encryption/RS)
   // Verified after RS-decode + decrypt
   data_shards: number; // 2 bytes (uint16)
   parity_shards: number; // 2 bytes (uint16)
   shard_index: number; // 2 bytes (uint16)
-  version: number; // 4 bytes (uint32) — snapshot version number
+  version: number; // 4 bytes (uint32) - snapshot version number
   encrypted: boolean; // 1 byte
   kdf_salt: Nullable<Buffer>; // 16 bytes when encrypted=true, absent otherwise
-  rs_stripe_size: Nullable<number>; // 4 bytes (uint32) — present when format_version >= 2; null for v1
+  rs_stripe_size: Nullable<number>; // 4 bytes (uint32) - present when format_version >= 2; null for v1
   map_length: number; // 4 bytes (uint32)
   location_map: ShardLocation[]; // JSON (optionally AES-GCM encrypted)
 }
@@ -358,7 +370,7 @@ export interface ShardLocation {
   adapterPackage: Nullable<string>;
   // NOTE: connection_config stores only NON-SECRET connection coordinates
   // (host, port, user, path). Adapter-declared secret fields (FTP password,
-  // SSH private key/passphrase) are stripped before the map is embedded —
+  // SSH private key/passphrase) are stripped before the map is embedded -
   // see splitLocationSecrets in vault/location-map.ts. This matters because
   // when encrypted=false the location map is raw JSON inside the shard header,
   // so anyone holding a single shard reads every provider's coordinates. The
@@ -366,7 +378,7 @@ export interface ShardLocation {
   // interactively via ProviderIO.askSecret() during disaster recovery.
   connection_config: Record<string, unknown>;
   // Names of inputs this resource requires at connection time but that are NOT
-  // stored here — stripped secrets the operator must supply during recovery.
+  // stored here - stripped secrets the operator must supply during recovery.
   // [] = nothing required (e.g. anonymous FTP). null = shard written before
   // this field existed (legacy): the secret is still inline in connection_config,
   // so recovery uses it directly instead of prompting. The map parser
@@ -376,7 +388,7 @@ export interface ShardLocation {
   shard_hash: string; // SHA-256 of the PAYLOAD (RS data, without the shard header)
 }
 
-// ─── Provider I/O — abstraction over user interaction ────────
+// --- Provider I/O - abstraction over user interaction --------
 // Providers do NOT touch the CLI directly. They receive ProviderIO via
 // dependency injection. The same provider therefore works in the REPL, in
 // the standalone CLI, and in a future GUI.
@@ -386,7 +398,7 @@ export interface ProviderIO {
   /**
    * Active user language (BCP-47 tag, e.g. 'en', 'pl').
    *
-   * Informational-only — built-in providers ignore this because they use
+   * Informational-only - built-in providers ignore this because they use
    * the global `t()` translator. External plugin adapters may read it to
    * decide how (or whether) to localize their own prompts. BFS does NOT
    * prescribe a translation mechanism for plugins.
@@ -395,23 +407,26 @@ export interface ProviderIO {
 
   /**
    * Working directory of the BFS invocation (absolute). Mirrors the same
-   * cwd BFS itself uses — i.e. respects `bfs --cwd <dir>` and falls back
+   * cwd BFS itself uses - i.e. respects `bfs --cwd <dir>` and falls back
    * to `process.cwd()` when the flag is absent. Provider is free to
    * resolve any relative path its own flags or prompts accept against
    * this value (typical: `path.resolve(io.workDir, userInput)`).
    *
-   * Informational-only context — BFS never inspects what providers do
+   * Informational-only context - BFS never inspects what providers do
    * with it.
    */
   readonly workDir: string;
 
   /**
    * Whether BFS can prompt the user. Absent or `true` means an interactive
-   * terminal is attached; `false` means a non-interactive invocation (`--ci`,
-   * `--bootstrap`, or no TTY) where a prompt has nobody to answer.
+   * terminal is attached; `false` means a non-interactive invocation (`--ci`
+   * or no TTY) where a prompt has nobody to answer. Flags that merely supply
+   * data a command would otherwise ask for - `--bootstrap`, `--strategy` -
+   * do NOT set this: removing the reason to ask is not the same as declaring
+   * that nobody is there to answer.
    *
    * A provider MUST NOT block on `confirm`/`ask`/`askSecret`/`choose` when this
-   * is `false` — it would hang or abort a scripted run. Instead choose a safe
+   * is `false` - it would hang or abort a scripted run. Instead choose a safe
    * default: e.g. LocalFs auto-creates a missing base path (equivalent to the
    * operator answering "yes") rather than asking. Absent is treated as
    * interactive, so adapters and IO constructors that predate this field keep
@@ -422,7 +437,7 @@ export interface ProviderIO {
   ask(prompt: string): Promise<string>; // "Enter login:"
   askSecret(prompt: string): Promise<string>; // "Enter password:" (hidden)
   confirm(message: string): Promise<boolean>; // "Continue? [y/N]"
-  choose(message: string, options: string[]): Promise<string>; // "Pick a directory:" → list
+  choose(message: string, options: string[]): Promise<string>; // "Pick a directory:" -> list
   info(message: string): void; // "Connecting to FTP..."
   /**
    * Diagnostic log emitted only when `bfs --debug` is active. Built-in
@@ -435,11 +450,11 @@ export interface ProviderIO {
   progress(label: string, percent: number): void; // progress bar
 }
 
-// ─── CLI Provider Input (pass-through) ───────────────────────
+// --- CLI Provider Input (pass-through) -----------------------
 // BFS recognizes exactly two fields of a provider invocation: `type` (which
 // selects the adapter) and `name` (the id). Every other CLI token flows
 // verbatim to the provider as `rawArgs`. BFS does NOT look for
-// `--config-file`, `--private-key`, `--bucket`, or any other flag — those
+// `--config-file`, `--private-key`, `--bucket`, or any other flag - those
 // belong to whatever grammar the adapter chooses to implement.
 //
 // The adapter interprets rawArgs however it documents in `help()`: its own
@@ -449,7 +464,7 @@ export interface ProviderIO {
 // `io.workDir`.
 
 export interface CliProviderInput {
-  /** Value of --name after trimming — non-empty; BFS validates before calling. */
+  /** Value of --name after trimming - non-empty; BFS validates before calling. */
   readonly name: string;
 
   /**
@@ -471,8 +486,8 @@ export interface CliProviderInput {
   /**
    * True when the invoking command edits config WITHOUT contacting the medium
    * (`bfs provider edit` is offline by contract). An adapter whose flag requires
-   * a live connection — e.g. SSH `--accept-new-host-key`, which must dial the
-   * server to capture and pin the host key — MUST reject that flag when this is
+   * a live connection - e.g. SSH `--accept-new-host-key`, which must dial the
+   * server to capture and pin the host key - MUST reject that flag when this is
    * set, pointing the operator at an offline-capable alternative (`--known-host`).
    * Absent/false: the command may contact the medium (add / init / repair /
    * recovery bootstrap).
@@ -480,9 +495,9 @@ export interface CliProviderInput {
   readonly offline?: boolean;
 }
 
-// ─── Provider Help (structured) ──────────────────────────────
+// --- Provider Help (structured) ------------------------------
 // Each provider factory exposes a structured help object. BFS renders
-// these uniformly under `bfs provider -h` — adapters fill fields, not
+// these uniformly under `bfs provider -h` - adapters fill fields, not
 // free-form text, so layout stays consistent across built-ins and plugins.
 
 export interface ProviderHelpFlag {
@@ -522,7 +537,7 @@ export interface ProviderHelp {
   readonly installation?: string;
 }
 
-// ─── Adapter registration metadata ───────────────────────────
+// --- Adapter registration metadata ---------------------------
 // External adapters MUST pass this when registering so BFS can persist
 // `ProviderConfig.adapterPackage` as "<packageName>@<packageVersion>"
 // for disaster-recovery reproducibility. Built-in providers omit it.
@@ -534,15 +549,15 @@ export interface AdapterRegistrationMeta {
   readonly packageVersion: string;
 }
 
-// ─── Storage Provider ────────────────────────────────────────
+// --- Storage Provider ----------------------------------------
 // A provider operates in the context: {base_path}/{vault_name}/
 // vault_name is supplied when the provider is initialized.
 // ProviderIO is supplied at construction (factory/constructor).
 //
 // authenticate() logic:
-//   1. Stored token/password && still valid → connect silently
-//   2. Token expired && refresh token available → refresh silently
-//   3. Nothing works → ProviderIO: "Session expired, enter password:"
+//   1. Stored token/password && still valid -> connect silently
+//   2. Token expired && refresh token available -> refresh silently
+//   3. Nothing works -> ProviderIO: "Session expired, enter password:"
 // The user is not asked unnecessarily.
 
 export interface StorageProvider {
@@ -564,11 +579,13 @@ export interface StorageProvider {
    */
   download(ref: RemoteRef): Promise<Readable>;
   delete(ref: RemoteRef): Promise<void>;
-  // rename — used in overwrite mode (push --overwrite):
-  //   Upload the new shard as .tmp → delete the old one → rename .tmp to the final name.
-  //   Providers without native rename (e.g. S3) implement this as copy + delete.
+  // rename - part of the contract every adapter implements; no path in BFS core
+  //   calls it today (overwrite re-uploads under the same name). Kept because a
+  //   medium that cannot move a file in place would have to be discovered at the
+  //   contract level, not mid-operation. Providers without native rename
+  //   (e.g. S3) implement it as copy + delete.
   rename(ref: RemoteRef, newFilename: string): Promise<RemoteRef>;
-  // updateShardHeader — used by heal (provider-remove + heal):
+  // updateShardHeader - used by heal (provider-remove + heal):
   //   Updates the shard header after the location map changes.
   //   Result: the shard on the provider has a new header, the original payload,
   //   and a recomputed trailing checksum (SHA-256 of new header + payload).
@@ -602,12 +619,12 @@ export interface StorageProvider {
   listVaults(): Promise<string[]>;
   healthCheck(): Promise<boolean>;
 
-  // ─── Configuration lifecycle ──────────────────────────────────────────────
+  // --- Configuration lifecycle ----------------------------------------------
   // Provider owns its own configuration flow. CLI/core code is blind to
-  // provider-specific fields — it only calls these methods polymorphically.
+  // provider-specific fields - it only calls these methods polymorphically.
 
   /**
-   * Interactive configuration — provider prompts the user via ProviderIO.
+   * Interactive configuration - provider prompts the user via ProviderIO.
    * Called by CLI when the user runs `bfs provider add <type>` without flags.
    * @returns config object to persist in VaultConfig.providers[].config
    * @throws BfsError on invalid input or user cancellation
@@ -618,14 +635,20 @@ export interface StorageProvider {
    * Interactive configuration for `bfs provider edit <id>` (not `add`). Unlike
    * `configureInteractive`, the provider is handed the existing connection-config
    * so it can decide whether an identity-defining field changed (for SSH: host or
-   * port → a different server) and adjust host-key handling accordingly. The edit
+   * port -> a different server) and adjust host-key handling accordingly. The edit
    * flow tries the medium first (interactive TOFU when the server is reachable)
-   * but MUST still complete when it is not — falling back to an offline path so a
+   * but MUST still complete when it is not - falling back to an offline path so a
    * credential/coordinate edit succeeds against an unreachable server.
    *
    * Optional: when a provider does not implement it, `bfs provider edit` falls
-   * back to `configureInteractive`. Providers whose configure flow never contacts
-   * the medium (local, ftp) need not implement it.
+   * back to `configureInteractive` - which means the edit inherits whatever that
+   * flow does, including any contact with the medium. Implement this method
+   * whenever your configure flow touches the medium at all: connecting to pin a
+   * certificate or host key, but equally a plain existence check on a path.
+   * Without it, an edit aimed at a medium that is currently gone cannot finish,
+   * which is the one case `bfs provider edit` exists for. All three built-ins
+   * implement it; the fallback exists for adapters written against an earlier
+   * contract.
    *
    * @param io  - ProviderIO for prompts and diagnostics
    * @param ctx - carries the existing connection-config being edited
@@ -638,8 +661,8 @@ export interface StorageProvider {
   /**
    * Non-interactive configuration from the minimal BFS pass-through input.
    * Receives:
-   *   - `name`    — value of --name (already validated non-empty)
-   *   - `rawArgs` — every CLI token that followed `--ci`, `--name <v>` and
+   *   - `name`    - value of --name (already validated non-empty)
+   *   - `rawArgs` - every CLI token that followed `--ci`, `--name <v>` and
    *                 `--type <v>`, in the original order. BFS does NOT
    *                 inspect or interpret them.
    *
@@ -682,10 +705,10 @@ export interface StorageProvider {
    */
   probeConnection(): Promise<void>;
 
-  // ─── Header storage strategy + verification ───────────────────────────────
+  // --- Header storage strategy + verification -------------------------------
   // A relocated shard's header is updated without rewriting its payload: the new
   // header is written to a separate sidecar file next to the shard, keeping the
-  // payload write-once. Built-in providers (local, ftp) use sidecars; a provider
+  // payload write-once. Built-in providers (local, ftp, ssh) use sidecars; a provider
   // whose medium prefers an in-place rewrite may opt out (usesSidecar() === false),
   // and BFS then rewrites the header inside the shard via updateShardHeader().
   // usesSidecar() tells BFS which write-path and read-path to take.
@@ -693,9 +716,9 @@ export interface StorageProvider {
   /**
    * Reports whether this provider stores an updated header in a sidecar file
    * instead of rewriting it in place inside the shard.
-   *   - false → BFS calls updateShardHeader(); the sidecar methods are never
+   *   - false -> BFS calls updateShardHeader(); the sidecar methods are never
    *     called and MUST throw if invoked.
-   *   - true  → BFS calls uploadHeaderSidecar() on write; the read-path fetches
+   *   - true  -> BFS calls uploadHeaderSidecar() on write; the read-path fetches
    *     the sidecar first and, when present, it wins over the in-shard header.
    * @returns true when the provider keeps the header in a sidecar file
    */
@@ -737,11 +760,11 @@ export interface StorageProvider {
    */
   verifyShard(ref: RemoteRef, expected: ShardIdentity): Promise<VerifyShardResult>;
 
-  // ─── Recovery credential handling (optional) ────────────────
+  // --- Recovery credential handling (optional) ----------------
   /**
    * Recovery-only hook: connect to this provider during `bfs recovery`, owning
    * the entire credential interaction. The provider MUST show the operator the
-   * connection target (host/endpoint) BEFORE collecting or reusing any secret —
+   * connection target (host/endpoint) BEFORE collecting or reusing any secret -
    * BFS-core is blind to which config field is the destination vs the secret, so
    * only the provider can present a meaningful target. It may reuse a secret from
    * `pool` (collected for other providers,
@@ -749,7 +772,7 @@ export interface StorageProvider {
    * let the operator decline, then connect + authenticate.
    *
    * Optional: when a provider does not implement it, BFS falls back to prompting
-   * for the location map's `required_inputs` via io.askSecret — the legacy path,
+   * for the location map's `required_inputs` via io.askSecret - the legacy path,
    * which cannot show the host and stays vulnerable to a redirected location map.
    *
    * @param io   - ProviderIO for showing the target and collecting the secret
@@ -758,17 +781,17 @@ export interface StorageProvider {
    *   recovered locations (unattended recovery, `bfs recovery --trust-locations`),
    *   so the provider connects WITHOUT blocking on a host confirmation. It may
    *   still surface the target for the log. Default/false: confirm before
-   *   sending the secret. Interactive recovery — the 99% case — leaves it false.
+   *   sending the secret. Interactive recovery - the 99% case - leaves it false.
    * @returns the secret to add to the pool (reusable across siblings), or null
    *          when the provider uses no reusable secret (anonymous / token)
-   * @throws when the operator declines or the connection/authentication fails —
+   * @throws when the operator declines or the connection/authentication fails -
    *         BFS treats it as a degraded skip of this provider
    */
   connectForRecovery?(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<Nullable<string>>;
 }
 
 /**
- * Context passed to StorageProvider.configureInteractiveForEdit — the existing
+ * Context passed to StorageProvider.configureInteractiveForEdit - the existing
  * connection-config being edited. The provider reads whatever fields it needs to
  * detect an identity-defining change (e.g. SSH host/port) and to preserve values
  * that a full-replacement edit would otherwise drop (e.g. an already-pinned
@@ -781,20 +804,20 @@ export interface ConfigureEditContext {
 export interface RemoteRef {
   provider_id: string;
   path: string;
-  hash?: string; // SHA-256 — available after upload(); list() may not return it (FTP, SSH)
+  hash?: string; // SHA-256 - available after upload(); list() may not return it (FTP, SSH)
 }
 
 /** Identity a shard must carry, used by StorageProvider.verifyShard(). */
 export interface ShardIdentity {
-  vault_id: string; // vault UUID — detects a foreign shard
-  shard_index: number; // 0..N+K-1 — detects a wrong shard index
-  version: number; // shard version — detects a wrong version
+  vault_id: string; // vault UUID - detects a foreign shard
+  shard_index: number; // 0..N+K-1 - detects a wrong shard index
+  version: number; // shard version - detects a wrong version
 }
 
 /**
  * A transport secret collected during recovery, labelled with the provider it
  * was first supplied for. BFS carries these between providers as a blind courier
- * (StorageProvider.connectForRecovery) — it never inspects the value.
+ * (StorageProvider.connectForRecovery) - it never inspects the value.
  */
 export interface RecoverySecret {
   readonly value: string;
@@ -819,7 +842,7 @@ export type VerifyShardResult =
       detail: string;
     };
 
-// ─── Heal operation options ───────────────────────────────────
+// --- Heal operation options -----------------------------------
 
 export interface UpdateLocationMapsOptions {
   newLocationMap: ShardLocation[];

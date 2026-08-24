@@ -22,7 +22,7 @@ export interface ConsensusFields {
 /**
  * Compares two sibling shard headers and returns the names of the fields that
  * diverge (empty array = full agreement). `rs_stripe_size` is included because
- * two shards of one version must share the same striping — a difference means
+ * two shards of one version must share the same striping - a difference means
  * they were not produced together. `location_map` is compared only for
  * unencrypted vaults: encrypted maps are MAC-protected, so tampering is caught
  * at decrypt. The caller decides whether a non-empty result is a hard error

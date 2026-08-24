@@ -1,13 +1,13 @@
 # shellcheck shell=bash
 # The FTP counterpart of 86: a REAL disk failure at the same location. The ftpd
 # holding shard_2 is killed, its data volume WIPED, then restarted on the SAME
-# port with an empty volume — the base directory the provider points at is GONE.
+# port with an empty volume - the base directory the provider points at is GONE.
 # `bfs repair --rebuild` must Reed-Solomon-reconstruct shard_2 and re-upload it.
 #
 # This is the exact case 86 exposes as broken on SSH (strict authenticate() =
 # readdir throws on a missing base dir). Existing FTP repair scenarios (69) always
 # ftp_mkdir the target base BEFORE repairing, so they never exercise a truly
-# missing base — this one deliberately does, to answer "does FTP have the same
+# missing base - this one deliberately does, to answer "does FTP have the same
 # bug, or does its lenient authenticate() + upload ensureDir handle it?".
 #
 # Docker-managed; SKIPs without a Docker daemon.
@@ -42,7 +42,7 @@ scenario_run() {
   local ftpshard="${PV_FTP_REMOTE[2]}/${name}/shard_2.bfs.1"
   [ -n "$(ftp_sha "$fe" "$ftpshard")" ] || _fail "shard_2 missing on the server after push"
 
-  # ── Disk failure: same host:port, data GONE (volume wiped) ──────────────────
+  # -- Disk failure: same host:port, data GONE (volume wiped) ------------------
   docker_ftpd_down "$ctr"
   docker_volume_reset "$vol"
   docker_ftpd_up "$ctr" "$port" "$pmin" "$pmax" "$vol" || _fail "could not restart ftpd after disk wipe"

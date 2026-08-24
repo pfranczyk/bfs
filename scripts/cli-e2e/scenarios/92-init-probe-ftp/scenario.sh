@@ -1,8 +1,8 @@
 # shellcheck shell=bash
 # `bfs init --ci` provisions each FTP provider's base directory itself (via
 # probeConnection), so a medium whose base path does not exist yet is CREATED at
-# init — an unusable target surfaces here, not at the first push. Guards the
-# decisions.md "init probes every medium (creates the dir) even in --ci" contract
+# init - an unusable target surfaces here, not at the first push. Guards the
+# "init probes every medium (creates the dir) even in --ci" contract
 # end-to-end over a real FTP server: the unit init-ci-probe.test.ts proves it with
 # a fake provider; this proves the real FtpProvider.probeConnection actually
 # ensureDir's a missing base. The early-failure side (a genuinely unusable target)
