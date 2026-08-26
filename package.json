@@ -1,6 +1,6 @@
 {
   "name": "bfs-vault",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "description": "Encrypted CLI backup split across local, FTP and SSH storages with Reed-Solomon parity - any N of N+K parts restore everything",
   "type": "module",
   "preferGlobal": true,

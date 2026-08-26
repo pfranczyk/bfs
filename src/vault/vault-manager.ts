@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -72,7 +73,7 @@ export interface PullOptions {
    * Defaults to false (standalone CLI: abort with PullSkippedError).
    */
   interactive?: boolean;
-  /** Directory for temporary files during pull. Defaults to output dir. */
+  /** Directory for the pull scratch dir (downloaded parts). Defaults to os.tmpdir(). */
   tempDir?: string;
   /** Overrides cache directory for pull.blob.pending. Defaults to {rootDir}/.bfs/cache. */
   cacheDir?: string;
@@ -689,11 +690,21 @@ async function _pullV2(config: VaultConfig, manifest: VersionManifest, options: 
   const { data_shards: N, parity_shards: K } = manifest.scheme;
   const targetVersion = manifest.version;
   const stripeSize = manifest.rs_stripe_size ?? V2_STRIPE_SIZE;
-  // tmpDir inside cache dir (or user-specified tempDir) - cleaned up in finally
-  const tmpBase = options.tempDir ?? config.temp_dir ?? path.dirname(outputPath);
-  await _validateConfigDir(tmpBase, 'temp-dir');
-  const tmpDir = path.join(tmpBase, `pull-v2-${targetVersion}-${Date.now()}`);
-  await fs.mkdir(tmpDir, { recursive: true, mode: 0o700 });
+  // Scratch dir under the system temp (or an explicitly configured temp dir) -
+  // removed in finally. Only an explicit temp dir is validated: os.tmpdir()
+  // always exists, and the error hint would point back at it anyway. mkdtemp
+  // rather than a predictable name: the system temp is shared, so a guessable
+  // path would be open to link planting and would leak backup data via the
+  // default file mode.
+  const explicitTempDir = options.tempDir ?? config.temp_dir ?? null;
+  if (explicitTempDir !== null) {
+    await _validateConfigDir(explicitTempDir, 'temp-dir');
+    // The validation accepts a not-yet-existing leaf (only the parent must
+    // exist) and mkdtemp does not create parents - so create it here.
+    await fs.mkdir(explicitTempDir, { recursive: true, mode: 0o700 });
+  }
+  const tmpDir = await fs.mkdtemp(path.join(explicitTempDir ?? os.tmpdir(), 'bfs-pull-'));
+  await fs.chmod(tmpDir, 0o700).catch(() => {});
   const tmpPaths = new Map<number, string>();
   try {
     const { blobSize, kdf_salt, failures } = await _downloadShardsToTempFiles(config, manifest, options, tmpDir, tmpPaths);

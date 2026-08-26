@@ -277,7 +277,7 @@ export interface PushOptions {
    * retry; non-interactive mode throws PushExcludedError (CLI exit code 3).
    */
   allowExcluded?: boolean;
-  /** Directory for temporary parity files during push. Defaults to cacheDir. */
+  /** Directory for the push scratch dir (parity parts). Defaults to os.tmpdir(). */
   tempDir?: string;
   /** Overrides cache directory for push.blob.pending. Defaults to {rootDir}/.bfs/cache. */
   cacheDir?: string;

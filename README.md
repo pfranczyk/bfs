@@ -1,8 +1,9 @@
 # BFS - Backup File System
 
 Distributed backup CLI tool for Node.js. Packs a directory into a binary blob,
-compresses it with deflate, optionally encrypts with AES-256-GCM, splits using
-Reed-Solomon erasure coding, and distributes shards across multiple storage providers. Any N of N+K
+compresses it with deflate, splits using Reed-Solomon erasure coding, encrypts
+every shard with AES-256-GCM (on by default), and distributes the shards across
+multiple storage providers. Any N of N+K
 shards can reconstruct the original data - losing up to K providers does not
 cause data loss.
 
@@ -91,8 +92,8 @@ Global options:
 ## How it works
 
 ```
-push:  scan dir -> pack blob -> [compress] -> [encrypt] -> Reed-Solomon encode -> shards -> upload x (N+K)
-pull:  read manifest -> download N shards -> Reed-Solomon decode -> [decrypt] -> [decompress] -> write files
+push:  scan dir -> pack blob [+compress] -> Reed-Solomon encode -> [encrypt each shard] -> upload x (N+K)
+pull:  read manifest -> download N shards -> [decrypt each shard] -> Reed-Solomon decode -> [decompress] -> write files
 ```
 
 Each provider holds exactly one shard per version. No single provider has

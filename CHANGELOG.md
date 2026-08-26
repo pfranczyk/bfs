@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-08-26
+
+### Changed
+
+- **Temporary files of push and pull now live in the system temp directory,
+  as `bfs config` has always said.** Parity parts written during push and the
+  parts downloaded during pull go to a private `bfs-push-*` / `bfs-pull-*`
+  directory under the system temp (unless `temp_dir` is set), and the
+  directory is removed when the operation ends - also when it fails. Until now
+  those files landed in the backup's own `.bfs/cache`, so an operator who
+  reserved space on the system disk filled the volume holding the backup
+  instead. If your system temp is small or lives in RAM, point BFS elsewhere
+  with `bfs config --temp-dir <path>`.
+
 ## [0.14.0] - 2026-08-20
 
 ### Added
@@ -1279,7 +1293,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/pfranczyk/bfs/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/pfranczyk/bfs/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/pfranczyk/bfs/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/pfranczyk/bfs/compare/v0.11.0...v0.12.0

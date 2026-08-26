@@ -13,6 +13,7 @@ import { readJson } from '../smoke-vault.js';
  * - bfs config --cache-dir <path> sets cache_dir in config.json
  * - bfs config shows the set value
  * - bfs config --cache-dir --reset resets to default (null)
+ * - bfs config with temp_dir unset names the system temp as the default (H8)
  */
 export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
   const tests: TestResult[] = [];
@@ -116,6 +117,18 @@ export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
         cfg.cache_dir = origCacheDir;
         await fs.writeFile(configPath, JSON.stringify(cfg, null, 2));
       }
+    }),
+  );
+
+  tests.push(
+    await runTest('H8', 'bfs config with temp_dir unset names the system temp as the default', async () => {
+      const configPath = path.join(ctx.vaultDir, '.bfs', 'config.json');
+      const cfg = await readJson<Record<string, unknown>>(configPath);
+      assert(cfg.temp_dir === undefined || cfg.temp_dir === null, `fixture must have temp_dir unset, got: ${JSON.stringify(cfg.temp_dir)}`);
+      const r = runBfs(['config'], ctx.vaultDir, undefined, hEnv);
+      assert(r.status === 0, `exit ${r.status ?? 'null'}\n${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      assert(/temp-dir:\s+\(default: system temp\)/.test(out), `expected temp-dir default line in bfs config output: ${out.slice(0, 400)}`);
     }),
   );
 

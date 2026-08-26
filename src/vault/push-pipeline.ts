@@ -650,8 +650,9 @@ interface ResolvedPushPaths {
 
 /**
  * Resolves and validates the cache and temp directories for a push operation.
- * Falls back to config values and project defaults, creates cacheDir, and
- * validates both directories via _validateConfigDir.
+ * Falls back to config values and project defaults and creates cacheDir. The
+ * temp dir is validated and created only when configured explicitly; the
+ * default is os.tmpdir(), which always exists.
  *
  * @param options - rootDir, optional cacheDir/tempDir overrides, config
  * @returns Resolved absolute paths and the blob cachePath
@@ -662,8 +663,16 @@ async function _resolvePushPaths(options: PushPathsOptions): Promise<ResolvedPus
   const cacheDir = options.cacheDir ?? config.cache_dir ?? path.join(rootDir, '.bfs', 'cache');
   await _validateConfigDir(cacheDir, 'cache-dir');
   await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
-  const tempDir = options.tempDir ?? config.temp_dir ?? cacheDir;
-  if (tempDir !== cacheDir) await _validateConfigDir(tempDir, 'temp-dir');
+  // Only an explicitly configured temp dir is validated - os.tmpdir() always
+  // exists, and the hint attached to the error would point back at it anyway.
+  const explicitTempDir = options.tempDir ?? config.temp_dir ?? null;
+  if (explicitTempDir !== null) {
+    await _validateConfigDir(explicitTempDir, 'temp-dir');
+    // The validation accepts a not-yet-existing leaf (only the parent must
+    // exist) and mkdtemp does not create parents - so create it here.
+    await fs.mkdir(explicitTempDir, { recursive: true, mode: 0o700 });
+  }
+  const tempDir = explicitTempDir ?? os.tmpdir();
   const cachePath = path.join(cacheDir, 'push.blob.pending');
   return { cacheDir, tempDir, cachePath };
 }
@@ -722,23 +731,38 @@ interface RsEncodeBlobOptions {
 }
 
 interface RsEncodeResult {
+  /** Private scratch directory holding the parity files - removed by the caller. */
+  scratchDir: string;
   parityPaths: string[];
   shardHashes: string[];
 }
 
 /**
  * Reed-Solomon striped encode of the blob.
- * Writes K parity shard files to tempDir and returns data+parity hashes.
+ * Writes K parity shard files into a fresh `bfs-push-*` scratch directory
+ * under tempDir and returns data+parity hashes.
+ *
+ * The scratch directory comes from fs.mkdtemp: tempDir defaults to the shared
+ * system temp, where a predictable name would be open to link planting and the
+ * default file mode would expose backup data - mkdtemp gives a random suffix,
+ * mode 0700 and refuses an existing target.
  *
  * @param options - blobSource, targetVersion, tempDir, N, K, stripeSize
- * @returns parityPaths (K temp files) and shardHashes (N+K)
+ * @returns scratchDir, parityPaths (K files inside it) and shardHashes (N+K)
  */
 async function _rsEncodeBlob(options: RsEncodeBlobOptions): Promise<RsEncodeResult> {
   const { blobSource, targetVersion, tempDir, N, K, stripeSize } = options;
-  const parityPaths: string[] = Array.from({ length: K }, (_, j) => path.join(tempDir, `bfs-parity-${targetVersion}-${j}-${Date.now()}.tmp`));
+  const scratchDir = await fs.mkdtemp(path.join(tempDir, 'bfs-push-'));
+  await fs.chmod(scratchDir, 0o700).catch(() => {});
+  const parityPaths: string[] = Array.from({ length: K }, (_, j) => path.join(scratchDir, `parity-${targetVersion}-${j}.tmp`));
   const rsSourceStream: Readable = Buffer.isBuffer(blobSource) ? Readable.from(blobSource) : createReadStream(blobSource);
-  const { dataShardHashes, parityShardHashes } = await rsEncodeStriped(rsSourceStream, parityPaths, N, K, stripeSize);
-  return { parityPaths, shardHashes: [...dataShardHashes, ...parityShardHashes] };
+  try {
+    const { dataShardHashes, parityShardHashes } = await rsEncodeStriped(rsSourceStream, parityPaths, N, K, stripeSize);
+    return { scratchDir, parityPaths, shardHashes: [...dataShardHashes, ...parityShardHashes] };
+  } catch (e: unknown) {
+    await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => {});
+    throw e;
+  }
 }
 
 interface BuildShardStreamsOptions {
@@ -844,8 +868,8 @@ async function _uploadOneShard(options: UploadOneShardOptions): Promise<UploadOn
     return { manifestShard, cacheDumpAttempted };
   } catch (e: unknown) {
     // Release the shard stream so its file-backed payload source (parity temp)
-    // is torn down now, before the parity files are unlinked after the loop -
-    // otherwise an orphaned read stream races the unlink and throws ENOENT.
+    // is torn down now, before the scratch directory is removed after the
+    // loop - otherwise an orphaned read stream races the removal and throws.
     shardStream.destroy();
     const { reason, detail } = _classifyUploadError(e);
     lock.failed.push({ shard_index: i, provider_id: pc.id, reason, detail, attempted_at: new Date().toISOString() });
@@ -1210,33 +1234,37 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
     throw new BfsError(fmt('gcm_payload_too_large', String(GCM_MAX_PLAINTEXT_BYTES / 1024 ** 3)));
   }
   options.io.info(t('vault_encoding_rs'));
-  const { parityPaths, shardHashes } = await _rsEncodeBlob({ blobSource, targetVersion, tempDir, N, K, stripeSize });
-  const locationMap = _buildLocationMap({ config, targetVersion, shardHashes, io: options.io });
-  options.io.info(t('vault_uploading_shards'));
-  const providers = await openProviders(config, options.io);
-  const { manifestShards } = await _uploadAllShards({
-    rootDir,
-    config,
-    providers,
-    blobSource,
-    parityPaths,
-    locationMap,
-    shardHashes,
-    lock,
-    cachePath,
-    cacheDir,
-    targetVersion,
-    N,
-    K,
-    stripeSize,
-    encKey,
-    kdf_salt,
-    shouldEncrypt,
-    blob_hash,
-    blobSize,
-    io: options.io,
-  });
-  for (const pPath of parityPaths) await fs.unlink(pPath).catch(() => {});
+  const { scratchDir, parityPaths, shardHashes } = await _rsEncodeBlob({ blobSource, targetVersion, tempDir, N, K, stripeSize });
+  let manifestShards: ManifestShard[];
+  try {
+    const locationMap = _buildLocationMap({ config, targetVersion, shardHashes, io: options.io });
+    options.io.info(t('vault_uploading_shards'));
+    const providers = await openProviders(config, options.io);
+    ({ manifestShards } = await _uploadAllShards({
+      rootDir,
+      config,
+      providers,
+      blobSource,
+      parityPaths,
+      locationMap,
+      shardHashes,
+      lock,
+      cachePath,
+      cacheDir,
+      targetVersion,
+      N,
+      K,
+      stripeSize,
+      encKey,
+      kdf_salt,
+      shouldEncrypt,
+      blob_hash,
+      blobSize,
+      io: options.io,
+    }));
+  } finally {
+    await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => {});
+  }
   const health = _computeHealth(manifestShards.length, N, K);
   await _writePushResults({ rootDir, config, state, targetVersion, file_count, total_size, blob_hash, stripeSize, shouldEncrypt, shouldCompress, manifestShards, health, lock, cachePath, N, K });
   return { version: targetVersion, file_count, total_size, skipped, excluded, uploaded_count: manifestShards.length, failed: lock.failed, health };

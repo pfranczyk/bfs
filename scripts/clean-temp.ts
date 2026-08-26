@@ -20,10 +20,11 @@ import path from 'node:path';
 
 /**
  * Every temp directory this project creates is named `bfs-...` - suites, unit
- * tests and the smoke harness alike - so this one prefix covers the whole
- * namespace. It is not exclusive to scratch data: a push configured with
- * `temp_dir` pointing at the system temp writes `bfs-parity-*.tmp` files there,
- * which is why only directories are ever considered.
+ * tests and the smoke harness alike, and the scratch directories of the CLI
+ * itself (`bfs-push-*` with parity parts, `bfs-pull-*` with downloaded parts,
+ * both under the system temp unless `temp_dir` says otherwise) - so this one
+ * prefix covers the whole namespace. Only directories are considered: a stray
+ * file under the prefix is not something BFS created.
  */
 const PREFIX = 'bfs-';
 
