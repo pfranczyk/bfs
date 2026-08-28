@@ -24,7 +24,7 @@ scenario_run() {
   : >"$broken_provider"
 
   # Break the cache blob path specifically: cacheDir itself must stay a real
-  # directory (push() does _validateConfigDir + fs.mkdir on it before pack
+  # directory (push() runs validateConfigDir + fs.mkdir on it before pack
   # and would abort before the upload loop otherwise). Make push.blob.pending
   # a *directory*, so fs.writeFile on that path inside the emergency dump
   # hits EISDIR and mutates lock.blob_pending_path to null.

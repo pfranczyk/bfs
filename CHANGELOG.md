@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-08-27
+
+### Fixed
+
+- **A full or unwritable temp directory is now reported as such, not as
+  backup data missing from a healthy storage.** When a part downloaded by
+  `bfs pull` did not fit in the temporary directory (a small or RAM-backed
+  system temp is the usual cause), the restore blamed the storage the part
+  came from and sent you to `bfs verify --deep`, which would find every
+  storage healthy. It now names the temporary directory and the fix
+  (`bfs config --temp-dir <path>`), and it keeps restoring as long as enough
+  parts did fit; only when too few fit does it stop, and then it says so
+  without accusing any storage. `bfs push` does the same for the parity parts
+  it writes there, so you can tell which of the two disks - the backup's or the
+  temp - ran out. A `--temp-dir` that points at an existing file is refused
+  up front, pointing at the same `bfs config --temp-dir` command, instead of
+  failing with a raw `EEXIST` error.
+- Temporary directories of push and pull are removed with a few retries, so a
+  virus scanner or indexer briefly holding a fresh file no longer leaves the
+  parts behind in the temp directory.
+- **`bfs provider remove --strategy rebuild` no longer reports success when
+  nothing was rebuilt.** When the new storage could not take the parts - wrong
+  address, dead port, no space, missing permissions - the command exited with
+  0, printed that the storage was replaced, dropped the old storage from the
+  configuration and left the new one empty: every version lost its
+  redundancy and nothing said so. The target is now probed once before any
+  part is fetched, every rebuilt part is read back (size and identity) after
+  it is written, and the first failure that would repeat for every version -
+  the target refusing a write, a storage that does not answer - stops the run.
+  Anything short of every version rebuilt is reported as a failure that names
+  the step, the storage and the storage's own message, lists what was rebuilt,
+  what failed and what was not attempted, and leaves the configuration exactly
+  as it was: the old storage stays, a target that received nothing is
+  withdrawn, one that already holds rebuilt parts is kept. Versions that were
+  not rebuilt are marked degraded (a later `bfs verify` re-checks them against
+  the storages). Running the same command again after fixing the cause
+  finishes the job without rebuilding what already moved. When some versions
+  had already moved, the new storage stays alongside the old one until that
+  re-run, and `bfs push`, `bfs pull` and `bfs prune` wait for it; a version
+  whose other storages lost too many parts is reported as such, with the
+  parts to restore first. On a local
+  disk the operating system's error code now travels with the message, and an
+  SFTP server answering a write with its generic "Failure" status is explained
+  as what it most often is - no disk space or quota left.
+
 ## [0.14.1] - 2026-08-26
 
 ### Changed
@@ -1293,7 +1338,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.1...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.2...HEAD
+[0.14.2]: https://github.com/pfranczyk/bfs/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/pfranczyk/bfs/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/pfranczyk/bfs/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/pfranczyk/bfs/compare/v0.12.0...v0.13.0

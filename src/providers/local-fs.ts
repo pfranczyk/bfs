@@ -134,10 +134,13 @@ export class LocalFsProvider implements StorageProvider {
    */
   async upload(shardFilename: string, data: Readable, _size: number): Promise<RemoteRef> {
     const dir = this.vaultDir();
+    // The operating system's error travels along as the cause: the code
+    // (ENOSPC, EACCES) is what tells a full disk from a refused write, and a
+    // string keeps only the words.
     try {
       await fs.mkdir(dir, { recursive: true });
     } catch (err) {
-      throw new ProviderError(`Failed to create vault directory "${dir}": ${String(err)}`);
+      throw new ProviderError(`Failed to create vault directory "${dir}": ${String(err)}`, { cause: err });
     }
 
     const filePath = path.join(dir, shardFilename);
@@ -153,7 +156,7 @@ export class LocalFsProvider implements StorageProvider {
     try {
       await pipeline(data, hashTransform, createWriteStream(filePath));
     } catch (err) {
-      throw new ProviderError(`Failed to write shard "${filePath}": ${String(err)}`);
+      throw new ProviderError(`Failed to write shard "${filePath}": ${String(err)}`, { cause: err });
     }
 
     // A fresh shard carries a fresh in-shard header, so a stale sidecar for this

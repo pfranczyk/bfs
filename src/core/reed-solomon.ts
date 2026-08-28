@@ -8,7 +8,7 @@ import type { Readable } from 'node:stream';
 import { PassThrough } from 'node:stream';
 
 import type { ReedSolomonErasure } from '@subspace/reed-solomon-erasure.wasm';
-import { BfsError } from './errors.js';
+import { BfsError, ScratchWriteError } from './errors.js';
 
 const require = createRequire(import.meta.url);
 
@@ -247,6 +247,9 @@ export interface RsEncodeStripedResult {
  * @param stripeSize  - bytes per shard per stripe (e.g. 64 MiB)
  * @returns SHA-256 hashes for all N data + K parity shards
  * @throws BfsError on invalid parameters, when parityPaths.length !== K, or when RS encoding fails
+ * @throws ScratchWriteError when a parity file cannot be created, written or
+ *   closed - the caller's scratch volume refused, which is a different thing
+ *   from the source failing (a source error is rethrown as itself)
  */
 export async function rsEncodeStriped(source: Readable, parityPaths: string[], N: number, K: number, stripeSize: number): Promise<RsEncodeStripedResult> {
   validateParams(N, K);
@@ -260,7 +263,8 @@ export async function rsEncodeStriped(source: Readable, parityPaths: string[], N
   // N+K hash contexts - mutation OK for performance (streaming hash)
   const hashers: Hash[] = Array.from({ length: N + K }, () => createHash('sha256'));
 
-  const parityHandles = await Promise.all(parityPaths.map((p) => open(p, 'w')));
+  const parityHandles = await _openParityFiles(parityPaths);
+  let closeFailure: Nullable<ScratchWriteError> = null;
   try {
     for await (const rawChunk of source) {
       const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk as Uint8Array);
@@ -272,7 +276,7 @@ export async function rsEncodeStriped(source: Readable, parityPaths: string[], N
         inputFilled += toCopy;
         off += toCopy;
         if (inputFilled === inputBlock.length) {
-          await _encodeStripeWithHash({ inputBlock, flat, N, K, stripeSize, parityHandles, hashers });
+          await _encodeStripeWithHash({ inputBlock, flat, N, K, stripeSize, parityHandles, parityPaths, hashers });
           inputFilled = 0;
         }
       }
@@ -280,11 +284,23 @@ export async function rsEncodeStriped(source: Readable, parityPaths: string[], N
     if (inputFilled > 0) {
       // Zero-pad the last partial stripe before encoding
       inputBlock.fill(0, inputFilled);
-      await _encodeStripeWithHash({ inputBlock, flat, N, K, stripeSize, parityHandles, hashers });
+      await _encodeStripeWithHash({ inputBlock, flat, N, K, stripeSize, parityHandles, parityPaths, hashers });
     }
   } finally {
-    await Promise.all(parityHandles.map((h) => h.close()));
+    // A close that fails is the scratch's failure too - but it may only be
+    // reported when nothing failed before it: an error from the loop above is
+    // the one the caller must see, not what the cleanup ran into afterwards.
+    await Promise.all(
+      parityHandles.map(async (h, j) => {
+        try {
+          await h.close();
+        } catch (e: unknown) {
+          closeFailure ??= new ScratchWriteError(parityPaths[j], e);
+        }
+      }),
+    );
   }
+  if (closeFailure !== null) throw closeFailure;
 
   return { dataShardHashes: hashers.slice(0, N).map((h) => h.digest('hex')), parityShardHashes: hashers.slice(N).map((h) => h.digest('hex')) };
 }
@@ -390,12 +406,33 @@ interface EncodeStripeCtx {
   K: number;
   stripeSize: number;
   parityHandles: FileHandle[];
+  /** Paths behind parityHandles, so a failed write can be named. */
+  parityPaths: string[];
   hashers: Hash[];
+}
+
+/**
+ * Opens the parity files for writing, one after another. A failure is the
+ * scratch volume's and is tagged as such so the caller can tell it from a
+ * failing source; the files already open are closed again first, since a
+ * handle left open keeps the scratch directory from being removed.
+ */
+async function _openParityFiles(parityPaths: string[]): Promise<FileHandle[]> {
+  const handles: FileHandle[] = []; // mutation: collects handles to release on a later failure
+  for (const parityPath of parityPaths) {
+    try {
+      handles.push(await open(parityPath, 'w'));
+    } catch (e: unknown) {
+      await Promise.all(handles.map((h) => h.close().catch(() => {})));
+      throw new ScratchWriteError(parityPath, e);
+    }
+  }
+  return handles;
 }
 
 /** Encodes one stripe: copies input into flat, RS-encodes, hashes, writes K parity slices. */
 async function _encodeStripeWithHash(ctx: EncodeStripeCtx): Promise<void> {
-  const { inputBlock, flat, N, K, stripeSize, parityHandles, hashers } = ctx;
+  const { inputBlock, flat, N, K, stripeSize, parityHandles, parityPaths, hashers } = ctx;
   // Copy data into flat; zero parity portion before encode
   flat.set(new Uint8Array(inputBlock.buffer, inputBlock.byteOffset, N * stripeSize), 0);
   flat.fill(0, N * stripeSize); // zero parity region
@@ -410,10 +447,16 @@ async function _encodeStripeWithHash(ctx: EncodeStripeCtx): Promise<void> {
     hashers[i].update(Buffer.from(inputBlock.buffer, inputBlock.byteOffset + i * stripeSize, stripeSize));
   }
 
-  // Write parity and feed parity shard slices to hashers
+  // Write parity and feed parity shard slices to hashers. Only the write to
+  // the parity file is tagged: a failure of the source surfaces from the
+  // caller's read loop and stays what it is.
   for (let j = 0; j < K; j++) {
     const paritySlice = Buffer.from(flat.buffer, flat.byteOffset + (N + j) * stripeSize, stripeSize);
-    await parityHandles[j].write(paritySlice);
+    try {
+      await parityHandles[j].write(paritySlice);
+    } catch (e: unknown) {
+      throw new ScratchWriteError(parityPaths[j], e);
+    }
     hashers[N + j].update(paritySlice);
   }
 }

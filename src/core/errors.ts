@@ -24,6 +24,22 @@ export class ShardCorruptedError extends BfsError {
   }
 }
 
+/**
+ * Thrown when BFS cannot create or write one of its own scratch files - a parity
+ * part during push, a downloaded part during pull. That is the local temp
+ * volume refusing (full, unwritable, a name already taken), never the medium
+ * the part comes from, and the two must not be confused: the fix for one is
+ * `bfs config --temp-dir`, for the other a look at the storage. Names the
+ * offending path and keeps the operating system's error as `cause`, so the
+ * caller can name the directory and the errno survives.
+ */
+export class ScratchWriteError extends BfsError {
+  constructor(path: string, cause: unknown) {
+    super(`Cannot write scratch file ${path}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = 'ScratchWriteError';
+  }
+}
+
 /** Thrown when a storage provider operation fails (I/O error, auth failure, etc.). */
 export class ProviderError extends BfsError {
   constructor(message: string, options?: { cause?: unknown }) {

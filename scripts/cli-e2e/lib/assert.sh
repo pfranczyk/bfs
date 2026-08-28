@@ -169,3 +169,22 @@ assert_file_mode() {
   got="$(stat -c '%a' "$file")"
   [ "$got" = "$want" ] || _fail "mode for $file: expected $want, got $got"
 }
+
+# assert_config_provider <vault> <id> - the storage id must be present in
+# .bfs/config.json (the id line as writeConfig serializes it).
+assert_config_provider() {
+  local id="$2" cf="$1/.bfs/config.json"
+  [ -f "$cf" ] || _fail "config.json missing: $cf"
+  grep -qE "\"id\": *\"$id\"" "$cf" || _fail "config.json lacks provider \"$id\". Got:
+$(grep -E '"id":' "$cf" || echo '<none>')"
+}
+
+# assert_config_no_provider <vault> <id> - the storage id must be absent from
+# .bfs/config.json.
+assert_config_no_provider() {
+  local id="$2" cf="$1/.bfs/config.json"
+  [ -f "$cf" ] || _fail "config.json missing: $cf"
+  if grep -qE "\"id\": *\"$id\"" "$cf"; then
+    _fail "config.json unexpectedly holds provider \"$id\""
+  fi
+}

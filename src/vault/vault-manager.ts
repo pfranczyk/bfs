@@ -8,7 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { parseBlobFileTable, parseBlobFileTableFromFile, unpackBlob, unpackBlobFromFile } from '../core/blob-unpack.js';
 import { trackFile, untrackFile } from '../core/cleanup.js';
 import { decryptBlob, decryptStream, deriveKey, deriveShardNonce } from '../core/crypto.js';
-import { BfsError, ProviderError, PullSkippedError, ShardCorruptedError, TamperDetectedError } from '../core/errors.js';
+import { BfsError, ProviderError, PullSkippedError, ScratchWriteError, ShardCorruptedError, TamperDetectedError } from '../core/errors.js';
 import { hashBuffer, hashFileExcludingTail, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
 import { DEFAULT_BFSIGNORE_CONTENT } from '../core/ignore-defaults.js';
 import { calcShardPayloadSize, rsDecode, rsDecodeStriped, rsRepair } from '../core/reed-solomon.js';
@@ -21,8 +21,10 @@ import { type PushMode, VersionHealth } from '../types/index.js';
 import { checkVersionMismatch, detectMissingAdapters, formatMissingAdaptersMessage } from './adapter-preflight.js';
 import { parseVersionFromFilename } from './bootstrap.js';
 import { assertNoExistingVault, assertSchemeValid, readConfig, writeConfig } from './config.js';
+import type { HealReport } from './heal.js';
 import { applyHealthChange, deleteManifest, listManifests, listUnrecoveredVersions, readManifest, writeManifest } from './manifest.js';
 import { confirmRecoveredLocations } from './recovered-locations.js';
+import { createScratchDir, createScratchSink, prepareExplicitTempDir, removeScratchDir, scratchWriteFailure, validateConfigDir } from './scratch-dir.js';
 import { DEFAULT_STATE, readState, writeState } from './state.js';
 import { assertNoForeignVault } from './vault-collision.js';
 import { rebuildVersionManifest, type VersionShardEntry } from './version-rebuild.js';
@@ -222,23 +224,21 @@ async function _rebuildMarkedVersion(rootDir: string, config: VaultConfig, versi
   }
 }
 
-/** Validates that a configured directory (or its parent) exists before use. */
-async function _validateConfigDir(dir: string, configFlag: string): Promise<void> {
-  const target = path.dirname(dir) === dir ? dir : path.dirname(dir);
-  try {
-    const stat = await fs.stat(target);
-    if (!stat.isDirectory()) {
-      throw new BfsError(`${t('path_not_dir')}: ${dir}\n  ${fmt('config_dir_hint', configFlag, configFlag)}`);
-    }
-  } catch (e: unknown) {
-    if (e instanceof BfsError) throw e;
-    throw new BfsError(`${fmt('dir_not_exist', dir)}\n  ${fmt('config_dir_hint', configFlag, configFlag)}`);
-  }
-}
-
 // --- Shard failure diagnostics -----------------------------------------------
 
 type ShardFailureReason = 'provider_unreachable' | 'file_missing' | 'adapter_missing' | 'corrupt' | 'provider_not_configured';
+
+/**
+ * A part the restore could not keep because its own scratch refused the
+ * write. Not a shard failure: the medium delivered the part, and it stays
+ * outside the per-medium map so no medium is blamed for a full temp.
+ */
+interface ScratchFailure {
+  /** The scratch directory that refused. */
+  dir: string;
+  /** The operating system's error behind the first refusal. */
+  cause: unknown;
+}
 
 /**
  * Classifies why a shard could not be read, from the error the attempt raised.
@@ -333,19 +333,30 @@ interface NotEnoughShardsOptions {
   have: number;
   /** Shard index -> why that shard could not be used. */
   failures: Map<number, ShardFailureReason>;
+  /** The scratch refusing parts, when that is (part of) why so few survived. */
+  scratchFailure?: Nullable<ScratchFailure>;
 }
 
 /**
  * Reports that too few parts survived to rebuild the version, naming the media
  * behind each cause when the caller collected them.
  *
- * @param options - Manifest, counts and the per-shard failure map
+ * A scratch that refused parts is named as the scratch, with its fix. When no
+ * medium failed, that is the whole story: the advice to check the media would
+ * find every one of them healthy, so it is not given. When media failed as
+ * well, both sides are named - each is a separate thing to put right.
+ *
+ * @param options - Manifest, counts, the per-shard failure map and the scratch failure
  * @returns the error to throw at the caller's failure point
  */
 function _notEnoughShards(options: NotEnoughShardsOptions): BfsError {
+  const scratch = options.scratchFailure ?? null;
+  if (scratch !== null && options.failures.size === 0) return scratchWriteFailure(scratch.dir, scratch.cause);
   const detail = _describeShardFailures(options.manifest, options.failures);
   const count = fmt('pull_not_enough_shards', String(options.needed), String(options.have));
-  return new BfsError(detail ? `${count} ${detail}` : count);
+  const media = detail ? `${count} ${detail}` : count;
+  if (scratch === null) return new BfsError(media);
+  return new BfsError(`${scratchWriteFailure(scratch.dir, scratch.cause).message} ${media}`, { cause: scratch.cause });
 }
 
 /**
@@ -427,7 +438,13 @@ async function _adoptSaltFromVerifiedShard(payloadStream: Readable, header: Shar
  * Parses each shard header to extract `blobSize` and `kdf_salt`.
  * Populates `tmpPaths` map with shard_index -> tmpPath for successfully downloaded shards.
  *
- * @returns blobSize, kdf_salt, and failures map with reasons for each failed shard
+ * A part the scratch refuses (full or unwritable temp) is not a shard failure:
+ * the medium delivered it. It is recorded once as the scratch's, warned about
+ * with the fix, and the loop carries on - the parts that do fit may still be
+ * enough to restore from.
+ *
+ * @returns blobSize, kdf_salt, the failures map with reasons for each failed
+ *   shard, and the scratch failure when the scratch refused any part
  */
 async function _downloadShardsToTempFiles(
   config: VaultConfig,
@@ -435,11 +452,12 @@ async function _downloadShardsToTempFiles(
   options: PullOptions,
   tmpDir: string,
   tmpPaths: Map<number, string>,
-): Promise<{ blobSize: number; kdf_salt: Nullable<Buffer>; failures: Map<number, ShardFailureReason> }> {
+): Promise<{ blobSize: number; kdf_salt: Nullable<Buffer>; failures: Map<number, ShardFailureReason>; scratchFailure: Nullable<ScratchFailure> }> {
   const { data_shards: N, parity_shards: K } = manifest.scheme;
   const targetVersion = manifest.version;
   let blobSize = 0;
   let kdf_salt: Nullable<Buffer> = null;
+  let scratchFailure: Nullable<ScratchFailure> = null;
   const failures = new Map<number, ShardFailureReason>();
   options.io.info(fmt('vault_download_shards', String(targetVersion)));
   for (const ms of manifest.shards) {
@@ -468,13 +486,13 @@ async function _downloadShardsToTempFiles(
       options.io.warn(fmt('vault_provider_unreachable', pc.id));
       continue;
     }
+    const tmpPath = path.join(tmpDir, `shard_${ms.shard_index}`);
     try {
       const provider = providerRegistry.create(pc, options.io);
       await provider.authenticate();
       provider.setVaultName(config.vault_name);
       const stream = await provider.download({ provider_id: ms.provider_id, path: `shard_${ms.shard_index}.bfs.${targetVersion}` });
-      const tmpPath = path.join(tmpDir, `shard_${ms.shard_index}`);
-      await pipeline(stream, createWriteStream(tmpPath, { mode: 0o600 }));
+      await pipeline(stream, createScratchSink(tmpPath));
       if (debugEnabled) {
         const stat = await fs.stat(tmpPath);
         process.stderr.write(`[bfs:debug] shard ${ms.shard_index} downloaded: ${stat.size} bytes\n`);
@@ -509,6 +527,19 @@ async function _downloadShardsToTempFiles(
       tmpPaths.set(ms.shard_index, tmpPath);
       options.io.progress(fmt('vault_download_shard_progress', String(ms.shard_index + 1), String(N + K)), ((ms.shard_index + 1) / (N + K)) * 100);
     } catch (err) {
+      if (err instanceof ScratchWriteError) {
+        // The scratch refused, not the medium. Warned once: every further
+        // part will most likely meet the same full volume, and the operator
+        // needs the directory and the fix, not one line per part. The partial
+        // file is dropped right away - on a full volume it holds the very
+        // space the next part is going to ask for.
+        await fs.unlink(tmpPath).catch(() => {});
+        if (scratchFailure === null) {
+          scratchFailure = { dir: tmpDir, cause: err.cause };
+          options.io.warn(scratchWriteFailure(tmpDir, err.cause).message);
+        }
+        continue;
+      }
       const reason = _downloadFailureReason(err);
       failures.set(ms.shard_index, reason);
       const notice = reason === 'corrupt' ? 'vault_shard_damaged_on_provider' : 'vault_file_missing_on_provider';
@@ -519,7 +550,7 @@ async function _downloadShardsToTempFiles(
     const indices = [...tmpPaths.keys()].sort((a, b) => a - b);
     process.stderr.write(`[bfs:debug] download done: shards=[${indices.join(',')}] blobSize=${blobSize} kdf_salt=${kdf_salt !== null ? 'yes' : 'null'}\n`);
   }
-  return { blobSize, kdf_salt, failures };
+  return { blobSize, kdf_salt, failures, scratchFailure };
 }
 
 /** Inputs for {@link _decodeFromTempFiles} - phase 2 of the V2 pull. */
@@ -682,33 +713,24 @@ async function _validateShardIntegrity(options: ValidateShardsOptions): Promise<
  * @param manifest   - Version manifest describing the shards to download
  * @param options    - Pull options including io, password, and tempDir
  * @param outputPath - Destination file for the decoded blob
- * @returns { isDegraded, failures } - degradation flag (fewer than N+K shards
- *          usable) plus shard index -> why that shard could not be used
+ * @returns { failures } - shard index -> why that shard could not be used; a
+ *          part the scratch refused is not in it, the medium still holds it
  * @throws BfsError if fewer than N shards available, password missing, or kdf_salt not found
  */
-async function _pullV2(config: VaultConfig, manifest: VersionManifest, options: PullOptions, outputPath: string): Promise<{ isDegraded: boolean; failures: Map<number, ShardFailureReason> }> {
+async function _pullV2(config: VaultConfig, manifest: VersionManifest, options: PullOptions, outputPath: string): Promise<{ failures: Map<number, ShardFailureReason> }> {
   const { data_shards: N, parity_shards: K } = manifest.scheme;
   const targetVersion = manifest.version;
   const stripeSize = manifest.rs_stripe_size ?? V2_STRIPE_SIZE;
   // Scratch dir under the system temp (or an explicitly configured temp dir) -
   // removed in finally. Only an explicit temp dir is validated: os.tmpdir()
-  // always exists, and the error hint would point back at it anyway. mkdtemp
-  // rather than a predictable name: the system temp is shared, so a guessable
-  // path would be open to link planting and would leak backup data via the
-  // default file mode.
+  // always exists, and the error hint would point back at it anyway.
   const explicitTempDir = options.tempDir ?? config.temp_dir ?? null;
-  if (explicitTempDir !== null) {
-    await _validateConfigDir(explicitTempDir, 'temp-dir');
-    // The validation accepts a not-yet-existing leaf (only the parent must
-    // exist) and mkdtemp does not create parents - so create it here.
-    await fs.mkdir(explicitTempDir, { recursive: true, mode: 0o700 });
-  }
-  const tmpDir = await fs.mkdtemp(path.join(explicitTempDir ?? os.tmpdir(), 'bfs-pull-'));
-  await fs.chmod(tmpDir, 0o700).catch(() => {});
+  if (explicitTempDir !== null) await prepareExplicitTempDir(explicitTempDir);
+  const tmpDir = await createScratchDir(explicitTempDir ?? os.tmpdir(), 'bfs-pull-');
   const tmpPaths = new Map<number, string>();
   try {
-    const { blobSize, kdf_salt, failures } = await _downloadShardsToTempFiles(config, manifest, options, tmpDir, tmpPaths);
-    if (tmpPaths.size < N) throw _notEnoughShards({ manifest, needed: N, have: tmpPaths.size, failures });
+    const { blobSize, kdf_salt, failures, scratchFailure } = await _downloadShardsToTempFiles(config, manifest, options, tmpDir, tmpPaths);
+    if (tmpPaths.size < N) throw _notEnoughShards({ manifest, needed: N, have: tmpPaths.size, failures, scratchFailure });
     if (blobSize === 0) throw new BfsError(t('pull_blob_size_unreadable'));
     const shardSize = calcShardPayloadSize(blobSize, N);
     const numStripes = Math.ceil(shardSize / stripeSize);
@@ -729,12 +751,12 @@ async function _pullV2(config: VaultConfig, manifest: VersionManifest, options: 
     // reconstructed from the healthy shards + parity, instead of poisoning the
     // decode and aborting the whole restore.
     await _validateShardIntegrity({ tmpPaths, encKey, targetVersion, failures, manifest, io: options.io });
-    if (tmpPaths.size < N) throw _notEnoughShards({ manifest, needed: N, have: tmpPaths.size, failures });
+    if (tmpPaths.size < N) throw _notEnoughShards({ manifest, needed: N, have: tmpPaths.size, failures, scratchFailure });
     await _decodeFromTempFiles({ tmpPaths, N, K, stripeSize, blobSize, targetVersion, encKey, outputPath, io: options.io });
-    return { isDegraded: tmpPaths.size < N + K, failures };
+    return { failures };
   } finally {
     for (const [, p] of tmpPaths) await fs.unlink(p).catch(() => {});
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    await removeScratchDir(tmpDir);
   }
 }
 
@@ -1259,7 +1281,7 @@ export async function pull(rootDir: string, options: PullOptions): Promise<PullR
   // Priority: CLI flag -> config.json -> default
   const cacheDir = options.cacheDir ?? config.cache_dir ?? path.join(rootDir, '.bfs', 'cache');
   const blobCachePath = path.join(cacheDir, 'pull.blob.pending');
-  await _validateConfigDir(cacheDir, 'cache-dir');
+  await validateConfigDir(cacheDir, 'cache-dir');
 
   // A version recovery met but could not open has no manifest - only a marker
   // saying it is out there. Rebuild it from the parts before anything else: the
@@ -1408,7 +1430,9 @@ export async function prune(rootDir: string, options: PruneOptions): Promise<voi
  * ('relocate'/'rebuild') first require the operator to confirm the provider
  * locations and clear the flag once the heal completes; 'remove' is not gated.
  *
- * @throws BfsError on validation failure, missing required options, or when the
+ * @throws BfsError when a rebuild did not complete for every version in scope
+ *   (three lists and a line per failed version; configuration untouched), on
+ *   validation failure, missing required options, or when the
  *   operator declines the post-recovery location confirmation.
  */
 export async function removeProvider(rootDir: string, providerId: string, options: RemoveProviderOptions): Promise<void> {
@@ -1471,18 +1495,40 @@ export async function removeProvider(rootDir: string, providerId: string, option
       throw new BfsError('targetProviderId required for rebuild strategy.');
     }
     const { rebuildAllVersions } = await import('./heal.js');
-    await rebuildAllVersions(rootDir, {
+    const report = await rebuildAllVersions(rootDir, {
       removedProviderId: providerId,
       targetProviderId: options.targetProviderId,
       scope: options.rebuildScope ?? 'all',
       io: options.io,
       ...(options.password !== undefined ? { password: options.password } : {}),
     });
+    // Anything short of every version rebuilt and confirmed is a failure, and
+    // the configuration stays as it was: the old provider keeps its entry (its
+    // parts are still the only copy of what did not move) and the target stays
+    // too (it may already hold what did). Dropping the old provider here would
+    // make the manifests point at a storage the configuration no longer knows.
+    if (report.degraded > 0 || report.versions_not_attempted.length > 0) throw new BfsError(_describeRebuildReport(report));
     // Remove old provider from config (target provider is already in config)
     const updatedProviders = config.providers.filter((p) => p.id !== providerId);
     await writeConfig(rootDir, { ...config, providers: updatedProviders });
     if (clearLocationsConfirmed) await _clearLocationsConfirmed(rootDir);
   }
+}
+
+/**
+ * The verdict of a rebuild that did not complete: three lists (what moved,
+ * what failed, what was never attempted), one line per failed version naming
+ * the step, the storage and the storage's own words, and the way out - the
+ * same command again, once the cause is gone. Whether the target stays in the
+ * configuration is not said here: the CLI decides that after this and says so.
+ *
+ * @param report - The report of the run
+ * @returns the message for the operator
+ */
+function _describeRebuildReport(report: HealReport): string {
+  const list = (versions: number[]): string => (versions.length > 0 ? versions.join(', ') : t('heal_rebuild_list_none'));
+  const lines = report.failures.map((f) => fmt('heal_rebuild_version_failed', String(f.version), f.message));
+  return [fmt('heal_rebuild_incomplete', list(report.versions_repaired), list(report.versions_degraded), list(report.versions_not_attempted)), ...lines, t('heal_rebuild_retry_hint')].join('\n');
 }
 
 /**

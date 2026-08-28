@@ -161,6 +161,8 @@ export interface Strings {
   config_reset_no_field: string;
   /** %s = flag name (twice) */
   config_dir_hint: string;
+  /** %s = temp directory that refused, %s = operating-system error message */
+  scratch_write_failed: string;
   config_opt_cache_dir: string;
   config_opt_temp_dir: string;
   config_opt_max_ram: string;
@@ -878,6 +880,8 @@ export interface Strings {
   ssh_help_flag_config_file_desc: string;
   ssh_operation_failed: string;
   ssh_size_mismatch: string;
+  /** %s = part filename, %s = the server's own error text */
+  ssh_write_failure_hint: string;
   ssh_control_chars: string;
   ssh_key_unreadable: string;
   ssh_recovery_confirm_host: string;
@@ -951,6 +955,26 @@ export interface Strings {
   heal_shard_corrupt_skip: string;
   heal_locationmap_update_failed: string;
   heal_relocate_unreachable: string;
+  /** %s = target storage name, %s = the storage's own reason */
+  heal_rebuild_target_unusable: string;
+  /** %s = part filename, %s = target storage name, %s = the storage's own reason */
+  heal_rebuild_step_write: string;
+  /** %s = part filename, %s = target storage name, %s = what read back differently */
+  heal_rebuild_step_verify: string;
+  /** %s = bytes stored, %s = bytes expected */
+  heal_rebuild_size_detail: string;
+  /** %s = parts needed (N), %s = parts obtained */
+  heal_rebuild_step_parts: string;
+  /** %s = sibling storage name, %s = the storage's own reason */
+  heal_rebuild_sibling_unreachable: string;
+  /** %s = versions rebuilt, %s = versions failed, %s = versions not attempted (lists or "none") */
+  heal_rebuild_incomplete: string;
+  /** %s = version number, %s = the failure (step, storage, reason) */
+  heal_rebuild_version_failed: string;
+  heal_rebuild_retry_hint: string;
+  /** %s = part filename, %s = target storage name, %s = the storage's own words */
+  heal_rebuild_unverifiable: string;
+  heal_rebuild_list_none: string;
 
   // --- repair (command) ------------------------------------------------------
   cmd_repair_desc: string;

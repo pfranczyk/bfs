@@ -841,7 +841,7 @@ describe('rebuildVersion with a damaged sibling', () => {
     await rotShardPayload(shardPath(setup.providerDirs[0], 0));
     await rotShardPayload(shardPath(setup.providerDirs[1], 1));
 
-    await expect(rebuildVersion(setup.root, 1, { removedProviderId: 'p2', targetProviderId: 'p3', io: setup.io })).rejects.toThrow(/Not enough shards/);
+    await expect(rebuildVersion(setup.root, 1, { removedProviderId: 'p2', targetProviderId: 'p3', io: setup.io })).rejects.toThrow(/not enough parts/);
   });
 
   it('should still refuse when a sibling header diverges and its checksum verifies', async () => {

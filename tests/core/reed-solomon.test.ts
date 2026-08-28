@@ -2,10 +2,38 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { Readable } from 'node:stream';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BfsError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
 import { calcShardPayloadSize, rsDecode, rsDecodeStriped, rsEncode, rsEncodeStriped, rsRepair, rsRepairStriped, SHARD_ALIGNMENT } from '../../src/core/reed-solomon.js';
+
+// Every file handle `open` hands out is recorded with whether it was closed,
+// and a close can be made to fail on demand - the striped encoder opens K
+// parity files and must not leak the ones it did open when a later one is
+// refused, nor let a failing close hide the error that came first.
+const handleTracker = vi.hoisted(() => ({ opened: [] as Array<{ path: string; closed: boolean }>, failClose: false }));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const open = (async (p: unknown, flags: unknown, mode: unknown) => {
+    const handle = await actual.open(p as never, flags as never, mode as never);
+    const record = { path: String(p), closed: false };
+    handleTracker.opened.push(record);
+    const close = handle.close.bind(handle);
+    handle.close = async () => {
+      record.closed = true;
+      await close();
+      if (handleTracker.failClose) {
+        const err: NodeJS.ErrnoException = new Error('EIO: simulated close fault, close');
+        err.code = 'EIO';
+        throw err;
+      }
+    };
+    return handle;
+  }) as typeof actual.open;
+  const patched = { ...actual, open };
+  return { ...patched, default: patched };
+});
 
 // --- Helpers ---------------------------------------------------------------
 
@@ -242,10 +270,13 @@ describe('rsEncodeStriped / rsDecodeStriped', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
+    handleTracker.opened = [];
+    handleTracker.failClose = false;
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-rs-'));
   });
 
   afterEach(async () => {
+    handleTracker.failClose = false;
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -266,6 +297,95 @@ describe('rsEncodeStriped / rsDecodeStriped', () => {
     }
     return shards;
   }
+
+  it('should report a parity file it cannot create as a scratch write failure carrying the errno and the path', async () => {
+    // The parity file lives in the caller's scratch directory; a failure to
+    // create or fill it is a local condition (full or unwritable temp), not a
+    // Reed-Solomon problem and not a medium problem. The caller can only name
+    // the right directory if the error tells it which side failed and keeps
+    // the operating system's code.
+    const parityPath = path.join(tmpDir, 'no-such-dir', 'parity_0.bin');
+
+    let failure: unknown = null;
+    try {
+      await rsEncodeStriped(Readable.from(makeData(300)), [parityPath], 2, 1, 64);
+    } catch (err: unknown) {
+      failure = err;
+    }
+
+    expect(failure).toBeInstanceOf(BfsError);
+    assert(failure instanceof BfsError);
+    expect(failure.message).toContain(parityPath);
+    expect((failure.cause as NodeJS.ErrnoException | undefined)?.code, 'the errno must survive the wrapping').toBe('ENOENT');
+  });
+
+  it('should close the parity files it did open when a later one cannot be created (K=2)', async () => {
+    // A full scratch rarely refuses every file at once: the first parity file
+    // opens, the second does not. The handle already open must be released -
+    // a leaked handle keeps the file busy, and on Windows that is what stops
+    // the scratch directory from being removed afterwards.
+    const openable = path.join(tmpDir, 'parity_0.bin');
+    const refused = path.join(tmpDir, 'no-such-dir', 'parity_1.bin');
+
+    await expect(rsEncodeStriped(Readable.from(makeData(300)), [openable, refused], 2, 2, 64)).rejects.toBeInstanceOf(BfsError);
+
+    const first = handleTracker.opened.find((h) => h.path === openable);
+    assert(first !== undefined, 'the first parity file must have been opened');
+    expect(first.closed, 'the parity file that did open must be closed again').toBe(true);
+  });
+
+  it('should report a parity file that cannot be closed as a scratch write failure when nothing else failed', async () => {
+    // The last bytes of a parity file reach the disk on close; a close that
+    // fails on an otherwise clean encode is a lost part, and must not pass as
+    // success just because it happened in the cleanup.
+    const parityPath = path.join(tmpDir, 'parity_0.bin');
+    handleTracker.failClose = true;
+
+    let failure: unknown = null;
+    try {
+      await rsEncodeStriped(Readable.from(makeData(300)), [parityPath], 2, 1, 64);
+    } catch (err: unknown) {
+      failure = err;
+    }
+
+    expect(failure).toBeInstanceOf(BfsError);
+    assert(failure instanceof BfsError);
+    expect(failure.message).toContain(parityPath);
+  });
+
+  it('should let a failure of the source win over a failing close of the parity files', async () => {
+    // The close in the cleanup path can fail too; when it does on top of a
+    // source error, the source error is the one the caller must see - a close
+    // fault re-labelled as a scratch failure would send the operator to
+    // `bfs config --temp-dir` for a broken blob.
+    const sourceError = new Error('EIO: i/o error, read');
+    const source = Readable.from(
+      (async function* broken() {
+        yield makeData(64);
+        throw sourceError;
+      })(),
+    );
+    handleTracker.failClose = true;
+
+    await expect(rsEncodeStriped(source, [path.join(tmpDir, 'parity_0.bin')], 2, 1, 64)).rejects.toBe(sourceError);
+  });
+
+  it('should propagate a failure of the source stream unchanged, not as a scratch write failure (A/B control)', async () => {
+    // Opposite side: the scratch is fine, the blob being read stops. That
+    // error must reach the caller as itself, so a broken source is never
+    // pinned on the temp directory. It carries ENOSPC on purpose - the errno a
+    // full scratch raises - so sorting by code cannot stand in for the side.
+    const sourceError: NodeJS.ErrnoException = new Error('ENOSPC: no space left on device, read');
+    sourceError.code = 'ENOSPC';
+    const source = Readable.from(
+      (async function* broken() {
+        yield makeData(64);
+        throw sourceError;
+      })(),
+    );
+
+    await expect(rsEncodeStriped(source, [path.join(tmpDir, 'parity_0.bin')], 2, 1, 64)).rejects.toBe(sourceError);
+  });
 
   it('should encode and decode a blob exactly (N=2, K=1)', async () => {
     const N = 2;

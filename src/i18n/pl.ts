@@ -140,6 +140,7 @@ export const pl: Strings = {
   config_reset: 'Ustawienie przywrócone do domyślnego.',
   config_reset_no_field: 'Podaj --cache-dir lub --temp-dir razem z --reset.',
   config_dir_hint: 'Zmień przez `bfs config --%s <ścieżka>` lub `bfs config --%s --reset`',
+  scratch_write_failed: 'Nie można zapisać do katalogu tymczasowego %s (%s). Wskaż BFS katalog z wolnym miejscem: `bfs config --temp-dir <ścieżka>` albo `--temp-dir <ścieżka>` tylko na to uruchomienie.',
   config_opt_cache_dir: 'Ustaw katalog cache (zastępuje .bfs/cache)',
   config_opt_temp_dir: 'Ustaw katalog plików tymczasowych (zastępuje systemowy temp)',
   config_opt_max_ram: 'Ustaw limit RAM do kodowania (MB, 0 = auto)',
@@ -702,6 +703,7 @@ export const pl: Strings = {
   // --- SSH - runtime errors --------------------------------------------------
   ssh_operation_failed: 'Operacja SSH nieudana na %s:%s: %s',
   ssh_size_mismatch: 'Niezgodność rozmiaru uploadu SSH dla "%s": wysłano %s B, serwer zapisał %s B.',
+  ssh_write_failure_hint: 'Zapis "%s" nie powiódł się z ogólnym błędem SFTP (%s) - przy zapisie najczęściej oznacza to brak miejsca na dysku lub wyczerpaną kwotę na serwerze.',
   ssh_control_chars: 'Ścieżka SSH i nazwa kopii nie mogą zawierać znaków końca linii ani znaków sterujących.',
   ssh_key_unreadable: 'Nie udało się odczytać pliku klucza prywatnego SSH "%s": %s',
   ssh_recovery_confirm_host: 'Odzyskiwanie chce wysłać sekret SSH do %s (ścieżka %s, klucz hosta %s). Wysłać do tego hosta?',
@@ -767,6 +769,17 @@ export const pl: Strings = {
   heal_shard_corrupt_skip: 'Dane kopii na nośniku "%s" nie przeszły kontroli integralności - pomijam go przy tej naprawie.',
   heal_locationmap_update_failed: 'Nie udało się zaktualizować nośnika "%s" nowymi informacjami o lokalizacji - napraw go osobno.',
   heal_relocate_unreachable: 'Nośnik "%s" nie nadaje się do użycia pod nowym adresem: %s',
+  heal_rebuild_target_unusable: 'Docelowy nośnik "%s" nie nadaje się do użycia: %s',
+  heal_rebuild_step_write: 'zapis %s na nośnik "%s": %s',
+  heal_rebuild_step_verify: '%s na nośniku "%s" nie odczytuje się tak, jak został zapisany: %s',
+  heal_rebuild_size_detail: 'zapisano %s B, oczekiwano %s B',
+  heal_rebuild_step_parts: 'za mało części na pozostałych nośnikach (potrzeba %s, jest %s)',
+  heal_rebuild_sibling_unreachable: 'nośnik "%s" nie odpowiedział: %s',
+  heal_rebuild_incomplete: 'Odbudowa nie została ukończona. Odbudowane: %s. Nieudane: %s. Niepodjęte: %s.',
+  heal_rebuild_version_failed: 'Wersja %s: %s',
+  heal_rebuild_retry_hint: 'Usuwany nośnik zostaje w konfiguracji. Usuń przyczynę i uruchom tę samą komendę ponownie - wersje już odbudowane nie są odbudowywane drugi raz.',
+  heal_rebuild_unverifiable: 'Nośnik "%s" zapisał %s w oczekiwanym rozmiarze, ale nie potrafi potwierdzić, co trzyma (%s) - przyjęte na wiarę; `bfs verify --deep` odczyta to w całości.',
+  heal_rebuild_list_none: 'brak',
 
   // --- repair (command) ------------------------------------------------------
   cmd_repair_desc: 'Napraw lokalizację nośnika po zmianie ścieżki lub rotacji poświadczeń',

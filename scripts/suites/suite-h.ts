@@ -14,6 +14,8 @@ import { readJson } from '../smoke-vault.js';
  * - bfs config shows the set value
  * - bfs config --cache-dir --reset resets to default (null)
  * - bfs config with temp_dir unset names the system temp as the default (H8)
+ * - bfs push / bfs pull --temp-dir <file> refuse with the path and the
+ *   `bfs config --temp-dir` hint, no raw errno (H9, H10)
  */
 export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
   const tests: TestResult[] = [];
@@ -129,6 +131,37 @@ export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
       assert(r.status === 0, `exit ${r.status ?? 'null'}\n${r.stderr}`);
       const out = r.stdout + r.stderr;
       assert(/temp-dir:\s+\(default: system temp\)/.test(out), `expected temp-dir default line in bfs config output: ${out.slice(0, 400)}`);
+    }),
+  );
+
+  // A temp directory that cannot take the scratch files is a local condition
+  // with a one-command fix, and the error has to say so: name the path that
+  // refused and point at `bfs config --temp-dir`. A path that exists as a file
+  // is the portable way to make the scratch unusable from outside the process
+  // (a full volume cannot be staged on every platform): its parent exists, so
+  // the directory check passes, and creating the scratch under it fails.
+  const tempDirFile = path.join(ctx.sourceDir, 'temp-dir-is-a-file');
+
+  tests.push(
+    await runTest('H9', 'bfs push --temp-dir <file> -> names the path and `bfs config --temp-dir`, no raw errno', async () => {
+      await fs.writeFile(tempDirFile, 'not a directory');
+      const r = runBfs(['push', '--new', '--temp-dir', tempDirFile], ctx.vaultDir, undefined, hEnv);
+      const out = r.stdout + r.stderr;
+      assert(r.status !== 0, `expected exit != 0, got: ${r.status}`);
+      assert(out.includes(tempDirFile), `expected the refused temp path in: ${out.slice(0, 400)}`);
+      assert(/bfs config --temp-dir/.test(out), `expected the temp-dir hint in: ${out.slice(0, 400)}`);
+      assert(!/^\s*at .+:\d+:\d+/m.test(out), `expected no stack trace in: ${out.slice(0, 400)}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('H10', 'bfs pull --temp-dir <file> -> names the path and `bfs config --temp-dir`, no raw errno', async () => {
+      const r = runBfs(['pull', '--force', '--temp-dir', tempDirFile], ctx.vaultDir, undefined, hEnv);
+      const out = r.stdout + r.stderr;
+      assert(r.status !== 0, `expected exit != 0, got: ${r.status}`);
+      assert(out.includes(tempDirFile), `expected the refused temp path in: ${out.slice(0, 400)}`);
+      assert(/bfs config --temp-dir/.test(out), `expected the temp-dir hint in: ${out.slice(0, 400)}`);
+      assert(!/^\s*at .+:\d+:\d+/m.test(out), `expected no stack trace in: ${out.slice(0, 400)}`);
     }),
   );
 

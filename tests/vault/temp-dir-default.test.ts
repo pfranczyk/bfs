@@ -12,6 +12,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fmt } from '../../src/i18n/index.js';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
 import type { ProviderConfig, ProviderIO } from '../../src/types/index.js';
@@ -115,8 +116,16 @@ describe('temp_dir default - push and pull scratch under os.tmpdir()', () => {
   it('should remove the bfs-push-* directory when the upload fails', async () => {
     const created = trackMkdtemp();
     vi.spyOn(LocalFsProvider.prototype, 'upload').mockRejectedValue(new Error('disk on fire'));
+    const { io, logs } = createMockProviderIO();
 
-    await push(root, { io: mockIO() }).catch(() => undefined);
+    // The rejection is the point: a push that swallowed the upload failure and
+    // reported success would leave this directory gone as well, and the test
+    // would be pinning the cleanup of a path it never proved was taken.
+    await expect(push(root, { io })).rejects.toThrow(fmt('push_damaged_zero', '2', '3'));
+    expect(
+      logs.some((l) => l.level === 'warn' && l.message.includes('disk on fire')),
+      'the failure must be the mocked upload',
+    ).toBe(true);
 
     const pushDirs = created.filter((d) => path.basename(d).startsWith('bfs-push-'));
     expect(pushDirs).toHaveLength(1);
@@ -124,6 +133,46 @@ describe('temp_dir default - push and pull scratch under os.tmpdir()', () => {
     assert(pushDir !== undefined);
     expect(await exists(pushDir), 'scratch dir must be removed even when push fails').toBe(false);
     expect(await scratchInCache(root)).toEqual([]);
+  });
+
+  it('should remove the bfs-pull-* directory when the download fails', async () => {
+    await push(root, { io: mockIO() });
+    const created = trackMkdtemp();
+    vi.spyOn(LocalFsProvider.prototype, 'download').mockRejectedValue(new Error('medium on fire'));
+
+    // The mock's own text never reaches the operator: a failed download is
+    // recorded per medium under the restore's own wording, so the rejection is
+    // pinned by its count of usable parts (none) rather than by 'medium on fire'.
+    await expect(pull(root, { io: mockIO(), force: true })).rejects.toThrow(fmt('pull_not_enough_shards', '2', '0'));
+
+    const pullDirs = created.filter((d) => path.basename(d).startsWith('bfs-pull-'));
+    expect(pullDirs).toHaveLength(1);
+    const pullDir = pullDirs[0];
+    assert(pullDir !== undefined);
+    expect(await exists(pullDir), 'scratch dir must be removed even when pull fails').toBe(false);
+    expect(await scratchInCache(root)).toEqual([]);
+  });
+
+  it('should remove the scratch directories with retries, so a file briefly held by an indexer or antivirus does not leave them behind', async () => {
+    // On Windows a scanner may hold a freshly written part for a moment and the
+    // removal answers EBUSY/EPERM; without retries the catch swallows that and
+    // the parts - for a --no-enc backup, plain fragments of user data - stay in
+    // the temp directory. scripts/clean-temp.ts already retries three times.
+    const created = trackMkdtemp();
+    const rmSpy = vi.spyOn(fs, 'rm');
+
+    await push(root, { io: mockIO() });
+    await pull(root, { io: mockIO(), force: true });
+
+    const scratch = created.filter((d) => /^bfs-(push|pull)-/.test(path.basename(d)));
+    expect(scratch.map((d) => path.basename(d).slice(0, 9))).toEqual(['bfs-push-', 'bfs-pull-']);
+    for (const dir of scratch) {
+      const removals = rmSpy.mock.calls.filter(([p]) => String(p) === dir);
+      expect(removals.length, `${path.basename(dir)} must be removed`).toBeGreaterThan(0);
+      for (const [, options] of removals) {
+        expect(options, `${path.basename(dir)} removal must retry`).toEqual(expect.objectContaining({ recursive: true, force: true, maxRetries: 3 }));
+      }
+    }
   });
 
   it('should download pull parts into a bfs-pull-* directory under os.tmpdir() and remove it afterwards', async () => {

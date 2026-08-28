@@ -140,6 +140,7 @@ export const en: Strings = {
   config_reset: 'Setting reset to default.',
   config_reset_no_field: 'Specify --cache-dir or --temp-dir together with --reset.',
   config_dir_hint: 'Update with `bfs config --%s <path>` or `bfs config --%s --reset`',
+  scratch_write_failed: 'Cannot write to the temporary directory %s (%s). Point BFS at a directory with room to spare: `bfs config --temp-dir <path>`, or `--temp-dir <path>` for this run only.',
   config_opt_cache_dir: 'Set cache directory (overrides .bfs/cache)',
   config_opt_temp_dir: 'Set temporary files directory (overrides system temp)',
   config_opt_max_ram: 'Set RAM limit for encoding (MB, 0 = auto)',
@@ -701,6 +702,7 @@ export const en: Strings = {
   // --- SSH - runtime errors --------------------------------------------------
   ssh_operation_failed: 'SSH operation failed on %s:%s: %s',
   ssh_size_mismatch: 'SSH upload size mismatch for "%s": sent %s B, server stored %s B.',
+  ssh_write_failure_hint: 'Writing "%s" failed with a general SFTP failure (%s) - on a write this most often means the server is out of disk space or quota.',
   ssh_control_chars: 'SSH path and backup name must not contain line breaks or control characters.',
   ssh_key_unreadable: 'SSH private key file "%s" could not be read: %s',
   ssh_recovery_confirm_host: 'Recovery wants to send the SSH secret to %s (path %s, host-key %s). Send it to this host?',
@@ -766,6 +768,17 @@ export const en: Strings = {
   heal_shard_corrupt_skip: 'Backup data on storage "%s" failed its integrity check - skipping it for this repair.',
   heal_locationmap_update_failed: 'Could not update storage "%s" with the new location info - heal or repair it separately.',
   heal_relocate_unreachable: 'Storage "%s" is not usable at the new address: %s',
+  heal_rebuild_target_unusable: 'Target storage "%s" is not usable: %s',
+  heal_rebuild_step_write: 'writing %s to storage "%s": %s',
+  heal_rebuild_step_verify: '%s on storage "%s" did not read back as written: %s',
+  heal_rebuild_size_detail: 'stored %s B, expected %s B',
+  heal_rebuild_step_parts: 'not enough parts on the other storages (need %s, got %s)',
+  heal_rebuild_sibling_unreachable: 'storage "%s" did not answer: %s',
+  heal_rebuild_incomplete: 'The rebuild did not complete. Rebuilt: %s. Failed: %s. Not attempted: %s.',
+  heal_rebuild_version_failed: 'Version %s: %s',
+  heal_rebuild_retry_hint: 'The storage being removed stays in the configuration. Fix the cause and run the same command again - versions already rebuilt are not rebuilt twice.',
+  heal_rebuild_unverifiable: 'Storage "%s" stored %s with the expected size but cannot confirm what it holds (%s) - taken on trust; `bfs verify --deep` reads it back in full.',
+  heal_rebuild_list_none: 'none',
 
   // --- repair (command) ------------------------------------------------------
   cmd_repair_desc: 'Repair a provider location after a path change or credential rotation',

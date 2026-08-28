@@ -17,7 +17,7 @@ import { parseBlobFileTable, parseBlobFileTableFromFile } from '../core/blob-unp
 import { trackFile, untrackFile } from '../core/cleanup.js';
 import { deriveKey, deriveShardNonce, encryptStream, exceedsGcmPlaintextLimit, GCM_MAX_PLAINTEXT_BYTES, generateSalt } from '../core/crypto.js';
 import type { SkippedFile } from '../core/errors.js';
-import { BfsError, ProviderError, PushCacheCorruptedError, PushCacheNoLockError, PushCacheUnavailableError, PushDriftError, PushExcludedError, PushSkippedError } from '../core/errors.js';
+import { BfsError, ProviderError, PushCacheCorruptedError, PushCacheNoLockError, PushCacheUnavailableError, PushDriftError, PushExcludedError, PushSkippedError, ScratchWriteError } from '../core/errors.js';
 import { hashBuffer, hashStream, SHA256_BYTES } from '../core/hash.js';
 import { appendToBfsignore, createIgnoreFilter } from '../core/ignore.js';
 import { calcShardPayloadSize, rsEncodeStriped } from '../core/reed-solomon.js';
@@ -33,6 +33,7 @@ import type { PushLock, PushLockFailedReason } from './lockfile.js';
 import { acquireCachePushLock, acquirePushLock, pushLockPath, readLock, removeLock, writeLockAtomic } from './lockfile.js';
 import { writeManifest } from './manifest.js';
 import { confirmRecoveredLocations } from './recovered-locations.js';
+import { createScratchDir, prepareExplicitTempDir, removeScratchDir, scratchWriteFailure, validateConfigDir } from './scratch-dir.js';
 import { readState, writeState } from './state.js';
 import { assertNoForeignVault } from './vault-collision.js';
 
@@ -148,26 +149,6 @@ async function* _stripedShardChunks(source: Buffer | string, blobSize: number, s
  */
 function _stripedShardStream(source: Buffer | string, blobSize: number, shardIndex: number, N: number, stripeSize: number): Readable {
   return Readable.from(_stripedShardChunks(source, blobSize, shardIndex, N, stripeSize));
-}
-
-// --- Shared utilities (local copy - push must not import vault-manager) --
-
-/**
- * Validates that a configured directory (or its parent) exists before use.
- * A local copy - the no-import-from-vault-manager rule forbids sharing it
- * through that module.
- */
-async function _validateConfigDir(dir: string, configFlag: string): Promise<void> {
-  const target = path.dirname(dir) === dir ? dir : path.dirname(dir);
-  try {
-    const stat = await fs.stat(target);
-    if (!stat.isDirectory()) {
-      throw new BfsError(`${t('path_not_dir')}: ${dir}\n  ${fmt('config_dir_hint', configFlag, configFlag)}`);
-    }
-  } catch (e: unknown) {
-    if (e instanceof BfsError) throw e;
-    throw new BfsError(`${fmt('dir_not_exist', dir)}\n  ${fmt('config_dir_hint', configFlag, configFlag)}`);
-  }
 }
 
 /**
@@ -661,17 +642,12 @@ interface ResolvedPushPaths {
 async function _resolvePushPaths(options: PushPathsOptions): Promise<ResolvedPushPaths> {
   const { rootDir, config } = options;
   const cacheDir = options.cacheDir ?? config.cache_dir ?? path.join(rootDir, '.bfs', 'cache');
-  await _validateConfigDir(cacheDir, 'cache-dir');
+  await validateConfigDir(cacheDir, 'cache-dir');
   await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
   // Only an explicitly configured temp dir is validated - os.tmpdir() always
   // exists, and the hint attached to the error would point back at it anyway.
   const explicitTempDir = options.tempDir ?? config.temp_dir ?? null;
-  if (explicitTempDir !== null) {
-    await _validateConfigDir(explicitTempDir, 'temp-dir');
-    // The validation accepts a not-yet-existing leaf (only the parent must
-    // exist) and mkdtemp does not create parents - so create it here.
-    await fs.mkdir(explicitTempDir, { recursive: true, mode: 0o700 });
-  }
+  if (explicitTempDir !== null) await prepareExplicitTempDir(explicitTempDir);
   const tempDir = explicitTempDir ?? os.tmpdir();
   const cachePath = path.join(cacheDir, 'push.blob.pending');
   return { cacheDir, tempDir, cachePath };
@@ -747,20 +723,26 @@ interface RsEncodeResult {
  * default file mode would expose backup data - mkdtemp gives a random suffix,
  * mode 0700 and refuses an existing target.
  *
+ * A parity file the scratch refuses is reported as the scratch's, with the
+ * directory and the fix - the operator has two volumes that could be full, the
+ * backup's and the temp, and a raw errno names neither. A failure of the blob
+ * source is rethrown as it is: that is the other volume.
+ *
  * @param options - blobSource, targetVersion, tempDir, N, K, stripeSize
  * @returns scratchDir, parityPaths (K files inside it) and shardHashes (N+K)
+ * @throws BfsError naming the temp directory when the scratch cannot be created or written
  */
 async function _rsEncodeBlob(options: RsEncodeBlobOptions): Promise<RsEncodeResult> {
   const { blobSource, targetVersion, tempDir, N, K, stripeSize } = options;
-  const scratchDir = await fs.mkdtemp(path.join(tempDir, 'bfs-push-'));
-  await fs.chmod(scratchDir, 0o700).catch(() => {});
+  const scratchDir = await createScratchDir(tempDir, 'bfs-push-');
   const parityPaths: string[] = Array.from({ length: K }, (_, j) => path.join(scratchDir, `parity-${targetVersion}-${j}.tmp`));
   const rsSourceStream: Readable = Buffer.isBuffer(blobSource) ? Readable.from(blobSource) : createReadStream(blobSource);
   try {
     const { dataShardHashes, parityShardHashes } = await rsEncodeStriped(rsSourceStream, parityPaths, N, K, stripeSize);
     return { scratchDir, parityPaths, shardHashes: [...dataShardHashes, ...parityShardHashes] };
   } catch (e: unknown) {
-    await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => {});
+    await removeScratchDir(scratchDir);
+    if (e instanceof ScratchWriteError) throw scratchWriteFailure(scratchDir, e.cause);
     throw e;
   }
 }
@@ -1234,7 +1216,21 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
     throw new BfsError(fmt('gcm_payload_too_large', String(GCM_MAX_PLAINTEXT_BYTES / 1024 ** 3)));
   }
   options.io.info(t('vault_encoding_rs'));
-  const { scratchDir, parityPaths, shardHashes } = await _rsEncodeBlob({ blobSource, targetVersion, tempDir, N, K, stripeSize });
+  let encoded: RsEncodeResult;
+  try {
+    encoded = await _rsEncodeBlob({ blobSource, targetVersion, tempDir, N, K, stripeSize });
+  } catch (e: unknown) {
+    // Nothing reached a medium, and a blob held in RAM leaves nothing to resume
+    // from, so the lock has no partial state to keep. Left behind, it would turn
+    // the advised retry (`bfs push` after fixing the temp dir) into `bfs clear`
+    // first. A blob packed to disk stays resumable with `--cache`, lock and all
+    // - and a resume itself (`--cache`) keeps the lock it was given, since the
+    // cached blob it resumes from is still there for the next attempt. The
+    // removal is best-effort: the error worth reporting is the encode's.
+    if (Buffer.isBuffer(blobSource) && options.fromCache !== true) await removeLock(pushLockPath(rootDir)).catch(() => {});
+    throw e;
+  }
+  const { scratchDir, parityPaths, shardHashes } = encoded;
   let manifestShards: ManifestShard[];
   try {
     const locationMap = _buildLocationMap({ config, targetVersion, shardHashes, io: options.io });
@@ -1263,7 +1259,7 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
       io: options.io,
     }));
   } finally {
-    await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => {});
+    await removeScratchDir(scratchDir);
   }
   const health = _computeHealth(manifestShards.length, N, K);
   await _writePushResults({ rootDir, config, state, targetVersion, file_count, total_size, blob_hash, stripeSize, shouldEncrypt, shouldCompress, manifestShards, health, lock, cachePath, N, K });

@@ -109,6 +109,10 @@ const mockState: {
    */
   streamChunkDelayMs: Nullable<number>;
   streamChunks: number;
+  /** When true, every write to an SFTP write stream fails with status 4 (Failure). */
+  writeStatus4: boolean;
+  /** When true, every SFTP read stream fails with status 4 (Failure). */
+  readStatus4: boolean;
 } = {
   files: new Map<string, Buffer>(),
   dirs: new Set<string>(),
@@ -127,6 +131,10 @@ const mockState: {
   sftpHang: false,
   streamChunkDelayMs: null,
   streamChunks: 0,
+  /** When true, every write to an SFTP write stream fails with status 4 (Failure). */
+  writeStatus4: false,
+  /** When true, every SFTP read stream fails with status 4 (Failure). */
+  readStatus4: false,
 };
 
 /** SFTP-style error: unlike Node's ErrnoException (string code), SFTP carries a numeric status code. */
@@ -176,6 +184,12 @@ class MockWriteStream extends Writable {
   }
 
   override _write(chunk: Buffer | Uint8Array, _enc: string, cb: (err?: Error) => void): void {
+    if (mockState.writeStatus4) {
+      // OpenSSH speaks SFTP v3, which has no status for "no space left" - a
+      // full disk or an exhausted quota comes back as the generic 4 (Failure).
+      cb(sftpError('Failure', 4));
+      return;
+    }
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     this.chunks.push(buf);
     mockState.lastUploadChunkSizes.push(buf.length);
@@ -238,6 +252,7 @@ const mockSftp = {
     // A stalled server: the read stream opens but never delivers a byte (no
     // 'data'/'end'/'error') - the transfer hangs forever without a timeout.
     if (mockState.sftpHang) return new Readable({ read() {} });
+    if (mockState.readStatus4) return erroringReadable(sftpError('Failure', 4));
     // A slow-but-progressing transfer: one chunk every streamChunkDelayMs ms.
     if (mockState.streamChunkDelayMs !== null) {
       const delay = mockState.streamChunkDelayMs;
@@ -513,6 +528,8 @@ function resetMockState(): void {
   mockState.sftpHang = false;
   mockState.streamChunkDelayMs = null;
   mockState.streamChunks = 0;
+  mockState.writeStatus4 = false;
+  mockState.readStatus4 = false;
 }
 
 // --- Tests -------------------------------------------------------------------
@@ -605,6 +622,42 @@ describe('SshProvider', () => {
     const downloaded = await downloadBuf(provider, ref);
 
     expect(downloaded).toEqual(data);
+  });
+
+  it('should explain an SFTP "Failure" status on write as a likely full disk or quota', async () => {
+    // SFTP v3 has no status for a full disk, so the server answers a write
+    // with the generic 4 (Failure). Handed over bare, "Failure" tells the
+    // operator nothing; the adapter owns the medium's semantics and must add
+    // what that status most often means on a write.
+    mockState.writeStatus4 = true;
+
+    let failure: unknown = null;
+    try {
+      await uploadBuf(provider, 'shard_0.bfs.1', Buffer.alloc(512, 1));
+    } catch (err: unknown) {
+      failure = err;
+    }
+
+    expect(failure).toBeInstanceOf(ProviderError);
+    const message = (failure as ProviderError).message;
+    expect(message, 'the likely meaning of the status must be spelled out').toMatch(/space|quota/i);
+    expect(message, 'the bare status word must not be the whole explanation').not.toMatch(/:\s*Failure\s*$/);
+  });
+
+  it('should not read a full disk into an SFTP "Failure" status on a download (A/B control)', async () => {
+    // The same status on a read means something else entirely; the hint
+    // belongs to the write path, not to every status 4 the connection sees.
+    mockState.readStatus4 = true;
+
+    let failure: unknown = null;
+    try {
+      await downloadBuf(provider, { provider_id: 'test-ssh', path: 'shard_0.bfs.1' });
+    } catch (err: unknown) {
+      failure = err;
+    }
+
+    expect(failure).toBeInstanceOf(ProviderError);
+    expect((failure as ProviderError).message).not.toMatch(/space|quota/i);
   });
 
   it('should return correct provider_id, path, and 64-char hash after upload', async () => {

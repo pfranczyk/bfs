@@ -613,7 +613,18 @@ export class SshProvider implements StorageProvider {
    * the FTP SIZE-retry loop.
    */
   private async uploadBuffer(sftp: SFTPWrapper, remotePath: string, buffer: Buffer, label: string): Promise<void> {
-    await pipeToWriteStream(bufferToChunkedStream(buffer), sftp.createWriteStream(remotePath));
+    try {
+      await pipeToWriteStream(bufferToChunkedStream(buffer), sftp.createWriteStream(remotePath));
+    } catch (err: unknown) {
+      // OpenSSH speaks SFTP v3, which has no status for "no space left": a
+      // full disk or an exhausted quota comes back as the generic 4 (Failure).
+      // On a write that is what it most often means, and the bare word tells
+      // the operator nothing - the adapter owns the medium's semantics.
+      if (sftpErrorCode(err) === 4) {
+        throw new ProviderError(fmtFor(this.io.lang, 'ssh_write_failure_hint', label, err instanceof Error ? err.message : String(err)), { cause: err });
+      }
+      throw err;
+    }
     const stored = await statSizeAsync(sftp, remotePath);
     if (stored !== buffer.length) {
       throw new ProviderError(fmtFor(this.io.lang, 'ssh_size_mismatch', label, String(buffer.length), String(stored)));

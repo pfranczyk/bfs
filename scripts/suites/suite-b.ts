@@ -632,6 +632,35 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     );
   }
 
+  // -- provider remove --strategy rebuild onto a target that cannot be written --
+  //
+  // Rebuilding is the operator saying "this storage is gone, move its parts".
+  // A target that cannot take a single byte must fail as a failure: non-zero
+  // exit, the target named, and the configuration exactly as before - the
+  // storage still in it, the unusable target withdrawn. A path under an
+  // existing file makes the target unusable on every platform.
+
+  tests.push(
+    await runTest('B25', 'provider remove --strategy rebuild onto <file>/sub -> exit != 0, target named, config untouched', async () => {
+      const blocker = path.join(ctx.sourceDir, 'rebuild-blocker');
+      await fs.writeFile(blocker, 'not a directory');
+      const before = await readJson<{ providers: Array<{ id: string }> }>(path.join(cliVaultDir, '.bfs', 'config.json'));
+      const idsBefore = before.providers.map((p) => p.id);
+      assert(idsBefore.includes('cli-p1'), `fixture must still hold cli-p1, got ${idsBefore.join(',')}`);
+
+      const r = runBfs(['provider', 'remove', 'cli-p1', '--strategy', 'rebuild', '--target', 'cli-dead', '--new-type', 'local', '--path', path.join(blocker, 'sub'), '--scope', 'all'], cliVaultDir);
+
+      const out = r.stdout + r.stderr;
+      assert(r.status !== 0, `expected exit != 0 for an unusable target, got ${r.status}\n${out}`);
+      // The failure itself must name the target as unusable - the note about
+      // withdrawing the target names it too, and is not the failure.
+      assert(out.includes('Target storage "cli-dead" is not usable'), `expected the target named as not usable in: ${out.slice(0, 600)}`);
+      assert(out.includes('same command'), `expected the advice to run the same command again in: ${out.slice(0, 600)}`);
+      const after = await readJson<{ providers: Array<{ id: string }> }>(path.join(cliVaultDir, '.bfs', 'config.json'));
+      assert(after.providers.map((p) => p.id).join(',') === idsBefore.join(','), `config must be exactly as before, got ${after.providers.map((p) => p.id).join(',')} vs ${idsBefore.join(',')}`);
+    }),
+  );
+
   return { name: 'Suite B - CLI init (subprocess)', tests };
 }
 
