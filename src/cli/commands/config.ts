@@ -1,12 +1,30 @@
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
 import { readConfig, writeConfig } from '../../vault/config.js';
+import { validateConfigDir } from '../../vault/scratch-dir.js';
 import { resolveCwd } from '../cwd.js';
-import { error, info, success } from '../ui.js';
+import { CommandAbort, error, info, success } from '../ui.js';
 
 const FEATURE_MAP: Record<string, 'compression' | 'encryption'> = { compress: 'compression', compression: 'compression', encryption: 'encryption', encrypt: 'encryption' };
+
+/**
+ * Checks a directory setting the way push and pull check it before use, so the
+ * only writer of `cache_dir` / `temp_dir` cannot store a value its own readers
+ * refuse. A leaf that does not exist yet is accepted - push and pull create it.
+ *
+ * @param dir - Path given on the command line
+ * @param flag - Which setting is being written (`cache-dir` / `temp-dir`)
+ * @throws CommandAbort after printing why the path was refused and how to fix it
+ */
+async function assertUsableDir(dir: string, flag: 'cache-dir' | 'temp-dir'): Promise<void> {
+  try {
+    await validateConfigDir(path.resolve(dir), flag);
+  } catch (err: unknown) {
+    error(err instanceof Error ? err.message : String(err));
+    throw new CommandAbort();
+  }
+}
 
 /**
  * Registers the `bfs config` command on the given Commander program.
@@ -84,29 +102,13 @@ export function registerConfig(program: Command): void {
       const isReset = (v: string | true | undefined): boolean => opts.reset === true || v === true;
 
       if (opts.cacheDir !== undefined) {
-        if (!isReset(opts.cacheDir)) {
-          const p = path.resolve(opts.cacheDir as string);
-          const parent = path.dirname(p);
-          const stat = await fs.stat(parent).catch(() => null);
-          if (!stat?.isDirectory()) {
-            error(fmt('dir_not_exist', p));
-            return;
-          }
-        }
+        if (!isReset(opts.cacheDir)) await assertUsableDir(opts.cacheDir as string, 'cache-dir');
         config.cache_dir = isReset(opts.cacheDir) ? null : (opts.cacheDir as string);
         changed = true;
       }
 
       if (opts.tempDir !== undefined) {
-        if (!isReset(opts.tempDir)) {
-          const p = path.resolve(opts.tempDir as string);
-          const parent = path.dirname(p);
-          const stat = await fs.stat(parent).catch(() => null);
-          if (!stat?.isDirectory()) {
-            error(fmt('dir_not_exist', p));
-            return;
-          }
-        }
+        if (!isReset(opts.tempDir)) await assertUsableDir(opts.tempDir as string, 'temp-dir');
         config.temp_dir = isReset(opts.tempDir) ? null : (opts.tempDir as string);
         changed = true;
       }

@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { captureConsole, makeConfig, runCmd } from './_helpers.js';
+import { captureConsole, makeConfig, runCmd, runCmdExitCode } from './_helpers.js';
 
 vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn(), writeConfig: vi.fn().mockResolvedValue(undefined) }));
 
@@ -27,6 +27,11 @@ describe('config', () => {
 
   beforeEach(() => {
     capture = captureConsole();
+    // Each test owns its stat queue: mockResolvedValueOnce entries that a test
+    // does not consume would otherwise be answered to the next one, which
+    // silently moves what a failure proves.
+    mockStat.mockReset();
+    mockStat.mockResolvedValue({ isDirectory: () => true } as never);
   });
 
   afterEach(() => {
@@ -158,5 +163,83 @@ describe('config', () => {
     expect(mockWriteConfig).not.toHaveBeenCalled();
     const all = [...capture.logs, ...capture.errors].join('\n');
     expect(all.toLowerCase()).toMatch(/not exist|nie istnieje/i);
+  });
+
+  // --- Validation: the leaf, the wording and the exit code -----------------
+
+  // `bfs config` is the only writer of cache_dir / temp_dir, and push and pull
+  // are the only readers. Writer and readers share one check
+  // (validateConfigDir in vault/scratch-dir.ts), so a path the readers would
+  // turn away cannot be stored here - otherwise the operator learns of it one
+  // push later, from a message that sends them back to this command.
+
+  it('should reject --temp-dir when the path exists as a file', async () => {
+    mockReadConfig.mockResolvedValue(makeConfig() as never);
+    // parent is a directory, the leaf itself is an existing file
+    mockStat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+    mockStat.mockResolvedValueOnce({ isDirectory: () => false } as never);
+
+    const result = await runCmd(['config', '--temp-dir', '/parent/notadir']);
+
+    expect(result, 'a refused setting must abort, not report success').toBe('abort');
+    expect(mockWriteConfig, 'a path the readers reject must not reach config.json').not.toHaveBeenCalled();
+    const all = [...capture.logs, ...capture.errors].join('\n');
+    expect(all.toLowerCase()).toMatch(/not a directory|nie jest katalogiem/i);
+    expect(all, 'the refusal must carry the one-command fix, as push and pull do').toContain('bfs config --temp-dir');
+  });
+
+  it('should reject --cache-dir when the path exists as a file', async () => {
+    mockReadConfig.mockResolvedValue(makeConfig() as never);
+    mockStat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+    mockStat.mockResolvedValueOnce({ isDirectory: () => false } as never);
+
+    const result = await runCmd(['config', '--cache-dir', '/parent/notadir']);
+
+    expect(result, 'a refused setting must abort, not report success').toBe('abort');
+    expect(mockWriteConfig).not.toHaveBeenCalled();
+    const all = [...capture.logs, ...capture.errors].join('\n');
+    expect(all.toLowerCase()).toMatch(/not a directory|nie jest katalogiem/i);
+    expect(all).toContain('bfs config --cache-dir');
+  });
+
+  it('should give a reason the operator can act on when the parent is a file, not "does not exist"', async () => {
+    // The parent resolves to an existing file. "Directory does not exist" reads
+    // as "create it", and creating it is exactly what cannot be done here -
+    // mkdir on that path fails with ENOTDIR however many times it is tried.
+    // The refusal has to name the real obstacle, or the advice sends the
+    // operator in a circle.
+    mockReadConfig.mockResolvedValue(makeConfig() as never);
+    mockStat.mockResolvedValueOnce({ isDirectory: () => false } as never);
+
+    await runCmd(['config', '--temp-dir', '/parent-is-a-file/tmp']);
+
+    expect(mockWriteConfig).not.toHaveBeenCalled();
+    const all = [...capture.logs, ...capture.errors].join('\n');
+    expect(all.toLowerCase()).toMatch(/not a directory|nie jest katalogiem/i);
+    expect(all.toLowerCase(), 'an obstacle that is not absence must not be reported as absence').not.toMatch(/does not exist|nie istnieje/i);
+  });
+
+  it('should exit non-zero when a directory setting is refused', async () => {
+    mockReadConfig.mockResolvedValue(makeConfig() as never);
+    mockStat.mockRejectedValueOnce(new Error('ENOENT'));
+
+    const code = await runCmdExitCode(['config', '--temp-dir', 'Z:\\nonexistent\\tmp']);
+
+    expect(code, 'a refusal that exits 0 cannot be told from a stored value by a script').toBe(1);
+  });
+
+  it('should accept a directory setting whose leaf does not exist yet (A/B control)', async () => {
+    // The opposite side of the same check: push and pull create the leaf
+    // themselves, so a missing one is not a fault and must still be stored.
+    // Without this control the fix could be tightened into refusing every
+    // path that is not already a directory.
+    mockReadConfig.mockResolvedValue(makeConfig() as never);
+    mockStat.mockResolvedValueOnce({ isDirectory: () => true } as never);
+    mockStat.mockRejectedValueOnce(new Error('ENOENT'));
+
+    const result = await runCmd(['config', '--temp-dir', '/parent/not-yet-there']);
+
+    expect(result).toBe('ok');
+    expect(mockWriteConfig, 'a leaf BFS creates on first use must be accepted').toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, assert, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeShardHeaderSize } from '../../src/core/shard-io.js';
 import '../../src/providers/local-fs.js'; // registers the built-in 'local' provider type
 import { createMockProviderIO } from '../../src/providers/provider.js';
@@ -20,6 +20,8 @@ import { init, pull, push } from '../../src/vault/vault-manager.js';
 // here, no setLang() runs in unit tests.
 
 const VAULT_NAME = 'pull-attribution';
+/** Passphrase for the encrypted fixtures - correct throughout, so a message about a key would be wrong. */
+const ENC_PASSWORD = 'correct horse battery staple';
 /** Fixture directories carry no medium names, so an id can only match a real one. */
 const DIR_PREFIXES = ['bfs-pull-attr-alpha-', 'bfs-pull-attr-beta-', 'bfs-pull-attr-gamma-'] as const;
 
@@ -61,9 +63,9 @@ function mediumDir(dirs: string[], index: number): string {
 }
 
 /** Runs pull and returns the message it failed with. */
-async function pullFailure(root: string, io: ProviderIO, password?: string): Promise<string> {
+async function pullFailure(root: string, io: ProviderIO, password?: string, extra: { allowMissingAdapters?: boolean } = {}): Promise<string> {
   try {
-    await pull(root, { io, force: true, ...(password !== undefined ? { password } : {}) });
+    await pull(root, { io, force: true, ...(password !== undefined ? { password } : {}), ...extra });
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   }
@@ -102,6 +104,7 @@ describe('pull attributes a failed restore to the right cause', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     for (const d of [root, ...pdirs]) {
       if (d) await fs.rm(d, { recursive: true, force: true });
     }
@@ -118,7 +121,10 @@ describe('pull attributes a failed restore to the right cause', () => {
     expect(message).toMatch(/\bp0\b/);
     expect(message).toMatch(/\bp1\b/);
     expect(message).not.toMatch(/\bp2\b/); // the healthy medium must not be implicated
-    expect(message).not.toMatch(/offline/i);
+    // Anchored on the sentence an unreachable medium actually prints. The word
+    // "offline" appears in none of these messages, so grepping for it would pass
+    // no matter how the cause was classified.
+    expect(message).not.toContain('Storage not reachable:');
   });
 
   it('should report missing data as missing, not as damaged', async () => {
@@ -196,6 +202,73 @@ describe('pull attributes a failed restore to the right cause', () => {
     expect(message).toMatch(/\bp1\b/);
     expect(message).toMatch(/\bp2\b/);
     expect(message).not.toMatch(/backup size/i);
+  });
+
+  it('should name the media that never answered, without calling their data damaged or absent', async () => {
+    // A medium that is switched off delivered nothing, so nothing is known about
+    // the state of the part it holds. Calling that data damaged sends the
+    // operator to repair bytes nobody read; calling it missing sends them
+    // looking for a file that is most likely still there. Both readings cost the
+    // operator a wasted move, so the cause gets a sentence of its own - and this
+    // is the assertion that it is actually emitted, which no layer had before.
+    await setup(false);
+    await fs.rm(mediumDir(pdirs, 0), { recursive: true, force: true });
+    await fs.rm(mediumDir(pdirs, 1), { recursive: true, force: true });
+
+    const message = await pullFailure(root, io);
+
+    expect(message).toContain('Storage not reachable:');
+    expect(message).toMatch(/\bp0\b/);
+    expect(message).toMatch(/\bp1\b/);
+    expect(message).not.toContain('Damaged backup data on:');
+    expect(message).not.toContain('Backup data missing on:');
+  });
+
+  it('should name a medium the configuration no longer lists when too few parts survive', async () => {
+    // The degraded restore already names this medium; the failed one did not,
+    // although it is the same recoverable mistake and the same fix. Here the
+    // shortage is reached with two different causes at once, so the message has
+    // to carry both sentences rather than collapse them into the louder one.
+    await setup(false);
+    const config = await readConfig(root);
+    assert(config !== null, 'fixture vault must have a config on disk');
+    const detached = config.providers[2];
+    assert(detached !== undefined, 'fixture vault must have a third medium');
+    config.providers = [...config.providers.slice(0, 2), { ...detached, id: 'p2-renamed' }];
+    await writeConfig(root, config);
+    await fs.rm(shardPath(mediumDir(pdirs, 0), 0));
+
+    const message = await pullFailure(root, io);
+
+    expect(message).toContain('absent from the configuration');
+    // The name recorded in the backup, not the renamed entry - that is the one
+    // the operator has to restore for the degradation to go away.
+    expect(message).toMatch(/\bp2\b(?!-)/);
+    expect(message).toContain('Backup data missing on:');
+    expect(message).toMatch(/\bp0\b/);
+  });
+
+  it('should name a medium whose adapter is not installed when too few parts survive', async () => {
+    // Reached only past the preflight, which refuses outright unless the run
+    // opted into carrying on without the adapter. Past that point the part is
+    // simply unavailable, and the reason has to survive into the failure - "not
+    // enough parts" alone would hide the one cause fixed by an `npm install`
+    // rather than by touching any storage.
+    await setup(false);
+    const config = await readConfig(root);
+    assert(config !== null, 'fixture vault must have a config on disk');
+    const external = config.providers[2];
+    assert(external !== undefined, 'fixture vault must have a third medium');
+    config.providers = [...config.providers.slice(0, 2), { ...external, type: 'ghost-cloud', adapterPackage: 'bfs-adapter-ghost' }];
+    await writeConfig(root, config);
+    await fs.rm(shardPath(mediumDir(pdirs, 0), 0));
+
+    const message = await pullFailure(root, io, undefined, { allowMissingAdapters: true });
+
+    expect(message).toContain('adapter that is not installed');
+    expect(message).toMatch(/\bp2\b/);
+    expect(message).toContain('Backup data missing on:');
+    expect(message).toMatch(/\bp0\b/);
   });
 
   it('should restore from the surviving parts when enough of them are still sound', async () => {
@@ -314,6 +387,68 @@ describe('pull attributes a failed restore to the right cause', () => {
     // gone and make a sound copy on what is left. Exact wording is smoke's job.
     expect(advice).toMatch(/bfs repair\b/);
     expect(advice).toMatch(/bfs push\b/);
+  });
+
+  // The two tests below are one pair, and splitting them apart or merging them
+  // would lose what they are for. On an encrypted backup the shortage can be
+  // reached at two different points, and WHICH one depends on where the damage
+  // sits. The size and salt the restore needs are adopted from the first part
+  // that clears its own checksum, and that happens before the password is ever
+  // asked for. So damage covering the early parts trips the shortage while the
+  // vault is still, as far as the code has got, an unopened one - whereas damage
+  // behind a sound first part trips it after the key was already derived. Only
+  // one of the two runs the attribution through the decryption machinery, so a
+  // test pinning either one alone pins the easy half.
+  it('should name the damaged media on an encrypted backup without asking for the password', async () => {
+    // Damage covers the parts consulted for the size, so the shortage is reached
+    // before the encrypted branch. Being asked to type a password here would be
+    // asking for a secret to unlock a restore that has already run out of parts.
+    await setup(true, ENC_PASSWORD);
+    await rotShardPayload(shardPath(mediumDir(pdirs, 0), 0));
+    await rotShardPayload(shardPath(mediumDir(pdirs, 1), 1));
+    const askSecret = vi.spyOn(io, 'askSecret');
+    const loggedBefore = logs.length;
+
+    const message = await pullFailure(root, io);
+
+    expect(message).toContain('Damaged backup data on:');
+    expect(message).toMatch(/\bp0\b/);
+    expect(message).toMatch(/\bp1\b/);
+    expect(message).not.toMatch(/\bp2\b/);
+    // Encryption must not colour the cause: the parts are rotted, and saying
+    // anything about a key or a password would send the operator after a secret
+    // that is not the problem.
+    expect(message).not.toMatch(/password|key/i);
+    expect(askSecret).not.toHaveBeenCalled();
+    // The counterpart of the assertion in the next test, and what makes the two
+    // a pair rather than a duplicate: this run never entered the encrypted
+    // branch at all.
+    expect(logs.slice(loggedBefore).some((l) => l.message.includes('Decrypting'))).toBe(false);
+  });
+
+  it('should name the damaged media on an encrypted backup after a sound part supplied the salt', async () => {
+    // The mirror image: part 0 is sound, so it hands over the size and salt, the
+    // password is taken and the key derived - and only then does the integrity
+    // pass drop the two rotted parts and reach the same shortage. The attribution
+    // has to read the same as it does on the branch above.
+    await setup(true, ENC_PASSWORD);
+    await rotShardPayload(shardPath(mediumDir(pdirs, 1), 1));
+    await rotShardPayload(shardPath(mediumDir(pdirs, 2), 2));
+    const loggedBefore = logs.length;
+
+    const message = await pullFailure(root, io, ENC_PASSWORD);
+
+    // Proof this really is the other branch: the key was derived before the
+    // shortage was reached. Without it the two tests could both be exercising
+    // the early exit and neither would say so.
+    expect(logs.slice(loggedBefore).some((l) => l.message.includes('Decrypting'))).toBe(true);
+    expect(message).toContain('Damaged backup data on:');
+    expect(message).toMatch(/\bp1\b/);
+    expect(message).toMatch(/\bp2\b/);
+    expect(message).not.toMatch(/\bp0\b/);
+    // The password was correct and the key derived - a decryption error surfacing
+    // here would tell the operator they mistyped it.
+    expect(message).not.toMatch(/password|key/i);
   });
 
   it('should still report a wrong password as a password problem', async () => {

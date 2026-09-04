@@ -1,5 +1,5 @@
 import { BfsError } from '../core/errors.js';
-import { buildShardHeaderFromBytes, extractSidecarHeaderBytes, SHARD_HEADER_READ_BYTES, shardIntegrityFailure } from '../core/shard-io.js';
+import { buildShardHeaderFromBytes, extractSidecarHeaderBytes, placementMismatches, SHARD_HEADER_READ_BYTES, shardIntegrityFailure } from '../core/shard-io.js';
 import { fmt, t } from '../i18n/index.js';
 import { providerRegistry } from '../providers/provider.js';
 import type { ManifestShard, ProviderIO, RemoteRef, ShardHeader, StorageProvider, VaultConfig, VersionManifest } from '../types/index.js';
@@ -323,15 +323,19 @@ async function checkShardIntegrity(provider: StorageProvider, ms: ManifestShard,
   return { available: true, sidecar, payload_corrupt: false };
 }
 
-/** Collects the manifest/config fields the in-shard header disagrees with. */
+/**
+ * Collects the manifest/config fields the in-shard header disagrees with.
+ *
+ * The five placement fields come from the same comparison the restore paths use,
+ * so a part cannot be judged as belonging here by one command and not by the
+ * other. The content hash is verify's alone: it reads headers without decoding
+ * anything, so this is its only chance to notice that a part describes content
+ * other than the manifest's - a restore instead checks the content itself, after
+ * the decode.
+ */
 function headerMismatches(header: ShardHeader, config: VaultConfig, manifest: VersionManifest, ms: ManifestShard): string[] {
-  const mismatches: string[] = [];
-  if (header.vault_id !== config.vault_id) mismatches.push('vault_id');
-  if (header.version !== manifest.version) mismatches.push('version');
-  if (header.shard_index !== ms.shard_index) mismatches.push('shard_index');
+  const mismatches = placementMismatches(header, { vault_id: config.vault_id, version: manifest.version, shard_index: ms.shard_index, data_shards: manifest.scheme.data_shards, parity_shards: manifest.scheme.parity_shards });
   if (header.blob_hash !== manifest.blob_hash) mismatches.push('blob_hash');
-  if (header.data_shards !== manifest.scheme.data_shards) mismatches.push('data_shards');
-  if (header.parity_shards !== manifest.scheme.parity_shards) mismatches.push('parity_shards');
   return mismatches;
 }
 

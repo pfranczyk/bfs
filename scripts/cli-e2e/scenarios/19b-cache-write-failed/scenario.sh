@@ -37,7 +37,8 @@ scenario_run() {
   assert_out_contains "degraded"
   assert_manifest_health "$vault" 1 degraded
   assert_lock_exists "$vault"
-  assert_out_contains "Cache write failed"
+  assert_out_contains "backup cache directory"
+  assert_out_contains 'bfs config --cache-dir'
   [ -d "$vault/.bfs/cache/push.blob.pending" ] \
     || _fail "expected .bfs/cache/push.blob.pending to remain a directory (write failed)"
 

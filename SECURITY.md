@@ -227,7 +227,12 @@ enforced separately, in layers:
   restore, so header bit-rot there - the KDF salt included - is undetected and
   can block decryption of an entire version; re-pushing the backup rewrites it
   in the current striped format, which restores single-damaged-shard
-  survivability. A wrong password is distinguished from corruption: it fails a
+  survivability. The same format boundary applies to a shard that is sound but
+  belongs elsewhere: on the current format such a shard is refused by name and
+  rebuilt from parity, whereas on the legacy format one whose contents also
+  differ from what the manifest records is recognised by those contents first
+  and reported as damaged, sending the operator to repair a shard that is whole.
+  Re-pushing the backup is the fix here too. A wrong password is distinguished from corruption: it fails a
   shard's authentication tag (not its checksum) on every shard, so it surfaces as
   a password error rather than being mistaken for damage. Disaster recovery makes
   the same distinction at its entry point: when the shard `bfs recovery

@@ -4,11 +4,14 @@
 # restore: with N healthy shards + parity present, pull must detect the corrupt
 # shard, exclude it, and erasure-decode the blob from the rest.
 #
-# Encrypted vault (V2 per-shard AES-256-GCM) -> the flipped ciphertext byte
-# breaks the shard's GCM auth tag, which surfaces as a stream error during
-# decode. Today that aborts the whole pull (output.destroy) even though the
-# redundancy to survive it is sitting in the other shards - the bug this
-# scenario pins down.
+# Encrypted vault (V2 per-shard AES-256-GCM). The flipped ciphertext byte breaks
+# the shard's trailing SHA-256, and that is what the restore sees: the
+# checksum-verified stream destroys itself on mismatch, skipping the flush where
+# the GCM tag would be checked. The distinction matters here - a DecryptionError
+# is rethrown rather than excluded (a wrong password fails every shard alike), so
+# were it the tag that surfaced, this pull would abort instead of rebuilding.
+# That it passes is the standing proof the encrypted path excludes rot the same
+# way the unencrypted one does.
 
 SCENARIO_NAME="corrupt data-shard -> pull rebuilds from parity (encrypted)"
 SCENARIO_DESC="length-preserving bit-flip in one data-shard; N healthy + parity must reconstruct"
@@ -45,9 +48,8 @@ scenario_run() {
     _fail "corrupt-shard driver did not report success: $BFS_OUT"
   fi
 
-  # GREEN target: pull excludes the corrupt shard and rebuilds from shard 1 +
-  # parity, restoring the tree byte-for-byte. RED today: pull aborts (GCM auth
-  # tag -> output.destroy) despite N healthy shards + parity being available.
+  # Pull excludes the corrupt shard and rebuilds from shard 1 + parity, restoring
+  # the tree byte-for-byte.
   run_bfs "$vault" pull --force --yes --password "$pw"
   assert_ok
   assert_restored "$vault" "$base"

@@ -39,7 +39,7 @@ export const pl: Strings = {
   cmd_help_flag: 'Wyświetl pomoc dla komendy',
   cmd_help_cmd: 'Wyświetl pomoc dla komendy',
   cmd_cwd_desc: 'Katalog roboczy kopii zapasowej (nadpisuje bieżący katalog)',
-  cmd_lang_desc: 'Ustaw język UI na stałe (np. en, pl)',
+  cmd_lang_desc: 'Ustaw język UI na stałe (en, pl)',
   cmd_ci_desc: 'Nigdy nie pytaj: niekompletne polecenie kończy się błędem zamiast pytaniem (do crona, CI i skryptów)',
   cmd_init_desc: 'Skonfiguruj nową kopię zapasową w bieżącym katalogu',
   cmd_push_desc: 'Utwórz kopię zapasową bieżącego katalogu (nowa wersja lub nadpisanie)',
@@ -60,6 +60,9 @@ export const pl: Strings = {
   // --- Global / shared -----------------------------------------------------
   global_settings_group: 'Ustawienia BFS (globalne)',
   lang_set: 'Język ustawiony na: %s',
+  lang_invalid: 'Nieprawidłowy --lang: "%s". Dozwolone: %s',
+  lang_stored_unusable: 'Zapisany język interfejsu (%s) jest niedostępny, więc używany jest angielski. Ustaw obsługiwany przez `bfs --lang <kod>`.',
+  cwd_value_missing: '--cwd wymaga katalogu: `bfs --cwd <katalog>`.',
   no_config: 'Brak kopii zapasowej w tym katalogu. Uruchom najpierw `bfs init`.',
   cancel: 'Anuluj',
   cancelled: 'Anulowano.',
@@ -141,6 +144,7 @@ export const pl: Strings = {
   config_reset_no_field: 'Podaj --cache-dir lub --temp-dir razem z --reset.',
   config_dir_hint: 'Zmień przez `bfs config --%s <ścieżka>` lub `bfs config --%s --reset`',
   scratch_write_failed: 'Nie można zapisać do katalogu tymczasowego %s (%s). Wskaż BFS katalog z wolnym miejscem: `bfs config --temp-dir <ścieżka>` albo `--temp-dir <ścieżka>` tylko na to uruchomienie.',
+  cache_write_failed: 'Nie można zapisać do katalogu cache kopii %s (%s). Wskaż BFS katalog z wolnym miejscem: `bfs config --cache-dir <ścieżka>` albo `--cache-dir <ścieżka>` tylko na to uruchomienie.',
   config_opt_cache_dir: 'Ustaw katalog cache (zastępuje .bfs/cache)',
   config_opt_temp_dir: 'Ustaw katalog plików tymczasowych (zastępuje systemowy temp)',
   config_opt_max_ram: 'Ustaw limit RAM do kodowania (MB, 0 = auto)',
@@ -202,7 +206,7 @@ export const pl: Strings = {
   lock_concurrent_active: 'inna operacja %s w toku (PID %s, od %s)',
   lock_partial_state_push: 'push.lock istnieje (stan częściowy z wersji %s). Uruchom `bfs clear`, aby porzucić ten stan.',
   push_cache_no_lock: '`--cache` wymaga obecności .bfs/push.lock oraz pliku cache; brakuje: %s',
-  push_cache_write_failed: 'Zapis cache nieudany: %s. Tego push nie da się wznowić przez `--cache`.',
+  push_cache_no_resume: 'Tego push nie da się wznowić przez `--cache`.',
   push_cache_unavailable_in_lock: '`push.lock` wskazuje, że dane cache nie zostały zapisane (np. brak miejsca na dysku). Uruchom `bfs clear`, aby porzucić ten stan.',
   push_cache_corrupted:
     'Dane kopii w cache (%s) nie zgadzają się już ze swoją sumą kontrolną - plik został uszkodzony albo zapisany nie do końca, więc nie da się go wysłać. Uruchom `bfs clear`, aby porzucić ten stan, a potem `bfs push`, aby ponownie wykonać kopię katalogu.',
@@ -433,6 +437,7 @@ export const pl: Strings = {
   // --- vault operations ----------------------------------------------------
   vault_download_shards: 'Pobieranie wersji %s...',
   vault_shard_damaged_on_provider: 'Dane kopii na nośniku "%s" są uszkodzone - pomijam.',
+  vault_shard_foreign_on_provider: 'Dane kopii na nośniku "%s" nie należą do tej wersji kopii - pomijam. Sprawdź, co jest zapisane pod tą nazwą; `bfs verify` wskaże niezgodny nośnik.',
   vault_download_shard_progress: 'Pobieranie %s/%s',
   vault_provider_unreachable: 'Nośnik "%s" jest niedostępny - pomijam.',
   vault_file_missing_on_provider: 'Dane kopii brakują na nośniku "%s" - pomijam.',
@@ -475,10 +480,10 @@ export const pl: Strings = {
   pull_failed_on_unreachable: 'Nośniki nieosiągalne: %s.',
   pull_failed_on_adapter_missing: 'Nośniki wymagające niezainstalowanego adaptera: %s.',
   pull_failed_on_not_configured: 'Nośniki zapisane w tej kopii, ale nieobecne w konfiguracji: %s.',
+  pull_failed_on_foreign_part: 'Dane kopii należące do innej wersji lub innej kopii zapasowej, na nośnikach: %s.',
   pull_blob_size_unreadable: 'Nie udało się odczytać rozmiaru kopii z żadnej części.',
   pull_salt_missing: 'Tej zaszyfrowanej kopii brakuje materiału klucza - części mogą być uszkodzone lub niekompletne.',
   pull_provider_not_found_skip: 'Nośnik "%s" nie istnieje w konfiguracji - pomijam jego część kopii.',
-  pull_shard_header_invalid_skip: 'Dane kopii na nośniku "%s" nie przeszły walidacji nagłówka - pomijam.',
   pull_shard_hash_mismatch_skip: 'Dane kopii na nośniku "%s" nie przeszły kontroli integralności przy pobieraniu - pomijam.',
   pull_degraded_repair: 'Brakuje części - odtwarzam z nadmiarowości...',
   scheme_provider_count_mismatch: 'Schemat wymaga %s nośników, podano %s.',
@@ -502,6 +507,8 @@ export const pl: Strings = {
   vault_degraded_file_missing: 'Pula zdegradowana: dane kopii zostały usunięte ze sprawnego nośnika. Uruchom `bfs push`, aby odtworzyć kopię.',
   vault_degraded_adapter_missing: 'Pula zdegradowana: jeden lub więcej nośników wymaga niezainstalowanego adaptera. Zainstaluj brakujący adapter (zobacz ostrzeżenie powyżej), a następnie ponów `bfs pull`, aby dołączyć te fragmenty.',
   vault_degraded_corrupt: 'Pula zdegradowana: część kopii nie przeszła weryfikacji integralności (uszkodzenie lub manipulacja) i została odtworzona z nadmiarowości. Uruchom `bfs push`, aby ponownie utworzyć czystą kopię.',
+  vault_degraded_foreign_part:
+    'Pula zdegradowana: część należąca gdzie indziej została zastąpiona z nadmiarowości. Odtworzone pliki są poprawne, ale ten nośnik nie trzyma użytecznej części tej wersji, więc dotychczasowa nadmiarowość zniknęła, dopóki nie wróci na niego właściwa część.',
   vault_degraded_provider_not_configured:
     'Pula zdegradowana: nośnik zapisany w tej kopii nie istnieje w konfiguracji: %s. Jeśli nazwa zniknęła przez pomyłkę, przywróć ją komendą `bfs repair --version all <nośnik-z-konfiguracji> "<typ>:<nośnik-z-kopii> <ustawienia nośnika>"` (jedna taka para na nazwę) i ponów `bfs pull`. Jeśli usunąłeś ten nośnik celowo, uruchom `bfs push`, aby utworzyć zdrową kopię na pozostałych nośnikach.',
 

@@ -325,7 +325,13 @@ export async function unpackBlobFromFile(blobPath: string, targetDir: string, fi
       assertSectionWithinFile({ offset: dataSectionOffset, length: dataSectionLength }, fileStat.size, 'data section');
       const zipBuffer = Buffer.alloc(dataSectionLength);
       await fh.read(zipBuffer, 0, dataSectionLength, dataSectionOffset);
-      return _extractZipToDir(zipBuffer, targetDir, entries, formatVersion);
+      // Awaited, not just returned: extractZip throws synchronously on a damaged
+      // archive, and the enclosing finally awaits the handle close. Returning the
+      // promise unawaited leaves it rejected and unowned across that turn of the
+      // event loop, which Node reports as an unhandled rejection - ahead of the
+      // caller's own error handling, so the operator sees a stack trace instead
+      // of the message, and the cleanup hanging off that handling is skipped.
+      return await _extractZipToDir(zipBuffer, targetDir, entries, formatVersion);
     }
 
     // -- 5. Raw path - extract each file using random-access reads ----------

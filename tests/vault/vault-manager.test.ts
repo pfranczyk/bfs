@@ -491,7 +491,12 @@ describe('push - partial commit', () => {
     const lock = await readLock<PushLock>(pushLockPath(root));
     expect(lock?.blob_pending_path).toBeNull();
 
-    const warnedAboutCache = logs.some((e) => e.level === 'warn' && /cache write failed/i.test(e.message));
+    // Both halves: which volume refused (one wording, shared with the pack
+    // path) and what it costs here - that this push has no `--cache` resume.
+    // The second half is anchored on the sentence itself, not on `--cache`:
+    // the shared wording already carries `bfs config --cache-dir`, so matching
+    // that substring would pass with the resume sentence dropped entirely.
+    const warnedAboutCache = logs.some((e) => e.level === 'warn' && /backup cache directory/i.test(e.message) && /cannot be resumed|wznowi/i.test(e.message));
     expect(warnedAboutCache).toBe(true);
   });
 

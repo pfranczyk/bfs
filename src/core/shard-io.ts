@@ -581,6 +581,53 @@ export async function shardIntegrityFailure(provider: StorageProvider, ref: Remo
 }
 
 /**
+ * The address a part is expected to answer to: which backup, which version,
+ * which slot of it, and the cut that version was written with. Every field is
+ * fixed for the whole version, so a part disagreeing about any of them was
+ * written somewhere else - whatever put it under this name.
+ *
+ * Deliberately not `ShardIdentity`: that one is part of the published adapter
+ * contract (`StorageProvider.verifyShard`), and widening it would change the
+ * contract. This shape is internal to the restore paths.
+ */
+export interface ShardPlacement {
+  /** UUID of the backup the part must belong to. */
+  vault_id: string;
+  /** Version the part must be from. */
+  version: number;
+  /** Slot the part must fill, 0..N+K-1. */
+  shard_index: number;
+  /** Data pieces the version was cut into. */
+  data_shards: number;
+  /** Parity pieces the version was cut into. */
+  parity_shards: number;
+}
+
+/**
+ * Collects the placement fields a part's own header disagrees with.
+ *
+ * The content hash is deliberately not among them. It describes what the part
+ * holds, not where it belongs, and it has a legal window of disagreement: an
+ * overwrite push that dies before writing the manifest leaves parts of the new
+ * content beside a manifest describing the old, at the same address. Those parts
+ * ARE the version, and refusing them would report a shortage while the media
+ * hold a full set - content is judged after the decode, against the manifest.
+ *
+ * @param header   - Parsed shard header
+ * @param expected - Address the part was fetched under
+ * @returns names of the disagreeing fields, empty when the part belongs here
+ */
+export function placementMismatches(header: ShardHeader, expected: ShardPlacement): string[] {
+  const mismatches: string[] = [];
+  if (header.vault_id !== expected.vault_id) mismatches.push('vault_id');
+  if (header.version !== expected.version) mismatches.push('version');
+  if (header.shard_index !== expected.shard_index) mismatches.push('shard_index');
+  if (header.data_shards !== expected.data_shards) mismatches.push('data_shards');
+  if (header.parity_shards !== expected.parity_shards) mismatches.push('parity_shards');
+  return mismatches;
+}
+
+/**
  * Compares a parsed header against an expected identity (vault_id, shard_index,
  * version). Returns the first mismatching field (with stringified values) or
  * null when all three match. Shared by StorageProvider.verifyShard()

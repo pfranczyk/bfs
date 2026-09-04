@@ -4,6 +4,8 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { Command } from 'commander';
+import { assertWorkingDirectoryGiven } from './cli/cwd.js';
+import { reportUnusableStoredLanguage, resolveLanguage } from './cli/lang.js';
 import { isPromptCancellation } from './cli/prompt.js';
 
 const _require = createRequire(import.meta.url);
@@ -145,9 +147,10 @@ async function main(): Promise<void> {
   }
 
   const settings = await readGlobalSettings();
-  const activeLang = cliLang ?? settings.language ?? 'en';
+  const activeLang = resolveLanguage(langIdx !== -1, cliLang, settings.language);
   setLang(activeLang);
   providerRegistry.setLang(activeLang);
+  reportUnusableStoredLanguage(cliLang, settings.language);
 
   if (cliLang !== undefined) {
     if (cliLang !== settings.language) {
@@ -166,6 +169,9 @@ async function main(): Promise<void> {
   // Also treat --help/-h and -V as "has subcommand" so Commander handles them.
   // --version is answered below instead, before Commander ever sees it.
   const argv = process.argv.slice(2);
+
+  assertWorkingDirectoryGiven(argv);
+
   const hasGlobalFlag = argv.some((a) => a === '--help' || a === '-h' || a === '-V');
   const hasSubcommand = nonOptionTokens(argv).length > 0 || hasGlobalFlag;
 

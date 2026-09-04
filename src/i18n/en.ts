@@ -39,7 +39,7 @@ export const en: Strings = {
   cmd_help_flag: 'Display help for command',
   cmd_help_cmd: 'Display help for command',
   cmd_cwd_desc: 'Backup working directory (overrides current directory)',
-  cmd_lang_desc: 'Set UI language permanently (e.g. en, pl)',
+  cmd_lang_desc: 'Set UI language permanently (en, pl)',
   cmd_ci_desc: 'Never prompt: an incomplete command fails instead of asking (for cron, CI and scripts)',
   cmd_init_desc: 'Set up a new backup in the current directory',
   cmd_push_desc: 'Back up the current directory (new version or overwrite)',
@@ -60,6 +60,9 @@ export const en: Strings = {
   // --- Global / shared -----------------------------------------------------
   global_settings_group: 'BFS Settings (global)',
   lang_set: 'Language set to: %s',
+  lang_invalid: 'Invalid --lang: "%s". Allowed: %s',
+  lang_stored_unusable: 'The saved interface language (%s) is not available, so English is being used. Set a supported one with `bfs --lang <code>`.',
+  cwd_value_missing: '--cwd needs a directory: `bfs --cwd <dir>`.',
   no_config: 'No backup found in this directory. Run `bfs init` first.',
   cancel: 'Cancel',
   cancelled: 'Cancelled.',
@@ -141,6 +144,7 @@ export const en: Strings = {
   config_reset_no_field: 'Specify --cache-dir or --temp-dir together with --reset.',
   config_dir_hint: 'Update with `bfs config --%s <path>` or `bfs config --%s --reset`',
   scratch_write_failed: 'Cannot write to the temporary directory %s (%s). Point BFS at a directory with room to spare: `bfs config --temp-dir <path>`, or `--temp-dir <path>` for this run only.',
+  cache_write_failed: 'Cannot write to the backup cache directory %s (%s). Point BFS at a directory with room to spare: `bfs config --cache-dir <path>`, or `--cache-dir <path>` for this run only.',
   config_opt_cache_dir: 'Set cache directory (overrides .bfs/cache)',
   config_opt_temp_dir: 'Set temporary files directory (overrides system temp)',
   config_opt_max_ram: 'Set RAM limit for encoding (MB, 0 = auto)',
@@ -202,7 +206,7 @@ export const en: Strings = {
   lock_concurrent_active: 'another %s in progress (PID %s, started %s)',
   lock_partial_state_push: 'push.lock exists from partial-state push of version %s. Run `bfs clear` to discard the leftover state.',
   push_cache_no_lock: '`--cache` requires both .bfs/push.lock and cached backup data; missing: %s',
-  push_cache_write_failed: 'Cache write failed: %s. This push cannot be resumed with `--cache`.',
+  push_cache_no_resume: 'This push cannot be resumed with `--cache`.',
   push_cache_unavailable_in_lock: '`push.lock` indicates the cached backup data was not persisted (e.g. out of disk space). Run `bfs clear` to discard the leftover state.',
   push_cache_corrupted:
     'The cached backup data in %s no longer matches its checksum - the file was damaged or left incomplete, so it cannot be uploaded. Run `bfs clear` to discard the leftover state, then `bfs push` to back up the directory again.',
@@ -433,6 +437,7 @@ export const en: Strings = {
   // --- vault operations ----------------------------------------------------
   vault_download_shards: 'Downloading version %s...',
   vault_shard_damaged_on_provider: 'Backup data on "%s" is damaged - skipping it.',
+  vault_shard_foreign_on_provider: 'Backup data on "%s" does not belong to this version of the backup - skipping it. Check what is stored under that name; `bfs verify` names the storage that disagrees.',
   vault_download_shard_progress: 'Downloading %s/%s',
   vault_provider_unreachable: 'Storage "%s" is not accessible - skipping.',
   vault_file_missing_on_provider: 'Backup data missing on storage "%s" - skipping.',
@@ -475,10 +480,10 @@ export const en: Strings = {
   pull_failed_on_unreachable: 'Storage not reachable: %s.',
   pull_failed_on_adapter_missing: 'Storage needing an adapter that is not installed: %s.',
   pull_failed_on_not_configured: 'Storage recorded in this backup but absent from the configuration: %s.',
+  pull_failed_on_foreign_part: 'Backup data belonging to another version or another backup, on: %s.',
   pull_blob_size_unreadable: 'Could not read the backup size from any storage piece.',
   pull_salt_missing: 'This encrypted backup is missing its key material - its storage pieces may be corrupted or incomplete.',
   pull_provider_not_found_skip: 'Storage "%s" is not in the configuration - skipping its part of the backup.',
-  pull_shard_header_invalid_skip: 'Backup data on "%s" failed header validation - skipping it.',
   pull_shard_hash_mismatch_skip: 'Backup data on "%s" failed its integrity check on download - skipping it.',
   pull_degraded_repair: 'Some pieces are missing - reconstructing from redundancy...',
   scheme_provider_count_mismatch: 'The scheme requires %s storage providers, but %s were given.',
@@ -502,6 +507,8 @@ export const en: Strings = {
   vault_degraded_file_missing: 'Pool degraded: backup data was deleted from a healthy provider. Run `bfs push` to re-create the backup.',
   vault_degraded_adapter_missing: 'Pool degraded: one or more providers need an adapter that is not installed. Install the missing adapter (see the warning above), then run `bfs pull` again to include those pieces.',
   vault_degraded_corrupt: 'Pool degraded: part of the backup failed its integrity check (corruption or tampering) and was rebuilt from redundancy. Run `bfs push` to re-create a clean backup.',
+  vault_degraded_foreign_part:
+    'Pool degraded: a part that belongs elsewhere was replaced from redundancy. The restored files are correct, but that storage is not holding a usable piece of this version, so the redundancy you had is gone until the right part is back on it.',
   vault_degraded_provider_not_configured:
     'Pool degraded: storage recorded in this backup but absent from the configuration: %s. If the name went missing by accident, bring it back with `bfs repair --version all <configured-storage> "<type>:<recorded-storage> <storage settings>"` (one such pair per name) and run `bfs pull` again. If you removed that storage on purpose, run `bfs push` to create a sound backup on the storage you have left.',
 

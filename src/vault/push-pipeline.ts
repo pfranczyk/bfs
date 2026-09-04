@@ -17,7 +17,7 @@ import { parseBlobFileTable, parseBlobFileTableFromFile } from '../core/blob-unp
 import { trackFile, untrackFile } from '../core/cleanup.js';
 import { deriveKey, deriveShardNonce, encryptStream, exceedsGcmPlaintextLimit, GCM_MAX_PLAINTEXT_BYTES, generateSalt } from '../core/crypto.js';
 import type { SkippedFile } from '../core/errors.js';
-import { BfsError, ProviderError, PushCacheCorruptedError, PushCacheNoLockError, PushCacheUnavailableError, PushDriftError, PushExcludedError, PushSkippedError, ScratchWriteError } from '../core/errors.js';
+import { BfsError, BlobWriteError, ProviderError, PushCacheCorruptedError, PushCacheNoLockError, PushCacheUnavailableError, PushDriftError, PushExcludedError, PushSkippedError, ScratchWriteError } from '../core/errors.js';
 import { hashBuffer, hashStream, SHA256_BYTES } from '../core/hash.js';
 import { appendToBfsignore, createIgnoreFilter } from '../core/ignore.js';
 import { calcShardPayloadSize, rsEncodeStriped } from '../core/reed-solomon.js';
@@ -33,7 +33,7 @@ import type { PushLock, PushLockFailedReason } from './lockfile.js';
 import { acquireCachePushLock, acquirePushLock, pushLockPath, readLock, removeLock, writeLockAtomic } from './lockfile.js';
 import { writeManifest } from './manifest.js';
 import { confirmRecoveredLocations } from './recovered-locations.js';
-import { createScratchDir, prepareExplicitTempDir, removeScratchDir, scratchWriteFailure, validateConfigDir } from './scratch-dir.js';
+import { cacheWriteFailure, createScratchDir, prepareExplicitTempDir, removeScratchDir, scratchWriteFailure, validateConfigDir } from './scratch-dir.js';
 import { readState, writeState } from './state.js';
 import { assertNoForeignVault } from './vault-collision.js';
 
@@ -430,9 +430,7 @@ async function _packFreshBlob(options: PackFreshBlobOptions): Promise<BlobPackRe
   io.info(t('init_scanning'));
   if (shouldCompress) {
     io.info(t('vault_compressing'));
-    await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
-    trackFile(cachePath);
-    const r = await packBlobToFileZipped(rootDir, cachePath, filter, vaultIdBuf);
+    const r = await _writeBlobToCache(cacheDir, cachePath, () => packBlobToFileZipped(rootDir, cachePath, filter, vaultIdBuf));
     return { blobSource: cachePath, blobSize: r.blobSize, file_count: r.fileCount, total_size: r.totalSize, skipped: r.skipped, blob_hash: null };
   }
   const estimated = await estimateBlobSize(rootDir, filter);
@@ -450,10 +448,37 @@ async function _packFreshBlob(options: PackFreshBlobOptions): Promise<BlobPackRe
     const entries = parseBlobFileTable(r.blob);
     return { blobSource: r.blob, blobSize: r.blob.length, file_count: entries.length, total_size: entries.reduce((s, e) => s + Number(e.size), 0), skipped: r.skipped, blob_hash: null };
   }
-  await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
-  trackFile(cachePath);
-  const r = await packBlobToFile(rootDir, cachePath, filter, vaultIdBuf);
+  const r = await _writeBlobToCache(cacheDir, cachePath, () => packBlobToFile(rootDir, cachePath, filter, vaultIdBuf));
   return { blobSource: cachePath, blobSize: r.blobSize, file_count: r.fileCount, total_size: r.totalSize, skipped: r.skipped, blob_hash: null };
+}
+
+/**
+ * Runs a pack that writes the blob into the backup's cache directory, naming
+ * that directory when it is what refused. A BlobWriteError is always the
+ * destination - the copy loop reports a write fault separately so it is not
+ * mistaken for the source file it was reading. Any other BfsError describes
+ * something else and keeps its own words; unreadable source files never reach
+ * here at all, they are collected as `skipped`. A raw system error is treated
+ * as the destination too, which covers opening and writing the blob; the scan
+ * of the source tree can in principle also raise one, but only if a directory
+ * becomes unreadable between the two walks push already made over it.
+ *
+ * @param cacheDir - Directory the blob is written into
+ * @param cachePath - The blob file itself, registered for cleanup
+ * @param pack - The packing call to run
+ * @returns whatever the pack returned
+ * @throws BfsError naming the cache directory and `bfs config --cache-dir`
+ */
+async function _writeBlobToCache<T>(cacheDir: string, cachePath: string, pack: () => Promise<T>): Promise<T> {
+  try {
+    await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
+    trackFile(cachePath);
+    return await pack();
+  } catch (e: unknown) {
+    if (e instanceof BlobWriteError) throw cacheWriteFailure(cacheDir, e.cause);
+    if (e instanceof BfsError) throw e;
+    throw cacheWriteFailure(cacheDir, e);
+  }
 }
 
 /**
@@ -864,7 +889,9 @@ async function _uploadOneShard(options: UploadOneShardOptions): Promise<UploadOn
         trackFile(cachePath);
       } catch (writeErr: unknown) {
         lock.blob_pending_path = null;
-        io.warn(fmt('push_cache_write_failed', writeErr instanceof Error ? writeErr.message : String(writeErr)));
+        // Same volume, same words as the pack path: one wording for "the
+        // backup's cache refused", plus what it costs here specifically.
+        io.warn(`${cacheWriteFailure(cacheDir, writeErr).message} ${t('push_cache_no_resume')}`);
       }
     }
     await writeLockAtomic(pushLockPath(rootDir), lock);

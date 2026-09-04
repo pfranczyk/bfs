@@ -10,7 +10,9 @@
 # Layout: 3 LOCAL providers, 2 data + 1 parity, unencrypted. Two parts rot (below
 # N - unrecoverable), the third stays sound and must NOT be implicated. A second
 # pass turns one of the two into a missing file, so the message has to keep the
-# two causes apart rather than lumping them together.
+# two causes apart rather than lumping them together. A third takes the sound
+# medium away entirely, leaving all three causes in one run - damage, absence and
+# a medium that never answered, each under its own name.
 
 SCENARIO_NAME="failed pull names the damaged media and the cause"
 SCENARIO_DESC="damage, absence and a healthy medium must be told apart in the failure message"
@@ -66,6 +68,38 @@ $BFS_OUT"
   # failure itself separated the two causes.
   assert_out_matches "Damaged backup data on: *p0"
   assert_out_matches "missing on: *p1"
+
+  # The third cause: a medium that is not there at all. Taking p2's base
+  # directory away leaves all three causes in one run, which is the harder case -
+  # each sentence has to name its own medium instead of the loudest cause
+  # swallowing the rest. Until now an unreachable medium was only ever asserted
+  # NOT to be blamed; that no failed restore ever names one when it is genuinely
+  # what happened was the gap.
+  #
+  # Reading this as "unreachable" depends on the pull loop calling healthCheck()
+  # BEFORE authenticate(): LocalFs re-creates a missing base path by itself in a
+  # non-interactive run, and run_bfs is exactly that. Swap those two steps and p2
+  # comes back as an empty directory, the cause drops to "missing", and these
+  # assertions go red - as a regression of the loop order, not of attribution.
+  rm -rf "${PV_LOCALDIR[2]}"
+  run_bfs "$vault" --lang en pull --force --yes
+  assert_fail
+  assert_out_matches "Damaged backup data on: *p0"
+  assert_out_matches "missing on: *p1"
+  assert_out_matches "Storage not reachable: *p2"
+  # Nothing was read from p2, so neither verdict about its bytes can have been
+  # formed - and each would send the operator somewhere different and wrong.
+  # The three sentences share one line, so these patterns stop at the end of the
+  # sentence they are about ([^.]) - without that they would run on into the
+  # next sentence and match the very name they are checking is absent.
+  if printf '%s' "$BFS_OUT" | grep -qE "Damaged backup data on:[^.]*\bp2\b"; then
+    _fail "nothing was read from p2, so its data must not be called damaged:
+$BFS_OUT"
+  fi
+  if printf '%s' "$BFS_OUT" | grep -qE "Backup data missing on:[^.]*\bp2\b"; then
+    _fail "an unreachable medium must not be reported as a deleted part:
+$BFS_OUT"
+  fi
 
   return 0
 }

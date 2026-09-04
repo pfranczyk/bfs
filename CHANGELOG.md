@@ -7,6 +7,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-09-04
+
+### Fixed
+
+- **A language BFS does not have is now turned away instead of being saved.**
+  `bfs --lang <code>` took anything at all - a typo, or the next flag when the
+  code was left out - wrote it down as your choice, said it had been set, and
+  exited as a success. Nothing was set: the interface quietly reverted to
+  English on that run and on every run after it, with nothing on screen
+  connecting that to the flag. The value is now checked against the languages
+  that actually ship, and a refusal comes back in the language you were already
+  using, leaving your setting as it was. If one was saved before this, it is
+  pointed out on the next run together with the command that clears it, and the
+  work carries on in English rather than stopping.
+- **`bfs --cwd` without a directory no longer carries on with a different one.**
+  With the value missing - left out entirely, empty because a variable in a
+  script never got set, or with the next flag standing where it belongs - the run
+  fell back to whatever directory it was started from, or answered with the
+  version number as though that was what you had asked for. Either way it went
+  ahead somewhere other than where you were pointing. It now says the directory
+  is missing and stops, whichever way the flag was written.
+- **Stopping an edit of a storage device now reads as your decision, not as a
+  crash.** `bfs provider edit` says why it stopped in the same voice as the rest
+  of the tool - the marked, coloured line every refusal carries. Only a refused
+  SSH host key got that treatment; declining an FTPS certificate, backing out of
+  its offline menu, or any reason an add-on storage adapter gave arrived as a
+  bare line instead, indistinguishable from the tool falling over. What was
+  stored is left untouched either way, and interrupting with Ctrl+C still ends
+  the session the way it always did rather than being reported as a refused
+  edit.
+- **A backup can no longer be written missing a file because the disk refused
+  mid-way.** Packing reads your files and writes them into a working file on the
+  backup's own disk, and a refusal from that disk - full, read-only, a failing
+  drive - was indistinguishable from a file that could not be read: it was
+  reported against whichever of your files was in hand, and packing carried on
+  without it. Because the working file is sealed over whatever reached the disk,
+  the seal agreed with an archive that was short of a file, so nothing looked
+  wrong, and the message suggested `bfs push --cache` - the one command that
+  would upload it. The file could then go missing without a sound, a restore
+  finishing and reporting success simply without it, or the copy could turn out
+  unreadable when it was finally needed. A refused write now stops the packing
+  and is named like every other refusal by that disk. A file that genuinely
+  cannot be read is still skipped and still named, exactly as before.
+- **A backup that cannot be unpacked now says so instead of printing an internal
+  error trace.** When a restore reached data it could not decompress, the
+  explanation was there but never got the chance to be shown: it surfaced as an
+  unhandled internal fault, complete with a stack trace, before the message
+  could be shown - and the tidying up that goes with a reported failure was
+  skipped along with it.
+- **`bfs config` no longer accepts a directory that the next backup will
+  refuse.** `--temp-dir` and `--cache-dir` checked only the folder above the
+  one you gave, so a path that already existed as a file was reported as
+  saved, written to the configuration, and only turned away by the next
+  `bfs push` - which sent you back to `bfs config` to undo it. The same check
+  the backup itself makes now runs when the setting is stored, so the refusal
+  arrives where the mistake is made. A folder that does not exist yet is still
+  accepted; push and pull create it. Two things that were wrong about the old
+  refusal are fixed with it: a path blocked by a file was reported as "does
+  not exist", which reads as an instruction to create it - the one thing that
+  cannot work there - and a refused setting still exited as a success, so a
+  script could not tell a stored value from a rejected one.
+- **When the disk holding the backup runs out of room while packing or
+  restoring, it is now named.** The data is packed to (and restored through) a
+  file in the backup's own cache directory, and there are two disks in play -
+  that one and the temporary directory. Packing the backup, and writing the
+  restored copy back, used to fail with the raw operating-system error on a
+  path and nothing else, so there was no telling which of the two had filled up
+  or what to do about it; on top of that, the refusal was reported against
+  whichever of your files was being read at the time, which reads as a problem
+  with that file. Both now name the directory
+  that refused and the one command that moves it
+  (`bfs config --cache-dir <path>`), keeping the system's own reason - full,
+  read-only and permission-denied need different answers. The temporary
+  directory keeps saying `bfs config --temp-dir`, so the two disks stay told
+  apart, and a restore that fails for its own reasons - a wrong password, a
+  part that cannot be used - is still reported as that and never as a full
+  disk.
+- **A restore now checks that each part it downloaded is the part it asked
+  for.** Parts are stored under a name saying which backup, version and slot
+  they belong to, but nothing read that back out of the part itself, so a sound
+  part of another version - or of another backup, or of the same backup cut
+  into a different number of pieces - was decoded as if it belonged here. That
+  needs nothing to be corrupted: files get moved by hand while data is being
+  rescued, a sync script points at the wrong source, a storage device comes
+  back from the wrong snapshot. Such data was never accepted as your backup,
+  but what you were told about it was wrong - on an encrypted backup, that the
+  password was wrong when it was right; otherwise, that the backup had failed
+  its integrity check - and no storage device was named to go and look at.
+  Worse, when the misplaced part sat in the slot read first it handed the whole
+  version its own size and encryption salt, so every healthy part failed
+  alongside it and a backup with redundancy to spare would not restore at all.
+  A part that does not belong is now refused by name and rebuilt from the
+  parity, exactly like a damaged one; the message says which storage holds it
+  and that `bfs verify` will show what disagrees, and when too few parts are
+  left, the closing message lists those storage devices under a cause of their
+  own instead of blaming the copy or your password. Backups written before
+  0.3.0 are checked against the same five fields, except that a part whose
+  contents also differ from what the backup records is still reported as
+  damaged there, because that older read path recognises it by its contents
+  first.
+
 ## [0.14.2] - 2026-08-27
 
 ### Fixed
@@ -1338,7 +1439,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.2...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.3...HEAD
+[0.14.3]: https://github.com/pfranczyk/bfs/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/pfranczyk/bfs/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/pfranczyk/bfs/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/pfranczyk/bfs/compare/v0.13.0...v0.14.0

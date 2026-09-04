@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as zlib from 'node:zlib';
 
-import { BfsError } from './errors.js';
+import { BfsError, BlobWriteError } from './errors.js';
 
 // --- ZIP format constants ------------------------------------------------------
 
@@ -320,14 +320,26 @@ export interface StreamingZipPacker {
  *
  * @param handle - Open FileHandle positioned where ZIP data should start
  * @returns StreamingZipPacker with addFile() and finalize()
+ * @throws BlobWriteError from addFile() and finalize() when the handle refuses a
+ *         write, so a caller packing user files can tell that apart from a
+ *         source file it could not read
  */
 export function createStreamingZipPacker(handle: FileHandle): StreamingZipPacker {
   const cdEntries: CdEntry[] = [];
   const hasher = createHash('sha256');
   let currentOffset = 0;
 
+  // Tagged so the caller can tell a destination that refused from a source file
+  // it could not read: both happen inside the same per-file loop, and only the
+  // handle knows which side it was. Without this the pack files a full disk as
+  // "that file could not be read" and carries on, sealing an archive short of a
+  // member it was asked to hold.
   async function _writeAndHash(buf: Buffer): Promise<void> {
-    await handle.write(buf);
+    try {
+      await handle.write(buf);
+    } catch (e: unknown) {
+      throw new BlobWriteError(e);
+    }
     hasher.update(buf);
     currentOffset += buf.length;
   }

@@ -22,6 +22,17 @@ describe('setLang / getLang', () => {
     setLang('unknown-lang');
     expect(getLang()).toBe('en');
   });
+
+  // Names every object carries whether or not anyone put them there. Asking the
+  // translation map for one the wrong way answers with something inherited
+  // rather than nothing, so the name is accepted as a language and every lookup
+  // afterwards comes back undefined - which surfaces far from here, as a crash
+  // inside whatever tried to format a message.
+  it.each(['constructor', 'toString', 'valueOf', 'hasOwnProperty'])('should fall back to "en" for the inherited name %s', (inherited) => {
+    setLang(inherited);
+    expect(getLang(), `${inherited} is not a language`).toBe('en');
+    expect(typeof t('health_healthy'), 'every key must still render as text').toBe('string');
+  });
 });
 
 describe('t()', () => {

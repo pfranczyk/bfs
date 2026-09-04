@@ -18,7 +18,7 @@ vi.mock('inquirer', () => ({
 }));
 
 import inquirer from 'inquirer';
-import { HostKeyDeclinedError } from '../../src/core/errors.js';
+import { HostKeyDeclinedError, ProviderError } from '../../src/core/errors.js';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { providerRegistry } from '../../src/providers/provider.js';
 import type { ConfigureEditContext, ProviderConfig, ProviderIO } from '../../src/types/index.js';
@@ -376,3 +376,131 @@ describe('provider edit - SSH-style host-key decline aborts without writing', ()
 // resolve so the file compiles even before the command exists.
 void SECRET_TYPE;
 void providerRegistry;
+
+// An interactive edit that stops says why in the CLI's own voice, whichever
+// storage it was and whoever wrote the adapter - FTPS refusing a certificate,
+// an external adapter refusing anything at all. What marks it is the `X`: a
+// message leaving by the top-level handler arrives bare, without it and without
+// colour, reading like a crash rather than this tool's own refusal.
+//
+// The line between what is reported and what travels on is not the error's
+// class. `error()` + `CommandAbort` is this project's channel for "the command
+// failed and has already said so", not a channel reserved for cancellation, and
+// the adapter's own message already names the step that stopped. The one thing
+// that must NOT be caught here is a cancelled prompt: it belongs to the runtime,
+// which answers Ctrl+C with its own exit code, and swallowing it would report
+// an interrupted session as a refused edit.
+const ADAPTER_EDIT_TYPE = 'adapter-refusal-edit-test';
+const ADAPTER_REFUSAL_MESSAGE = 'Edit cancelled - certificate pin not set.';
+const PROMPT_CANCEL_EDIT_TYPE = 'prompt-cancel-edit-test';
+
+/** Stands in for FTPS and for any external adapter: refuses the edit with a plain ProviderError. */
+class AdapterRefusalEditProvider extends LocalFsProvider {
+  async configureInteractive(): Promise<Record<string, unknown>> {
+    return { path: '/mnt/should-not-be-persisted' };
+  }
+  async configureInteractiveForEdit(_io: ProviderIO, _ctx: ConfigureEditContext): Promise<Record<string, unknown>> {
+    throw new ProviderError(ADAPTER_REFUSAL_MESSAGE);
+  }
+  validateConfig(): string[] {
+    return [];
+  }
+  getSecretFields(): readonly string[] {
+    return [];
+  }
+}
+
+// A cancellation raised by a SECOND copy of the prompt library - what the
+// shipped bundle actually produces, because the adapter's prompts come from the
+// runtime's own copy while the CLI checks against the one bundled with it.
+// Declared here rather than imported so it is a different class carrying the
+// same name: recognisable by name, invisible to `instanceof`. Without this the
+// A/B control passes under a fix that checks the class directly, and nothing
+// else in the project would catch that - the e2e harness runs the CLI from
+// source, where a single copy exists, and the bundled smoke has no prompts.
+const ForeignCancellation = (() => {
+  class ExitPromptError extends Error {}
+  return ExitPromptError;
+})();
+
+/** The same edit interrupted at the prompt - Ctrl+C, which is not the command's to report. */
+class PromptCancelEditProvider extends LocalFsProvider {
+  async configureInteractive(): Promise<Record<string, unknown>> {
+    return { path: '/mnt/should-not-be-persisted' };
+  }
+  async configureInteractiveForEdit(_io: ProviderIO, _ctx: ConfigureEditContext): Promise<Record<string, unknown>> {
+    throw new ForeignCancellation('User force closed the prompt');
+  }
+  validateConfig(): string[] {
+    return [];
+  }
+  getSecretFields(): readonly string[] {
+    return [];
+  }
+}
+
+function registerEditProvider(type: string, factory: (config: ProviderConfig, io: ProviderIO) => LocalFsProvider): void {
+  providerRegistry.register(type, { lang: 'en', displayName: 'Edit refusal (tests)', create: factory, help: () => ({ usage: '', description: '', flags: [], examples: [] }) });
+}
+
+function unregisterEditProvider(type: string): void {
+  (providerRegistry as unknown as { entries: Map<string, unknown> }).entries.delete(type);
+}
+
+describe('provider edit - an interrupted interactive edit is reported, whichever storage it was', () => {
+  let capture: ReturnType<typeof captureConsole>;
+
+  beforeEach(() => {
+    capture = captureConsole();
+    mockWriteConfig.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    capture.restore();
+    mockPrompt.mockReset();
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  it('interactive: should report a refused edit in the CLI voice and keep the stored config', async () => {
+    registerEditProvider(ADAPTER_EDIT_TYPE, (config, io) => new AdapterRefusalEditProvider(config, io));
+    try {
+      const nas: ProviderConfig = { id: 'nas', type: ADAPTER_EDIT_TYPE, adapterPackage: null, config: { path: '/old' } };
+      mockReadConfig.mockResolvedValue(makeConfig({ providers: [nas] }) as never);
+
+      const result = await runCmd(['provider', 'edit', 'nas']);
+
+      expect(result, 'a refused edit must end as a reported failure, not travel on to the top-level handler').toBe('abort');
+      expect(mockWriteConfig, 'a refused edit must leave the stored configuration alone').not.toHaveBeenCalled();
+      // The `X` is what separates this tool saying "I stopped" from a bare line
+      // that reads like a crash. Asserting the prefix and the message together
+      // fails both if the branch is removed and if the wording is dropped.
+      const reported = capture.errors.find((line) => line.includes(ADAPTER_REFUSAL_MESSAGE));
+      expect(reported, "the adapter's own reason must reach the operator").toBeDefined();
+      expect(reported, 'a refusal by this tool must be marked as one').toMatch(/^X /);
+    } finally {
+      unregisterEditProvider(ADAPTER_EDIT_TYPE);
+    }
+  });
+
+  it('interactive: should let a cancelled prompt travel on untouched (A/B control)', async () => {
+    // The other direction, and the reason this cannot simply catch everything:
+    // Ctrl+C is answered by the runtime with its own exit code. Reporting it
+    // here would turn an interrupted session into a refused edit and take that
+    // exit code away.
+    registerEditProvider(PROMPT_CANCEL_EDIT_TYPE, (config, io) => new PromptCancelEditProvider(config, io));
+    try {
+      const nas: ProviderConfig = { id: 'nas', type: PROMPT_CANCEL_EDIT_TYPE, adapterPackage: null, config: { path: '/old' } };
+      mockReadConfig.mockResolvedValue(makeConfig({ providers: [nas] }) as never);
+
+      const result = await runCmd(['provider', 'edit', 'nas']);
+
+      expect(result, 'a cancelled prompt is the runtime to answer, not this command').toBe('cancelled');
+      expect(mockWriteConfig, 'a cancelled edit must leave the stored configuration alone').not.toHaveBeenCalled();
+      const swallowed = capture.errors.some((line) => line.includes('force closed'));
+      expect(swallowed, 'a cancelled prompt must not be reported as a refused edit').toBe(false);
+    } finally {
+      unregisterEditProvider(PROMPT_CANCEL_EDIT_TYPE);
+    }
+  });
+});

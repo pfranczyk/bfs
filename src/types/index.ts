@@ -653,8 +653,12 @@ export interface StorageProvider {
    * @param io  - ProviderIO for prompts and diagnostics
    * @param ctx - carries the existing connection-config being edited
    * @returns config object to persist in VaultConfig.providers[].config
-   * @throws HostKeyDeclinedError when the operator refuses the host key (aborts
-   *   the edit); BfsError on invalid input or cancellation
+   * @throws any error to stop the edit - the CLI reports it in its own voice and
+   *   leaves the stored config untouched, so the thrown message is what the
+   *   operator reads and should name what stopped. No particular class is
+   *   required: built-in SSH raises HostKeyDeclinedError for a refused host key
+   *   and FTPS a plain ProviderError, both handled the same way. A cancelled
+   *   prompt is the exception - let it through, it belongs to the runtime.
    */
   configureInteractiveForEdit?(io: ProviderIO, ctx: ConfigureEditContext): Promise<Record<string, unknown>>;
 

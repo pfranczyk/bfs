@@ -64,6 +64,11 @@ export interface Strings {
   // --- Global / shared -----------------------------------------------------
   global_settings_group: string;
   lang_set: string;
+  /** %s = the value that was rejected, %s = the languages that do work */
+  lang_invalid: string;
+  /** %s = the stored language that is not available */
+  lang_stored_unusable: string;
+  cwd_value_missing: string;
   no_config: string;
   cancel: string;
   cancelled: string;
@@ -163,6 +168,8 @@ export interface Strings {
   config_dir_hint: string;
   /** %s = temp directory that refused, %s = operating-system error message */
   scratch_write_failed: string;
+  /** %s = cache directory that refused, %s = operating-system error message */
+  cache_write_failed: string;
   config_opt_cache_dir: string;
   config_opt_temp_dir: string;
   config_opt_max_ram: string;
@@ -243,8 +250,7 @@ export interface Strings {
   lock_partial_state_push: string;
   /** %s = comma-separated list of missing files */
   push_cache_no_lock: string;
-  /** %s = error message from the failed write */
-  push_cache_write_failed: string;
+  push_cache_no_resume: string;
   push_cache_unavailable_in_lock: string;
   /** %s = path of the cached blob that failed its own checksum */
   push_cache_corrupted: string;
@@ -535,6 +541,8 @@ export interface Strings {
   vault_download_shards: string;
   /** %s = provider_id */
   vault_shard_damaged_on_provider: string;
+  /** %s = provider_id */
+  vault_shard_foreign_on_provider: string;
   /** %s = shard_index+1 (1-based), %s = N+K total */
   vault_download_shard_progress: string;
   /** %s = provider_id */
@@ -592,12 +600,12 @@ export interface Strings {
   pull_failed_on_adapter_missing: string;
   /** %s = comma-separated provider ids */
   pull_failed_on_not_configured: string;
+  /** %s = comma-separated provider ids */
+  pull_failed_on_foreign_part: string;
   pull_blob_size_unreadable: string;
   pull_salt_missing: string;
   /** %s = provider name */
   pull_provider_not_found_skip: string;
-  /** %s = provider name */
-  pull_shard_header_invalid_skip: string;
   /** %s = provider name */
   pull_shard_hash_mismatch_skip: string;
   pull_degraded_repair: string;
@@ -630,6 +638,7 @@ export interface Strings {
   vault_degraded_file_missing: string;
   vault_degraded_adapter_missing: string;
   vault_degraded_corrupt: string;
+  vault_degraded_foreign_part: string;
   /** %s = comma-separated provider names recorded in the backup */
   vault_degraded_provider_not_configured: string;
 
@@ -1030,12 +1039,40 @@ const translations: Record<string, Strings> = { en, pl };
 let currentLang = 'en';
 
 /**
+ * Lists the languages the interface is available in, as language tags.
+ * Derived from the translations themselves, so adding one stays a single edit
+ * and no caller can hold a list that drifts from what is actually shipped.
+ *
+ * @returns the available language tags, e.g. ['en', 'pl']
+ */
+export function availableLangs(): string[] {
+  return Object.keys(translations);
+}
+
+/**
+ * True when the interface is actually available in the given language.
+ * Callers that ask the operator for a language use this to turn a mistake away
+ * while it can still be corrected; setLang() itself stays lenient, because a
+ * renderer must always render something.
+ *
+ * @param lang - language tag to check
+ * @returns whether the language is one of availableLangs()
+ */
+export function isKnownLang(lang: string): boolean {
+  return Object.hasOwn(translations, lang);
+}
+
+/**
  * Sets the active language for all subsequent t() calls.
  * Falls back to 'en' if the language is not available.
  * @param lang - BCP 47 language tag (e.g. 'en', 'pl')
  */
 export function setLang(lang: string): void {
-  if (translations[lang]) {
+  // Same question isKnownLang asks, so the two can never disagree. Indexing the
+  // map directly would accept anything inherited from Object.prototype -
+  // 'constructor', 'toString' - as a language, and every lookup afterwards would
+  // return undefined instead of a string.
+  if (isKnownLang(lang)) {
     currentLang = lang;
   } else {
     currentLang = 'en';

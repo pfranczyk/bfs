@@ -16,6 +16,10 @@ import { readJson } from '../smoke-vault.js';
  * - bfs config with temp_dir unset names the system temp as the default (H8)
  * - bfs push / bfs pull --temp-dir <file> refuse with the path and the
  *   `bfs config --temp-dir` hint, no raw errno (H9, H10)
+ * - bfs config --temp-dir / --cache-dir <file> refuse the same leaf its own
+ *   readers reject, with a non-zero exit and the hint (H11, H12)
+ * - bfs push / bfs pull name the cache directory and `bfs config --cache-dir`
+ *   when the blob cannot be written there, keeping the OS reason (H13, H14)
  */
 export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
   const tests: TestResult[] = [];
@@ -95,6 +99,9 @@ export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
       const r = runBfs(['config', '--cache-dir', badCacheDir], ctx.vaultDir, undefined, hEnv);
       const out = r.stdout + r.stderr;
       assert(/not exist|nie istnieje/i.test(out), `expected non-existent directory error message: ${out.slice(0, 400)}`);
+      // A refusal that exits 0 cannot be told apart from a stored value by
+      // anything driving `bfs config` from a script.
+      assert(r.status !== 0, `expected exit != 0 for a refused setting, got: ${r.status}`);
     }),
   );
 
@@ -162,6 +169,90 @@ export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
       assert(out.includes(tempDirFile), `expected the refused temp path in: ${out.slice(0, 400)}`);
       assert(/bfs config --temp-dir/.test(out), `expected the temp-dir hint in: ${out.slice(0, 400)}`);
       assert(!/^\s*at .+:\d+:\d+/m.test(out), `expected no stack trace in: ${out.slice(0, 400)}`);
+    }),
+  );
+
+  // `bfs config` is the only writer of these two settings and push/pull are
+  // the only readers. The readers refuse a path whose leaf exists and is not a
+  // directory; the writer must refuse the same path, or it stores a value that
+  // works until the next push and then sends the operator back here (H11, H12).
+  const configLeafFile = path.join(ctx.sourceDir, 'config-dir-is-a-file');
+
+  tests.push(
+    await runTest('H11', 'bfs config --temp-dir <file> -> refused with the path, the reason and the hint', async () => {
+      await fs.writeFile(configLeafFile, 'not a directory');
+      const configPath = path.join(ctx.vaultDir, '.bfs', 'config.json');
+      const before = await readJson<Record<string, unknown>>(configPath);
+      const r = runBfs(['config', '--temp-dir', configLeafFile], ctx.vaultDir, undefined, hEnv);
+      const out = r.stdout + r.stderr;
+      assert(r.status !== 0, `expected exit != 0, got: ${r.status}\n${out.slice(0, 400)}`);
+      assert(/not a directory|nie jest katalogiem/i.test(out), `expected a not-a-directory refusal in: ${out.slice(0, 400)}`);
+      assert(/bfs config --temp-dir/.test(out), `expected the temp-dir hint in: ${out.slice(0, 400)}`);
+      const after = await readJson<Record<string, unknown>>(configPath);
+      assert(after.temp_dir === before.temp_dir, `a refused path must not reach config.json, got: ${JSON.stringify(after.temp_dir)}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('H12', 'bfs config --cache-dir <file> -> refused with the path, the reason and the hint', async () => {
+      const configPath = path.join(ctx.vaultDir, '.bfs', 'config.json');
+      const before = await readJson<Record<string, unknown>>(configPath);
+      const r = runBfs(['config', '--cache-dir', configLeafFile], ctx.vaultDir, undefined, hEnv);
+      const out = r.stdout + r.stderr;
+      assert(r.status !== 0, `expected exit != 0, got: ${r.status}\n${out.slice(0, 400)}`);
+      assert(/not a directory|nie jest katalogiem/i.test(out), `expected a not-a-directory refusal in: ${out.slice(0, 400)}`);
+      assert(/bfs config --cache-dir/.test(out), `expected the cache-dir hint in: ${out.slice(0, 400)}`);
+      const after = await readJson<Record<string, unknown>>(configPath);
+      assert(after.cache_dir === before.cache_dir, `a refused path must not reach config.json, got: ${JSON.stringify(after.cache_dir)}`);
+    }),
+  );
+
+  // The backup's own volume is the second one a run can fill, and it is not the
+  // temp: the packed blob (push) and the restored blob (pull) are written to
+  // the cache directory. Both name that directory and the one command that
+  // moves it, around the system's own reason, so the operator can tell which of
+  // the two disks ran out (H13, H14). The blob file is replaced by a directory
+  // of the same name - portable, and the open fails the way a full or read-only
+  // volume does.
+  const blockedCache = path.join(ctx.sourceDir, 'blocked-cache');
+
+  tests.push(
+    await runTest('H13', 'bfs push with a cache dir that refuses the blob -> names it and `bfs config --cache-dir`', async () => {
+      await fs.mkdir(path.join(blockedCache, 'push.blob.pending'), { recursive: true });
+      try {
+        // --yes: earlier suites left the working directory on an older version
+        // than the media hold, and the version-switch gate would otherwise stop
+        // this push before it ever reaches the cache.
+        const r = runBfs(['push', '--new', '--yes', '--cache-dir', blockedCache], ctx.vaultDir, undefined, hEnv);
+        const out = r.stdout + r.stderr;
+        assert(r.status !== 0, `expected exit != 0, got: ${r.status}`);
+        assert(out.includes(blockedCache), `expected the refused cache path in: ${out.slice(0, 400)}`);
+        assert(/bfs config --cache-dir/.test(out), `expected the cache-dir hint in: ${out.slice(0, 400)}`);
+        assert(/EISDIR/.test(out), `the OS reason must survive, as it does for the temp volume: ${out.slice(0, 400)}`);
+        assert(!/^\s*at .+:\d+:\d+/m.test(out), `expected no stack trace in: ${out.slice(0, 400)}`);
+      } finally {
+        // The pack fails after the push lock is taken; leaving it behind would
+        // fail every later suite on this vault.
+        await fs.rm(path.join(ctx.vaultDir, '.bfs', 'push.lock'), { force: true });
+        await fs.rm(path.join(blockedCache, 'push.blob.pending'), { recursive: true, force: true });
+      }
+    }),
+  );
+
+  tests.push(
+    await runTest('H14', 'bfs pull with a cache dir that refuses the blob -> names it and `bfs config --cache-dir`', async () => {
+      await fs.mkdir(path.join(blockedCache, 'pull.blob.pending'), { recursive: true });
+      try {
+        const r = runBfs(['pull', '--force', '--yes', '--cache-dir', blockedCache], ctx.vaultDir, undefined, hEnv);
+        const out = r.stdout + r.stderr;
+        assert(r.status !== 0, `expected exit != 0, got: ${r.status}`);
+        assert(out.includes(blockedCache), `expected the refused cache path in: ${out.slice(0, 400)}`);
+        assert(/bfs config --cache-dir/.test(out), `expected the cache-dir hint in: ${out.slice(0, 400)}`);
+        assert(/EISDIR/.test(out), `the OS reason must survive, as it does for the temp volume: ${out.slice(0, 400)}`);
+        assert(!/^\s*at .+:\d+:\d+/m.test(out), `expected no stack trace in: ${out.slice(0, 400)}`);
+      } finally {
+        await fs.rm(path.join(blockedCache, 'pull.blob.pending'), { recursive: true, force: true });
+      }
     }),
   );
 

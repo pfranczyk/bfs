@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { BLOB_ENTRY_KIND, BLOB_FLAGS, BLOB_FORMAT_VERSION, type ExcludedEntry, type FileEntry, type IgnoreFilter } from '../types/index.js';
 import { createStreamingZipPacker, createZipPacker } from './compression.js';
 import type { SkippedFile } from './errors.js';
-import { BfsError } from './errors.js';
+import { BfsError, BlobWriteError } from './errors.js';
 import { hashBuffer, SHA256_BYTES } from './hash.js';
 
 // BFS Blob header: 70 bytes, identical for every blob format version - the
@@ -377,7 +377,7 @@ export async function packBlobToFile(rootDir: string, outputPath: string, ignore
         results.push({ path: meta.relativePath, kind: BLOB_ENTRY_KIND.NEW_FILE, size, data_offset: currentDataOffset, hash: hashHex, mode, modified_at: modifiedAt, created_at: createdAt });
         currentDataOffset += size;
       } catch (e: unknown) {
-        if (e instanceof BfsError) throw e; // output write failure - cannot continue, abort the pack
+        if (e instanceof BlobWriteError) throw e; // the destination refused - cannot continue, abort the pack
         // Input read failure (unreadable / vanished / mid-stream I/O fault): skip
         // this file. currentDataOffset is unchanged, so its partial bytes at
         // fileStartPos are overwritten by the next file, or dropped by the
@@ -436,6 +436,8 @@ export async function packBlobToFile(rootDir: string, outputPath: string, ignore
  * @param ignoreFilter - Filter: returns true = ignore path
  * @param vaultId      - Optional 16-byte vault UUID (defaults to zeros)
  * @returns blobSize, fileCount (actual directory files), totalSize (uncompressed sum), skipped
+ * @throws BlobWriteError when the output refuses a write - that aborts the pack
+ *         instead of being recorded as a source file that could not be read
  */
 export async function packBlobToFileZipped(rootDir: string, outputPath: string, ignoreFilter: IgnoreFilter, vaultId?: Buffer): Promise<{ blobSize: number; fileCount: number; totalSize: number; skipped: SkippedFile[] }> {
   const metas = await scanDir(rootDir, ignoreFilter);
@@ -482,6 +484,9 @@ export async function packBlobToFileZipped(rootDir: string, outputPath: string, 
           created_at: BigInt(Math.round(stat.birthtimeMs)),
         });
       } catch (e: unknown) {
+        if (e instanceof BlobWriteError) throw e; // the destination refused - cannot continue, abort the pack
+        // Input read failure: skip this file. The ZIP stream is untouched by a
+        // read that never happened, so the remaining files pack normally.
         skipped.push({ path: meta.relativePath, reason: e instanceof Error ? e.message : String(e) });
       }
     }
@@ -529,7 +534,9 @@ export async function packBlobToFileZipped(rootDir: string, outputPath: string, 
  * length. Mode, mtime and birth time come from a single fstat on the open
  * descriptor. A failure reading the source (unreadable, vanished, mid-stream I/O
  * fault) propagates as-is so the caller can skip the file; a failure writing the
- * output is wrapped in BfsError so the caller aborts the pack instead of skipping.
+ * output is wrapped in BlobWriteError so the caller aborts the pack instead of
+ * skipping, and so the destination that refused stays tellable from the source
+ * that happened to be in hand at the time.
  */
 async function _streamFileHashingToHandle(absPath: string, outHandle: FileHandle, startPos: number): Promise<{ hashHex: string; size: bigint; mode: number; modifiedAt: bigint; createdAt: bigint }> {
   const inHandle = await fs.open(absPath, 'r');
@@ -543,7 +550,7 @@ async function _streamFileHashingToHandle(absPath: string, outHandle: FileHandle
       try {
         await outHandle.write(buf, 0, buf.length, pos);
       } catch (e: unknown) {
-        throw new BfsError(`Failed to write blob data for ${absPath}`, { cause: e });
+        throw new BlobWriteError(e);
       }
       fileHash.update(buf);
       size += BigInt(buf.length);

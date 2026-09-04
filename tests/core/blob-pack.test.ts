@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { Mode, PathLike } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
@@ -1009,6 +1009,62 @@ describe('file-table entry format', () => {
       expect(Math.round(stat.mtimeMs / 1000)).toBe(Math.round(mtimeMs / 1000));
     } finally {
       await fs.rm(outDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// A blob whose ZIP stream is damaged is found out by extractZip, which is
+// synchronous and throws at once. The compressed branch of unpackBlobFromFile
+// returns that promise from inside a try whose finally awaits the file handle -
+// so the rejection exists for a full turn of the event loop before anything
+// adopts it. Node counts that as unhandled: with no listener registered
+// anywhere in src/, the default is to report it as an uncaught exception at the
+// moment of detection, ahead of the CLI's own error handling. The operator gets
+// a stack trace instead of a message, and the cleanup and exit code that hang
+// off that handling are skipped.
+//
+// The damage is built here rather than staged through a failing push on
+// purpose: tying this to a particular way of producing a broken blob would let
+// the check disappear the moment that producer is fixed, leaving the defect to
+// wait for the next damaged blob.
+describe('a damaged compressed blob is refused through the normal error path', () => {
+  it('should reject a corrupt ZIP stream without leaving an unhandled rejection', async () => {
+    const srcDir = await makeTempDir();
+    const outDir = await makeTempDir();
+    try {
+      // Incompressible, so the deflate stream is long enough that a flipped byte
+      // well inside it lands in compressed data and not in a header.
+      await writeFile(srcDir, 'payload.bin', randomBytes(4096));
+      const filter = createIgnoreFilter(srcDir);
+      const { blob } = await packBlob(srcDir, filter, undefined, true);
+      const dataOffset = Number(blob.readBigUInt64LE(0x36));
+      blob[dataOffset + 200] ^= 0xff;
+      // The blob must still pass its own seal, or it would be turned away before
+      // the ZIP is ever read - which is a different site and not the one at issue.
+      recomputeTrailingChecksum(blob);
+      const blobPath = path.join(outDir, 'corrupt-zip.blob');
+      await fs.writeFile(blobPath, blob);
+
+      // Narrowed to this restore's own failure: the listener is process-wide
+      // while it is installed, and a stray rejection from elsewhere would
+      // otherwise be read as this defect.
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => {
+        if (reason instanceof BfsError) unhandled.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandled);
+      try {
+        await expect(unpackBlobFromFile(blobPath, outDir)).rejects.toThrow(BfsError);
+        // Node decides a rejection is unhandled once the microtask queue drains,
+        // so the check has to stand on the other side of a macrotask.
+        await new Promise((resolve) => setImmediate(resolve));
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
+
+      expect(unhandled, 'a refused restore must travel as a rejection the caller can catch, not as an unhandled one').toHaveLength(0);
+    } finally {
+      for (const d of [srcDir, outDir]) await fs.rm(d, { recursive: true, force: true });
     }
   });
 });

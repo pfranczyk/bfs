@@ -40,6 +40,38 @@ export class ScratchWriteError extends BfsError {
   }
 }
 
+/**
+ * Thrown when the destination handle a blob is being packed into refuses a
+ * write. The pack reads user files and copies them into that one output, and a
+ * read fault on a source file is recoverable - the file is skipped and the pack
+ * goes on - while a write fault on the destination is not, so the two must stay
+ * apart. Naming it separately is also what keeps the operator pointed at the
+ * volume that filled rather than at whichever file was being copied when it did.
+ * Keeps the operating system's error as `cause`.
+ */
+export class BlobWriteError extends BfsError {
+  constructor(cause: unknown) {
+    super(`Cannot write the packed backup data: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = 'BlobWriteError';
+  }
+}
+
+/**
+ * Thrown when BFS cannot write one of its own blob files in the backup's cache
+ * directory - the packed blob during push, the restored blob during pull. That
+ * is the volume holding the backup refusing, the twin of {@link
+ * ScratchWriteError} on the other disk, and the two must not be confused: the
+ * fix for one is `bfs config --cache-dir`, for the other `bfs config
+ * --temp-dir`. Names the offending path and keeps the operating system's error
+ * as `cause`, so the caller can name the directory and the errno survives.
+ */
+export class CacheWriteError extends BfsError {
+  constructor(path: string, cause: unknown) {
+    super(`Cannot write cache file ${path}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = 'CacheWriteError';
+  }
+}
+
 /** Thrown when a storage provider operation fails (I/O error, auth failure, etc.). */
 export class ProviderError extends BfsError {
   constructor(message: string, options?: { cause?: unknown }) {

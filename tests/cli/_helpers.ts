@@ -5,7 +5,6 @@
  * capture stdout/stderr via vi.spyOn(console, ...).
  */
 
-import { AbortPromptError, ExitPromptError } from '@inquirer/core';
 import { Command } from 'commander';
 import { vi } from 'vitest';
 // Side-effect imports: register built-in providers in the global registry.
@@ -29,6 +28,7 @@ import { registerStatus } from '../../src/cli/commands/status.js';
 import { registerVerify } from '../../src/cli/commands/verify.js';
 import { registerVersions } from '../../src/cli/commands/versions.js';
 import { registerCiModeHook } from '../../src/cli/interactive-mode.js';
+import { isPromptCancellation } from '../../src/cli/prompt.js';
 import { CommandAbort } from '../../src/cli/ui.js';
 import { PushMode } from '../../src/types/index.js';
 
@@ -110,7 +110,11 @@ export async function runCmd(tokens: string[]): Promise<'abort' | 'ok' | 'comman
     return 'ok';
   } catch (err) {
     if (err instanceof CommandAbort) return 'abort';
-    if (err instanceof AbortPromptError || err instanceof ExitPromptError) return 'cancelled';
+    // Same check the CLI itself uses, name fallback included. A bare `instanceof`
+    // here would recognise only the copy this file imported, making the harness
+    // blind to the very thing a test may be pinning: that the command still
+    // passes on a cancellation raised by a second copy of the prompt library.
+    if (isPromptCancellation(err)) return 'cancelled';
     if (err instanceof Error && 'code' in err && String((err as { code: unknown }).code).startsWith('commander.')) return 'commander';
     throw err;
   }

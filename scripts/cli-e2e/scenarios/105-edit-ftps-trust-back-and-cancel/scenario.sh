@@ -96,6 +96,10 @@ scenario_run() {
   # read as a refusal and this phase would pass for the wrong reason.
   assert_out_contains "What would you like to do"
   assert_out_contains "was not trusted"
+  # Reported in the CLI's own voice, with the mark every refusal by this tool
+  # carries. Without it the same sentence reaches the operator bare, the way an
+  # error escaping the command does - which reads as a crash, not a decision.
+  assert_out_matches "X .*was not trusted"
   [ "$(ftp_cfg_field cert_fingerprint)" = "$fpA" ] || _fail "a cancelled edit changed the pinned certificate"
   [ "$(ftp_cfg_field password)" = "bfspass" ] || _fail "a cancelled edit persisted the password"
   [ "$(ftp_cfg_field port)" = "$portA" ] || _fail "a cancelled edit persisted the wrong port"

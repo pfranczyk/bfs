@@ -2,7 +2,7 @@ import { createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { finished, Writable } from 'node:stream';
-import { BfsError, ScratchWriteError } from '../core/errors.js';
+import { BfsError, CacheWriteError, ScratchWriteError } from '../core/errors.js';
 import { fmt, t } from '../i18n/index.js';
 
 /**
@@ -94,6 +94,21 @@ export function scratchWriteFailure(dir: string, cause: unknown): BfsError {
 }
 
 /**
+ * The error an operation reports when the backup's own cache directory refuses
+ * its blob: the twin of {@link scratchWriteFailure} for the other volume. Both
+ * keep the operating system's reason - full, read-only and permission-denied
+ * call for different actions and only the errno tells them apart - and both add
+ * what the errno alone cannot say: which directory, and the one-command fix.
+ *
+ * @param dir - Cache directory that refused
+ * @param cause - The operating system's error
+ * @returns the error to throw or to print as a warning
+ */
+export function cacheWriteFailure(dir: string, cause: unknown): BfsError {
+  return new BfsError(fmt('cache_write_failed', dir, cause instanceof Error ? cause.message : String(cause)), { cause });
+}
+
+/**
  * A sink for one downloaded part that tags its own failures. A pipeline
  * reports the first error it sees, whichever stream raised it, and on an
  * error it destroys every stream with that same error - so the sink's
@@ -105,13 +120,44 @@ export function scratchWriteFailure(dir: string, cause: unknown): BfsError {
  * @returns a Writable that fails with ScratchWriteError for the file's own faults
  */
 export function createScratchSink(filePath: string): Writable {
+  return createTaggedFileSink(filePath, (cause) => new ScratchWriteError(filePath, cause));
+}
+
+/**
+ * The same sink for the other volume: a file in the backup's cache directory
+ * that tags only its own faults. Pull writes the restored blob through the
+ * stream pipeline that carries the decoder's output, so a blanket catch there
+ * would put the decoder's failures - a wrong key, an unusable part - under the
+ * cache's name. Tagging at the sink keeps the two apart whatever else the
+ * pipeline carries.
+ *
+ * @param filePath - Cache file to write
+ * @returns a Writable that fails with CacheWriteError for the file's own faults
+ */
+export function createCacheSink(filePath: string): Writable {
+  return createTaggedFileSink(filePath, (cause) => new CacheWriteError(filePath, cause));
+}
+
+/**
+ * Builds a Writable wrapping one file stream, tagging what its own open, write
+ * and finish report with the caller's error type. A pipeline reports the first
+ * error it sees, whichever stream raised it, and on an error it destroys every
+ * stream with that same error - so the sink's identity cannot be read off the
+ * stream afterwards. Wrapping is what lets the caller tell its own volume from
+ * whatever else the pipeline was carrying.
+ *
+ * @param filePath - File to write
+ * @param tagCause - Builds the error this sink's own faults are reported as
+ * @returns a Writable owning that file
+ */
+function createTaggedFileSink(filePath: string, tagCause: (cause: unknown) => BfsError): Writable {
   const file = createWriteStream(filePath, { mode: 0o600 });
   // The file stream's 'error' would otherwise be unhandled; its cause is read
   // back through `file.errored`, which is set before any callback fires, so a
   // write that fails only because the stream is already destroyed still names
   // the fault that destroyed it.
   file.on('error', () => {});
-  const tagged = (err: unknown): ScratchWriteError => new ScratchWriteError(filePath, file.errored ?? err);
+  const tagged = (err: unknown): BfsError => tagCause(file.errored ?? err);
   return new Writable({
     write(chunk: Buffer, _encoding, callback) {
       file.write(chunk, (err) => callback(err ? tagged(err) : null));

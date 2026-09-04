@@ -7,7 +7,18 @@ import { describe, expect, it } from 'vitest';
 import { encryptStream, generateSalt } from '../../src/core/crypto.js';
 import { BfsError, DecryptionError, ShardCorruptedError } from '../../src/core/errors.js';
 import { hashBuffer, streamToBuffer } from '../../src/core/hash.js';
-import { buildShard, buildShardHeaderFromBytes, buildShardStream, buildSidecarBytes, matchShardIdentity, parseShardHeaderFromStream, readShardHeader, serializeShardHeader, shardChecksumMatches } from '../../src/core/shard-io.js';
+import {
+  buildShard,
+  buildShardHeaderFromBytes,
+  buildShardStream,
+  buildSidecarBytes,
+  matchShardIdentity,
+  parseShardHeaderFromStream,
+  placementMismatches,
+  readShardHeader,
+  serializeShardHeader,
+  shardChecksumMatches,
+} from '../../src/core/shard-io.js';
 import type { RemoteRef, ShardHeader, ShardLocation, StorageProvider } from '../../src/types/index.js';
 
 // --- Test fixtures ---------------------------------------------------------
@@ -706,6 +717,43 @@ describe('shard-io', () => {
       expect(shardChecksumMatches(Buffer.alloc(0))).toBe(false);
       expect(shardChecksumMatches(Buffer.alloc(SHA256_BYTES))).toBe(false);
       expect(shardChecksumMatches(Buffer.alloc(SHA256_BYTES - 1))).toBe(false);
+    });
+  });
+
+  describe('placementMismatches', () => {
+    const address = { vault_id: TEST_VAULT_ID, version: 1, shard_index: 0, data_shards: 2, parity_shards: 1 };
+
+    it('should accept a header that agrees with the address it was fetched under', () => {
+      expect(placementMismatches(makeHeader(), address)).toEqual([]);
+    });
+
+    it('should name each field the header disagrees about', () => {
+      const cases: Array<{ header: ShardHeader; field: string }> = [
+        { header: makeHeader({ vault_id: '00000000-0000-4000-8000-000000000000' }), field: 'vault_id' },
+        { header: makeHeader({ version: 2 }), field: 'version' },
+        { header: makeHeader({ shard_index: 1 }), field: 'shard_index' },
+        { header: makeHeader({ data_shards: 3 }), field: 'data_shards' },
+        { header: makeHeader({ parity_shards: 2 }), field: 'parity_shards' },
+      ];
+
+      for (const { header, field } of cases) {
+        expect(placementMismatches(header, address)).toEqual([field]);
+      }
+    });
+
+    it('should report every disagreeing field, not stop at the first', () => {
+      const header = makeHeader({ version: 7, shard_index: 4 });
+
+      expect(placementMismatches(header, address)).toEqual(['version', 'shard_index']);
+    });
+
+    it('should ignore the content hash, which describes what a part holds rather than where it belongs', () => {
+      // The boundary this function is drawn at: an overwrite push that dies
+      // before writing the manifest leaves parts of the new content at the old
+      // address, and those parts still are the version.
+      const header = makeHeader({ blob_hash: 'f'.repeat(64) });
+
+      expect(placementMismatches(header, address)).toEqual([]);
     });
   });
 });

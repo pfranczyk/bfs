@@ -3,10 +3,14 @@
 // the deliberate opposite of tamper-shard.ts (which recomputes the checksum so
 // the forgery stays byte-valid): here we want the shard to read as CORRUPT.
 //
-// For an encrypted shard the flipped byte lands in the ciphertext, breaking the
-// per-shard AES-256-GCM auth tag; for a --no-enc shard it breaks the trailing
-// SHA-256. Either way BFS must detect the corruption, exclude the shard, and
-// erasure-decode the blob from the remaining N healthy shards + parity.
+// The trailing SHA-256 covers the payload, so the flip breaks it either way -
+// encrypted or not. On an encrypted shard the flipped ciphertext byte would also
+// fail the per-shard AES-256-GCM tag, but the checksum gets there first: the
+// checksum-verified stream destroys itself on mismatch, which skips the flush
+// where the GCM tag is checked. So this always surfaces as a corrupt shard, never
+// as a decryption failure - which is what lets BFS exclude the shard and
+// erasure-decode the blob from the remaining N healthy shards + parity, instead
+// of reporting what looks like a wrong password.
 //
 //   tsx corrupt-shard.ts <shardPath> [byteOffsetWithinPayload]
 //     <shardPath>              path to the shard file to corrupt in place

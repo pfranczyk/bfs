@@ -566,6 +566,28 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
+  // An edit that stops mid-way is reported in the CLI's own voice, whichever
+  // storage it was: the marked line, not a bare one that reads like a crash.
+  // Reached without `--ci` and with no answer to give, so the adapter's first
+  // question has nobody to ask and it refuses - the same route every other stop
+  // takes out of the interactive edit.
+  tests.push(
+    await runTest('B20a', 'bfs provider edit interactive with no operator - marked refusal, config untouched', async () => {
+      const configPath = path.join(cliVaultDir, '.bfs', 'config.json');
+      const before = await fs.readFile(configPath, 'utf-8');
+      const r = runBfs(['--lang', 'en', 'provider', 'edit', 'cli-p5'], cliVaultDir, '', langEnv);
+      const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+      assert(r.status !== 0, `expected non-zero exit, got ${r.status}\n${out.slice(0, 300)}`);
+      // The marker is tied to the reason it belongs to. `X` on its own would
+      // also match the refusals this command could always report - a mistyped
+      // id, a missing backup - so the test would keep passing on a build that
+      // lost this branch entirely.
+      assert(/^X .*asks no questions/m.test(out), `expected the refusal to reach the operator marked, got: ${out.slice(0, 300)}`);
+      const after = await fs.readFile(configPath, 'utf-8');
+      assert(before === after, 'a refused edit must leave the stored configuration untouched');
+    }),
+  );
+
   // -- excluded entries (symlinks / special files) ----------------------------
   // push refuses entries that can never be in a backup, listing them and
   // pointing at .bfsignore; --allow-excluded backs up everything else.

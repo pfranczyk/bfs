@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
+import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,11 +8,11 @@ import { pipeline } from 'node:stream/promises';
 import { parseBlobFileTable, parseBlobFileTableFromFile, unpackBlob, unpackBlobFromFile } from '../core/blob-unpack.js';
 import { trackFile, untrackFile } from '../core/cleanup.js';
 import { decryptBlob, decryptStream, deriveKey, deriveShardNonce } from '../core/crypto.js';
-import { BfsError, ProviderError, PullSkippedError, ScratchWriteError, ShardCorruptedError, TamperDetectedError } from '../core/errors.js';
+import { BfsError, CacheWriteError, ProviderError, PullSkippedError, ScratchWriteError, ShardCorruptedError, TamperDetectedError } from '../core/errors.js';
 import { hashBuffer, hashFileExcludingTail, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
 import { DEFAULT_BFSIGNORE_CONTENT } from '../core/ignore-defaults.js';
 import { calcShardPayloadSize, rsDecode, rsDecodeStriped, rsRepair } from '../core/reed-solomon.js';
-import { computeShardHeaderSize, parseShardHeaderFromStream } from '../core/shard-io.js';
+import { computeShardHeaderSize, parseShardHeaderFromStream, placementMismatches, type ShardPlacement } from '../core/shard-io.js';
 import { debugEnabled } from '../debug.js';
 import { fmt, type Strings, t } from '../i18n/index.js';
 import { providerRegistry } from '../providers/provider.js';
@@ -24,7 +24,7 @@ import { assertNoExistingVault, assertSchemeValid, readConfig, writeConfig } fro
 import type { HealReport } from './heal.js';
 import { applyHealthChange, deleteManifest, listManifests, listUnrecoveredVersions, readManifest, writeManifest } from './manifest.js';
 import { confirmRecoveredLocations } from './recovered-locations.js';
-import { createScratchDir, createScratchSink, prepareExplicitTempDir, removeScratchDir, scratchWriteFailure, validateConfigDir } from './scratch-dir.js';
+import { cacheWriteFailure, createCacheSink, createScratchDir, createScratchSink, prepareExplicitTempDir, removeScratchDir, scratchWriteFailure, validateConfigDir } from './scratch-dir.js';
 import { DEFAULT_STATE, readState, writeState } from './state.js';
 import { assertNoForeignVault } from './vault-collision.js';
 import { rebuildVersionManifest, type VersionShardEntry } from './version-rebuild.js';
@@ -226,7 +226,7 @@ async function _rebuildMarkedVersion(rootDir: string, config: VaultConfig, versi
 
 // --- Shard failure diagnostics -----------------------------------------------
 
-type ShardFailureReason = 'provider_unreachable' | 'file_missing' | 'adapter_missing' | 'corrupt' | 'provider_not_configured';
+type ShardFailureReason = 'provider_unreachable' | 'file_missing' | 'adapter_missing' | 'corrupt' | 'provider_not_configured' | 'foreign_part';
 
 /**
  * A part the restore could not keep because its own scratch refused the
@@ -238,6 +238,24 @@ interface ScratchFailure {
   dir: string;
   /** The operating system's error behind the first refusal. */
   cause: unknown;
+}
+
+/**
+ * The address a part of this version must answer to, for a restore to accept it.
+ *
+ * The geometry comes from the manifest, never from the configuration: a backup
+ * can be re-cut, and every version keeps the shape it was written with, so
+ * judging an older version's parts by today's scheme would refuse sound data.
+ * The backup id comes from the configuration, which is where it lives - the
+ * manifest does not carry it, and it is identical for every version anyway.
+ *
+ * @param config   - Vault configuration, for the backup id
+ * @param manifest - Version manifest being restored
+ * @param shardIndex - Slot the part was fetched for
+ * @returns the placement the part's header has to agree with
+ */
+function _expectedPlacement(config: VaultConfig, manifest: VersionManifest, shardIndex: number): ShardPlacement {
+  return { vault_id: config.vault_id, version: manifest.version, shard_index: shardIndex, data_shards: manifest.scheme.data_shards, parity_shards: manifest.scheme.parity_shards };
 }
 
 /**
@@ -297,6 +315,7 @@ function _describeShardFailures(manifest: VersionManifest, failures: Map<number,
     { reason: 'provider_unreachable', key: 'pull_failed_on_unreachable' },
     { reason: 'adapter_missing', key: 'pull_failed_on_adapter_missing' },
     { reason: 'provider_not_configured', key: 'pull_failed_on_not_configured' },
+    { reason: 'foreign_part', key: 'pull_failed_on_foreign_part' },
   ];
 
   const parts: string[] = [];
@@ -381,6 +400,13 @@ function _emitDegradedWarnings(failures: Map<number, ShardFailureReason>, manife
   }
   if (reasons.some((r) => r === 'corrupt')) {
     io.warn(t('vault_degraded_corrupt'));
+  }
+  // A part that belongs elsewhere gets its own sentence rather than sharing the
+  // one about damage: the bytes are sound, so re-pushing does not address it -
+  // what is under that name has to be looked at, and the redundancy is gone
+  // until the right part is back on that medium.
+  if (reasons.some((r) => r === 'foreign_part')) {
+    io.warn(t('vault_degraded_foreign_part'));
   }
   // A medium the backup records but the configuration has lost reads two ways -
   // a name lost by accident, or one the operator deliberately removed - and this
@@ -506,6 +532,24 @@ async function _downloadShardsToTempFiles(
       // on Windows.
       const fs1 = createReadStream(tmpPath);
       const { header, payloadStream } = await parseShardHeaderFromStream(fs1);
+      // Ask the header whether these bytes are the part that was fetched, before
+      // anything is taken from them. This has to come first: the size and salt
+      // of the whole version are adopted from the first part that clears its own
+      // checksum, so a part belonging elsewhere would otherwise hand every sound
+      // sibling a foreign blob size and - on an encrypted backup - a foreign
+      // salt, failing all of them at once. A part refused here is excluded and
+      // rebuilt from parity, exactly like one that is damaged.
+      const foreign = placementMismatches(header, _expectedPlacement(config, manifest, ms.shard_index));
+      if (foreign.length > 0) {
+        payloadStream.on('error', () => {}).destroy();
+        fs1.destroy();
+        failures.set(ms.shard_index, 'foreign_part');
+        options.io.warn(fmt('vault_shard_foreign_on_provider', pc.id));
+        if (debugEnabled) {
+          process.stderr.write(`[bfs:debug] shard ${ms.shard_index} belongs elsewhere: ${foreign.join(', ')}\n`);
+        }
+        continue;
+      }
       if (blobSize === 0) {
         const { meta, corrupt } = await _adoptSaltFromVerifiedShard(payloadStream, header);
         if (meta) {
@@ -621,12 +665,25 @@ async function _decodeFromTempFiles(options: DecodeFromTempFilesOptions): Promis
   // error (e.g. a wrong-key DecryptionError on the actively-read shard) could
   // destroy blobStream during the mkdir await -> 'error' emitted with no
   // listener -> unhandled exception crashing the process.
-  await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
+  try {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
+  } catch (e: unknown) {
+    // The same volume the write below lands on, so the same words: push wraps
+    // its own mkdir for this reason too.
+    throw cacheWriteFailure(path.dirname(outputPath), e);
+  }
   const blobStream = rsDecodeStriped(payloadStreams, { N, K, stripeSize, blobSize, debugLog });
   // outputPath is pull.blob.pending - a full plaintext copy of the restored
   // data; create it owner-only and tighten an already-existing inode (no-op on
-  // Windows NTFS).
-  await pipeline(blobStream, createWriteStream(outputPath, { mode: 0o600 }));
+  // Windows NTFS). The sink tags only its own faults: this pipeline also
+  // carries the decoder, and a blanket catch here would report an unusable
+  // part or a bad key as the backup volume refusing.
+  try {
+    await pipeline(blobStream, createCacheSink(outputPath));
+  } catch (e: unknown) {
+    if (e instanceof CacheWriteError) throw cacheWriteFailure(path.dirname(outputPath), e.cause);
+    throw e;
+  }
   await fs.chmod(outputPath, 0o600).catch(() => {});
 }
 
@@ -825,9 +882,16 @@ async function downloadShardSlots(
         continue;
       }
       const { header: meta } = await parseShardHeaderFromStream(Readable.from(shardData));
-      if (meta.shard_index !== ms.shard_index || meta.version !== targetVersion || meta.vault_id !== config.vault_id) {
-        failures.set(ms.shard_index, 'corrupt');
-        io.warn(fmt('pull_shard_header_invalid_skip', ms.provider_id));
+      // The same five fields, and the same cause, as the current read path: one
+      // state must not be named two different things depending on which format
+      // the backup happens to be in.
+      const foreign = placementMismatches(meta, _expectedPlacement(config, manifest, ms.shard_index));
+      if (foreign.length > 0) {
+        failures.set(ms.shard_index, 'foreign_part');
+        io.warn(fmt('vault_shard_foreign_on_provider', ms.provider_id));
+        if (debugEnabled) {
+          process.stderr.write(`[bfs:debug] shard ${ms.shard_index} belongs elsewhere: ${foreign.join(', ')}\n`);
+        }
         continue;
       }
       shardSlots[ms.shard_index] = extractShardPayload(shardData);

@@ -1,12 +1,11 @@
 import type { Command } from 'commander';
-import { HostKeyDeclinedError } from '../../core/errors.js';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO, providerRegistry } from '../../providers/provider.js';
 import type { CliProviderInput, ProviderConfig } from '../../types/index.js';
 import { readConfig, writeConfig } from '../../vault/config.js';
 import { resolveCwd } from '../cwd.js';
 import { isCiRun } from '../interactive-mode.js';
-import { promptWithRawMode } from '../prompt.js';
+import { isPromptCancellation, promptWithRawMode } from '../prompt.js';
 import { CommandAbort, error, info, success } from '../ui.js';
 
 interface ProviderEditOpts {
@@ -148,17 +147,28 @@ export function registerProviderEdit(providerCmd: Command): void {
           throw new CommandAbort();
         }
       } else {
-        // Edit routes through the provider's edit-aware flow when present; a
-        // deliberate host-key refusal aborts without persisting. The fallback is
-        // for external adapters that predate the hook - every built-in has it.
+        // Edit routes through the provider's edit-aware flow when present; the
+        // fallback is for external adapters that predate the hook - every
+        // built-in has it. However the adapter stops - a refused host key, a
+        // declined certificate, its own reason - the stop is reported here and
+        // the stored config is left alone. Not keyed on the error's class: the
+        // classes that can arrive say a provider operation failed, not that the
+        // operator changed their mind, and only the adapter's own message can
+        // tell those apart. A class test would also have to hold across the
+        // bundle boundary, where an adapter's error is a different object than
+        // the one this file imported.
+        //
+        // A cancelled prompt is the exception and travels on untouched: the
+        // runtime answers it with its own exit code, and reporting it here would
+        // turn an interrupted session into a refused edit. Recognised through
+        // isPromptCancellation, which matches by name as well, so a cancellation
+        // raised by the runtime's own copy of the prompt library still counts.
         try {
           newConfig = instance.configureInteractiveForEdit ? await instance.configureInteractiveForEdit(io, { existingConfig: existing.config }) : await instance.configureInteractive(io);
         } catch (err) {
-          if (err instanceof HostKeyDeclinedError) {
-            error(err.message);
-            throw new CommandAbort();
-          }
-          throw err;
+          if (isPromptCancellation(err)) throw err;
+          error(err instanceof Error ? err.message : String(err));
+          throw new CommandAbort();
         }
       }
 
