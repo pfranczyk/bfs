@@ -3,9 +3,9 @@
 # no compression and blob written to .bfs/cache instead of RAM.
 #
 # Path selection lives in src/vault/push-pipeline.ts (_packFreshBlob): with
-# compression off, `useRamPath = estimated < computeRamThreshold(maxRamMb,N,K)`.
-# `--max-ram 1` drives resolveRamBudget to 1 MiB; computeRamThreshold subtracts
-# the RS overhead ((N+K) x 256 MiB) and clamps at 0, so the threshold is 0 and
+# compression off, `useRamPath = estimated < _computeRamThreshold(maxRamMb,N,K)`.
+# `--max-ram 1` drives resolveRamBudget to 1 MiB; _computeRamThreshold subtracts
+# the RS overhead ((2N+K) x 256 MiB) and clamps at 0, so the threshold is 0 and
 # no blob can take the RAM path - packBlobToFile is chosen for any input.
 #
 # This is a GREEN guard: it proves the disk/no-compress pack path does a clean

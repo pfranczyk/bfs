@@ -1,4 +1,4 @@
-import { availableLangs, fmt, isKnownLang, setLang } from '../i18n/index.js';
+import { availableLangs, fmt, isKnownLang, setLang, t } from '../i18n/index.js';
 import { CommandAbort, error, warn } from './ui.js';
 
 /**
@@ -7,8 +7,9 @@ import { CommandAbort, error, warn } from './ui.js';
  * outside it is a mistake to report rather than a preference to store: written
  * through, it would drop the interface back to English on this run and every run
  * after it, with nothing on screen tying that back to the flag that did it.
- * Asking for the flag and leaving the value out is the same mistake arriving the
- * same way, and is answered the same.
+ * Asking for the flag and leaving the value out entirely is a different mistake -
+ * nothing was given to reject, so it is named as a missing value, not answered
+ * with the same "invalid value" wording an unknown language gets.
  *
  * The refusal speaks the language already in force - never the one being asked
  * for, which is exactly the one that cannot be rendered. The returned tag is
@@ -19,14 +20,21 @@ import { CommandAbort, error, warn } from './ui.js';
  * @param cliLang   - the token that followed it, if any
  * @param stored    - the language saved in the global settings
  * @returns a language tag the interface can actually render
- * @throws CommandAbort when `--lang` carries a value the interface does not have,
- *         including none at all
+ * @throws CommandAbort when `--lang` was given with no value (or an empty one),
+ *         or with a value the interface does not have
  */
 export function resolveLanguage(flagGiven: boolean, cliLang: string | undefined, stored: Nullable<string>): string {
-  if (flagGiven && (cliLang === undefined || cliLang === '' || !isKnownLang(cliLang))) {
-    setLang(stored !== null && isKnownLang(stored) ? stored : 'en');
-    error(fmt('lang_invalid', cliLang ?? '', availableLangs().join(', ')));
-    throw new CommandAbort();
+  if (flagGiven) {
+    if (cliLang === undefined || cliLang === '') {
+      setLang(stored !== null && isKnownLang(stored) ? stored : 'en');
+      error(t('lang_value_missing'));
+      throw new CommandAbort();
+    }
+    if (!isKnownLang(cliLang)) {
+      setLang(stored !== null && isKnownLang(stored) ? stored : 'en');
+      error(fmt('lang_invalid', cliLang, availableLangs().join(', ')));
+      throw new CommandAbort();
+    }
   }
   const requested = cliLang ?? stored ?? 'en';
   return isKnownLang(requested) ? requested : 'en';

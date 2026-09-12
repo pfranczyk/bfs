@@ -61,6 +61,7 @@ export const pl: Strings = {
   global_settings_group: 'Ustawienia BFS (globalne)',
   lang_set: 'Język ustawiony na: %s',
   lang_invalid: 'Nieprawidłowy --lang: "%s". Dozwolone: %s',
+  lang_value_missing: '--lang wymaga kodu języka: `bfs --lang <kod>`.',
   lang_stored_unusable: 'Zapisany język interfejsu (%s) jest niedostępny, więc używany jest angielski. Ustaw obsługiwany przez `bfs --lang <kod>`.',
   cwd_value_missing: '--cwd wymaga katalogu: `bfs --cwd <katalog>`.',
   no_config: 'Brak kopii zapasowej w tym katalogu. Uruchom najpierw `bfs init`.',
@@ -289,13 +290,8 @@ export const pl: Strings = {
   verify_col_available: 'Dostępne',
   verify_col_scheme: 'Schemat',
   verify_col_tolerance: 'Tolerancja',
-  /** %s = filename, %s = provider id, %s = reason */
-  verify_shard_check_failed: 'Plik "%s" na nośniku "%s" nie przeszedł weryfikacji integralności: %s',
-  verify_shard_medium_unreachable: 'Nie udało się sprawdzić pliku "%s" - nośnik "%s" jest nieosiągalny: %s',
-  verify_shard_unreadable: 'Nie udało się odczytać pliku "%s" na nośniku "%s" - brak pliku lub błąd odczytu: %s',
-  verify_shard_adapter_missing: 'Nie można sprawdzić pliku "%s" - nośnik "%s" wymaga niezainstalowanego adaptera: %s',
-  verify_shard_provider_unknown: 'Nie można sprawdzić pliku "%s" - nośnika "%s" nie ma już w konfiguracji.',
-  verify_reason_health_check: 'brak odpowiedzi na kontrolę dostępności',
+  /** %s = version label, %s = one of the loss_on_* sentences */
+  verify_loss_line: 'Wersja %s - %s',
   verify_verdict_retained: 'Wersja %s zachowuje werdykt wcześniejszego sprawdzenia głębokiego - ten przebieg czytał tylko nagłówki, które nie widzą uszkodzeń wewnątrz danych. Uruchom `bfs verify --deep`, żeby sprawdzić same dane.',
   verify_header_advisory: 'Wersja %s: brak lub uszkodzenie %s plik(ów) nagłówka. Uruchom "bfs repair --restore-headers", aby je odbudować - inaczej odtworzenie niezaszyfrowanej kopii zapasowej może być utrudnione.',
   verify_opt_deep: 'Głęboka weryfikacja integralności: pobierz i sprawdź pełne dane każdego pliku (przesyła wszystkie dane kopii)',
@@ -475,12 +471,14 @@ export const pl: Strings = {
   push_recovered_locations_no_operator:
     'Ten przebieg nie zadaje pytań, więc nie ma jak potwierdzić odzyskanych lokalizacji nośników. Sprawdź je w `.bfs/config.json` (np. `bfs config`), a potem albo uruchom tę komendę przy terminalu, albo powtórz odzyskiwanie: `bfs recovery --provider <typ> --name <nazwaKopii> --bootstrap "<ustawienia>" --trust-locations`.',
   pull_not_enough_shards: 'Za mało części: potrzeba %s, dostępne %s - tej wersji nie da się odtworzyć z nośników dostępnych w tej chwili. Uruchom `bfs verify --deep`, aby zobaczyć, które wersje wciąż można odtworzyć.',
-  pull_failed_on_damaged: 'Uszkodzone dane kopii na nośnikach: %s.',
-  pull_failed_on_missing: 'Brak danych kopii na nośnikach: %s.',
-  pull_failed_on_unreachable: 'Nośniki nieosiągalne: %s.',
-  pull_failed_on_adapter_missing: 'Nośniki wymagające niezainstalowanego adaptera: %s.',
-  pull_failed_on_not_configured: 'Nośniki zapisane w tej kopii, ale nieobecne w konfiguracji: %s.',
-  pull_failed_on_foreign_part: 'Dane kopii należące do innej wersji lub innej kopii zapasowej, na nośnikach: %s.',
+  loss_on_damaged: 'Uszkodzone dane kopii na nośnikach: %s.',
+  loss_on_missing: 'Brak danych kopii na nośnikach: %s.',
+  loss_on_unreachable: 'Nośniki nieosiągalne: %s.',
+  loss_on_adapter_missing: 'Nośniki wymagające niezainstalowanego adaptera: %s.',
+  loss_on_not_configured: 'Nośniki zapisane w tej kopii, ale nieobecne w konfiguracji: %s.',
+  loss_on_foreign_part: 'Dane kopii należące do innej wersji lub innej kopii zapasowej, na nośnikach: %s.',
+  loss_on_read_failed: 'Dane kopii, których nie udało się odczytać - transfer się nie dokończył, na nośnikach: %s.',
+  loss_on_header_mismatch: 'Dane kopii niezgodne z zapisem tej wersji, na nośnikach: %s.',
   pull_blob_size_unreadable: 'Nie udało się odczytać rozmiaru kopii z żadnej części.',
   pull_salt_missing: 'Tej zaszyfrowanej kopii brakuje materiału klucza - części mogą być uszkodzone lub niekompletne.',
   pull_provider_not_found_skip: 'Nośnik "%s" nie istnieje w konfiguracji - pomijam jego część kopii.',
@@ -680,6 +678,8 @@ export const pl: Strings = {
   ssh_host_key_declined: 'Klucz hosta dla %s nie został zaufany - połączenie odrzucone.',
   ssh_host_key_revoked: 'Klucz hosta dla %s jest unieważniony (@revoked) w ~/.ssh/known_hosts - odmawiam połączenia (klucz oznaczony jako skompromitowany).',
   ssh_host_key_mismatch: 'Klucz hosta dla %s ZMIENIŁ SIĘ - to możliwy atak man-in-the-middle (tampering). Oczekiwano %s, a serwer przedstawił %s. Odmawiam połączenia.',
+  ssh_host_key_tofu_refused:
+    'Klucz hosta dla %s nie jest jeszcze zaufany, a nie ma tu nikogo, kto mógłby to potwierdzić. Uruchom ponownie z `--accept-new-host-key`, żeby zaufać mu teraz, albo z `--known-host <SHA256:...>`, jeśli znasz już jego odcisk.',
 
   // --- SSH - edit (online-first host key, offline fallback) --------------
   ssh_edit_connecting: 'Łączę się z %s, aby potwierdzić klucz hosta...',

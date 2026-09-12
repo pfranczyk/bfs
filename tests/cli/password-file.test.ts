@@ -26,7 +26,10 @@ vi.mock('../../src/vault/vault-manager.js', () => ({ push: vi.fn(), pull: vi.fn(
 vi.mock('../../src/vault/recovery.js', () => ({ recover: vi.fn() }));
 // provider remove reads the vault config before it does anything else; without
 // this it aborts long before the password would matter.
-vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn(), writeConfig: vi.fn() }));
+vi.mock('../../src/vault/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/vault/config.js')>();
+  return { ...actual, readConfig: vi.fn(), writeConfig: vi.fn() };
+});
 vi.mock('inquirer', () => ({
   default: {
     prompt: vi.fn(),

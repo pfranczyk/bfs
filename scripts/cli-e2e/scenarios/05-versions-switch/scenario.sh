@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Two versions, then switch between them with `pull --version`. Verifies that an
 # old snapshot restores its exact tree (and the v2-only file is gone), then the
-# latest restores again. Mirrors tests/e2e Scenariusz 3.
+# latest restores again. Mirrors tests/e2e scenario 3.
 
 SCENARIO_NAME="version switching (pull --version)"
 SCENARIO_DESC="push v1/v2, restore v1 then v2, track working_version"

@@ -8,6 +8,25 @@ interface GlobalOpts {
 }
 
 /**
+ * Reads the value following `--cwd` in either spelling: `--cwd <dir>` or
+ * `--cwd=<dir>`. Returns `undefined` when the flag is absent, or when the
+ * spaced spelling has no following token. Does not validate the value - a
+ * flag-like token or an empty string comes back verbatim, for the caller to
+ * judge (see {@link assertWorkingDirectoryGiven}). Every reader of `--cwd`
+ * (validation here, the REPL's own root-directory pre-scan in `src/index.ts`)
+ * goes through this single parser, so a spelling either both recognise or both
+ * miss - never one silently blind to the other.
+ *
+ * @param tokens - argv tokens to scan
+ * @returns the raw value found, or `undefined` if the flag is not present
+ */
+export function parseCwdFlag(tokens: string[]): string | undefined {
+  const spaced = tokens.indexOf('--cwd');
+  if (spaced !== -1) return tokens[spaced + 1];
+  return tokens.find((token) => token.startsWith('--cwd='))?.slice('--cwd='.length);
+}
+
+/**
  * Refuses a working-directory flag that was given without a directory. Every
  * reader treats the value as the place to work in, so one that is missing is
  * read as an answer nobody gave and the run silently continues wherever it
@@ -21,9 +40,9 @@ interface GlobalOpts {
  * @throws CommandAbort when `--cwd` is present without a usable directory
  */
 export function assertWorkingDirectoryGiven(tokens: string[]): void {
-  const spaced = tokens.indexOf('--cwd');
-  const value = spaced !== -1 ? tokens[spaced + 1] : tokens.find((token) => token.startsWith('--cwd='))?.slice('--cwd='.length);
-  if (spaced === -1 && value === undefined) return;
+  const flagPresent = tokens.includes('--cwd') || tokens.some((token) => token.startsWith('--cwd='));
+  if (!flagPresent) return;
+  const value = parseCwdFlag(tokens);
   if (value === undefined || value === '' || value.startsWith('-')) {
     error(t('cwd_value_missing'));
     throw new CommandAbort();

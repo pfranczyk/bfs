@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.4] - 2026-09-12
+
+### Fixed
+
+- **A backup now uses far less memory than its limit used to allow, and stops
+  working in memory when there is too little of it.** The limit was measured
+  against only part of what building a backup needs, so a backup limited to
+  500 MB could take about 1.3 GB and be killed by the system - after the
+  directory had already been packed. The same gap decided when a backup could be
+  assembled in memory rather than on disk, and chose memory exactly when there
+  was no room. At the same setting, a backup now takes about two fifths less
+  than it did. Note that the limit covers the memory BFS itself works in; the
+  library that adds the redundancy briefly copies its working block outside it,
+  so leave some headroom above the number you set. On machines with little
+  memory the work now goes to disk more often - slower, but it finishes.
+
+- **`bfs verify` no longer calls a broken transfer damaged data.** A storage
+  that answered, then dropped the connection while its part was being read,
+  was reported as having failed an integrity check - the wording for data that
+  arrived and turned out to be rotten. The two call for opposite moves, and
+  the wrong one sends you rebuilding parts that are sound and sitting exactly
+  where they should be. A read that never completed is now named as such, and
+  the data is only called damaged when it was actually read and refused.
+- **`bfs verify` now says why a version is short of parts, once per reason
+  instead of once per part.** Each reason names the version it belongs to and
+  every storage behind it. Where a failed restore already has wording for the
+  same situation, the check now borrows it, so the two commands cannot describe
+  one switched-off drive in different words; a transfer that broke off and a
+  part whose header disagrees with the record are particular to the check and
+  carry their own wording. The storage's own error text moved to
+  `bfs --debug verify`, so a check across many versions stays readable.
+- **`bfs recovery` now names the storage a version is short of, under the same
+  wording.** Recovering a backup onto a fresh machine ends in a table of
+  versions and their condition, and "degraded" there left you to work out which
+  of your storages was the one at fault - on the one machine that has no
+  configuration of its own to consult. The reason now follows the table, naming
+  the storage, in the words `bfs verify` uses for the same state; what it used
+  to print instead was the internal part filename and the raw error behind it,
+  and those now belong to `bfs --debug recovery`.
+
+- **`bfs --cwd=<dir>` with no sub-command now opens the interactive prompt in
+  the given directory.** The equals-sign spelling was already accepted
+  everywhere a sub-command followed it, but starting the prompt with no
+  command at all ignored that spelling and opened wherever the process
+  happened to be running instead - a real backup could look uninitialized
+  while sitting exactly where you pointed. Both spellings now root the prompt
+  the same way.
+- **`bfs --lang` given no value now says so, instead of calling the missing
+  value invalid.** The refusal is the same whether the flag was left bare or
+  given an empty value, but the wording claimed a value had been rejected when
+  none was given at all. It now names what actually happened, the way
+  `bfs --cwd` already does for the same slip; a value that is given but
+  unsupported still gets the existing "invalid" wording.
+- **A first-contact SSH connection refused with nobody able to confirm it now
+  names the way out.** With no pinned host key, no `--accept-new-host-key`,
+  and no operator to answer a prompt (for example `bfs init --ci`), the
+  refusal read as a generic "SSH operation failed" - indistinguishable from an
+  ordinary connection problem. It now also names `--accept-new-host-key` and
+  `--known-host <fingerprint>` as the two ways to proceed, the way a revoked
+  host key already did.
+
 ## [0.14.3] - 2026-09-04
 
 ### Fixed
@@ -1439,7 +1500,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.3...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.4...HEAD
+[0.14.4]: https://github.com/pfranczyk/bfs/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/pfranczyk/bfs/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/pfranczyk/bfs/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/pfranczyk/bfs/compare/v0.14.0...v0.14.1

@@ -1,6 +1,5 @@
-import { BfsError } from '../core/errors.js';
+import { BfsError, ShardCorruptedError } from '../core/errors.js';
 import { buildShardHeaderFromBytes, extractSidecarHeaderBytes, placementMismatches, SHARD_HEADER_READ_BYTES, shardIntegrityFailure } from '../core/shard-io.js';
-import { fmt, t } from '../i18n/index.js';
 import { providerRegistry } from '../providers/provider.js';
 import type { ManifestShard, ProviderIO, RemoteRef, ShardHeader, StorageProvider, VaultConfig, VersionManifest } from '../types/index.js';
 import { VersionHealth } from '../types/index.js';
@@ -13,6 +12,24 @@ import { listManifests, readManifest, writeManifest } from './manifest.js';
 export interface HeaderAdvisory {
   missing: number;
   broken: number;
+}
+
+/**
+ * Why a part did not count towards its version.
+ *
+ * The distinction is the whole point: a bare count reads identically for a
+ * medium that is switched off, a part that was deleted and data that rotted, and
+ * those call for opposite moves. The causes are ordered by how far the exchange
+ * got, so nothing accuses bytes that were never read - `medium_unreachable` and
+ * `read_failed` say only that BFS did not get to look, while `data_corrupt`
+ * means it looked and the bytes contradict themselves.
+ */
+export type ShardLossCause = 'provider_not_configured' | 'adapter_missing' | 'medium_unreachable' | 'file_missing' | 'read_failed' | 'header_mismatch' | 'data_corrupt';
+
+/** One cause of loss for a version, with the media it hit under the names the backup records. */
+export interface VersionLoss {
+  cause: ShardLossCause;
+  providers: string[];
 }
 
 export interface VersionStatus {
@@ -28,6 +45,17 @@ export interface VersionStatus {
    * healthy header while one or more are missing or broken.
    */
   header_advisory: Nullable<HeaderAdvisory>;
+  /**
+   * Why this version is short of parts, grouped so each cause names its media
+   * once. Empty when nothing was lost.
+   *
+   * Carried as data rather than written out here: a line per part, emitted from
+   * inside the loop, arrives once per medium in the middle of whatever progress
+   * display the caller is running, and cannot name the version it belongs to -
+   * `verifyAll` walks every manifest, so a long history buries the table it is
+   * meant to explain.
+   */
+  loss_causes: VersionLoss[];
   /**
    * true when this pass reported a verdict it could not observe itself: a
    * shallow run reading the header window, over a version whose payload rot was
@@ -101,12 +129,14 @@ export async function verifyVersion(rootDir: string, version: number, io: Provid
   let available = 0;
   let payloadRot = 0;
   const sidecarCounts = { valid: 0, missing: 0, broken: 0 };
+  const losses = new Map<number, ShardLossCause>();
 
   for (const ms of manifest.shards) {
     const result = await inspectShard(ms, { config, manifest, io, deep });
     if (result.available) available++;
     if (result.payload_corrupt) payloadRot++;
     if (result.sidecar !== 'n/a') sidecarCounts[result.sidecar]++;
+    if (result.loss !== null) losses.set(ms.shard_index, result.loss);
   }
 
   let health: VersionHealth;
@@ -128,7 +158,36 @@ export async function verifyVersion(rootDir: string, version: number, io: Provid
   // (so every shard should carry a sidecar), yet some are missing or broken.
   const header_advisory: Nullable<HeaderAdvisory> = sidecarCounts.valid >= 1 && sidecarCounts.missing + sidecarCounts.broken >= 1 ? { missing: sidecarCounts.missing, broken: sidecarCounts.broken } : null;
 
-  return { version, health, available_shards: available, total_shards: total, tolerance, header_advisory, retained_from_deep };
+  return { version, health, available_shards: available, total_shards: total, tolerance, header_advisory, retained_from_deep, loss_causes: groupLosses(manifest, losses) };
+}
+
+/**
+ * The order causes are reported in, matching the one a failed restore uses
+ * (`_describeShardFailures` in vault-manager), so the same two faults never come
+ * out in opposite orders depending on which command found them. Fixed rather than
+ * derived from the shards, or the same backup would read differently from one run
+ * to the next as slots fail in a different sequence.
+ */
+const LOSS_CAUSE_ORDER: readonly ShardLossCause[] = ['data_corrupt', 'file_missing', 'medium_unreachable', 'adapter_missing', 'provider_not_configured', 'read_failed', 'header_mismatch'];
+
+/**
+ * Groups the media that lost a part by the cause, under the names the backup
+ * records for them.
+ *
+ * @param manifest - Version manifest, to map shard indexes to medium names
+ * @param losses   - Shard index -> why that part did not count
+ * @returns one entry per cause that occurred, in {@link LOSS_CAUSE_ORDER}
+ */
+function groupLosses(manifest: VersionManifest, losses: Map<number, ShardLossCause>): VersionLoss[] {
+  const grouped: VersionLoss[] = [];
+  for (const cause of LOSS_CAUSE_ORDER) {
+    const providers = [...losses.entries()]
+      .filter(([, c]) => c === cause)
+      .map(([index]) => manifest.shards.find((s) => s.shard_index === index)?.provider_id)
+      .filter((id): id is string => id !== undefined);
+    if (providers.length > 0) grouped.push({ cause, providers });
+  }
+  return grouped;
 }
 
 /** Orders health verdicts so they can be compared: healthy < degraded < damaged. */
@@ -191,6 +250,8 @@ interface ShardInspection {
   available: boolean;
   sidecar: SidecarState;
   payload_corrupt: boolean;
+  /** Why this part did not count, or null when it did. */
+  loss: Nullable<ShardLossCause>;
 }
 
 /** The name a version's shard carries on every medium. */
@@ -204,6 +265,22 @@ function failureReason(err: unknown): string {
 }
 
 /**
+ * Whether a thrown value is the parser refusing bytes it read, as opposed to a
+ * read that never delivered them.
+ *
+ * The constructor name stands in beside `instanceof` because an adapter shipped
+ * outside this bundle throws from its own copy of the class: two copies of the
+ * same error type do not share identity, so `instanceof` alone silently misses
+ * every corruption an external adapter reports. Getting this wrong in either
+ * direction misnames the fault: a dropped session reported as damage sends the
+ * operator to rebuild sound data, and damage reported as a dropped session tells
+ * them to try again forever.
+ */
+function isShardCorruption(err: unknown): boolean {
+  return err instanceof ShardCorruptedError || (err instanceof Error && err.constructor.name === 'ShardCorruptedError');
+}
+
+/**
  * Reaches one shard's medium and checks the shard on it, naming the cause of
  * every outcome that costs the version a part.
  *
@@ -212,26 +289,31 @@ function failureReason(err: unknown): string {
  * for opposite moves (bring the medium back vs `bfs repair <name> "" --rebuild`,
  * which needs the name/params pair its parser insists on). So an
  * unreachable medium, a provider the configuration no longer knows and a medium
- * with no installed adapter are reported, not swallowed, exactly as the per-file
- * failures below already are.
+ * with no installed adapter each carry their own cause, exactly as the per-file
+ * failures below do.
  *
  * An unreachable medium is never reported as damage: nothing was read, so the
  * bytes are not accused. The distinction matters because a momentary read error
  * would otherwise condemn a healthy medium.
  *
+ * The cause is returned, never written out: the caller groups the media per
+ * cause and says it once. What the medium itself said goes to the debug channel,
+ * where it stays available for a diagnosis without crowding the report.
+ *
  * @param ms  - Manifest entry of the shard to inspect
  * @param ctx - Config, manifest, IO and depth for this pass
- * @returns availability, sidecar state and whether the payload was found rotten
+ * @returns availability, sidecar state, whether the payload was found rotten,
+ *          and the cause when the part did not count
  */
 async function inspectShard(ms: ManifestShard, ctx: ShardCheckContext): Promise<ShardInspection> {
   const { config, io } = ctx;
   const filename = shardFilename(ms, ctx.manifest);
-  const unavailable: ShardInspection = { available: false, sidecar: 'n/a', payload_corrupt: false };
+  const lost = (cause: ShardLossCause): ShardInspection => ({ available: false, sidecar: 'n/a', payload_corrupt: false, loss: cause });
 
   const pc = config.providers.find((p) => p.id === ms.provider_id);
   if (!pc) {
-    io.warn(fmt('verify_shard_provider_unknown', filename, ms.provider_id));
-    return unavailable;
+    io.debug(`verify: ${filename} on "${ms.provider_id}" - the configuration no longer knows this provider`);
+    return lost('provider_not_configured');
   }
 
   let provider: StorageProvider;
@@ -241,21 +323,26 @@ async function inspectShard(ms: ManifestShard, ctx: ShardCheckContext): Promise<
     // Nothing was contacted: BFS has no adapter to speak this medium's protocol.
     // Reporting that as "unreachable" would send the operator to check a cable
     // instead of installing the adapter.
-    io.warn(fmt('verify_shard_adapter_missing', filename, ms.provider_id, failureReason(err)));
-    return unavailable;
+    io.debug(`verify: ${filename} on "${ms.provider_id}" - no adapter installed: ${failureReason(err)}`);
+    return lost('adapter_missing');
   }
 
   try {
     if (!(await provider.healthCheck())) {
-      io.warn(fmt('verify_shard_medium_unreachable', filename, ms.provider_id, t('verify_reason_health_check')));
-      return unavailable;
+      io.debug(`verify: ${filename} on "${ms.provider_id}" - no answer to the reachability check`);
+      return lost('medium_unreachable');
     }
     await provider.authenticate();
     provider.setVaultName(config.vault_name);
     return await checkShardIntegrity(provider, ms, ctx);
   } catch (err) {
-    io.warn(fmt('verify_shard_medium_unreachable', filename, ms.provider_id, failureReason(err)));
-    return unavailable;
+    // Reaching the medium is what failed - the reachability check, the login, or
+    // the connection behind either. Classified by how far the exchange got, not
+    // by what was thrown: a refused login raises the same error class as a
+    // transfer that dies later, and calling this one a failed transfer would
+    // describe a medium BFS never got to read from.
+    io.debug(`verify: ${filename} on "${ms.provider_id}" - medium unreachable: ${failureReason(err)}`);
+    return lost('medium_unreachable');
   }
 }
 
@@ -270,32 +357,30 @@ async function inspectShard(ms: ManifestShard, ctx: ShardCheckContext): Promise<
  * Availability is read from the IN-SHARD header, so it is independent of the
  * sidecar: a broken or missing sidecar never marks the shard unavailable.
  *
- * Failure modes (reported via io.warn, `available: false`):
- *   - getSize fails or returns 0   -> shard missing
- *   - downloadHeader / parse fails -> header truncated or corrupt
- *   - vault_id / version / shard_index / blob_hash / scheme mismatch -> wrong shard
- *   - deep: trailing SHA-256 mismatch -> payload corrupted (bit-rot / truncation)
+ * Failure modes (`available: false`, each with its own cause):
+ *   - getSize fails or returns 0   -> `file_missing`
+ *   - downloadHeader fails to deliver -> `read_failed`
+ *   - the delivered header does not parse -> `data_corrupt`
+ *   - vault_id / version / shard_index / blob_hash / scheme mismatch -> `header_mismatch`
+ *   - deep: the payload read breaks -> `read_failed`
+ *   - deep: trailing SHA-256 mismatch -> `data_corrupt` (bit-rot / truncation)
  *
- * @returns availability plus the observed sidecar state
+ * `header_mismatch` covers one field more than the restore paths judge identity
+ * by: `blob_hash` describes content rather than address and has a legal window of
+ * disagreement (an interrupted `push --overwrite` leaves this version's own newer
+ * part beside a manifest describing the older content). Both belong in the report
+ * - the part cannot be counted either way - so the cause says the header
+ * disagrees, and never whose part it is.
+ *
+ * @returns availability, the observed sidecar state and the cause of any loss
  */
 async function checkShardIntegrity(provider: StorageProvider, ms: ManifestShard, ctx: ShardCheckContext): Promise<ShardInspection> {
   const { config, manifest, io, deep } = ctx;
   const filename = shardFilename(ms, manifest);
   const ref = { provider_id: provider.id, path: filename };
 
-  let size: number;
-  try {
-    size = await provider.getSize(ref);
-  } catch (err) {
-    // The medium answered but the file did not come back: deleted, renamed, or
-    // unreadable. The provider's own reason is carried through, so a deleted
-    // part is not reported the same way as a permission or transport failure.
-    io.warn(fmt('verify_shard_unreadable', filename, provider.id, failureReason(err)));
-    return { available: false, sidecar: 'n/a', payload_corrupt: false };
-  }
-  if (size === 0) {
-    io.warn(fmt('verify_shard_check_failed', filename, provider.id, 'size=0'));
-    return { available: false, sidecar: 'n/a', payload_corrupt: false };
+  if (!(await partIsPresent(provider, ref, filename, io))) {
+    return { available: false, sidecar: 'n/a', payload_corrupt: false, loss: 'file_missing' };
   }
 
   const sidecar = await probeSidecarState(provider, ref);
@@ -304,23 +389,85 @@ async function checkShardIntegrity(provider: StorageProvider, ms: ManifestShard,
   try {
     header = buildShardHeaderFromBytes(await provider.downloadHeader(ref, SHARD_HEADER_READ_BYTES));
   } catch (err) {
-    io.warn(fmt('verify_shard_check_failed', filename, provider.id, err instanceof Error ? err.message : String(err)));
-    return { available: false, sidecar, payload_corrupt: false };
+    // Two failures meet at this one call and want opposite moves: bytes that
+    // arrived and contradict themselves (repair the part) against a transfer
+    // that never delivered them (try again, look at the link). Anything the
+    // parser did not refuse is read as the latter - the conservative side, since
+    // nothing was established about the bytes.
+    const corrupted = isShardCorruption(err);
+    io.debug(`verify: ${filename} on "${provider.id}" - ${corrupted ? 'header damaged' : 'header read failed'}: ${failureReason(err)}`);
+    return { available: false, sidecar, payload_corrupt: false, loss: corrupted ? 'data_corrupt' : 'read_failed' };
   }
 
   const mismatches = headerMismatches(header, config, manifest, ms);
   if (mismatches.length > 0) {
-    io.warn(fmt('verify_shard_check_failed', filename, provider.id, `header mismatch: ${mismatches.join(', ')}`));
-    return { available: false, sidecar, payload_corrupt: false };
+    io.debug(`verify: ${filename} on "${provider.id}" - header mismatch: ${mismatches.join(', ')}`);
+    return { available: false, sidecar, payload_corrupt: false, loss: 'header_mismatch' };
   }
-  if (deep) {
-    const corruptReason = await shardIntegrityFailure(provider, ref);
-    if (corruptReason !== null) {
-      io.warn(fmt('verify_shard_check_failed', filename, provider.id, corruptReason));
-      return { available: false, sidecar, payload_corrupt: true };
-    }
+  if (deep) return await checkPayloadIntegrity(provider, ref, filename, sidecar, io);
+  return { available: true, sidecar, payload_corrupt: false, loss: null };
+}
+
+/**
+ * Whether the part is on the medium at all, asked with a metadata call rather
+ * than a transfer.
+ *
+ * A size of zero counts as absent: the name is taken but nothing is behind it,
+ * which is what an interrupted upload leaves. Either way the medium answered -
+ * the file is what did not come back - so the reason it gave is kept on the
+ * debug channel, where a deleted part can still be told from a refused
+ * permission without an adapter's error text reaching everyone.
+ *
+ * @param provider - Provider holding the shard, already authenticated
+ * @param ref      - RemoteRef of the shard
+ * @param filename - The part's name, for the debug line
+ * @param io       - ProviderIO the medium's own reason is written to
+ * @returns true when a non-empty file answered
+ */
+async function partIsPresent(provider: StorageProvider, ref: RemoteRef, filename: string, io: ProviderIO): Promise<boolean> {
+  try {
+    const size = await provider.getSize(ref);
+    if (size > 0) return true;
+    io.debug(`verify: ${filename} on "${provider.id}" - part missing or unreadable: size=0`);
+    return false;
+  } catch (err) {
+    io.debug(`verify: ${filename} on "${provider.id}" - part missing or unreadable: ${failureReason(err)}`);
+    return false;
   }
-  return { available: true, sidecar, payload_corrupt: false };
+}
+
+/**
+ * Streams the whole part and settles its trailing SHA-256, for a deep pass.
+ *
+ * Only a failed checksum condemns the bytes; {@link shardIntegrityFailure}
+ * rethrows everything else for this decision. The medium answered its
+ * reachability check and handed over its header moments ago, so a transfer
+ * breaking now says nothing about the bytes - and the part is demonstrably still
+ * on it, which is why a broken read is never reported as a missing part.
+ *
+ * @param provider - Provider holding the shard, already authenticated
+ * @param ref      - RemoteRef of the shard
+ * @param filename - The part's name, for the debug line
+ * @param sidecar  - Sidecar state observed before the payload was read
+ * @param io       - ProviderIO the medium's own reason is written to
+ * @returns the inspection for this part: sound, damaged, or unread
+ */
+async function checkPayloadIntegrity(provider: StorageProvider, ref: RemoteRef, filename: string, sidecar: SidecarState, io: ProviderIO): Promise<ShardInspection> {
+  let corruptReason: Nullable<string>;
+  try {
+    corruptReason = await shardIntegrityFailure(provider, ref);
+  } catch (err) {
+    // An adapter outside this bundle may raise the parser's refusal from here
+    // rather than returning it, and that one IS about the bytes.
+    const corrupted = isShardCorruption(err);
+    io.debug(`verify: ${filename} on "${provider.id}" - ${corrupted ? 'payload damaged' : 'payload read failed'}: ${failureReason(err)}`);
+    return { available: false, sidecar, payload_corrupt: corrupted, loss: corrupted ? 'data_corrupt' : 'read_failed' };
+  }
+  if (corruptReason !== null) {
+    io.debug(`verify: ${filename} on "${provider.id}" - payload damaged: ${corruptReason}`);
+    return { available: false, sidecar, payload_corrupt: true, loss: 'data_corrupt' };
+  }
+  return { available: true, sidecar, payload_corrupt: false, loss: null };
 }
 
 /**

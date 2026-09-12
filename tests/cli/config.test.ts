@@ -8,7 +8,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureConsole, makeConfig, runCmd, runCmdExitCode } from './_helpers.js';
 
-vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn(), writeConfig: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('../../src/vault/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/vault/config.js')>();
+  return { ...actual, readConfig: vi.fn(), writeConfig: vi.fn().mockResolvedValue(undefined) };
+});
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;

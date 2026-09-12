@@ -29,9 +29,8 @@ jobs:
   # "User force closed" instead of a clean abort) materializes only in dist/ and
   # canonically on Windows, so this job is where it gets caught.
   #
-  # smoke:dist is a private npm script (stripped from the public package.json by
-  # the sync), so invoke scripts/smoke.ts directly - that file IS synced to the
-  # public repo, so the same workflow runs green on both sides.
+  # Invoke scripts/smoke.ts directly rather than through an npm script, so this
+  # job depends only on files it can see in this repository.
   windows-smoke:
     runs-on: windows-latest
     steps:

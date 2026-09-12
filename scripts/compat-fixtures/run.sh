@@ -12,8 +12,7 @@
 # Requires: docker, bfs (current version - see setup below)
 # Windows note: run from WSL, not Git Bash - Docker volume mounts need Linux paths.
 #
-# WSL setup (one-time, or after code changes):
-#   cd /mnt/d/projects/BFS
+# WSL setup (one-time, or after code changes), from the repository root:
 #   npm ci && npm run build && npm pack
 #   npm install -g bfs-vault-*.tgz && rm bfs-vault-*.tgz
 
@@ -48,8 +47,7 @@ fi
 
 # Verify bfs is available and working (catches argon2 native binding issues)
 if ! bfs -V >/dev/null 2>&1; then
-  echo "ERROR: 'bfs' not found or not working. In WSL, run:" >&2
-  echo "  cd /mnt/d/projects/BFS" >&2
+  echo "ERROR: 'bfs' not found or not working. In WSL, run from the repository root:" >&2
   echo "  npm ci && npm run build && npm pack" >&2
   echo "  npm install -g bfs-vault-*.tgz && rm bfs-vault-*.tgz" >&2
   exit 1

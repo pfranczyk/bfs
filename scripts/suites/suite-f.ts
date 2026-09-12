@@ -205,6 +205,12 @@ export async function suiteF(ctx: SmokeContext): Promise<SuiteResult> {
       // that too, and it would tell the operator nothing about which flag went
       // short of its value.
       assert(/^X .*--lang/m.test(out), `the refusal must name the flag that is short of its value: ${out.slice(0, 300)}`);
+      // Negative control for F13b: a value that was actually GIVEN, even one
+      // that looks like another flag, is a wrong value - not a missing one -
+      // and must keep the classification that names the closed set of
+      // languages, not the dedicated "no value at all" wording F13b
+      // pins below.
+      assert(/Invalid --lang/.test(out), `a swallowed flag is a value that was given, not one that is missing - it must not be reclassified: ${out.slice(0, 300)}`);
       const stored = await fileExists(path.join(dir, 'bfs', 'settings.json'));
       assert(!stored, 'a swallowed flag must not be written to the settings');
     }),
@@ -224,10 +230,15 @@ export async function suiteF(ctx: SmokeContext): Promise<SuiteResult> {
       const trailingOut = `${trailing.stdout ?? ''}${trailing.stderr ?? ''}`;
       assert(trailing.status !== 0, `a language flag with no value must not exit 0, got ${trailing.status}\n${trailingOut.slice(0, 300)}`);
       assert(/^X .*--lang/m.test(trailingOut), `the refusal must name the flag: ${trailingOut.slice(0, 300)}`);
+      // A missing value is not a wrong one: the refusal must not claim a value
+      // was invalid when none was given at all - the mirror of cwd_value_missing
+      // for --cwd (F16-F18), which already carries its own, dedicated wording.
+      assert(!/Invalid --lang/.test(trailingOut), `a missing value must not be worded as an invalid one: ${trailingOut.slice(0, 300)}`);
 
       const empty = runBfs(['--lang', '', 'status'], ctx.vaultDir, '', env);
       const emptyOut = `${empty.stdout ?? ''}${empty.stderr ?? ''}`;
       assert(empty.status !== 0, `an empty language value must not exit 0, got ${empty.status}\n${emptyOut.slice(0, 300)}`);
+      assert(!/Invalid --lang/.test(emptyOut), `an empty value must not be worded as an invalid one: ${emptyOut.slice(0, 300)}`);
 
       const stored = await fileExists(path.join(dir, 'bfs', 'settings.json'));
       assert(!stored, 'neither shape may be written to the settings');
@@ -362,6 +373,26 @@ export async function suiteF(ctx: SmokeContext): Promise<SuiteResult> {
         const r = runBfs(shape, ctx.sourceDir);
         const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
         assert(r.status === 0, `a directory given properly must be accepted (${shape.join(' ')}), got ${r.status}\n${out.slice(0, 300)}`);
+      }
+    }),
+  );
+
+  // F19 - assertWorkingDirectoryGiven (validation) reads both spellings, but the
+  // REPL's own pre-scan for rootDir - run with no sub-command at all - has its
+  // own, separate reading of --cwd. The value IS given here (unlike F16/F17,
+  // which refuse a missing one), just spelled with `=` - and that spelling is
+  // silently dropped by the pre-scan, so the prompt opens wherever the run
+  // started instead of at the given directory.
+  tests.push(
+    await runTest('F19', 'bfs --cwd=<dir> with no sub-command still roots the REPL there', () => {
+      for (const shape of [['--cwd', ctx.vaultDir], [`--cwd=${ctx.vaultDir}`]]) {
+        // Spawned from sourceDir (no vault there) so a rootDir that fell back
+        // to the start directory is observable in the banner, not silently
+        // identical to the right answer.
+        const r = runBfs(shape, ctx.sourceDir, 'exit\n');
+        const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+        assert(out.includes('smoke-vault'), `REPL banner must show the vault at --cwd (${shape.join(' ')}), got: ${out.slice(0, 300)}`);
+        assert(!out.includes('No configuration'), `REPL must not fall back to the start directory (${shape.join(' ')}): ${out.slice(0, 300)}`);
       }
     }),
   );

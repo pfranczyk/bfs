@@ -27,7 +27,10 @@ import { captureConsole, makeConfig, runCmd } from './_helpers.js';
 
 const hoisted = vi.hoisted(() => ({ captured: null as Nullable<ProviderIO>, real: null as Nullable<(workDir: string, interactive?: boolean) => ProviderIO>, adapterSaw: null as Nullable<boolean | undefined> }));
 
-vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn(), writeConfig: vi.fn() }));
+vi.mock('../../src/vault/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/vault/config.js')>();
+  return { ...actual, readConfig: vi.fn(), writeConfig: vi.fn() };
+});
 vi.mock('../../src/providers/provider.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/providers/provider.js')>();
   hoisted.real = actual.createCliProviderIO;

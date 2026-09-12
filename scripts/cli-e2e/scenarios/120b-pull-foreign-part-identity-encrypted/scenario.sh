@@ -77,8 +77,8 @@ scenario_run() {
   # fields sit outside the encrypted location map. Run before the restore,
   # because a scenario stops at its first failed assertion.
   run_bfs "$va" --lang en verify
-  assert_out_contains 'on provider "p1"'
-  assert_out_contains 'header mismatch'
+  assert_out_contains 'does not match this version'
+  assert_out_contains 'on: p1.'
 
   run_bfs "$va" --lang en pull --version 1 --force --yes --password "$pw"
   assert_ok

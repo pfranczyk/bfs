@@ -456,9 +456,9 @@ describe('restore refuses a part belonging to another backup, version or scheme'
     // header field moves here, so the bytes still match the hash the manifest
     // records for them. Pre-filtering parts by `manifest.shard_hash`, the way
     // the legacy path does, would therefore pass this test and still break the
-    // interrupted overwrite - that route is closed separately, in
-    // `architecture/decisions.md` ("Pull wyklucza uszkodzony-ale-obecny shard",
-    // among the variants not to revisit).
+    // interrupted overwrite: a part whose bytes are intact but whose recorded
+    // hash moved on is not the same thing as a damaged one, and excluding it up
+    // front is a closed design question, not a variant to revisit here.
     await setup(false);
     const planted = shardPath(mediumDir(pdirs, 1), 1, 1);
     const stale = 'f'.repeat(64);

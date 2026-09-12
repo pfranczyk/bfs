@@ -32,7 +32,14 @@ scenario_run() {
 
   # Partial push: exit 1, manifest degraded, warn about cache write failure,
   # blob_pending_path stays a directory (writeFile failed).
-  run_bfs "$vault" push --new
+  # --max-ram pins the in-memory pack path, which this scenario's trigger needs:
+  # the emergency RAM->disk dump only happens when the blob is a Buffer. The
+  # budget must clear the encoder's reservation, which at this scheme (3/1) is
+  # (2N+K) x 256 MiB = 1792 MiB - below that the threshold is 0, packing goes to
+  # disk, and the run fails earlier and for another reason (no upload is ever
+  # attempted, so nothing is degraded). Without this the outcome would depend on
+  # how much memory the host has, since an unset budget is a quarter of it.
+  run_bfs "$vault" push --new --max-ram 2048
   assert_exit 1
   assert_out_contains "degraded"
   assert_manifest_health "$vault" 1 degraded

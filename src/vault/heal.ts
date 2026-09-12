@@ -636,9 +636,10 @@ async function _readBackMismatch(options: ReadBackOptions): Promise<Nullable<Rea
     const verdict = await target.verifyShard(ref, identity);
     if (verdict.ok) return null;
     // A storage that cannot look inside its own files answers `unverifiable`
-    // - a complete answer from the courier, not a mismatch (decisions.md:
-    // "Adapter nie weryfikuje treści"). The size check above still stands;
-    // the identity is taken on trust, and said so.
+    // - a complete answer from the courier, not a mismatch: an adapter is not
+    // required to inspect content, so silence about identity is not evidence
+    // against it. The size check above still stands; the identity is taken on
+    // trust, and said so.
     if (verdict.reason === 'unverifiable') {
       io.warn(fmt('heal_rebuild_unverifiable', filename, targetProviderConfig.id, verdict.detail));
       return null;

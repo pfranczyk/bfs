@@ -4,7 +4,7 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { Command } from 'commander';
-import { assertWorkingDirectoryGiven } from './cli/cwd.js';
+import { assertWorkingDirectoryGiven, parseCwdFlag } from './cli/cwd.js';
 import { reportUnusableStoredLanguage, resolveLanguage } from './cli/lang.js';
 import { isPromptCancellation } from './cli/prompt.js';
 
@@ -182,8 +182,9 @@ async function main(): Promise<void> {
 
   if (!hasSubcommand) {
     // Pre-scan --cwd from argv to set REPL rootDir without full Commander parsing.
-    const cwdIdx = process.argv.indexOf('--cwd');
-    const cwdValue = cwdIdx !== -1 ? process.argv[cwdIdx + 1] : undefined;
+    // assertWorkingDirectoryGiven(argv) above already validated the value (both
+    // spellings) before this point is reached.
+    const cwdValue = parseCwdFlag(argv);
     const rootDir = cwdValue ? path.resolve(cwdValue) : process.cwd();
 
     await startRepl(rootDir, async (tokens) => {

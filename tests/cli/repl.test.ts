@@ -10,7 +10,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startRepl } from '../../src/cli/repl.js';
 import { CommandAbort } from '../../src/cli/ui.js';
 
-vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn().mockResolvedValue(null) }));
+vi.mock('../../src/vault/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/vault/config.js')>();
+  return { ...actual, readConfig: vi.fn().mockResolvedValue(null) };
+});
 vi.mock('../../src/vault/state.js', () => ({ readState: vi.fn().mockResolvedValue({ latest_version: 0, working_version: 0 }) }));
 
 // --- Fake readline factory -------------------------------------------------

@@ -47,9 +47,9 @@ const mockPrompt = vi.mocked(inquirer.prompt);
 const recoveryReport = {
   manifests_rebuilt: 3,
   versions: [
-    { version: 1, health: VersionHealth.Healthy, consensus: true },
-    { version: 2, health: VersionHealth.Healthy, consensus: true },
-    { version: 3, health: VersionHealth.Degraded, consensus: true },
+    { version: 1, health: VersionHealth.Healthy, consensus: true, loss_causes: [] },
+    { version: 2, health: VersionHealth.Healthy, consensus: true, loss_causes: [] },
+    { version: 3, health: VersionHealth.Degraded, consensus: true, loss_causes: [] },
   ],
   unrecovered_versions: [],
 };
@@ -141,6 +141,63 @@ describe('recovery', () => {
     const output = capture.logs.join('\n');
     expect(output).toContain('pull --version 3');
     expect(output).toContain('v004');
+  });
+
+  // --- loss causes after a recovery ----------------------------------------
+  // Recovery settles each version's health through the same check `bfs verify`
+  // runs, so a "degraded" row is proof it already knows which medium is short of
+  // its part. The operator reading that row on a fresh machine has no
+  // configuration of their own to consult, so the row alone leaves them guessing
+  // which medium to chase. The sentence verify prints for the same state belongs
+  // here, so the two commands cannot describe one dead drive in different words.
+
+  it('should name the medium behind a degraded version, not just its status', async () => {
+    mockRecover.mockResolvedValue({
+      ...recoveryReport,
+      versions: [
+        { version: 1, health: VersionHealth.Healthy, consensus: true, loss_causes: [] },
+        { version: 2, health: VersionHealth.Degraded, consensus: true, loss_causes: [{ cause: 'file_missing', providers: ['usb-2'] }] },
+        { version: 3, health: VersionHealth.Damaged, consensus: true, loss_causes: [{ cause: 'medium_unreachable', providers: ['nas-1'] }] },
+      ],
+    } as never);
+
+    await runCmd(['recovery', '--provider', 'local', '--name', 'my-vault', '--bootstrap', '--path /mnt/usb']);
+
+    const warned = capture.errors.join('\n');
+    expect(warned).toContain('Version v002 - Backup data missing on: usb-2.');
+    expect(warned).toContain('Version v003 - Storage not reachable: nas-1.');
+    // A version that lost nothing must not get a line - an empty cause list is
+    // the healthy case, and a renderer looping unconditionally would emit a
+    // bare "Version v001 - " that reads as a fault.
+    expect(warned).not.toContain('v001');
+  });
+
+  // One line per cause, not per part: a version can lose parts for two different
+  // reasons at once, and each reason calls for a different move. Grouping is what
+  // keeps a wide pool that lost three parts to one dead switch at one line.
+  it('should give a version one line per cause when it lost parts for two reasons', async () => {
+    mockRecover.mockResolvedValue({
+      ...recoveryReport,
+      versions: [
+        {
+          version: 2,
+          health: VersionHealth.Degraded,
+          consensus: true,
+          loss_causes: [
+            { cause: 'medium_unreachable', providers: ['usb-1'] },
+            { cause: 'file_missing', providers: ['nas-1', 'nas-2'] },
+          ],
+        },
+      ],
+    } as never);
+
+    await runCmd(['recovery', '--provider', 'local', '--name', 'my-vault', '--bootstrap', '--path /mnt/usb']);
+
+    const warned = capture.errors.join('\n');
+    expect(warned).toContain('Version v002 - Storage not reachable: usb-1.');
+    // Several media behind one cause share its line, under the names the backup
+    // records - not one line each.
+    expect(warned).toContain('Version v002 - Backup data missing on: nas-1, nas-2.');
   });
 
   // --- CI mode: parse adapter flags via configureFromFlags ------------------

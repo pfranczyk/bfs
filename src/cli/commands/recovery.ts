@@ -7,6 +7,7 @@ import type { ProviderIO, StorageProvider } from '../../types/index.js';
 import { recover } from '../../vault/recovery.js';
 import { resolveCwd } from '../cwd.js';
 import { isCiRun } from '../interactive-mode.js';
+import { versionLabel, warnLossCauses } from '../loss-lines.js';
 import { parseRecoveryBootstrapSpec } from '../parse-provider-spec.js';
 import { readPasswordFiles } from '../password-input.js';
 import { isPromptCancellation, promptWithRawMode } from '../prompt.js';
@@ -212,15 +213,20 @@ function _collectBootstrapInputs(provider: StorageProvider, connectionConfig: Re
 /** Prints the recovery summary table (rebuilt count + per-version health/consensus). */
 function _renderRecoveryReport(report: Awaited<ReturnType<typeof recover>>): void {
   console.log(chalk.bold(fmt('recovery_rebuilt', String(report.manifests_rebuilt))));
-  const rows = report.versions.map((v) => [`v${String(v.version).padStart(3, '0')}`, formatHealth(v.health), v.consensus ? chalk.green('OK') : chalk.red('X')]);
+  const rows = report.versions.map((v) => [versionLabel(v.version), formatHealth(v.health), v.consensus ? chalk.green('OK') : chalk.red('X')]);
   table([t('recovery_col_version'), t('recovery_col_status'), t('recovery_col_consensus')], rows);
   console.log();
+
+  // Why a version is short of parts. The Status column carries the verdict, and
+  // on a freshly recovered machine nothing else is at hand to say which medium it
+  // came from - so the causes go out under the same sentences `bfs verify` uses.
+  warnLossCauses(report.versions);
   // A run that skipped a version cannot close by pointing at "the latest": that
   // one is exactly what stayed sealed. Name the newest version this directory can
   // actually restore, so the closing line is a command that works.
   if (report.unrecovered_versions.length > 0 && report.versions.length > 0) {
     const newest = Math.max(...report.versions.map((v) => v.version));
-    success(fmt('recovery_success_partial', String(newest), report.unrecovered_versions.map((v) => `v${String(v).padStart(3, '0')}`).join(', ')));
+    success(fmt('recovery_success_partial', String(newest), report.unrecovered_versions.map(versionLabel).join(', ')));
     return;
   }
   success(t('recovery_success'));

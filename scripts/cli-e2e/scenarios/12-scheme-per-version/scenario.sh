@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Different scheme per version: v1 uses 3/1, then a provider is added (3/2) and
 # v2 is pushed under the new scheme. Each version restores using its own
-# manifest scheme. Mirrors tests/e2e Scenariusz 8.
+# manifest scheme. Mirrors tests/e2e scenario 8.
 
 SCENARIO_NAME="scheme per version"
 SCENARIO_DESC="v1 3/1, add provider -> v2 3/2, restore both"

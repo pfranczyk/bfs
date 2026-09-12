@@ -17,12 +17,16 @@ import { captureConsole, makeConfig, runCmd } from './_helpers.js';
 
 const hoisted = vi.hoisted(() => ({ stored: null as Nullable<VaultConfig> }));
 
-vi.mock('../../src/vault/config.js', () => ({
-  readConfig: vi.fn(async () => (hoisted.stored === null ? null : structuredClone(hoisted.stored))),
-  writeConfig: vi.fn(async (_rootDir: string, config: VaultConfig) => {
-    hoisted.stored = structuredClone(config);
-  }),
-}));
+vi.mock('../../src/vault/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/vault/config.js')>();
+  return {
+    ...actual,
+    readConfig: vi.fn(async () => (hoisted.stored === null ? null : structuredClone(hoisted.stored))),
+    writeConfig: vi.fn(async (_rootDir: string, config: VaultConfig) => {
+      hoisted.stored = structuredClone(config);
+    }),
+  };
+});
 vi.mock('../../src/vault/vault-manager.js', () => ({ listVersions: vi.fn(), removeProvider: vi.fn() }));
 
 import { ExitPromptError } from '@inquirer/core';

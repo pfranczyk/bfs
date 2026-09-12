@@ -353,7 +353,13 @@ export class SshProvider implements StorageProvider {
     }
     if (known === 'trusted') return true;
     if (acceptNew) return true;
-    if (io.interactive === false) return false;
+    if (io.interactive === false) {
+      // Nobody is here to confirm TOFU, and ssh2's verifier turns the false
+      // into a generic transport error - name the way out here, the same way
+      // the @revoked branch above already does.
+      io.warn(fmtFor(io.lang, 'ssh_host_key_tofu_refused', `${user}@${host}:${port}`));
+      return false;
+    }
     return io.confirm(fmtFor(io.lang, 'ssh_host_key_confirm', `${user}@${host}:${port}`, fp));
   }
 

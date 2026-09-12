@@ -319,7 +319,8 @@ describe('a restore that fails to decode is not reported as a cache write', () =
 // refusal by the destination is filed as "this file was skipped" - wearing the
 // name of the file that happened to be in hand. The uncompressed pack already
 // separates them (packBlobToFile rethrows a BlobWriteError instead of skipping),
-// and architecture/pipeline.md states that split as the contract; these tests
+// and that split is the contract: a file BFS chose to skip is reported as
+// skipped, a destination that refused the write aborts the pack. These tests
 // hold the compressed pack to it.
 //
 // The fault is injected as a single refused write, not a permanently full

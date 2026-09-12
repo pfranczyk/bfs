@@ -30,7 +30,10 @@ vi.mock('../../src/cli/prompt.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn(), writeConfig: vi.fn() }));
+vi.mock('../../src/vault/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/vault/config.js')>();
+  return { ...actual, readConfig: vi.fn(), writeConfig: vi.fn() };
+});
 vi.mock('../../src/vault/vault-manager.js', () => ({ listVersions: vi.fn(), removeProvider: vi.fn(), prune: vi.fn(), assertPruneKeepsARestorableVersion: vi.fn() }));
 
 import { readConfig, writeConfig } from '../../src/vault/config.js';

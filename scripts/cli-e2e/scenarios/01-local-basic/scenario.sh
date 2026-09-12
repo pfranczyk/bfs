@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # init -> push -> lose one shard -> verify (degraded) -> pull (RS repair) -> SHA match.
-# Mirrors tests/e2e Scenariusz 1 (3/1, restore from 3 of 4 shards).
+# Mirrors tests/e2e scenario 1 (3/1, restore from 3 of 4 shards).
 
 SCENARIO_NAME="local 3/1 basic + RS repair"
 SCENARIO_DESC="init/push/verify/pull, restore from 3 of 4 shards"

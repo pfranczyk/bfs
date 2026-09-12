@@ -66,6 +66,7 @@ export interface Strings {
   lang_set: string;
   /** %s = the value that was rejected, %s = the languages that do work */
   lang_invalid: string;
+  lang_value_missing: string;
   /** %s = the stored language that is not available */
   lang_stored_unusable: string;
   cwd_value_missing: string;
@@ -349,16 +350,8 @@ export interface Strings {
   verify_col_available: string;
   verify_col_scheme: string;
   verify_col_tolerance: string;
-  verify_shard_check_failed: string;
-  /** %s = file name, %s = provider name, %s = reason */
-  verify_shard_medium_unreachable: string;
-  /** %s = file name, %s = provider name, %s = reason */
-  verify_shard_unreadable: string;
-  /** %s = file name, %s = provider name, %s = reason */
-  verify_shard_adapter_missing: string;
-  /** %s = file name, %s = provider name */
-  verify_shard_provider_unknown: string;
-  verify_reason_health_check: string;
+  /** %s = version number, %s = one of the `loss_on_*` sentences */
+  verify_loss_line: string;
   /** %s = version number */
   verify_verdict_retained: string;
   verify_header_advisory: string;
@@ -590,18 +583,25 @@ export interface Strings {
   // --- vault - pull / versions / provider runtime --------------------------
   /** %s = data count N (need), %s = available/found count (got) */
   pull_not_enough_shards: string;
+  // Why parts of a version could not be used, one sentence per cause. Shared by
+  // the restore path, by `bfs verify` and by `bfs recovery`, which reach the same
+  // states and must not describe them in different words.
   /** %s = comma-separated provider ids */
-  pull_failed_on_damaged: string;
+  loss_on_damaged: string;
   /** %s = comma-separated provider ids */
-  pull_failed_on_missing: string;
+  loss_on_missing: string;
   /** %s = comma-separated provider ids */
-  pull_failed_on_unreachable: string;
+  loss_on_unreachable: string;
   /** %s = comma-separated provider ids */
-  pull_failed_on_adapter_missing: string;
+  loss_on_adapter_missing: string;
   /** %s = comma-separated provider ids */
-  pull_failed_on_not_configured: string;
+  loss_on_not_configured: string;
   /** %s = comma-separated provider ids */
-  pull_failed_on_foreign_part: string;
+  loss_on_foreign_part: string;
+  /** %s = comma-separated provider ids */
+  loss_on_read_failed: string;
+  /** %s = comma-separated provider ids */
+  loss_on_header_mismatch: string;
   pull_blob_size_unreadable: string;
   pull_salt_missing: string;
   /** %s = provider name */
@@ -861,6 +861,8 @@ export interface Strings {
   ssh_host_key_revoked: string;
   /** %s = user@host:port, %s = expected pin, %s = presented fingerprint */
   ssh_host_key_mismatch: string;
+  /** %s = user@host:port */
+  ssh_host_key_tofu_refused: string;
   /** %s = user@host:port */
   ssh_edit_connecting: string;
   /** %s = host:port */

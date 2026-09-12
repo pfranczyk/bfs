@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Compression + encryption together: deflate -> AES-256-GCM -> roundtrip.
-# Mirrors tests/e2e Scenariusz 10.
+# Mirrors tests/e2e scenario 11.
 
 SCENARIO_NAME="local compress + encrypt 2/1"
 SCENARIO_DESC="deflate + AES roundtrip byte-for-byte"

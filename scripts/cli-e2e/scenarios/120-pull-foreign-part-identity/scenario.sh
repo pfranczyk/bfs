@@ -85,8 +85,8 @@ scenario_run() {
   # about what. Run before the restore, because a scenario stops at its first
   # failed assertion and this check must not depend on the restore going through.
   run_bfs "$va" --lang en verify
-  assert_out_contains 'on provider "p0"'
-  assert_out_contains 'header mismatch'
+  assert_out_contains 'does not match this version'
+  assert_out_contains 'on: p0.'
 
   run_bfs "$va" --lang en pull --version 1 --force --yes
   assert_ok

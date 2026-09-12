@@ -64,13 +64,27 @@ interface StripeSizeParams {
 }
 
 /**
- * Computes the stripe size that fits a RAM budget, dividing it by (N + K).
- * Encoding peaks above that - see computeRamThreshold for why the budget is
- * optimistic (`proposals/followups.plan.md` #3).
+ * Computes the stripe size that fits a RAM budget.
+ *
+ * The budget is divided by what the encoder holds at once, not by the number of
+ * shards: `rsEncodeStriped` allocates `flat` ((N+K) x stripe) and `inputBlock`
+ * (N x stripe) before its read loop and keeps both alive until it returns, so
+ * the peak on the JS heap is (2N+K) x stripe. Dividing by (N+K) would hand out
+ * stripes that overshoot the budget by (2N+K)/(N+K) - 1.67x at 2/1 - and a push
+ * told to stay inside a limit would exceed it.
+ *
+ * Above the JS heap, the WASM encoder copies the working block into its own
+ * linear memory once per stripe; those instances are dropped each stripe but
+ * freed by GC, so the process can briefly hold more than one. That margin sits
+ * above this budget by design - it is not allocated here and cannot be priced
+ * from these inputs.
+ *
+ * @param params - Budget, scheme and blob size
+ * @returns stripe size in bytes, clamped to the range the shard format accepts
  */
-function computeStripeSize(params: StripeSizeParams): number {
+export function _computeStripeSize(params: StripeSizeParams): number {
   const ramBytes = resolveRamBudget(params.maxRamMb);
-  const fromRam = Math.floor(ramBytes / (params.N + params.K));
+  const fromRam = Math.floor(ramBytes / (2 * params.N + params.K));
   const fromBlob = calcShardPayloadSize(params.blobSize, params.N);
   return Math.min(Math.max(V2_MIN_STRIPE_SIZE, Math.min(fromRam, V2_MAX_STRIPE_SIZE)), fromBlob);
 }
@@ -88,15 +102,25 @@ function rawShardPayloadSize(blobSize: number, N: number, stripeSize: number): n
 
 /**
  * Computes the RAM threshold for keeping the blob in memory vs writing to disk.
- * Reserves (N+K) x V2_MAX_STRIPE_SIZE for the RS encoder. That reservation is
- * smaller than what encoding actually peaks at - rsEncodeStriped also holds an
- * N-wide input block, and the WASM encoder copies the working block into its own
- * linear memory - so the budget is optimistic by design until that is reworked
- * (`proposals/followups.plan.md` #3).
+ *
+ * Reserves (2N+K) x V2_MAX_STRIPE_SIZE up front - what {@link _computeStripeSize}
+ * explains the encoder really peaks at. The blob and the encoder are alive at the
+ * same moment, so anything reserved short of that peak lets a blob stay in memory
+ * precisely when there is no room for it, and the two allocations collide while
+ * encoding a backup that has already been packed.
+ *
+ * A budget smaller than that reservation yields 0: nothing may be held in memory,
+ * and packing goes to disk. That is the honest answer rather than a small
+ * positive number, which would read as "there is room" when there is none.
+ *
+ * @param maxRamMb - Operator's budget in MiB, or null to detect from the system
+ * @param N        - Data shards
+ * @param K        - Parity shards
+ * @returns the largest blob that may be held in memory, in bytes
  */
-function computeRamThreshold(maxRamMb: Nullable<number> | undefined, N: number, K: number): number {
+export function _computeRamThreshold(maxRamMb: Nullable<number> | undefined, N: number, K: number): number {
   const ramBytes = resolveRamBudget(maxRamMb);
-  const rsOverhead = (N + K) * V2_MAX_STRIPE_SIZE;
+  const rsOverhead = (2 * N + K) * V2_MAX_STRIPE_SIZE;
   return Math.min(Math.max(0, ramBytes - rsOverhead), V2_MAX_BLOB_IN_RAM);
 }
 
@@ -434,7 +458,7 @@ async function _packFreshBlob(options: PackFreshBlobOptions): Promise<BlobPackRe
     return { blobSource: cachePath, blobSize: r.blobSize, file_count: r.fileCount, total_size: r.totalSize, skipped: r.skipped, blob_hash: null };
   }
   const estimated = await estimateBlobSize(rootDir, filter);
-  const ramThreshold = computeRamThreshold(maxRamMb, N, K);
+  const ramThreshold = _computeRamThreshold(maxRamMb, N, K);
   let useRamPath = estimated < ramThreshold;
   if (useRamPath) {
     try {
@@ -1238,7 +1262,7 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
   // seal, and that digest IS blob_hash - hashing the file again would double the
   // read on exactly the backups that were too large to push in one go.
   const blob_hash = verifiedBlobHash ?? (await _hashBlobWithoutChecksum(blobSource, blobSize));
-  const stripeSize = computeStripeSize({ maxRamMb, N, K, blobSize });
+  const stripeSize = _computeStripeSize({ maxRamMb, N, K, blobSize });
   if (encKey && exceedsGcmPlaintextLimit(rawShardPayloadSize(blobSize, N, stripeSize))) {
     throw new BfsError(fmt('gcm_payload_too_large', String(GCM_MAX_PLAINTEXT_BYTES / 1024 ** 3)));
   }

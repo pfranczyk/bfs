@@ -30,7 +30,7 @@ scenario_run() {
   # ones included - would still turn both checks below green.
   run_bfs "$vault" verify
   assert_exit 0
-  if printf '%s' "$BFS_OUT" | grep -qE 'missing or unreadable|is unreachable|failed integrity check'; then
+  if printf '%s' "$BFS_OUT" | grep -qE 'Backup data missing on|Storage not reachable|Damaged backup data on'; then
     _fail "a healthy backup must not name any cause of loss:
 $BFS_OUT"
   fi
@@ -40,11 +40,16 @@ $BFS_OUT"
   run_bfs "$vault" verify
   assert_exit 4
   assert_manifest_health "$vault" 1 degraded
-  assert_out_contains 'shard_2.bfs.1'
-  assert_out_contains 'could not be read on provider "p2" - missing or unreadable'
+  assert_out_contains 'Version v001 - Backup data missing on: p2.'
   # A medium that answered must not be blamed for being away.
-  if printf '%s' "$BFS_OUT" | grep -qF 'provider "p2" is unreachable'; then
+  if printf '%s' "$BFS_OUT" | grep -qE 'Storage not reachable:.*p2'; then
     _fail "a reachable medium whose part was deleted must not be reported as unreachable:
+$BFS_OUT"
+  fi
+  # One line per cause, naming media. The internal part files belong to
+  # `bfs --debug verify`, not to the operator's report.
+  if printf '%s' "$BFS_OUT" | grep -qE 'shard_[0-9]+\.bfs\.[0-9]+'; then
+    _fail "the report must name media, not internal part files:
 $BFS_OUT"
   fi
 
@@ -53,13 +58,13 @@ $BFS_OUT"
   run_bfs "$vault" verify
   assert_exit 5
   assert_manifest_health "$vault" 1 damaged
-  assert_out_contains 'could not be checked - provider "p1" is unreachable'
+  assert_out_contains 'Version v001 - Storage not reachable: p1.'
   # Nothing was read from p1, so its data must not be called missing or damaged.
-  if printf '%s' "$BFS_OUT" | grep -qF 'provider "p1" - missing or unreadable'; then
+  if printf '%s' "$BFS_OUT" | grep -qE 'Backup data missing on:.*p1'; then
     _fail "an unreachable medium must not be reported as a missing file:
 $BFS_OUT"
   fi
-  if printf '%s' "$BFS_OUT" | grep -qF '"p1" failed integrity check'; then
+  if printf '%s' "$BFS_OUT" | grep -qE 'Damaged backup data on:.*p1'; then
     _fail "an unread medium must not be accused of holding corrupt data:
 $BFS_OUT"
   fi

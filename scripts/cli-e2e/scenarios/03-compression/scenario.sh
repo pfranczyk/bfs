@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Compression on by default; per-push --no-compress override. Both roundtrip.
-# Mirrors tests/e2e Scenariusz 9.
+# Mirrors tests/e2e scenario 10.
 
 SCENARIO_NAME="local compression + per-push override"
 SCENARIO_DESC="compressed v1, --no-compress v2, both restore"

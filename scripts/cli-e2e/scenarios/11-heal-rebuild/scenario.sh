@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Heal by rebuild: re-encode a removed provider's shard onto a brand-new
-# provider via Reed-Solomon, then stay healthy. Mirrors tests/e2e Scenariusz 7.
+# provider via Reed-Solomon, then stay healthy. Mirrors tests/e2e scenario 7.
 
 SCENARIO_NAME="heal: provider rebuild"
 SCENARIO_DESC="rebuild p0's shard onto a new provider, stay healthy"

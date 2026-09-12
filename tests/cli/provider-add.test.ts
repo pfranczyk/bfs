@@ -4,7 +4,10 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureConsole, makeConfig, runCmd } from './_helpers.js';
 
-vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn(), writeConfig: vi.fn() }));
+vi.mock('../../src/vault/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/vault/config.js')>();
+  return { ...actual, readConfig: vi.fn(), writeConfig: vi.fn() };
+});
 vi.mock('inquirer', () => ({
   default: {
     prompt: vi.fn(),

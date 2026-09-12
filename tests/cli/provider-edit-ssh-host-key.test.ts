@@ -85,7 +85,10 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 // Capture the persisted config instead of touching a real `.bfs/config.json`.
-vi.mock('../../src/vault/config.js', () => ({ readConfig: vi.fn(), writeConfig: vi.fn() }));
+vi.mock('../../src/vault/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/vault/config.js')>();
+  return { ...actual, readConfig: vi.fn(), writeConfig: vi.fn() };
+});
 
 // Side-effect import: register the SSH provider so `provider edit` can build it.
 // Must come after the ssh2 mock (hoisted) so the provider loads against the mock.

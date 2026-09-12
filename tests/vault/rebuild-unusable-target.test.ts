@@ -242,8 +242,8 @@ describe('provider remove --strategy rebuild onto a target that cannot take the 
 
   it('should take an unverifiable part on trust with a warning, as the repair migration does', async () => {
     // A storage that cannot look inside its files answers `unverifiable` - a
-    // complete answer, not a mismatch (decisions.md: "Adapter nie weryfikuje
-    // treści"). The size still has to match; the identity is taken on trust
+    // complete answer, not a mismatch: an adapter is not required to inspect
+    // content. The size still has to match; the identity is taken on trust
     // and the operator is told so.
     const { io: trustingIo, logs } = createMockProviderIO({}, '', false);
     vi.spyOn(LocalFsProvider.prototype, 'verifyShard').mockImplementation(async function (this: LocalFsProvider) {

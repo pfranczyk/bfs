@@ -7,6 +7,7 @@ import { listVersions } from '../../vault/vault-manager.js';
 import { verifyAll } from '../../vault/verify.js';
 import { resolveCwd } from '../cwd.js';
 import { isCiRun } from '../interactive-mode.js';
+import { versionLabel, warnLossCauses } from '../loss-lines.js';
 import { createSpinnerIo } from '../spinner-io.js';
 import { CommandAbort, error, formatHealth, table, warn } from '../ui.js';
 
@@ -31,9 +32,10 @@ export function registerVerify(program: Command): void {
       const rootDir = resolveCwd(cmd);
       const spinner = ora(t('verify_spinner')).start();
       const io = createCliProviderIO(rootDir, isCiRun(cmd) ? false : undefined);
-      // Every reason a part is lost is reported while the spinner animates, so
-      // the reasons must pause it - an unreachable medium is a routine finding
-      // here, not a rarity, and its line would otherwise be drawn over.
+      // Reasons for lost parts are collected and printed after the table, but an
+      // adapter can still speak up mid-check - a host key to confirm, a retry it
+      // wants to mention - and those lines have to pause the spinner or they are
+      // drawn over.
       const wrappedIo = createSpinnerIo(io, spinner);
 
       try {
@@ -56,24 +58,27 @@ export function registerVerify(program: Command): void {
           // all present, so a tolerance derived from that count would read as
           // spare redundancy the backup does not have.
           const tolerance = v.retained_from_deep || v.available_shards < dataN ? 0 : v.available_shards - dataN;
-          return [`v${String(v.version).padStart(3, '0')}`, formatHealth(v.health), `${v.available_shards}/${v.total_shards}`, schemeTxt, tolerance.toString()];
+          return [versionLabel(v.version), formatHealth(v.health), `${v.available_shards}/${v.total_shards}`, schemeTxt, tolerance.toString()];
         });
 
         console.log();
         table([t('verify_col_version'), t('verify_col_status'), t('verify_col_available'), t('verify_col_scheme'), t('verify_col_tolerance')], rows);
         console.log();
 
+        // Why the Available column is short.
+        warnLossCauses(report.versions);
+
         for (const v of report.versions) {
           if (v.header_advisory === null) continue;
           const count = v.header_advisory.missing + v.header_advisory.broken;
-          warn(fmt('verify_header_advisory', `v${String(v.version).padStart(3, '0')}`, String(count)));
+          warn(fmt('verify_header_advisory', versionLabel(v.version), String(count)));
         }
 
         // A retained verdict looks contradictory in the table - "damaged" beside
         // a full shard count - because this run never read the data. Say where it
         // came from, so the operator knows what to run to refresh it.
         for (const v of report.versions) {
-          if (v.retained_from_deep) warn(fmt('verify_verdict_retained', `v${String(v.version).padStart(3, '0')}`));
+          if (v.retained_from_deep) warn(fmt('verify_verdict_retained', versionLabel(v.version)));
         }
 
         // The exit code carries the worst verdict, so a scheduled check can alarm

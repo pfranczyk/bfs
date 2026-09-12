@@ -9,6 +9,7 @@ import { type BootstrapResult, bootstrapFromProvider, parseVersionFromFilename }
 import { writeConfig } from './config.js';
 import { readManifest, writeManifest, writeUnrecoveredMarker } from './manifest.js';
 import { writeState } from './state.js';
+import type { VersionLoss } from './verify.js';
 import { verifyAll } from './verify.js';
 import { rebuildVersionManifest, type VersionRebuildContext } from './version-rebuild.js';
 
@@ -49,7 +50,13 @@ export interface RecoveryOptions {
 export interface RecoveryReport {
   manifests_rebuilt: number;
   provider_count: number;
-  versions: Array<{ version: number; health: VersionHealth; consensus: boolean }>;
+  /**
+   * Per version: the health verdict, whether the shard headers agreed, and why
+   * the version is short of parts. The causes come from the same check that
+   * settled the verdict, so a degraded version always carries the media behind
+   * it; a version that lost nothing carries an empty list.
+   */
+  versions: Array<{ version: number; health: VersionHealth; consensus: boolean; loss_causes: VersionLoss[] }>;
   /** Versions found on the storage whose location map no supplied password opened. */
   unrecovered_versions: number[];
 }
@@ -182,7 +189,7 @@ export async function recover(rootDir: string, options: RecoveryOptions): Promis
   const versionProviderMap = await discoverAllVersions(allProviders, vaultName);
 
   // -- 4. Process each version - build and write its manifest ----------------
-  const reportVersions: Array<{ version: number; health: VersionHealth; consensus: boolean }> = [];
+  const reportVersions: RecoveryReport['versions'] = [];
   const unrecoveredVersions: number[] = [];
   let latestVerified = 0;
   const rebuildCtx: VersionRebuildContext = { vaultName, vaultId: bootstrap.vault_id, passwordPool, caller: 'recovery', io };
@@ -198,7 +205,7 @@ export async function recover(rootDir: string, options: RecoveryOptions): Promis
       case 'recovered':
         await writeManifest(rootDir, result.manifest);
         latestVerified = Math.max(latestVerified, version);
-        reportVersions.push({ version, health: VersionHealth.Degraded, consensus: result.consensusOk });
+        reportVersions.push({ version, health: VersionHealth.Degraded, consensus: result.consensusOk, loss_causes: [] });
         break;
       case 'map_unopened':
         unrecoveredVersions.push(version);
@@ -251,10 +258,16 @@ export async function recover(rootDir: string, options: RecoveryOptions): Promis
   await writeState(rootDir, { latest_version: latestOnMedia, working_version: 0, locations_confirmed: options.trustLocations === true });
 
   // -- 7. Run verify to update health ----------------------------------------
+  // The verdict and the causes behind it travel together: this runs on a machine
+  // with no configuration of its own, so a verdict whose causes were dropped here
+  // leaves the operator with no way to learn which medium to chase.
   const verifyReport = await verifyAll(rootDir, io);
   for (const vs of verifyReport.versions) {
     const rv = reportVersions.find((r) => r.version === vs.version);
-    if (rv) rv.health = vs.health;
+    if (rv) {
+      rv.health = vs.health;
+      rv.loss_causes = vs.loss_causes;
+    }
   }
 
   return { manifests_rebuilt: reportVersions.length, provider_count: config.providers.length, versions: reportVersions, unrecovered_versions: unrecoveredVersions };

@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Encrypted 5/2: push with password, lose 2 shards, restore from 5 of 7.
-# Mirrors tests/e2e Scenariusz 2.
+# Mirrors tests/e2e scenario 2.
 
 SCENARIO_NAME="local 5/2 encrypted + 2 lost shards"
 SCENARIO_DESC="AES-256-GCM push/pull, restore from 5 of 7 shards"

@@ -177,8 +177,9 @@ interface LazyRebuiltVersion {
  * comes back with the manifest and the caller reuses it - asking twice would read
  * as the first answer having been rejected. The pool holds at most the one
  * password given plus whatever the operator types: `bfs pull` names a single
- * version, so it takes a single password (see decisions.md -> "Pula haseł należy
- * do `recovery`, nie do `pull`").
+ * version, so it takes a single password. Carrying a pool of candidates across
+ * versions belongs to recovery, which meets many versions in one run; a restore
+ * that names one version has nothing to try them against.
  *
  * @returns the rebuilt version, or null when this directory has no record of it
  * @throws BfsError when the version is recorded but cannot be rebuilt
@@ -310,12 +311,12 @@ function _downloadFailureReason(err: unknown): ShardFailureReason {
  */
 function _describeShardFailures(manifest: VersionManifest, failures: Map<number, ShardFailureReason>): string {
   const naming: Array<{ reason: ShardFailureReason; key: keyof Strings }> = [
-    { reason: 'corrupt', key: 'pull_failed_on_damaged' },
-    { reason: 'file_missing', key: 'pull_failed_on_missing' },
-    { reason: 'provider_unreachable', key: 'pull_failed_on_unreachable' },
-    { reason: 'adapter_missing', key: 'pull_failed_on_adapter_missing' },
-    { reason: 'provider_not_configured', key: 'pull_failed_on_not_configured' },
-    { reason: 'foreign_part', key: 'pull_failed_on_foreign_part' },
+    { reason: 'corrupt', key: 'loss_on_damaged' },
+    { reason: 'file_missing', key: 'loss_on_missing' },
+    { reason: 'provider_unreachable', key: 'loss_on_unreachable' },
+    { reason: 'adapter_missing', key: 'loss_on_adapter_missing' },
+    { reason: 'provider_not_configured', key: 'loss_on_not_configured' },
+    { reason: 'foreign_part', key: 'loss_on_foreign_part' },
   ];
 
   const parts: string[] = [];

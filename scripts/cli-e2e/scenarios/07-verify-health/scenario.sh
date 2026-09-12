@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Health transitions: healthy -> degraded -> damaged as shards disappear.
-# Mirrors tests/e2e Scenariusz 6 / tests/cli/verify.
+# Mirrors tests/e2e scenario 6 / tests/cli/verify.
 
 SCENARIO_NAME="verify health transitions"
 SCENARIO_DESC="healthy -> degraded -> damaged on shard loss"

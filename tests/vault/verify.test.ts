@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ProviderError, ShardCorruptedError } from '../../src/core/errors.js';
 import { buildShardHeaderFromBytes, buildSidecarBytes, computeShardHeaderSize } from '../../src/core/shard-io.js';
 import { setLang } from '../../src/i18n/index.js';
 // Importing LocalFsProvider registers its factory in the global ProviderRegistry,
@@ -22,9 +23,12 @@ function localProvider(id: string, dir: string): ProviderConfig {
   return { id, type: 'local', adapterPackage: null, config: { path: dir } };
 }
 
-function mockIO(): { io: ProviderIO; warnings: string[] } {
+/** What a run wrote to the mock IO, tagged with the channel it went out on. */
+type MockLog = Array<{ level: 'info' | 'debug' | 'warn'; message: string }>;
+
+function mockIO(): { io: ProviderIO; warnings: string[]; logs: MockLog } {
   const warnings: string[] = [];
-  const { io } = createMockProviderIO();
+  const { io, logs } = createMockProviderIO();
   // Wrap warn to capture verify warnings without losing the underlying mock
   // (createMockProviderIO records logs internally too).
   const original = io.warn.bind(io);
@@ -32,10 +36,15 @@ function mockIO(): { io: ProviderIO; warnings: string[] } {
     warnings.push(msg);
     original(msg);
   };
-  return { io, warnings };
+  return { io, warnings, logs };
 }
 
-async function setupVault(): Promise<{ root: string; providerDirs: string[]; io: ProviderIO; warnings: string[] }> {
+/** The lines a run put on the debug channel - what `bfs --debug` shows and a plain run does not. */
+function debugLines(logs: MockLog): string[] {
+  return logs.filter((l) => l.level === 'debug').map((l) => l.message);
+}
+
+async function setupVault(): Promise<{ root: string; providerDirs: string[]; io: ProviderIO; warnings: string[]; logs: MockLog }> {
   const root = await tmp();
   const providerDirs = [await tmp(), await tmp(), await tmp()];
   const m = mockIO();
@@ -50,7 +59,11 @@ async function setupVault(): Promise<{ root: string; providerDirs: string[]; io:
   await fs.writeFile(path.join(root, 'a.txt'), 'aaa', 'utf-8');
   await fs.writeFile(path.join(root, 'b.txt'), 'bbb', 'utf-8');
   await push(root, { io: m.io });
-  return { root, providerDirs, io: m.io, warnings: m.warnings };
+  // From here on `warnings` and `logs` hold only what the call under test
+  // raised, so a test can assert that verify wrote nothing at all.
+  m.warnings.length = 0;
+  m.logs.length = 0;
+  return { root, providerDirs, io: m.io, warnings: m.warnings, logs: m.logs };
 }
 
 async function cleanup(dirs: string[]): Promise<void> {
@@ -65,7 +78,7 @@ const ENCRYPTED_PASSWORD = 'verify-deep-pass-123';
  * supplying the password through the push options. Mirrors setupVault for the
  * encrypted path - used to prove deep verify is password-free.
  */
-async function setupEncryptedVault(): Promise<{ root: string; providerDirs: string[]; io: ProviderIO; warnings: string[] }> {
+async function setupEncryptedVault(): Promise<{ root: string; providerDirs: string[]; io: ProviderIO; warnings: string[]; logs: MockLog }> {
   const root = await tmp();
   const providerDirs = [await tmp(), await tmp(), await tmp()];
   const m = mockIO();
@@ -80,7 +93,9 @@ async function setupEncryptedVault(): Promise<{ root: string; providerDirs: stri
   await fs.writeFile(path.join(root, 'a.txt'), 'aaa', 'utf-8');
   await fs.writeFile(path.join(root, 'b.txt'), 'bbb', 'utf-8');
   await push(root, { io: m.io, password: ENCRYPTED_PASSWORD });
-  return { root, providerDirs, io: m.io, warnings: m.warnings };
+  m.warnings.length = 0;
+  m.logs.length = 0;
+  return { root, providerDirs, io: m.io, warnings: m.warnings, logs: m.logs };
 }
 
 /**
@@ -120,6 +135,10 @@ describe('verifyVersion (integrity check)', () => {
 
     expect(status.health).toBe(VersionHealth.Healthy);
     expect(status.available_shards).toBe(3);
+    // A sound backup names no cause at all - without this, reporting every
+    // medium under some cause would still satisfy the checks below.
+    expect(status.loss_causes).toEqual([]);
+    expect(setup.warnings).toEqual([]);
   });
 
   it('should mark a shard unavailable when its file is empty (size 0)', async () => {
@@ -133,14 +152,19 @@ describe('verifyVersion (integrity check)', () => {
 
     expect(status.available_shards).toBe(2);
     expect(status.health).toBe(VersionHealth.Degraded);
-    expect(setup.warnings.some((w) => w.includes('size=0'))).toBe(true);
+    expect(status.loss_causes).toEqual([{ cause: 'file_missing', providers: ['p0'] }]);
   });
 
-  // The three checks below pin WHY a part is missing, not just that it is. A
-  // bare count reads identically for a switched-off medium, a stale address and
-  // a deleted file, yet those call for opposite moves (bring the medium back vs
-  // rebuild the part), so verify has to name the cause it observed.
-  it('should name the file and the provider when the part is gone from a reachable medium', async () => {
+  // The checks below pin WHY a part is missing, not just that it is. A bare
+  // count reads identically for a switched-off medium, a stale address and a
+  // deleted file, yet those call for opposite moves (bring the medium back vs
+  // rebuild the part), so verify has to carry the cause it observed.
+  //
+  // The cause is DATA on the status, not a line verify writes itself: written
+  // inside the loop it lands once per part, in the middle of the progress
+  // display, and never says which version it belongs to. Whoever renders the
+  // report says it once per cause, naming every medium behind it.
+  it('should report a part gone from a reachable medium as missing, without writing a line itself', async () => {
     setLang('en');
     const setup = await setupVault();
     dirs = [setup.root, ...setup.providerDirs];
@@ -150,16 +174,23 @@ describe('verifyVersion (integrity check)', () => {
 
     expect(status.available_shards).toBe(2);
     expect(status.health).toBe(VersionHealth.Degraded);
-    const warning = setup.warnings.find((w) => w.includes('shard_2.bfs.1'));
-    expect(warning).toBeDefined();
-    expect(warning).toContain('"p2"');
-    expect(warning).toContain('missing or unreadable');
-    // A medium that answered is not accused of failing an integrity check -
-    // nothing was read, so nothing about the bytes was learned.
-    expect(warning).not.toContain('failed integrity check');
+    // Asserted before the data, so this check fails on its own rather than
+    // behind another: it is the one that pins WHERE the cause is reported.
+    expect(setup.warnings).toEqual([]);
+    // A medium that answered is not accused of holding damaged data - nothing
+    // was read, so nothing about the bytes was learned.
+    expect(status.loss_causes).toEqual([{ cause: 'file_missing', providers: ['p2'] }]);
+    // The report names media, so the adapter's own words have to survive
+    // somewhere: on a remote medium they are the only thing telling a dropped
+    // session from a rotated password. The debug channel keeps them without
+    // putting them in front of an operator who did not ask.
+    const detail = debugLines(setup.logs).find((l) => l.includes('shard_2.bfs.1'));
+    expect(detail).toBeDefined();
+    expect(detail).toContain('p2');
+    expect(detail).toContain('ENOENT');
   });
 
-  it('should name the unreachable medium instead of silently dropping the part', async () => {
+  it('should report an unreachable medium as such instead of silently dropping the part', async () => {
     setLang('en');
     const setup = await setupVault();
     dirs = [setup.root, ...setup.providerDirs];
@@ -171,16 +202,30 @@ describe('verifyVersion (integrity check)', () => {
 
     expect(status.available_shards).toBe(2);
     expect(status.health).toBe(VersionHealth.Degraded);
-    const warning = setup.warnings.find((w) => w.includes('shard_2.bfs.1'));
-    expect(warning).toBeDefined();
-    expect(warning).toContain('"p2"');
-    expect(warning).toContain('unreachable');
     // An unread part is not reported as a missing file: the operator must be
     // able to tell "plug the medium back in" from "rebuild the part".
-    expect(warning).not.toContain('missing or unreadable');
+    expect(status.loss_causes).toEqual([{ cause: 'medium_unreachable', providers: ['p2'] }]);
+    expect(setup.warnings).toEqual([]);
   });
 
-  it('should name a medium whose adapter is not installed as such, not as unreachable', async () => {
+  // The A/B twin of the read failures below, on the near side of the same error
+  // class. A refused login raises the very error a dropped transfer raises, so a
+  // classifier keying off the error class alone would call this "the transfer
+  // did not finish" - about a medium BFS never got to read from. What separates
+  // them is how far the exchange got, not what was thrown.
+  it('should report a medium that refuses the connection as unreachable, whatever it threw', async () => {
+    setLang('en');
+    const setup = await setupVault();
+    dirs = [setup.root, ...setup.providerDirs];
+    vi.spyOn(LocalFsProvider.prototype, 'authenticate').mockRejectedValue(new ProviderError('530 Login incorrect'));
+
+    const status = await verifyVersion(setup.root, 1, setup.io);
+
+    expect(status.available_shards).toBe(0);
+    expect(status.loss_causes).toEqual([{ cause: 'medium_unreachable', providers: ['p0', 'p1', 'p2'] }]);
+  });
+
+  it('should report a medium whose adapter is not installed as such, not as unreachable', async () => {
     setLang('en');
     const setup = await setupVault();
     dirs = [setup.root, ...setup.providerDirs];
@@ -197,13 +242,11 @@ describe('verifyVersion (integrity check)', () => {
     const status = await verifyVersion(setup.root, 1, setup.io);
 
     expect(status.available_shards).toBe(2);
-    const warning = setup.warnings.find((w) => w.includes('shard_2.bfs.1'));
-    expect(warning).toBeDefined();
-    expect(warning).toContain('needs an adapter that is not installed');
-    expect(warning).not.toContain('is unreachable');
+    expect(status.loss_causes).toEqual([{ cause: 'adapter_missing', providers: ['p2'] }]);
+    expect(setup.warnings).toEqual([]);
   });
 
-  it('should name the provider a version still uses but the configuration no longer knows', async () => {
+  it('should report the provider a version still uses but the configuration no longer knows', async () => {
     setLang('en');
     const setup = await setupVault();
     dirs = [setup.root, ...setup.providerDirs];
@@ -216,10 +259,147 @@ describe('verifyVersion (integrity check)', () => {
 
     expect(status.available_shards).toBe(2);
     expect(status.health).toBe(VersionHealth.Degraded);
-    const warning = setup.warnings.find((w) => w.includes('shard_2.bfs.1'));
-    expect(warning).toBeDefined();
-    expect(warning).toContain('"p2"');
-    expect(warning).toContain('no longer in the configuration');
+    expect(status.loss_causes).toEqual([{ cause: 'provider_not_configured', providers: ['p2'] }]);
+    expect(setup.warnings).toEqual([]);
+  });
+
+  it('should name both media in one entry when they fail the same way', async () => {
+    setLang('en');
+    const setup = await setupVault();
+    dirs = [setup.root, ...setup.providerDirs];
+    await fs.rm(path.join(setup.providerDirs[0], 'verify-test', 'shard_0.bfs.1'));
+    await fs.rm(path.join(setup.providerDirs[1], 'verify-test', 'shard_1.bfs.1'));
+
+    const status = await verifyVersion(setup.root, 1, setup.io);
+
+    expect(status.health).toBe(VersionHealth.Damaged);
+    expect(status.loss_causes).toEqual([{ cause: 'file_missing', providers: ['p0', 'p1'] }]);
+  });
+
+  // Two media lost for two different reasons have to stay apart, in an order
+  // that does not depend on which slot happened to fail first - otherwise the
+  // same backup reads differently from one run to the next. The order is the one
+  // a failed restore already uses (`_describeShardFailures` in vault-manager),
+  // so the same two faults do not come out in opposite orders per command.
+  //
+  // The faults are put on media whose slot order is the REVERSE of the expected
+  // one: p0 (slot 0) is unreachable, p1 (slot 1) lost its part, and file_missing
+  // still has to come first. Arranged the other way round, an implementation
+  // simply walking the shards would pass without ordering anything.
+  it('should group media by cause and keep the causes in a fixed order', async () => {
+    setLang('en');
+    const setup = await setupVault();
+    dirs = [setup.root, ...setup.providerDirs];
+    await fs.rm(setup.providerDirs[0], { recursive: true, force: true });
+    await fs.rm(path.join(setup.providerDirs[1], 'verify-test', 'shard_1.bfs.1'));
+
+    const status = await verifyVersion(setup.root, 1, setup.io);
+
+    expect(status.loss_causes).toEqual([
+      { cause: 'file_missing', providers: ['p1'] },
+      { cause: 'medium_unreachable', providers: ['p0'] },
+    ]);
+  });
+
+  // (b) A read that broke and data that contradicts itself arrive at the same
+  // call site and, until now, under the same sentence about a failed integrity
+  // check. They call for opposite moves - retry the transfer vs rebuild the
+  // part - and blaming the bytes for a dropped session condemns a sound medium.
+  it('should report a broken transfer as a failed read, not as damaged data', async () => {
+    setLang('en');
+    const setup = await setupVault();
+    dirs = [setup.root, ...setup.providerDirs];
+    // The medium answered its health check and the file is in place; the read
+    // itself breaks, the way a remote session drops mid-transfer.
+    vi.spyOn(LocalFsProvider.prototype, 'downloadHeader').mockRejectedValue(new ProviderError('connection reset by peer'));
+
+    const status = await verifyVersion(setup.root, 1, setup.io);
+
+    expect(status.available_shards).toBe(0);
+    expect(status.loss_causes).toEqual([{ cause: 'read_failed', providers: ['p0', 'p1', 'p2'] }]);
+    // What the medium actually said is the whole diagnosis here - a reset reads
+    // nothing like a refused login - so it must reach the debug channel.
+    expect(debugLines(setup.logs).some((l) => l.includes('connection reset by peer'))).toBe(true);
+  });
+
+  it('should report data that does not parse as damaged, from that same read', async () => {
+    setLang('en');
+    const setup = await setupVault();
+    dirs = [setup.root, ...setup.providerDirs];
+    // The A/B twin of the check above: same call site, but the bytes arrived and
+    // contradict themselves, so this time the data IS what failed.
+    vi.spyOn(LocalFsProvider.prototype, 'downloadHeader').mockRejectedValue(new ShardCorruptedError('Invalid shard magic'));
+
+    const status = await verifyVersion(setup.root, 1, setup.io);
+
+    expect(status.available_shards).toBe(0);
+    expect(status.loss_causes).toEqual([{ cause: 'data_corrupt', providers: ['p0', 'p1', 'p2'] }]);
+  });
+
+  // The same confusion one call site later, and the site where the transfer is
+  // actually large: a deep pass streams every part end to end. `shardIntegrityFailure`
+  // condemns the bytes only on a failed checksum and rethrows everything else,
+  // leaving the caller to decide - so a session that drops mid-transfer must not
+  // come out as a medium that never answered. It answered twice already, to the
+  // health check and to the header window.
+  it('should report a transfer that broke while streaming a part as a failed read', async () => {
+    setLang('en');
+    const setup = await setupVault();
+    dirs = [setup.root, ...setup.providerDirs];
+    vi.spyOn(LocalFsProvider.prototype, 'download').mockRejectedValue(new ProviderError('connection reset by peer'));
+
+    const status = await verifyVersion(setup.root, 1, setup.io, { deep: true });
+
+    expect(status.loss_causes).toEqual([{ cause: 'read_failed', providers: ['p0', 'p1', 'p2'] }]);
+  });
+
+  // Not every broken transfer arrives as a ProviderError: a socket dying inside
+  // the stream surfaces as a plain Error, and the part is demonstrably on the
+  // medium - it answered the health check and handed over its header. Falling
+  // back to "missing" here would tell the operator to rebuild a part that is
+  // lying right there.
+  it('should report a transfer that broke with an unclassified error as a failed read, not as a missing part', async () => {
+    setLang('en');
+    const setup = await setupVault();
+    dirs = [setup.root, ...setup.providerDirs];
+    vi.spyOn(LocalFsProvider.prototype, 'download').mockRejectedValue(new Error('socket hang up'));
+
+    const status = await verifyVersion(setup.root, 1, setup.io, { deep: true });
+
+    expect(status.loss_causes).toEqual([{ cause: 'read_failed', providers: ['p0', 'p1', 'p2'] }]);
+  });
+
+  // An adapter shipped outside this bundle throws the parser's refusal from its
+  // own copy of the class, where `instanceof` does not match - the bundling trap
+  // that only shows up in the published package. Recognised by name or not at
+  // all, and "not at all" reads real damage as a broken transfer, telling the
+  // operator to keep retrying something no retry can fix.
+  it('should recognize a corruption class from outside this bundle by its name', async () => {
+    setLang('en');
+    const setup = await setupVault();
+    dirs = [setup.root, ...setup.providerDirs];
+    const ForeignCorruption = class ShardCorruptedError extends Error {};
+    vi.spyOn(LocalFsProvider.prototype, 'downloadHeader').mockRejectedValue(new ForeignCorruption('Invalid shard magic'));
+
+    const status = await verifyVersion(setup.root, 1, setup.io);
+
+    expect(status.loss_causes).toEqual([{ cause: 'data_corrupt', providers: ['p0', 'p1', 'p2'] }]);
+  });
+
+  it('should report a part belonging to another slot as a mismatch, not as damage', async () => {
+    setLang('en');
+    const setup = await setupVault();
+    dirs = [setup.root, ...setup.providerDirs];
+    // A whole, checksum-clean part under the wrong name: its header describes
+    // another slot. Repairing the bytes would fix nothing - what sits under that
+    // name has to be looked at.
+    const donor = await fs.readFile(path.join(setup.providerDirs[1], 'verify-test', 'shard_1.bfs.1'));
+    await fs.writeFile(path.join(setup.providerDirs[0], 'verify-test', 'shard_0.bfs.1'), donor);
+
+    const status = await verifyVersion(setup.root, 1, setup.io);
+
+    expect(status.available_shards).toBe(2);
+    expect(status.loss_causes).toEqual([{ cause: 'header_mismatch', providers: ['p0'] }]);
   });
 
   it('should mark a shard unavailable when its header has been tampered', async () => {
@@ -242,7 +422,12 @@ describe('verifyVersion (integrity check)', () => {
 
     expect(status.available_shards).toBe(2);
     expect(status.health).toBe(VersionHealth.Degraded);
-    expect(setup.warnings.some((w) => w.includes('shard_1.bfs.1'))).toBe(true);
+    expect(status.loss_causes).toEqual([{ cause: 'data_corrupt', providers: ['p1'] }]);
+    // Damage found in the header window is not payload rot: this run never read
+    // the data, so it must not stamp a verdict a later shallow pass would then
+    // carry forward as if the payload had been checked.
+    const stamped = JSON.parse(await fs.readFile(path.join(setup.root, '.bfs', 'manifests', 'v001.json'), 'utf-8')) as { health_deep_rot?: boolean };
+    expect(stamped.health_deep_rot).toBe(false);
   });
 
   it('should mark a shard unavailable in deep mode when a payload byte is corrupted', async () => {
@@ -257,7 +442,7 @@ describe('verifyVersion (integrity check)', () => {
 
     expect(status.available_shards).toBe(2);
     expect(status.health).toBe(VersionHealth.Degraded);
-    expect(setup.warnings.some((w) => w.includes('shard_0.bfs.1'))).toBe(true);
+    expect(status.loss_causes).toEqual([{ cause: 'data_corrupt', providers: ['p0'] }]);
   });
 
   it('should stay Healthy in shallow mode under the same payload corruption (blind spot)', async () => {

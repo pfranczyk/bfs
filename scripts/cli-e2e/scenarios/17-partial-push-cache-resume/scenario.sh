@@ -33,7 +33,11 @@ scenario_run() {
   # Partial push exits 1 (CommandAbort on degraded). Manifest is written,
   # surviving shards land on disk, and the emergency cache dump preserves
   # push.blob.pending even though packing went RAM-path (small fixture).
-  run_bfs "$vault" push --new
+  # --max-ram pins that path rather than leaving it to the host: an unset budget
+  # is a quarter of system memory, and at this scheme (3/1) the encoder's
+  # reservation is (2N+K) x 256 MiB = 1792 MiB, so a smaller machine would pack
+  # to disk and this would quietly stop covering the emergency dump.
+  run_bfs "$vault" push --new --max-ram 2048
   assert_exit 1
   assert_out_contains "degraded"
   assert_manifest_health "$vault" 1 degraded

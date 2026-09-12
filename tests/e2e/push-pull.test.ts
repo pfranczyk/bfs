@@ -12,7 +12,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as cryptoModule from '../../src/core/crypto.js';
 import { BfsError, DecryptionError } from '../../src/core/errors.js';
 import { buildShardHeaderFromBytes, computeShardHeaderSize } from '../../src/core/shard-io.js';
-// Side-effect import: rejestruje typ "local" w ProviderRegistry
+// Side-effect import: registers the "local" type in the ProviderRegistry
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
 import type { ProviderConfig, ProviderIO } from '../../src/types/index.js';
@@ -105,7 +105,7 @@ async function hashAllFiles(dir: string): Promise<Map<string, string>> {
 async function assertFilesMatch(destDir: string, expected: Map<string, string>): Promise<void> {
   const actual = await hashAllFiles(destDir);
   for (const [rel, expectedHash] of expected) {
-    expect(actual.get(rel), `Plik ${rel}: brakuje lub hash niezgodny`).toBe(expectedHash);
+    expect(actual.get(rel), `File ${rel}: missing or hash mismatch`).toBe(expectedHash);
   }
   expect(actual.size).toBe(expected.size);
 }
@@ -160,7 +160,7 @@ async function flipKdfSaltByte(shardPath: string): Promise<void> {
 
 // --- Scenario 1: WITHOUT encryption, 3/1, 4 local providers -----------------
 
-describe('Scenariusz 1: brak szyfrowania, schemat 3/1, RS repair z 3 z 4 shardów', () => {
+describe('Scenario 1: no encryption, 3/1 scheme, RS repair from 3 of 4 shards', () => {
   let root: string;
   let pdirs: string[];
 
@@ -221,7 +221,7 @@ describe('Scenariusz 1: brak szyfrowania, schemat 3/1, RS repair z 3 z 4 shardó
 
 // --- Scenario 2: Encrypted, 5/2 (7 providers), pull with 2 missing -
 
-describe('Scenariusz 2: szyfrowanie, schemat 5/2, RS repair z 5 z 7 shardów', () => {
+describe('Scenario 2: encryption, 5/2 scheme, RS repair from 5 of 7 shards', () => {
   let root: string;
   let pdirs: string[];
   const PASSWORD = 'super-secret-pass-123';
@@ -284,7 +284,7 @@ describe('Scenariusz 2: szyfrowanie, schemat 5/2, RS repair z 5 z 7 shardów', (
 
 // --- Scenario 3: Versioning and restoring versions -----------------------
 
-describe('Scenariusz 3: wersjonowanie i przywracanie wersji', () => {
+describe('Scenario 3: versioning and restoring a chosen version', () => {
   let root: string;
   let pdirs: string[];
 
@@ -378,7 +378,7 @@ describe('Scenariusz 3: wersjonowanie i przywracanie wersji', () => {
 
 // --- Scenario 4: Pull with an existing .bfs/ (provider auto-discovery) ------
 
-describe('Scenariusz 4: pull z istniejącym .bfs/ - providery z config, bez pytań', () => {
+describe('Scenario 4: pull with an existing .bfs/ - providers from config, no prompts', () => {
   let root: string;
   let pdirs: string[];
 
@@ -422,7 +422,7 @@ describe('Scenariusz 4: pull z istniejącym .bfs/ - providery z config, bez pyta
 
 // --- Scenario 5: Large files (50 MB) ----------------------------------------
 
-describe('Scenariusz 5: duży plik 50 MB', () => {
+describe('Scenario 5: large file, 50 MB', () => {
   let root: string;
   let pdirs: string[];
 
@@ -463,7 +463,7 @@ describe('Scenariusz 5: duży plik 50 MB', () => {
 
 // --- Scenario 6: Verify + health check -------------------------------------
 
-describe('Scenariusz 6: verify i health check', () => {
+describe('Scenario 6: verify and health check', () => {
   let root: string;
   let pdirs: string[];
 
@@ -507,7 +507,7 @@ describe('Scenariusz 6: verify i health check', () => {
     report = await verifyAll(root, mockIO());
     expect(report.versions[0]?.health).toBe('damaged');
 
-    // Manifest zaktualizowany
+    // Manifest updated
     const manifest = await readManifest(root, 1);
     expect(manifest?.health).toBe('damaged');
   });
@@ -515,7 +515,7 @@ describe('Scenariusz 6: verify i health check', () => {
 
 // --- Scenario 7: Provider remove + heal (strategy: rebuild) ----------------
 
-describe('Scenariusz 7: provider remove + heal - verify healthy, pull poprawny', () => {
+describe('Scenario 7: provider remove + heal - verify healthy, pull intact', () => {
   let root: string;
   let pdirs: string[];
   let spareDir: string;
@@ -571,9 +571,9 @@ describe('Scenariusz 7: provider remove + heal - verify healthy, pull poprawny',
 
 // --- Scenario 8: Manifests with different schemes per version -----------------
 
-describe('Scenariusz 8: różne schematy N/K per wersja', () => {
+describe('Scenario 8: different N/K schemes per version', () => {
   let root: string;
-  let pdirs: string[]; // 4 bazowe + 3 dodatkowe = 7
+  let pdirs: string[]; // 4 base + 3 extra = 7
 
   beforeEach(async () => {
     root = await tmp();
@@ -641,7 +641,7 @@ describe('Scenariusz 8: różne schematy N/K per wersja', () => {
 
 // --- Scenario 9: Full disaster recovery -------------------------------------
 
-describe('Scenariusz 9: full disaster recovery', () => {
+describe('Scenario 9: full disaster recovery', () => {
   let root: string;
   let pdirs: string[];
 
@@ -685,7 +685,7 @@ describe('Scenariusz 9: full disaster recovery', () => {
 
     const report = await recover(root, { vaultName: 'recovery-vault', provider: bootstrapProvider, io: bsIO });
 
-    // .bfs/ odbudowane: 3 manifesty, config, state
+    // .bfs/ rebuilt: 3 manifests, config, state
     expect(report.manifests_rebuilt).toBe(3);
 
     const manifests = await listManifests(root);
@@ -723,7 +723,7 @@ describe('Scenariusz 9: full disaster recovery', () => {
 
 // --- Scenario 9: ZIP compression - roundtrip without encryption -----------------
 
-describe('Scenariusz 9: kompresja ZIP, brak szyfrowania, 2/1', () => {
+describe('Scenario 10: ZIP compression, no encryption, 2/1', () => {
   let root: string;
   let pdirs: string[];
 
@@ -842,7 +842,7 @@ describe('Scenariusz 9: kompresja ZIP, brak szyfrowania, 2/1', () => {
 
 // --- Scenario 10: ZIP compression + encryption - roundtrip ------------------
 
-describe('Scenariusz 10: kompresja ZIP + szyfrowanie, 2/1', () => {
+describe('Scenario 11: ZIP compression + encryption, 2/1', () => {
   const PASSWORD = 'zip-enc-pass-789';
   let root: string;
   let pdirs: string[];
@@ -887,7 +887,7 @@ describe('Scenariusz 10: kompresja ZIP + szyfrowanie, 2/1', () => {
 
 // --- Scenario 11: Backward compatibility - blob without the COMPRESSED flag ------
 
-describe('Scenariusz 11: wsteczna kompatybilność - brak kompresji w konfiguracji', () => {
+describe('Scenario 12: backward compatibility - no compression in the configuration', () => {
   let root: string;
   let pdirs: string[];
 
@@ -930,7 +930,7 @@ describe('Scenariusz 11: wsteczna kompatybilność - brak kompresji w konfigurac
 
 // --- Scenario 8: --password override with encryption.enabled=false--------
 
-describe('Scenariusz 8: --password override przy encryption.enabled=false', () => {
+describe('Scenario 13: --password override when encryption.enabled=false', () => {
   const PASSWORD = 'override-pass-456';
   let root: string;
   let pdirs: string[];
@@ -991,7 +991,7 @@ describe('Scenariusz 8: --password override przy encryption.enabled=false', () =
 
 // --- Scenario 9: --password on an unencrypted vault = silent no-op-----------
 
-describe('Scenariusz 9: --password na unencrypted vault = silent no-op', () => {
+describe('Scenario 14: --password on an unencrypted backup is a silent no-op', () => {
   let root: string;
   let pdirs: string[];
 
@@ -1037,7 +1037,7 @@ describe('Scenariusz 9: --password na unencrypted vault = silent no-op', () => {
 
 // --- Scenario 10: pull without a password on an encrypted manifest fails clearly-
 
-describe('Scenariusz 10: pull bez password na encrypted manifest fails czytelnie', () => {
+describe('Scenario 15: pull without a password on an encrypted manifest fails readably', () => {
   const PASSWORD = 'enc-pass-789';
   let root: string;
   let pdirs: string[];
@@ -1078,7 +1078,7 @@ describe('Scenariusz 10: pull bez password na encrypted manifest fails czytelnie
 
 // --- Scenario 11: mixed-version vault - per-version encryption dispatch ---
 
-describe('Scenariusz 11: mixed-version vault - pull respektuje per-version encryption', () => {
+describe('Scenario 16: mixed-version backup - pull respects per-version encryption', () => {
   const V2_PASSWORD = 'enc-v2-pwd';
   let root: string;
   let pdirs: string[];
@@ -1192,7 +1192,7 @@ describe('Scenariusz 11: mixed-version vault - pull respektuje per-version encry
 // its shard file stays untouched. pull --allow-missing-adapters must skip the
 // missing provider and restore from the 2 remaining local ones (N=2). Before the fix:
 // providerRegistry.create() on an unregistered type throws OUTSIDE the try -> crash.
-describe('Scenariusz 13: pull --allow-missing-adapters z brakującym external adapterem', () => {
+describe('Scenario 17: pull --allow-missing-adapters with a missing external adapter', () => {
   let root: string;
   let pdirs: string[];
 
@@ -1286,7 +1286,7 @@ describe('Scenariusz 13: pull --allow-missing-adapters z brakującym external ad
 // the V2 path with many shards (all present, wrong password): before the fix it
 // crashed the worker with an unhandled 'error', after the fix it rejects with a
 // single DecryptionError.
-describe('Scenariusz 12: pull ze złym hasłem na encrypted vault', () => {
+describe('Scenario 18: pull with a wrong password on an encrypted backup', () => {
   let root: string;
   let pdirs: string[];
   const PASSWORD = 'correct-horse-battery';

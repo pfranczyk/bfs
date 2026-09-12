@@ -4,11 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * The test harnesses mark a failed scenario with `[[X]]`, which the CI log
- * trimmer greps for when it cuts a job log down to the failure blocks. The
- * token is bracketed because a bare `X` is already the prefix `error()` puts on
- * every CLI error message, so a passing test that asserts an error path would
- * be reported as a failure.
+ * The test harnesses mark a failed scenario with `[[X]]`, a token CI tooling
+ * greps for when it cuts a job log down to the failure blocks. The token is
+ * bracketed because a bare `X` is already the prefix `error()` puts on every
+ * CLI error message, so a passing test that asserts an error path would be
+ * reported as a failure.
  *
  * That marker belongs to the harnesses alone. If it ever reaches `src/`, a user
  * running `bfs` sees `[[X]] Backup not found` instead of `X Backup not found` -

@@ -249,10 +249,13 @@ export async function suiteR(): Promise<SuiteResult> {
 
       const r = runBfs(['--lang', 'en', 'verify'], causeVaultDir, undefined, langEnv);
       const out = r.stdout + r.stderr;
-      assert(out.includes('could not be read on provider "c2" - missing or unreadable'), `a deleted part must be named under its medium: ${out.slice(0, 600)}`);
-      assert(out.includes('could not be checked - provider "c3" is unreachable'), `an unreachable medium must be named as unreachable: ${out.slice(0, 600)}`);
-      assert(!out.includes('provider "c3" - missing or unreadable'), `a medium that never answered must not be reported as a missing file: ${out.slice(0, 600)}`);
-      assert(!out.includes('"c2" failed integrity check'), `nothing was read from c2, so its data must not be called corrupt: ${out.slice(0, 600)}`);
+      assert(out.includes('Version v001 - Backup data missing on: c2.'), `a deleted part must be named under its medium: ${out.slice(0, 600)}`);
+      assert(out.includes('Version v001 - Storage not reachable: c3.'), `an unreachable medium must be named as unreachable: ${out.slice(0, 600)}`);
+      assert(!/Backup data missing on:.*c3/.test(out), `a medium that never answered must not be reported as a missing file: ${out.slice(0, 600)}`);
+      assert(!/Damaged backup data on:.*c2/.test(out), `nothing was read from c2, so its data must not be called corrupt: ${out.slice(0, 600)}`);
+      // One line per cause, naming media - not one line per part. Internal part
+      // files belong to `bfs --debug verify`, not to the operator's report.
+      assert(!/shard_\d+\.bfs\.\d+/.test(out), `the report must name media, not internal part files: ${out.slice(0, 600)}`);
     }),
   );
 
@@ -260,9 +263,9 @@ export async function suiteR(): Promise<SuiteResult> {
     await runTest('R11', 'verify tells a deleted part from an unreachable medium (PL)', () => {
       const r = runBfs(['--lang', 'pl', 'verify'], causeVaultDir, undefined, langEnv);
       const out = r.stdout + r.stderr;
-      assert(out.includes('na nośniku "c2" - brak pliku lub błąd odczytu'), `a deleted part must be named under its medium: ${out.slice(0, 600)}`);
-      assert(out.includes('nośnik "c3" jest nieosiągalny'), `an unreachable medium must be named as unreachable: ${out.slice(0, 600)}`);
-      assert(!out.includes('nośniku "c3" - brak pliku'), `a medium that never answered must not be reported as a missing file: ${out.slice(0, 600)}`);
+      assert(out.includes('Wersja v001 - Brak danych kopii na nośnikach: c2.'), `a deleted part must be named under its medium: ${out.slice(0, 600)}`);
+      assert(out.includes('Wersja v001 - Nośniki nieosiągalne: c3.'), `an unreachable medium must be named as unreachable: ${out.slice(0, 600)}`);
+      assert(!/Brak danych kopii na nośnikach:.*c3/.test(out), `a medium that never answered must not be reported as a missing file: ${out.slice(0, 600)}`);
     }),
   );
 
@@ -578,6 +581,46 @@ export async function suiteR(): Promise<SuiteResult> {
       // whole point of refusing the stranger is that the version still comes
       // back intact off the parity, so that is what gets checked.
       await verifyShaHashes(saltVaultDir, originals, 'after restoring past a foreign part');
+    }),
+  );
+
+  // -- R20/R21 - recovery names the same causes, in both languages -------------
+  // `bfs recovery` settles health through the same check, on a machine that has
+  // no configuration of its own - so its report is everything the operator has,
+  // and a bare "degraded" leaves them guessing which medium to chase. It has to
+  // reach for the sentences verify already uses (R10/R11) rather than growing
+  // its own wording, and both languages have to carry them: only this layer
+  // compares the pair, so an EN-only line of its own would pass every other
+  // layer. Both media short of a part group into ONE line here, which is also
+  // the only place that shape is asserted.
+  tests.push(
+    await runTest('R20', 'recovery names the media behind a lost part (EN)', async () => {
+      await fs.rm(path.join(causeVaultDir, '.bfs'), { recursive: true, force: true });
+
+      const r = runBfs(['--lang', 'en', 'recovery', '--provider', 'local', '--name', causeVaultName, '--bootstrap', `--path ${c1Dir}`], causeVaultDir, undefined, langEnv);
+      assert(r.status === 0, `recovery must rebuild metadata from the one surviving part, got exit ${r.status ?? 'null'}\n${r.stdout}\n${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      const line = out.split('\n').find((l) => l.includes('Backup data missing on:'));
+      if (line === undefined) throw new Error(`the report must say why the version is short of parts: ${out.slice(0, 600)}`);
+      assert(line.includes('Version v001'), `the line must name the version it belongs to: ${line}`);
+      assert(line.includes('c2') && line.includes('c3'), `both media short of a part belong in that one line: ${line}`);
+      assert(!line.includes('c1'), `the medium that still holds its part must not be blamed: ${line}`);
+      assert(!/shard_\d+\.bfs\.\d+/.test(out), `the report must name media, not internal part files: ${out.slice(0, 600)}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('R21', 'recovery names the media behind a lost part (PL)', async () => {
+      await fs.rm(path.join(causeVaultDir, '.bfs'), { recursive: true, force: true });
+
+      const r = runBfs(['--lang', 'pl', 'recovery', '--provider', 'local', '--name', causeVaultName, '--bootstrap', `--path ${c1Dir}`], causeVaultDir, undefined, langEnv);
+      assert(r.status === 0, `recovery must rebuild metadata from the one surviving part, got exit ${r.status ?? 'null'}\n${r.stdout}\n${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      const line = out.split('\n').find((l) => l.includes('Brak danych kopii na nośnikach:'));
+      if (line === undefined) throw new Error(`the Polish report must say why the version is short of parts: ${out.slice(0, 600)}`);
+      assert(line.includes('Wersja v001'), `the line must name the version it belongs to: ${line}`);
+      assert(line.includes('c2') && line.includes('c3'), `both media short of a part belong in that one line: ${line}`);
+      assert(!line.includes('c1'), `the medium that still holds its part must not be blamed: ${line}`);
     }),
   );
 

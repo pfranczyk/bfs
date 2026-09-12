@@ -1370,6 +1370,16 @@ describe('SshProvider', () => {
 
       await expect(p.authenticate()).rejects.toThrow(ProviderError);
       expect(calls.some((c) => c.kind === 'confirm')).toBe(false);
+
+      // The refusal that follows this (raised by ssh2's verifier -> withClient)
+      // is a generic transport error naming neither flag - decideHostKeyTrust
+      // must surface the way out itself, the same way it already does for
+      // @revoked (ssh_host_key_revoked), instead of leaving the operator with
+      // only "SSH operation failed".
+      const warning = calls.find((c) => c.kind === 'warn');
+      expect(warning).toBeDefined();
+      expect(warning?.text).toContain('--accept-new-host-key');
+      expect(warning?.text).toContain('--known-host');
     });
 
     it('should accept a new host in non-interactive mode when accept_new_host_key is set', async () => {
