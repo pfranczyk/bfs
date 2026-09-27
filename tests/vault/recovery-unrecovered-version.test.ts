@@ -248,16 +248,21 @@ describe('recover() meeting a version it cannot open', () => {
     await expect(fs.readFile(path.join(root, '.bfs', 'manifests', 'v002.json'), 'utf-8'), 'a foreign backup version must leave no record in this copy').rejects.toThrow();
   });
 
-  // Recovery is run more than once - the messages that send an operator to it say
-  // so - and each run brings whichever passwords are at hand. A run without the
-  // password for a version already rebuilt must not trade its manifest, the only
-  // local copy of that version's location map, for a record saying nothing.
+  // A run interrupted after writing manifests but before its configuration leaves
+  // .bfs/ without config.json, and the next run starts over in that directory -
+  // with whichever passwords are at hand this time. A run without the password for
+  // a version already rebuilt must not trade its manifest, the only local copy of
+  // that version's location map, for a record saying nothing.
   it('should not replace a manifest it already rebuilt with a marker', async () => {
     await seedVault();
     const root = await tmp();
     await runRecovery(root, [PASSWORD, ROTATED_PASSWORD]);
     const rebuilt = await readManifest(root, 2);
     expect(rebuilt?.version, 'test setup: the first run must rebuild v2').toBe(2);
+    // The interruption: the manifests made it to disk, the configuration and the
+    // state written after it did not.
+    await fs.rm(path.join(root, '.bfs', 'config.json'));
+    await fs.rm(path.join(root, '.bfs', 'state.json'));
 
     await runRecovery(root);
 

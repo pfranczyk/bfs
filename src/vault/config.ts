@@ -99,6 +99,41 @@ export async function assertNoExistingVault(rootDir: string): Promise<void> {
 }
 
 /**
+ * Aborts when the working directory already describes a backup, so `recovery`
+ * never replaces a live configuration. Rebuilding over one swaps the provider
+ * settings for those of whichever backup was recovered and leaves the previous
+ * manifests behind as orphans, cutting the directory off from versions it still
+ * lists - and it does so before the operator sees a single result.
+ *
+ * What counts as a backup is the same thing `assertNoExistingVault` names in its
+ * refusal: a file yielding a backup name. The difference from that guard is
+ * deliberate. `init` keys on the FILE, because a directory it cannot read is
+ * still someone's; recovery is the command that rebuilds an unreadable one, so
+ * an empty, truncated or nameless file has to let it through - that is what
+ * keeps a failed recovery repeatable.
+ *
+ * A read that fails outright is neither: it says nothing about whether a backup
+ * is here, and starting over during a momentary lock would destroy a live one.
+ *
+ * @param rootDir - Vault root directory to inspect
+ * @throws VaultAlreadyInitializedError when .bfs/config.json names a backup
+ * @throws BfsError when the file cannot be read at all, so its presence is undecided
+ */
+export async function assertRecoveryTargetFree(rootDir: string): Promise<void> {
+  const filePath = path.join(rootDir, '.bfs', 'config.json');
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, 'utf-8');
+  } catch (err: unknown) {
+    if (isEnoent(err)) return;
+    const reason = (err as NodeJS.ErrnoException).code ?? (err instanceof Error ? err.message : String(err));
+    throw new BfsError(fmt('recovery_vault_check_failed', reason));
+  }
+  const name = _vaultNameIn(content);
+  if (name !== null) throw new VaultAlreadyInitializedError(fmt('recovery_vault_exists', name));
+}
+
+/**
  * Validates scheme + providers in the loaded config. Fails fast with a
  * user-level message before any provider work starts, instead of letting
  * lower layers throw cryptic internal errors.

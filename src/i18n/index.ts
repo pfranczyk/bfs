@@ -737,6 +737,10 @@ export interface Strings {
   recovery_no_manifests: string;
   /** %s = version */
   recovery_manifest_unreadable: string;
+  /** %s = backup name read from .bfs/config.json */
+  recovery_vault_exists: string;
+  /** %s = why .bfs/config.json could not be read (errno code or message) */
+  recovery_vault_check_failed: string;
 
   // --- Provider runtime errors (FTP + LocalFS shared shape) ----------------
   /** %s = path */
@@ -1010,6 +1014,8 @@ export interface Strings {
   repair_foreign_shard_detected: string;
   /** %s = storage name (provider id) */
   vault_collision_detected: string;
+  /** %s = storage name (provider id); for a directory that already holds a configuration (push / provider add) */
+  vault_collision_detected_configured: string;
   /** %s = version */
   repair_wrong_version_shard: string;
   /** %s = version */

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { assert, runBfs, runTest } from '../smoke-runner.js';
 import type { SuiteResult, TestResult } from '../smoke-types.js';
-import { initTestVault, readJson, verifyShaHashes } from '../smoke-vault.js';
+import { fileExists, initTestVault, readJson, verifyShaHashes } from '../smoke-vault.js';
 
 // --- Suite M - Recovery (--bootstrap, LocalFS) -----------------------------
 //
@@ -21,11 +21,16 @@ export async function suiteM(): Promise<SuiteResult> {
   const tmpBase = path.join(os.tmpdir(), `bfs-smoke-m-${Date.now()}`);
   const sourceDir = path.join(tmpBase, 'source');
   const restoreDir = path.join(tmpBase, 'restore');
+  // Flag validation is pinned in a directory holding no backup: in one that does,
+  // the refusal to replace it comes before any flag is looked at (M10/M11).
+  const argsDir = path.join(tmpBase, 'args');
   const p1Dir = path.join(tmpBase, 'p1');
   const p2Dir = path.join(tmpBase, 'p2');
   const p3Dir = path.join(tmpBase, 'p3');
 
   try {
+    await fs.mkdir(argsDir, { recursive: true });
+
     // M0 - bootstrap fixture: init + push to local providers
     let originalHashes: Map<string, string> = new Map();
     tests.push(
@@ -71,7 +76,7 @@ export async function suiteM(): Promise<SuiteResult> {
     // whatever locale the test machine has persisted in settings.json.
     tests.push(
       await runTest('M3', 'bfs recovery --bootstrap without --provider -> exit != 0', async () => {
-        const r = runBfs(['recovery', '--name', 'recovery-vault', '--bootstrap', `--path ${p1Dir}`], restoreDir);
+        const r = runBfs(['recovery', '--name', 'recovery-vault', '--bootstrap', `--path ${p1Dir}`], argsDir);
         assert(r.status !== 0, `expected non-zero exit, got ${r.status}`);
         const combined = r.stdout + r.stderr;
         assert(combined.includes('--bootstrap requires --provider') || combined.includes('Flaga --bootstrap wymaga --provider'), `expected --bootstrap requires --provider error, got:\n${combined}`);
@@ -81,7 +86,7 @@ export async function suiteM(): Promise<SuiteResult> {
     // M4 - --bootstrap without --name is rejected
     tests.push(
       await runTest('M4', 'bfs recovery --bootstrap without --name -> exit != 0', async () => {
-        const r = runBfs(['recovery', '--provider', 'local', '--bootstrap', `--path ${p1Dir}`], restoreDir);
+        const r = runBfs(['recovery', '--provider', 'local', '--bootstrap', `--path ${p1Dir}`], argsDir);
         assert(r.status !== 0, `expected non-zero exit, got ${r.status}`);
         const combined = r.stdout + r.stderr;
         assert(combined.includes('--bootstrap requires --name') || combined.includes('Flaga --bootstrap wymaga --name'), `expected --bootstrap requires --name error, got:\n${combined}`);
@@ -91,7 +96,7 @@ export async function suiteM(): Promise<SuiteResult> {
     // M5 - empty --bootstrap spec is rejected
     tests.push(
       await runTest('M5', 'bfs recovery --bootstrap "" -> exit != 0', async () => {
-        const r = runBfs(['recovery', '--provider', 'local', '--name', 'recovery-vault', '--bootstrap', ''], restoreDir);
+        const r = runBfs(['recovery', '--provider', 'local', '--name', 'recovery-vault', '--bootstrap', ''], argsDir);
         assert(r.status !== 0, `expected non-zero exit, got ${r.status}`);
         const combined = r.stdout + r.stderr;
         assert(combined.includes('Bootstrap spec is empty') || combined.includes('Spec --bootstrap jest pusty'), `expected empty-spec error, got:\n${combined}`);
@@ -101,7 +106,7 @@ export async function suiteM(): Promise<SuiteResult> {
     // M6 - unknown provider type is rejected
     tests.push(
       await runTest('M6', 'bfs recovery --provider made-up-xyz -> exit != 0', async () => {
-        const r = runBfs(['recovery', '--provider', 'made-up-xyz', '--name', 'recovery-vault', '--bootstrap', `--path ${p1Dir}`], restoreDir);
+        const r = runBfs(['recovery', '--provider', 'made-up-xyz', '--name', 'recovery-vault', '--bootstrap', `--path ${p1Dir}`], argsDir);
         assert(r.status !== 0, `expected non-zero exit, got ${r.status}`);
         const combined = r.stdout + r.stderr;
         assert(combined.includes('Unknown provider type') || combined.includes('Nieznany typ nośnika'), `expected unknown-type error, got:\n${combined}`);
@@ -147,7 +152,7 @@ export async function suiteM(): Promise<SuiteResult> {
         const setLang = runBfs(['--lang', 'pl', 'status'], restoreDir, undefined, langEnv);
         assert(setLang.status === 0, `--lang pl setup failed: ${setLang.stderr}`);
 
-        const r = runBfs(['recovery', '--name', 'recovery-vault', '--bootstrap', `--path ${p1Dir}`], restoreDir, undefined, langEnv);
+        const r = runBfs(['recovery', '--name', 'recovery-vault', '--bootstrap', `--path ${p1Dir}`], argsDir, undefined, langEnv);
         assert(r.status !== 0, `expected non-zero exit, got ${r.status}`);
         const combined = r.stdout + r.stderr;
         assert(combined.includes('Flaga --bootstrap wymaga --provider'), `expected Polish error message, got:\n${combined}`);
@@ -184,6 +189,42 @@ export async function suiteM(): Promise<SuiteResult> {
         assert(!combined.includes('Enter password for version') && !combined.includes('Podaj hasło dla wersji'), `recovery must not prompt when no one can answer, got:\n${combined}`);
       }),
     );
+
+    // M10/M11 - recovery in a directory whose .bfs/config.json describes a backup
+    // refuses to replace it, names that backup and all three ways out, and writes
+    // nothing. restoreDir holds the backup rebuilt by M7 from the same media, so
+    // a second recovery would write the same config bytes: the file in the cache
+    // is what tells a refusal from a rerun, since recovery empties the cache first.
+    for (const [id, lang, expected, secondWay, thirdWay] of [
+      ['M10', 'en', 'This directory already holds a backup named "recovery-vault". Recovery would replace its settings', 'delete the .bfs directory here', 'in another directory'],
+      ['M11', 'pl', 'W tym katalogu jest już kopia zapasowa "recovery-vault". Odzyskiwanie zastąpiłoby jej ustawienia', 'usuń stąd katalog .bfs', 'w innym katalogu'],
+    ] as const) {
+      tests.push(
+        await runTest(id, `i18n ${lang.toUpperCase()}: bfs recovery over a live configuration -> refusal, config untouched`, async () => {
+          const langConfigDir = path.join(tmpBase, `lang-config-${lang}`);
+          await fs.mkdir(langConfigDir, { recursive: true });
+          const langEnv: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: langConfigDir };
+          const setLang = runBfs(['--lang', lang, 'status'], restoreDir, undefined, langEnv);
+          assert(setLang.status === 0, `--lang ${lang} setup failed: ${setLang.stderr}`);
+          const configPath = path.join(restoreDir, '.bfs', 'config.json');
+          const sentinel = path.join(restoreDir, '.bfs', 'cache', `sentinel-${lang}`);
+          await fs.mkdir(path.dirname(sentinel), { recursive: true });
+          await fs.writeFile(sentinel, 'pending', 'utf8');
+          const before = await fs.readFile(configPath);
+
+          const r = runBfs(['recovery', '--provider', 'local', '--name', 'recovery-vault', '--bootstrap', `--path ${p1Dir}`], restoreDir, undefined, langEnv);
+
+          assert(r.status !== 0, `expected non-zero exit, got ${r.status}\n${r.stdout}\n${r.stderr}`);
+          const combined = r.stdout + r.stderr;
+          assert(combined.includes(expected), `expected the refusal naming the backup here, got:\n${combined}`);
+          assert(combined.includes('bfs pull'), `the refusal must name the backup's own commands, got:\n${combined}`);
+          assert(combined.includes(secondWay), `the refusal must name deleting .bfs/ as the second way, got:\n${combined}`);
+          assert(combined.includes(thirdWay), `the refusal must name recovering into another directory, got:\n${combined}`);
+          assert(await fileExists(sentinel), 'a refused recovery must not empty .bfs/cache');
+          assert((await fs.readFile(configPath)).equals(before), 'a refused recovery must leave .bfs/config.json byte-for-byte');
+        }),
+      );
+    }
   } finally {
     await fs.rm(tmpBase, { recursive: true, force: true }).catch(() => {});
   }

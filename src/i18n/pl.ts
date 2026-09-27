@@ -469,7 +469,7 @@ export const pl: Strings = {
   push_confirm_recovered_locations: 'Wysłać dane kopii do tych lokalizacji?',
   push_recovered_locations_declined: 'Wysyłanie przerwane: lokalizacje nośników po recovery niepotwierdzone. Sprawdź je w `.bfs/config.json` (np. `bfs config`) i spróbuj ponownie.',
   push_recovered_locations_no_operator:
-    'Ten przebieg nie zadaje pytań, więc nie ma jak potwierdzić odzyskanych lokalizacji nośników. Sprawdź je w `.bfs/config.json` (np. `bfs config`), a potem albo uruchom tę komendę przy terminalu, albo powtórz odzyskiwanie: `bfs recovery --provider <typ> --name <nazwaKopii> --bootstrap "<ustawienia>" --trust-locations`.',
+    'Ten przebieg nie zadaje pytań, więc nie ma jak potwierdzić odzyskanych lokalizacji nośników. Sprawdź je w `.bfs/config.json` (np. `bfs config`), a potem albo uruchom tę komendę przy terminalu, albo usuń stąd katalog .bfs i powtórz odzyskiwanie: `bfs recovery --provider <typ> --name <nazwaKopii> --bootstrap "<ustawienia>" --trust-locations`.',
   pull_not_enough_shards: 'Za mało części: potrzeba %s, dostępne %s - tej wersji nie da się odtworzyć z nośników dostępnych w tej chwili. Uruchom `bfs verify --deep`, aby zobaczyć, które wersje wciąż można odtworzyć.',
   loss_on_damaged: 'Uszkodzone dane kopii na nośnikach: %s.',
   loss_on_missing: 'Brak danych kopii na nośnikach: %s.',
@@ -587,6 +587,10 @@ export const pl: Strings = {
   recovery_map_from_sibling: 'Wersja %s: mapa lokalizacji odzyskana z rodzeństwa - nośnik(i) %s nie mógł jej dostarczyć; zweryfikuj/napraw je',
   recovery_no_manifests: 'Nie udało się odtworzyć żadnej poprawnej wersji kopii zapasowej z dostępnych nośników.',
   recovery_manifest_unreadable: 'Nie udało się odczytać najnowszej wersji %s kopii zapasowej po odzyskaniu.',
+  recovery_vault_exists:
+    'W tym katalogu jest już kopia zapasowa "%s". Odzyskiwanie zastąpiłoby jej ustawienia i odcięło jej wersje. Pracuj z nią jej własnymi komendami, np. `bfs pull`, albo usuń stąd katalog .bfs i uruchom `bfs recovery` ponownie, albo uruchom `bfs recovery` w innym katalogu.',
+  recovery_vault_check_failed:
+    'Nie można ustalić, czy w tym katalogu jest już kopia zapasowa: nie udało się odczytać .bfs/config.json (%s). Odzyskiwanie zastąpiłoby ją. Usuń przyczynę błędu odczytu albo uruchom `bfs recovery` w innym katalogu.',
 
   // --- Provider runtime errors (FTP + LocalFS shared shape) ------------------
   provider_short_shard: 'Plik "%s" jest za krótki, aby zawierać poprawne dane po nagłówku',
@@ -611,7 +615,7 @@ export const pl: Strings = {
   ftp_recovery_password: 'Hasło FTP do %s:',
   ftp_recovery_declined: 'Odzyskiwanie przerwane: nie wysłano hasła FTP do %s.',
   ftp_recovery_no_operator:
-    'Nie ma kto potwierdzić, że %s to właściwy host, więc nie wysłano hasła FTP i ten nośnik zostaje pominięty. Sprawdź odzyskane lokalizacje i powtórz odzyskiwanie: `bfs recovery --provider ftp --name <nazwaKopii> --bootstrap "<ustawienia>" --trust-locations`, albo uruchom je przy terminalu.',
+    'Nie ma kto potwierdzić, że %s to właściwy host, więc nie wysłano hasła FTP i ten nośnik zostaje pominięty. Sprawdź odzyskane lokalizacje, potem usuń stąd katalog .bfs i powtórz odzyskiwanie - przy terminalu albo poleceniem `bfs recovery --provider ftp --name <nazwaKopii> --bootstrap "<ustawienia>" --trust-locations`.',
 
   // --- FTP - configureFromFlags + validateConfig -----------------------------
   ftp_config_port_invalid: 'Adapter FTP: pole "port" w configu musi być liczbą całkowitą 1-65535',
@@ -719,7 +723,7 @@ export const pl: Strings = {
   ssh_recovery_passphrase: 'Hasło do klucza prywatnego SSH dla %s:',
   ssh_recovery_declined: 'Odzyskiwanie odrzucone: nie wysłano sekretu SSH do %s.',
   ssh_recovery_no_operator:
-    'Nie ma kto potwierdzić, że %s to właściwy host, więc nie wysłano sekretu SSH i ten nośnik zostaje pominięty. Sprawdź odzyskane lokalizacje i powtórz odzyskiwanie: `bfs recovery --provider ssh --name <nazwaKopii> --bootstrap "<ustawienia>" --trust-locations`, albo uruchom je przy terminalu.',
+    'Nie ma kto potwierdzić, że %s to właściwy host, więc nie wysłano sekretu SSH i ten nośnik zostaje pominięty. Sprawdź odzyskane lokalizacje, potem usuń stąd katalog .bfs i powtórz odzyskiwanie - przy terminalu albo poleceniem `bfs recovery --provider ssh --name <nazwaKopii> --bootstrap "<ustawienia>" --trust-locations`.',
   ssh_recovery_no_secret_noninteractive: 'Odzyskiwanie nie może pobrać sekretu SSH dla %s w trybie nieinteraktywnym: żaden podany sekret nie uwierzytelnił. Podaj go przez dane wejściowe odzyskiwania.',
   ssh_recovery_unpinned: '(nieprzypięty)',
 
@@ -819,6 +823,8 @@ Przykłady:
   repair_foreign_shard_detected: 'Fragment kopii dla wersji %s należy do innej kopii - przerywam.',
   vault_collision_detected:
     'W tej lokalizacji na nośniku "%s" istnieje już inna kopia zapasowa o tej nazwie. BFS nie nadpisze ani nie usunie danych innej kopii. Aby kontynuować, ręcznie usuń pliki z tej lokalizacji, użyj innej nazwy kopii, albo uruchom `bfs recovery`, jeśli to Twoja kopia. Przerywam.',
+  vault_collision_detected_configured:
+    'W tej lokalizacji na nośniku "%s" istnieje już inna kopia zapasowa o tej nazwie. BFS nie nadpisze ani nie usunie danych innej kopii. Aby kontynuować, ręcznie usuń pliki z tej lokalizacji, użyj innej nazwy kopii, albo - jeśli to Twoja kopia - uruchom `bfs recovery` w innym, pustym katalogu. Przerywam.',
   repair_wrong_version_shard: 'Fragment kopii dla wersji %s nie odpowiada oczekiwanej wersji - przerywam.',
   repair_force_unverified_warn: 'Kontynuuję mimo niezweryfikowanego fragmentu kopii dla wersji %s.',
   repair_ask_vault_password: 'Hasło kopii dla wersji %s:',

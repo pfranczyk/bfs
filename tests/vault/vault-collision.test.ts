@@ -5,6 +5,7 @@ import type { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ProviderError, VaultCollisionError } from '../../src/core/errors.js';
 import { serializeShardHeader } from '../../src/core/shard-io.js';
+import { setLang } from '../../src/i18n/index.js';
 import { createMockProviderIO, type ProviderFactory, providerRegistry } from '../../src/providers/provider.js';
 import type { ProviderConfig, ProviderHelp, RemoteRef, ShardHeader, StorageProvider, VerifyShardResult } from '../../src/types/index.js';
 import { PushMode } from '../../src/types/index.js';
@@ -276,6 +277,7 @@ describe('assertNoForeignVault', () => {
   });
 
   afterEach(async () => {
+    setLang('en');
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -292,6 +294,53 @@ describe('assertNoForeignVault', () => {
   it('should throw when the location holds a DIFFERENT backup (foreign vault_id)', async () => {
     const { io } = createMockProviderIO({}, root, false);
     await expect(assertNoForeignVault(makeProbeProvider('p0', { refs: ['shard_0.bfs.1'], headerVaultId: FOREIGN_VAULT_ID }), 'docs', OUR_VAULT_ID, io)).rejects.toThrow(VaultCollisionError);
+  });
+
+  // The refusal ends in advice, and the advice differs by path. On `push` and
+  // `provider add` this directory already holds a configuration, and recovery
+  // refuses to replace one - so "run `bfs recovery`" only works pointed at
+  // another directory. A fresh `init` has no configuration yet, so there the
+  // recovery is run right here and the wording stays as it was.
+  it('should send a push/add collision to a recovery in another directory', async () => {
+    const { io } = createMockProviderIO({}, root, false);
+
+    const err = await assertNoForeignVault(makeProbeProvider('p0', { refs: ['shard_0.bfs.1'], headerVaultId: FOREIGN_VAULT_ID }), 'docs', OUR_VAULT_ID, io).then(
+      () => null,
+      (e: unknown) => String(e),
+    );
+
+    expect(err).toMatch(/run `bfs recovery` in another, empty directory/);
+    expect(err).not.toMatch(/run `bfs recovery` if this backup is yours/);
+  });
+
+  it('should keep pointing a fresh init at a recovery in this directory', async () => {
+    const { io } = createMockProviderIO({}, root, false);
+
+    const err = await assertNoForeignVault(makeProbeProvider('p0', { refs: ['shard_0.bfs.1'], headerVaultId: FOREIGN_VAULT_ID }), 'docs', null, io).then(
+      () => null,
+      (e: unknown) => String(e),
+    );
+
+    expect(err).toMatch(/run `bfs recovery` if this backup is yours/);
+    expect(err).not.toMatch(/in another, empty directory/);
+  });
+
+  it('should give the Polish operator the same split', async () => {
+    const { io } = createMockProviderIO({}, root, false);
+    setLang('pl');
+
+    const configured = await assertNoForeignVault(makeProbeProvider('p0', { refs: ['shard_0.bfs.1'], headerVaultId: FOREIGN_VAULT_ID }), 'docs', OUR_VAULT_ID, io).then(
+      () => null,
+      (e: unknown) => String(e),
+    );
+    const fresh = await assertNoForeignVault(makeProbeProvider('p0', { refs: ['shard_0.bfs.1'], headerVaultId: FOREIGN_VAULT_ID }), 'docs', null, io).then(
+      () => null,
+      (e: unknown) => String(e),
+    );
+
+    expect(configured).toMatch(/uruchom `bfs recovery` w innym, pustym katalogu/);
+    expect(fresh).toMatch(/uruchom `bfs recovery`, jeśli to Twoja kopia/);
+    expect(fresh).not.toMatch(/w innym, pustym katalogu/);
   });
 
   it('should throw for a fresh init (expectedVaultId=null) when any shard is present', async () => {

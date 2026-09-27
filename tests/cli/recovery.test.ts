@@ -1,3 +1,6 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { ExitPromptError } from '@inquirer/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VersionHealth } from '../../src/types/index.js';
@@ -374,5 +377,84 @@ describe('recovery', () => {
 
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ password: 'ftp-secret' }) }), expect.anything());
     expect(mockRecover).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ passwords: ['vault-secret'] }));
+  });
+
+  // --- A directory that already holds a backup ------------------------------
+  // The refusal to replace a live configuration comes first - before any
+  // question and before any flag check. Every other message this command prints
+  // advises a way to run it again, and in this directory that way ends in the
+  // same refusal; asking for storage settings first would make the operator type
+  // them for nothing.
+
+  describe('in a directory that already holds a backup', () => {
+    let dir = '';
+
+    beforeEach(async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-cli-recovery-live-'));
+      await fs.mkdir(path.join(dir, '.bfs'), { recursive: true });
+      await fs.writeFile(path.join(dir, '.bfs', 'config.json'), JSON.stringify({ vault_name: 'kept' }), 'utf-8');
+    });
+
+    afterEach(async () => {
+      await fs.rm(dir, { recursive: true, force: true });
+    });
+
+    it('should refuse before asking anything', async () => {
+      // Should a question slip through, it is answered with "cancel" - the run
+      // then ends on its own terms and the assertions below name what went wrong.
+      mockPrompt.mockResolvedValue({ providerType: '__cancel__' } as never);
+
+      const result = await runCmd(['--cwd', dir, 'recovery']);
+
+      expect(result).toBe('abort');
+      expect(capture.errors.some((l) => l.includes('already holds a backup named "kept"'))).toBe(true);
+      expect(mockPrompt).not.toHaveBeenCalled();
+      expect(mockRecover).not.toHaveBeenCalled();
+    });
+
+    // The adapter's configureFromFlags may reach the server (an opt-in to trust
+    // records the fingerprint it sees), so it must not run for a command that is
+    // about to be refused.
+    it('should refuse before building the bootstrap storage from --bootstrap', async () => {
+      const fromFlags = vi.spyOn(LocalFsProvider.prototype, 'configureFromFlags');
+
+      const result = await runCmd(['--cwd', dir, 'recovery', '--provider', 'local', '--name', 'kept', '--bootstrap', '--path /mnt/usb']);
+
+      expect(result).toBe('abort');
+      expect(capture.errors.some((l) => l.includes('already holds a backup named "kept"'))).toBe(true);
+      expect(fromFlags).not.toHaveBeenCalled();
+      expect(mockCreate).not.toHaveBeenCalled();
+      expect(mockRecover).not.toHaveBeenCalled();
+    });
+
+    it('should refuse before checking the --bootstrap flags', async () => {
+      const result = await runCmd(['--cwd', dir, 'recovery', '--name', 'kept', '--bootstrap', '--path /mnt/usb']);
+
+      expect(result).toBe('abort');
+      expect(capture.errors.some((l) => l.includes('already holds a backup named "kept"'))).toBe(true);
+      expect(capture.errors.some((l) => l.includes('--bootstrap requires --provider'))).toBe(false);
+    });
+
+    // `--ci` without --bootstrap is refused with advice to add it; in this
+    // directory that advice leads straight into the refusal above.
+    it('should refuse in place of the --ci bootstrap advice', async () => {
+      const result = await runCmd(['--cwd', dir, '--ci', 'recovery']);
+
+      expect(result).toBe('abort');
+      expect(capture.errors.some((l) => l.includes('already holds a backup named "kept"'))).toBe(true);
+      expect(capture.errors.some((l) => l.includes('Add --bootstrap'))).toBe(false);
+    });
+
+    it('should run in a directory next to it that holds no backup', async () => {
+      const empty = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-cli-recovery-empty-'));
+      try {
+        const result = await runCmd(['--cwd', empty, 'recovery', '--provider', 'local', '--name', 'kept', '--bootstrap', '--path /mnt/usb']);
+
+        expect(result).toBe('ok');
+        expect(mockRecover).toHaveBeenCalledWith(path.resolve(empty), expect.objectContaining({ vaultName: 'kept' }));
+      } finally {
+        await fs.rm(empty, { recursive: true, force: true });
+      }
+    });
   });
 });

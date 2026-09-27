@@ -14,7 +14,9 @@ import type { ProviderConfig, ProviderIO } from '../../src/types/index.js';
 //
 // The way through exists and is a command, not just a flag: an operator who has
 // checked the recovered locations re-runs `bfs recovery --trust-locations`,
-// which pre-approves the hosts.
+// which pre-approves the hosts. The run printing this sentence goes on to write
+// .bfs/config.json, and recovery refuses a directory that holds one - so the
+// command only works in the order the sentence gives it: delete .bfs/ first.
 //
 // WHERE that sentence goes is load-bearing, so only warn() counts here. The
 // throw is swallowed by the caller. `debug()` is silenced without `bfs --debug`.
@@ -75,6 +77,10 @@ describe('connectForRecovery with nobody to confirm the target', () => {
     expect(refusal).not.toBe('');
     expect(refusal).not.toMatch(/declined/i);
     expect(warned(logs)).toMatch(/bfs recovery[\s\S]*--trust-locations/);
+    expect(warned(logs)).toMatch(/delete the \.bfs directory here and redo the recovery/);
+    expect(warned(logs)).not.toMatch(/then redo the recovery with/);
+    // "Run it at a terminal" is the same recovery, met by the same refusal.
+    expect(warned(logs)).not.toMatch(/or run it at a terminal/);
     expect(warned(logs)).toMatch(/ftphost/);
   });
 
@@ -86,7 +92,23 @@ describe('connectForRecovery with nobody to confirm the target', () => {
     expect(refusal).not.toBe('');
     expect(refusal).not.toMatch(/declined/i);
     expect(warned(logs)).toMatch(/bfs recovery[\s\S]*--trust-locations/);
+    expect(warned(logs)).toMatch(/delete the \.bfs directory here and redo the recovery/);
+    expect(warned(logs)).not.toMatch(/then redo the recovery with/);
+    expect(warned(logs)).not.toMatch(/or run it at a terminal/);
     expect(warned(logs)).toMatch(/sshhost/);
+  });
+
+  // A rewording of en.ts alone would leave the Polish operator at the dead end.
+  it('should give the Polish operator the same order: delete .bfs/, then redo the recovery', async () => {
+    const { io: base, logs } = createMockProviderIO({}, process.cwd(), NON_INTERACTIVE);
+    const io: ProviderIO = { ...base, lang: 'pl' };
+
+    await refusalFrom(new FtpProvider(ftpConfig(), io), io);
+    await refusalFrom(new SshProvider(sshConfig(), io), io);
+
+    const text = warned(logs);
+    expect(text.match(/usuń stąd katalog \.bfs i powtórz odzyskiwanie/g)?.length, 'both adapters must carry the new order').toBe(2);
+    expect(text).not.toMatch(/albo uruchom je przy terminalu/);
   });
 
   it('should not offer --trust-locations to an operator who refused the FTP host', async () => {

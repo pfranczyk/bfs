@@ -469,7 +469,7 @@ export const en: Strings = {
   push_confirm_recovered_locations: 'Send backup data to these locations?',
   push_recovered_locations_declined: 'Push aborted: recovered provider locations not confirmed. Verify them in `.bfs/config.json` (e.g. with `bfs config`) and retry.',
   push_recovered_locations_no_operator:
-    'This run asks no questions, so the recovered storage locations cannot be confirmed. Check them in `.bfs/config.json` (e.g. with `bfs config`), then either run this command at a terminal or redo the recovery with `bfs recovery --provider <type> --name <backupName> --bootstrap "<settings>" --trust-locations`.',
+    'This run asks no questions, so the recovered storage locations cannot be confirmed. Check them in `.bfs/config.json` (e.g. with `bfs config`), then either run this command at a terminal, or delete the .bfs directory here and redo the recovery with `bfs recovery --provider <type> --name <backupName> --bootstrap "<settings>" --trust-locations`.',
   pull_not_enough_shards: 'Not enough storage pieces: need %s, got %s - this version cannot be restored from the storage available now. Run `bfs verify --deep` to see which versions still can.',
   loss_on_damaged: 'Damaged backup data on: %s.',
   loss_on_missing: 'Backup data missing on: %s.',
@@ -586,6 +586,9 @@ export const en: Strings = {
   recovery_map_from_sibling: 'Version %s: location map recovered from a sibling - medium(s) %s could not supply it; verify/repair them',
   recovery_no_manifests: 'Could not reconstruct any valid backup version from the available providers.',
   recovery_manifest_unreadable: 'The latest backup version %s could not be read after recovery.',
+  recovery_vault_exists:
+    'This directory already holds a backup named "%s". Recovery would replace its settings and leave its versions behind unreachable. Work with it through its own commands, e.g. `bfs pull`, delete the .bfs directory here and run `bfs recovery` again, or run `bfs recovery` in another directory.',
+  recovery_vault_check_failed: 'Cannot tell whether this directory already holds a backup: .bfs/config.json could not be read (%s). Recovery would replace it. Clear the read error, or run `bfs recovery` in another directory.',
 
   // --- Provider runtime errors (FTP + LocalFS shared shape) ------------------
   provider_short_shard: 'File "%s" is too short to contain a valid payload after the header',
@@ -610,7 +613,7 @@ export const en: Strings = {
   ftp_recovery_password: 'FTP password for %s:',
   ftp_recovery_declined: 'Recovery declined: no FTP password sent to %s.',
   ftp_recovery_no_operator:
-    'Nobody can confirm that %s is the right host, so no FTP password was sent and this storage is skipped. Check the recovered locations, then redo the recovery with `bfs recovery --provider ftp --name <backupName> --bootstrap "<settings>" --trust-locations`, or run it at a terminal.',
+    'Nobody can confirm that %s is the right host, so no FTP password was sent and this storage is skipped. Check the recovered locations, then delete the .bfs directory here and redo the recovery - at a terminal, or with `bfs recovery --provider ftp --name <backupName> --bootstrap "<settings>" --trust-locations`.',
 
   // --- FTP - configureFromFlags + validateConfig -----------------------------
   ftp_config_port_invalid: 'FTP adapter: config "port" must be an integer between 1 and 65535',
@@ -717,7 +720,7 @@ export const en: Strings = {
   ssh_recovery_passphrase: 'SSH private key passphrase for %s:',
   ssh_recovery_declined: 'Recovery declined: no SSH secret sent to %s.',
   ssh_recovery_no_operator:
-    'Nobody can confirm that %s is the right host, so no SSH secret was sent and this storage is skipped. Check the recovered locations, then redo the recovery with `bfs recovery --provider ssh --name <backupName> --bootstrap "<settings>" --trust-locations`, or run it at a terminal.',
+    'Nobody can confirm that %s is the right host, so no SSH secret was sent and this storage is skipped. Check the recovered locations, then delete the .bfs directory here and redo the recovery - at a terminal, or with `bfs recovery --provider ssh --name <backupName> --bootstrap "<settings>" --trust-locations`.',
   ssh_recovery_no_secret_noninteractive: 'Recovery cannot obtain the SSH secret for %s in non-interactive mode: no supplied secret authenticated. Provide it via the recovery inputs.',
   ssh_recovery_unpinned: '(unpinned)',
 
@@ -817,6 +820,8 @@ Examples:
   repair_foreign_shard_detected: 'A backup part for version %s belongs to a different backup - aborting.',
   vault_collision_detected:
     'This location on storage "%s" already holds a different backup of the same name. BFS will not overwrite or delete data from another backup. To continue, manually remove the files at that location, use a different backup name, or run `bfs recovery` if this backup is yours. Aborting.',
+  vault_collision_detected_configured:
+    'This location on storage "%s" already holds a different backup of the same name. BFS will not overwrite or delete data from another backup. To continue, manually remove the files at that location, use a different backup name, or, if this backup is yours, run `bfs recovery` in another, empty directory. Aborting.',
   repair_wrong_version_shard: 'A backup part for version %s does not match its expected version - aborting.',
   repair_force_unverified_warn: 'Continuing despite an unverifiable backup part for version %s.',
   repair_ask_vault_password: 'Encryption password for version %s:',

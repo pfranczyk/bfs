@@ -4,6 +4,7 @@ import ora from 'ora';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO, providerRegistry } from '../../providers/provider.js';
 import type { ProviderIO, StorageProvider } from '../../types/index.js';
+import { assertRecoveryTargetFree } from '../../vault/config.js';
 import { recover } from '../../vault/recovery.js';
 import { resolveCwd } from '../cwd.js';
 import { isCiRun } from '../interactive-mode.js';
@@ -61,6 +62,17 @@ export function registerRecovery(program: Command): void {
     .option('--trust-locations', t('recovery_opt_trust_locations'))
     .action(async (opts: RecoveryOpts, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
+      // First of all, before a single question and before the flags are looked
+      // at: a directory that already holds a backup is one recovery must not
+      // rebuild over. Every other refusal this command prints advises a way to
+      // run it again, and here that way ends in this same refusal - so it has to
+      // be said first, and said before the operator types any storage settings.
+      try {
+        await assertRecoveryTargetFree(rootDir);
+      } catch (err) {
+        error(err instanceof Error ? err.message : String(err));
+        throw new CommandAbort();
+      }
       // --bootstrap says where the first storage is, not that nobody is watching:
       // it replaces the prompts that collect that one provider's settings, and
       // nothing else. Recovering a machine is an operator's job - the password of

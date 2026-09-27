@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`bfs recovery` no longer overwrites the settings of a backup that is already
+  in the directory.** Run where `.bfs/config.json` described a backup - the same
+  one or a different one - it rebuilt straight over it: the storage settings were
+  replaced, the versions the directory still listed became unreachable, and
+  anything waiting in the cache for `bfs push --cache` was deleted first. Recovery
+  now refuses, names the backup that is there, and gives three ways on: work with
+  that backup through its own commands, delete the `.bfs` directory here and run
+  recovery again, or run recovery in another directory. Nothing is written or
+  deleted before the refusal, and no storage settings are asked for. A directory
+  left behind by an interrupted recovery - no settings file, or one that cannot be
+  read as a backup - still lets recovery start over, so a failed run stays
+  repeatable; a settings file that cannot be read at all is named as a read error
+  instead of being taken for an empty directory. Wherever something else sends you
+  back to recovery - a storage skipped because nobody could confirm its host, a
+  push that cannot confirm recovered locations - it now tells you to delete the
+  `.bfs` directory first, so the advice works in the order it is given.
+- **A collision with another backup of the same name no longer points at a
+  recovery that would overwrite your own.** `bfs push` and `bfs provider add`
+  refuse a storage location holding a different backup, and offered `bfs recovery`
+  for the case where that data is yours - run in that directory, it replaced the
+  settings of the backup you were pushing. The advice now names another, empty
+  directory to recover into.
+
 ## [0.14.4] - 2026-09-12
 
 ### Fixed

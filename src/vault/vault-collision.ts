@@ -62,6 +62,8 @@ export async function assertNoForeignVault(provider: StorageProvider, vaultName:
     // only enriches the debug diagnostic.
     const header = await tryReadHeader(provider, shardRefs[0]);
     io.debug(`vault collision at provider "${provider.id}": ${shardRefs.length} shard(s) present, foreign vault_id=${header?.vault_id ?? 'unreadable'}`);
+    // A fresh init has written no configuration here yet, so `bfs recovery` in
+    // this very directory is open to the operator whose backup that is.
     throw new VaultCollisionError(fmt('vault_collision_detected', provider.id), provider.id);
   }
 
@@ -70,7 +72,10 @@ export async function assertNoForeignVault(provider: StorageProvider, vaultName:
     if (header === null) continue; // unreadable - no proof of foreignness from this shard
     if (header.vault_id === expectedVaultId) return; // our own shard - this location is ours
     io.debug(`vault collision at provider "${provider.id}": foreign vault_id=${header.vault_id}`);
-    throw new VaultCollisionError(fmt('vault_collision_detected', provider.id), provider.id);
+    // `push` / `provider add` run in a directory that already holds a backup of
+    // its own, and recovery refuses to replace one - so the way to the foreign
+    // data leads through another, empty directory.
+    throw new VaultCollisionError(fmt('vault_collision_detected_configured', provider.id), provider.id);
   }
   // Every shard header was unreadable: no proof of a foreign vault, so let the
   // owner proceed - they may be overwriting a damaged copy of their own backup.

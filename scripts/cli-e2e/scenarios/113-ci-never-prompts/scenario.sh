@@ -149,6 +149,11 @@ _fail_if_prompted() {
 _recovery_needs_its_bootstrap() {
   local vault="$1" base="$2" name="$3"
 
+  # Recovery is for a directory that has lost .bfs/ - in one that still holds a
+  # backup it refuses to replace it before looking at any flag. Lose it first,
+  # so the refusal pinned here is the one about the missing --bootstrap, in the
+  # state where following its advice works.
+  rm -rf "$vault/.bfs"
   PTY_TIMEOUT=20000 run_bfs_pty "$vault" '[]' --lang en --ci recovery
   _fail_if_prompted "Bootstrap provider type" "recovery --ci opened the adapter menu instead of refusing"
   assert_exit 1
@@ -157,7 +162,6 @@ _recovery_needs_its_bootstrap() {
   # Take the named flags and rebuild .bfs/ from a single storage, then restore.
   # p1 is the bootstrap: p0 was emptied above (version 1 pruned, its part of
   # version 2 deleted to force the restore through the relocated storage).
-  rm -rf "$vault/.bfs"
   PTY_TIMEOUT=40000 run_bfs_pty "$vault" '[]' --lang en --ci recovery \
     --provider local --name "$name" --trust-locations \
     --bootstrap "--path $(winpath "${PV_LOCALDIR[1]}")"

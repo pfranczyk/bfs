@@ -139,7 +139,7 @@ export class VaultCollisionError extends BfsError {
   }
 }
 
-/** Thrown when `init` is asked to set up a backup in a directory that already describes one. */
+/** Thrown when `init` or `recovery` is asked to work in a directory that already describes a backup. */
 export class VaultAlreadyInitializedError extends BfsError {
   constructor(message: string) {
     super(message);
