@@ -408,11 +408,7 @@ export const pl: Strings = {
   provider_remove_target_required: '--target jest wymagane dla strategii rebuild w trybie CI',
   provider_remove_target_invalid: 'Nośnik "%s" nie istnieje lub jest tym samym co usuwany',
   provider_remove_success: 'Nośnik "%s" usunięty.',
-  provider_remove_next_steps: 'Zalecane kolejne kroki:',
-  provider_remove_next_step_1: '  1. `bfs scheme set <N> <K>` - dopasuj schemat do pozostałych nośników',
-  provider_remove_next_step_2: '  2. `bfs pull` - pobierz bieżącą wersję (nadmiarowość pokryje degradację)',
-  provider_remove_next_step_3: '  3. `bfs push` - utwórz nową zdrową kopię na pozostałych nośnikach',
-  provider_remove_next_step_4: '  4. `bfs prune` - opcjonalnie usuń stare zdegradowane wersje',
+  provider_remove_next_step: 'Zalecany kolejny krok: `bfs scheme set <N> <K>` z N + K = %s, żeby dopasować schemat do pozostałych nośników.',
   provider_remove_target_reverted: 'Nośnik "%s" dodany na potrzeby odbudowy został usunięty - konfiguracja wróciła do stanu sprzed komendy.',
   provider_remove_target_kept: 'Nośnik "%s" zostaje w konfiguracji: część kopii mogła już zostać na nim odbudowana. Powtórz tę samą komendę, żeby dokończyć odbudowę.',
   provider_relocate_success: 'Nośnik "%s" przeniesiony.',
@@ -477,6 +473,7 @@ export const pl: Strings = {
   loss_on_adapter_missing: 'Nośniki wymagające niezainstalowanego adaptera: %s.',
   loss_on_not_configured: 'Nośniki zapisane w tej kopii, ale nieobecne w konfiguracji: %s.',
   loss_on_foreign_part: 'Dane kopii należące do innej wersji lub innej kopii zapasowej, na nośnikach: %s.',
+  loss_repair_form: '`bfs repair --version all --rebuild <nośnik-z-konfiguracji> "<typ>:<nośnik-z-kopii> <ustawienia nośnika>"`',
   loss_on_read_failed: 'Dane kopii, których nie udało się odczytać - transfer się nie dokończył, na nośnikach: %s.',
   loss_on_header_mismatch: 'Dane kopii niezgodne z zapisem tej wersji, na nośnikach: %s.',
   pull_blob_size_unreadable: 'Nie udało się odczytać rozmiaru kopii z żadnej części.',
@@ -508,7 +505,7 @@ export const pl: Strings = {
   vault_degraded_foreign_part:
     'Pula zdegradowana: część należąca gdzie indziej została zastąpiona z nadmiarowości. Odtworzone pliki są poprawne, ale ten nośnik nie trzyma użytecznej części tej wersji, więc dotychczasowa nadmiarowość zniknęła, dopóki nie wróci na niego właściwa część.',
   vault_degraded_provider_not_configured:
-    'Pula zdegradowana: nośnik zapisany w tej kopii nie istnieje w konfiguracji: %s. Jeśli nazwa zniknęła przez pomyłkę, przywróć ją komendą `bfs repair --version all <nośnik-z-konfiguracji> "<typ>:<nośnik-z-kopii> <ustawienia nośnika>"` (jedna taka para na nazwę) i ponów `bfs pull`. Jeśli usunąłeś ten nośnik celowo, uruchom `bfs push`, aby utworzyć zdrową kopię na pozostałych nośnikach.',
+    'Pula zdegradowana: nośnik zapisany w tej kopii nie istnieje w konfiguracji: %s. Jeśli nazwa zniknęła przez pomyłkę, przywróć ją komendą %s (jedna taka para na nazwę) i ponów `bfs pull`. Jeśli usunąłeś ten nośnik celowo, uruchom `bfs push`, aby utworzyć zdrową kopię na pozostałych nośnikach.',
 
   // --- recovery operations (vault layer) ----------------------------------
   recovery_ask_version_password: 'Podaj hasło dla wersji %s (zostaw puste, aby pominąć):',
@@ -827,6 +824,7 @@ Przykłady:
     'W tej lokalizacji na nośniku "%s" istnieje już inna kopia zapasowa o tej nazwie. BFS nie nadpisze ani nie usunie danych innej kopii. Aby kontynuować, ręcznie usuń pliki z tej lokalizacji, użyj innej nazwy kopii, albo - jeśli to Twoja kopia - uruchom `bfs recovery` w innym, pustym katalogu. Przerywam.',
   repair_wrong_version_shard: 'Fragment kopii dla wersji %s nie odpowiada oczekiwanej wersji - przerywam.',
   repair_force_unverified_warn: 'Kontynuuję mimo niezweryfikowanego fragmentu kopii dla wersji %s.',
+  repair_force_unreadable_warn: 'Kontynuuję mimo nieczytelnej zawartości na nośniku docelowym dla wersji %s - odbudowany fragment ją nadpisze.',
   repair_ask_vault_password: 'Hasło kopii dla wersji %s:',
   repair_wrong_vault_password_retry: 'Błędne hasło dla wersji %s - spróbuj ponownie (puste = pomiń):',
   repair_pool_password_failed: 'Żadne podane hasło nie odszyfrowuje wersji %s.',

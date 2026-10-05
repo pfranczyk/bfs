@@ -7,8 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`bfs provider remove --strategy remove` names one next step.** A removal leaves
+  fewer storages than the scheme requires, which refuses every restore, push and
+  prune until the two match - so the command now prints the one step that closes
+  that gap, `bfs scheme set`, with the sum N + K has to reach for the storages that
+  are left. The four-step list ending in a fresh copy and a prune is gone: what to
+  do with the backup afterwards is the operator's choice, not the way out of the
+  state the removal leaves behind.
+
 ### Fixed
 
+- **`bfs repair --rebuild` now reconstructs the part when a replacement storage
+  takes over a name the configuration lost - and says so instead of reporting a
+  success it did not perform.** Replacing a storage dropped with
+  `bfs provider remove --strategy remove` ends with pointing a free configuration
+  entry at the name the backup records. The rebuild looked the work up under the
+  entry being replaced, which no backup had ever heard of, found nothing to do and
+  finished with a success message - leaving the new storage empty and the version
+  degraded. The same run now checks the destination before writing anything, as
+  the migration without `--rebuild` always did: a part that is not there is
+  reconstructed from the remaining ones, a sound one is left untouched, and a part
+  whose identity matches but whose length does not - what an interrupted run
+  leaves behind - is rebuilt over. A part belonging to another backup is still
+  refused, and so is content that cannot be identified at all, which
+  `--force-unverified` waives. A run that reconstructs nothing leaves the storage
+  pool the size it was, so the same command can simply be run again. The warning
+  `bfs pull` prints for a storage outside the configuration names this form, so
+  following it works on a brand-new storage.
 - **`bfs recovery` no longer overwrites the settings of a backup that is already
   in the directory.** Run where `.bfs/config.json` described a backup - the same
   one or a different one - it rebuilt straight over it: the storage settings were

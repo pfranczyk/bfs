@@ -203,6 +203,44 @@ describe('recovery', () => {
     expect(warned).toContain('Version v002 - Backup data missing on: nas-1, nas-2.');
   });
 
+  // A recovered directory reaches this state through an older version that names
+  // a provider the rebuilt configuration does not list - the configuration is
+  // rebuilt from the NEWEST version, so anything an older one used and the newest
+  // one does not is absent from it. Recovery names that storage under every
+  // version that lost it, through the same renderer as `bfs verify`, and like
+  // verify it offers no command for it: what to do depends on why the storage
+  // left, which a machine rebuilt from the media knows even less about. Only the
+  // warning channel is read - the closing line of a recovery names `bfs pull` as
+  // the next step for the whole backup, which is a different thing.
+
+  it('should name the absent provider under every version and offer no command for it', async () => {
+    mockRecover.mockResolvedValue({
+      ...recoveryReport,
+      // Not part of the report type: the counts of the pool are handed in anyway,
+      // so a remedy that came back keyed to them would have them to read.
+      unknown_provider: { configured: 3, required: 3, missing: 1, unused: 0 },
+      versions: [
+        { version: 2, health: VersionHealth.Degraded, consensus: true, loss_causes: [{ cause: 'provider_not_configured', providers: ['usb-2'] }] },
+        { version: 3, health: VersionHealth.Degraded, consensus: true, loss_causes: [{ cause: 'provider_not_configured', providers: ['usb-2'] }] },
+        { version: 4, health: VersionHealth.Healthy, consensus: true, loss_causes: [] },
+      ],
+    } as never);
+
+    await runCmd(['recovery', '--provider', 'local', '--name', 'my-vault', '--bootstrap', '--path /mnt/usb']);
+
+    const warned = capture.errors.join('\n');
+    expect(warned).toContain('Version v002 - Storage recorded in this backup but absent from the configuration: usb-2.');
+    expect(warned).toContain('Version v003 - Storage recorded in this backup but absent from the configuration: usb-2.');
+    // Read everywhere, so a remedy moved to another channel is still caught...
+    const everything = [...capture.logs, ...capture.errors].join('\n');
+    for (const command of ['bfs repair', 'bfs scheme set', 'bfs push', 'bfs prune', 'bfs provider add']) {
+      expect(everything, `recovery must not offer \`${command}\` for the absent provider`).not.toContain(command);
+    }
+    // ...except `bfs pull`, which the closing line names as the next step for the
+    // whole backup - so for that one only the warnings are read.
+    expect(warned, 'recovery must not offer `bfs pull` for the absent provider').not.toContain('bfs pull');
+  });
+
   // --- CI mode: parse adapter flags via configureFromFlags ------------------
   // Regression for the user's bug report - `bfs recovery --provider ftp
   // --path bfsuser@host/ftp/bfsuser` returned "530 Login incorrect" because

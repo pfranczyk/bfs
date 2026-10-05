@@ -497,11 +497,8 @@ export interface Strings {
   provider_remove_target_invalid: string;
   /** %s = id */
   provider_remove_success: string;
-  provider_remove_next_steps: string;
-  provider_remove_next_step_1: string;
-  provider_remove_next_step_2: string;
-  provider_remove_next_step_3: string;
-  provider_remove_next_step_4: string;
+  /** %s = number of storages left after the removal */
+  provider_remove_next_step: string;
   /** %s = id */
   provider_remove_target_reverted: string;
   /** %s = id */
@@ -598,6 +595,11 @@ export interface Strings {
   loss_on_not_configured: string;
   /** %s = comma-separated provider ids */
   loss_on_foreign_part: string;
+  // The migration form of `bfs repair` that the warning after a degraded restore
+  // hands to the operator. The command and its flags are the same in both
+  // languages; only the placeholders standing for the operator's own values are
+  // translated.
+  loss_repair_form: string;
   /** %s = comma-separated provider ids */
   loss_on_read_failed: string;
   /** %s = comma-separated provider ids */
@@ -639,7 +641,7 @@ export interface Strings {
   vault_degraded_adapter_missing: string;
   vault_degraded_corrupt: string;
   vault_degraded_foreign_part: string;
-  /** %s = comma-separated provider names recorded in the backup */
+  /** %s = comma-separated provider names recorded in the backup, %s = loss_repair_form */
   vault_degraded_provider_not_configured: string;
 
   // --- recovery operations (vault layer) ----------------------------------
@@ -1020,6 +1022,8 @@ export interface Strings {
   repair_wrong_version_shard: string;
   /** %s = version */
   repair_force_unverified_warn: string;
+  /** %s = version */
+  repair_force_unreadable_warn: string;
   /** %s = version */
   repair_ask_vault_password: string;
   /** %s = version */

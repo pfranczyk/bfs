@@ -163,6 +163,20 @@ describe('provider remove', () => {
     expect(mockRemoveProvider).not.toHaveBeenCalled();
   });
 
+  it('should name the sum the scheme has to reach for the pool that is left', async () => {
+    // Six storages, one removed: the step has to say five. Every other layer
+    // removes one of four, so a number copied from there would pass them all.
+    const providers = [1, 2, 3, 4, 5, 6].map((n) => ({ id: `dysk-${n}`, type: 'local', config: { path: `/tmp/d${n}` } }));
+    mockReadConfig.mockResolvedValue(makeConfig({ providers, scheme: { data_shards: 4, parity_shards: 2 } }) as never);
+    mockPrompt.mockResolvedValueOnce({ strategy: 'remove' } as never).mockResolvedValueOnce({ confirmed: true } as never);
+
+    await runCmd(['provider', 'remove', 'dysk-1']);
+
+    const out = [...capture.logs, ...capture.errors].join('\n');
+    expect(out).toContain('bfs scheme set <N> <K>');
+    expect(out).toContain('N + K = 5');
+  });
+
   // --- Strategy: relocate (pass-through) ----------------------------------
   // Contract: BFS knows only --strategy, --new-type, --password. Everything else
   // goes to the adapter as rawArgs; the adapter collects its config itself via

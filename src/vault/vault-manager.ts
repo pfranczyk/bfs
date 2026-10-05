@@ -416,7 +416,7 @@ function _emitDegradedWarnings(failures: Map<number, ShardFailureReason>, manife
   // `provider remove` to undo it.
   if (manifest !== null && reasons.some((r) => r === 'provider_not_configured')) {
     const ids = _mediaFailingWith(manifest, failures, 'provider_not_configured');
-    if (ids.length > 0) io.warn(fmt('vault_degraded_provider_not_configured', ids.join(', ')));
+    if (ids.length > 0) io.warn(fmt('vault_degraded_provider_not_configured', ids.join(', '), t('loss_repair_form')));
   }
 }
 

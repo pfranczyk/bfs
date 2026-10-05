@@ -408,11 +408,7 @@ export const en: Strings = {
   provider_remove_target_required: '--target is required for rebuild strategy in CI mode',
   provider_remove_target_invalid: 'Provider "%s" does not exist or is the same as the one being removed',
   provider_remove_success: 'Provider "%s" removed.',
-  provider_remove_next_steps: 'Recommended next steps:',
-  provider_remove_next_step_1: '  1. `bfs scheme set <N> <K>` - match the scheme to the remaining storages',
-  provider_remove_next_step_2: '  2. `bfs pull` - fetch the current version (redundancy repair covers the degradation)',
-  provider_remove_next_step_3: '  3. `bfs push` - create a new healthy backup on the remaining storages',
-  provider_remove_next_step_4: '  4. `bfs prune` - optionally delete old degraded versions',
+  provider_remove_next_step: 'Recommended next step: `bfs scheme set <N> <K>` with N + K = %s, to match the scheme to the remaining storages.',
   provider_remove_target_reverted: 'Provider "%s" was added for the rebuild and has been removed again - the configuration is back to where it started.',
   provider_remove_target_kept: 'Provider "%s" stays in the configuration: part of the backup may already have been rebuilt onto it. Re-run the same command to finish the rebuild.',
   provider_relocate_success: 'Provider "%s" relocated.',
@@ -477,6 +473,7 @@ export const en: Strings = {
   loss_on_adapter_missing: 'Storage needing an adapter that is not installed: %s.',
   loss_on_not_configured: 'Storage recorded in this backup but absent from the configuration: %s.',
   loss_on_foreign_part: 'Backup data belonging to another version or another backup, on: %s.',
+  loss_repair_form: '`bfs repair --version all --rebuild <configured-storage> "<type>:<recorded-storage> <storage settings>"`',
   loss_on_read_failed: 'Backup data that could not be read - the transfer did not finish, on: %s.',
   loss_on_header_mismatch: "Backup data that does not match this version's record, on: %s.",
   pull_blob_size_unreadable: 'Could not read the backup size from any storage piece.',
@@ -508,7 +505,7 @@ export const en: Strings = {
   vault_degraded_foreign_part:
     'Pool degraded: a part that belongs elsewhere was replaced from redundancy. The restored files are correct, but that storage is not holding a usable piece of this version, so the redundancy you had is gone until the right part is back on it.',
   vault_degraded_provider_not_configured:
-    'Pool degraded: storage recorded in this backup but absent from the configuration: %s. If the name went missing by accident, bring it back with `bfs repair --version all <configured-storage> "<type>:<recorded-storage> <storage settings>"` (one such pair per name) and run `bfs pull` again. If you removed that storage on purpose, run `bfs push` to create a sound backup on the storage you have left.',
+    'Pool degraded: storage recorded in this backup but absent from the configuration: %s. If the name went missing by accident, bring it back with %s (one such pair per name) and run `bfs pull` again. If you removed that storage on purpose, run `bfs push` to create a sound backup on the storage you have left.',
 
   // --- recovery operations (vault layer) ----------------------------------
   recovery_ask_version_password: 'Enter password for version %s (or leave blank to skip):',
@@ -824,6 +821,7 @@ Examples:
     'This location on storage "%s" already holds a different backup of the same name. BFS will not overwrite or delete data from another backup. To continue, manually remove the files at that location, use a different backup name, or, if this backup is yours, run `bfs recovery` in another, empty directory. Aborting.',
   repair_wrong_version_shard: 'A backup part for version %s does not match its expected version - aborting.',
   repair_force_unverified_warn: 'Continuing despite an unverifiable backup part for version %s.',
+  repair_force_unreadable_warn: 'Continuing despite unreadable content at the destination for version %s - the reconstructed part will overwrite it.',
   repair_ask_vault_password: 'Encryption password for version %s:',
   repair_wrong_vault_password_retry: 'Wrong password for version %s - try again (blank to skip):',
   repair_pool_password_failed: 'No supplied password decrypts version %s.',

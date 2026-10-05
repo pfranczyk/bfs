@@ -24,7 +24,7 @@ export interface RepairOptions {
   readonly passwords: string[];
   /** Reed-Solomon-reconstruct a lost shard instead of only rewriting headers. */
   readonly rebuild: boolean;
-  /** Continue a migration when a destination shard is unverifiable (not when it is missing or mismatched). */
+  /** Continue a migration when a destination shard is unverifiable (not when it is missing or mismatched). With `rebuild` it also waives a destination whose header does not parse, which the reconstruction then overwrites. */
   readonly forceUnverified: boolean;
   /** Rebuild missing/broken location-header sidecars from the current config instead of editing a provider. Defaults to false. */
   readonly restoreHeaders?: boolean;
@@ -212,29 +212,31 @@ async function applyRebuildConfigChange(rootDir: string, config: VaultConfig, pa
 }
 
 /**
- * Migration commit: move a provider's shard to a new provider id/type. Without
- * `--rebuild` the payload is expected already at the destination - Phase A
- * verifyShard confirms it, then the config, every manifest and the scoped
- * headers are swapped to the new provider. With `--rebuild` the lost shard is
- * Reed-Solomon-reconstructed onto the new provider via {@link rebuildVersion}.
- * Each pair independently joins `succeeded_pairs` or `failed_pairs`.
+ * Migration commit: move a provider's shard to a new provider id/type. Phase A
+ * ({@link scanPairAtDestination}) asks the destination what it holds before
+ * anything is written, on both paths. Without `--rebuild` the payload is
+ * expected already there, so anything but a match fails the pair; then the
+ * config, every manifest and the scoped headers are swapped to the new provider.
+ * With `--rebuild` the same answers are classified instead: what has to be
+ * reconstructed goes to {@link migrateWithRebuild}, and a destination that
+ * already holds every in-scope part is a plain relocation. Each pair
+ * independently joins `succeeded_pairs` or `failed_pairs`.
  */
 async function commitMigrationPairs(ctx: CommitContext, rebuild: boolean): Promise<void> {
   for (const pair of ctx.pairs) {
     const newConfig = pair.newConfig;
     if (!newConfig) continue; // a migration pair always carries newConfig
     try {
-      if (rebuild) {
-        await migrateWithRebuild(ctx, pair, newConfig);
-      } else {
-        const verdict = await verifyPairAtDestination(ctx, pair, newConfig);
-        if (!verdict.ok) {
-          ctx.lock.failed_pairs.push({ name: pair.oldName, params: ctx.redacted.get(pair.oldName) ?? '', reason: verdict.reason, detail: verdict.detail });
-          await writeLockAtomic(repairLockPath(ctx.rootDir), ctx.lock);
-          continue;
-        }
-        await migrateInPlace(ctx, pair, newConfig);
+      const scan = await scanPairAtDestination({ ctx, pair, newConfig, rebuild });
+      if (!scan.ok) {
+        ctx.lock.failed_pairs.push({ name: pair.oldName, params: ctx.redacted.get(pair.oldName) ?? '', reason: scan.reason, detail: scan.detail });
+        await writeLockAtomic(repairLockPath(ctx.rootDir), ctx.lock);
+        continue;
       }
+      // Nothing to reconstruct is a relocation, whether or not `--rebuild` was
+      // asked for: every in-scope part is already sound at the destination.
+      if (scan.rebuild.length === 0) await migrateInPlace(ctx, pair, newConfig);
+      else await migrateWithRebuild({ ctx, pair, newConfig, scan });
       ctx.lock.succeeded_pairs.push({ old_name: pair.oldName, new_name: newConfig.id, new_type: newConfig.type });
     } catch (err) {
       ctx.lock.failed_pairs.push({ name: pair.oldName, params: ctx.redacted.get(pair.oldName) ?? '', reason: 'unknown', detail: err instanceof Error ? err.message : String(err) });
@@ -243,21 +245,112 @@ async function commitMigrationPairs(ctx: CommitContext, rebuild: boolean): Promi
   }
 }
 
+/** One in-scope version whose part has to be reconstructed at the destination. */
+interface RebuildTarget {
+  readonly version: number;
+  /** true when the manifest still names the pair's source; false when it names the destination. */
+  readonly underOldName: boolean;
+}
+
+type DestinationScan = { ok: true; rebuild: RebuildTarget[]; present: number[] } | { ok: false; reason: RepairLockFailedPair['reason']; detail: string };
+
+interface MigrateWithRebuildOptions {
+  readonly ctx: CommitContext;
+  readonly pair: RepairPair;
+  readonly newConfig: ProviderConfig;
+  /** Phase A's verdict: which in-scope versions to reconstruct, and which are already sound. */
+  readonly scan: { readonly rebuild: RebuildTarget[]; readonly present: number[] };
+}
+
+interface DestinationScanOptions {
+  readonly ctx: CommitContext;
+  readonly pair: RepairPair;
+  readonly newConfig: ProviderConfig;
+  readonly rebuild: boolean;
+}
+
+interface ClassifyPartOptions {
+  readonly ctx: CommitContext;
+  readonly newConfig: ProviderConfig;
+  readonly rebuild: boolean;
+  readonly manifest: VersionManifest;
+  readonly ms: ManifestShard;
+  readonly provider: StorageProvider;
+  /** true when the manifest names the pair's source rather than its destination. */
+  readonly underOldName: boolean;
+}
+
+type PartVerdict = { outcome: 'rebuild' | 'present' } | { outcome: 'refuse'; reason: RepairLockFailedPair['reason']; detail: string };
+
 /**
- * Phase A - verifies the migrated shard is present and identical at the new
- * provider for every in-scope version. Clean-exclusion verdict: a missing /
- * mismatched / corrupted / auth failure fails the pair; an unverifiable result
- * passes only under `forceUnverified`.
+ * What one in-scope version's part at the destination means for this pair:
+ * reconstruct it, leave it alone, or refuse the pair.
  */
-async function verifyPairAtDestination(ctx: CommitContext, pair: RepairPair, newConfig: ProviderConfig): Promise<{ ok: true } | { ok: false; reason: RepairLockFailedPair['reason']; detail: string }> {
+async function _classifyDestinationPart(options: ClassifyPartOptions): Promise<PartVerdict> {
+  const { ctx, newConfig, rebuild, manifest, ms, provider, underOldName } = options;
+  const ref = { provider_id: newConfig.id, path: `shard_${ms.shard_index}.bfs.${manifest.version}` };
+  const result = await provider.verifyShard(ref, { vault_id: ctx.config.vault_id, shard_index: ms.shard_index, version: manifest.version });
+  if (result.ok) {
+    // A manifest naming the pair's source still has to have its provider
+    // swapped, which only the rebuild does - so those versions go there whatever
+    // lies at the destination, exactly as they did before this gate existed.
+    // Only a manifest already naming the destination can be left alone.
+    if (rebuild && (underOldName || !(await _sizeMatchesSiblings({ ctx, manifest, ms, provider, ref })))) return { outcome: 'rebuild' };
+    return { outcome: 'present' };
+  }
+  if (result.reason === 'not_found' && rebuild) return { outcome: 'rebuild' };
+  // `corrupted` joins `unverifiable` under the waiver only on the rebuild path:
+  // there the destination is about to be written anyway, so the operator can
+  // decide to overwrite content nobody can identify. Without the waiver both
+  // stay refusals, and on the non-rebuild path `corrupted` stays one regardless -
+  // nothing would rewrite it, so continuing over it would commit to damage.
+  const waivable = result.reason === 'unverifiable' || (rebuild && result.reason === 'corrupted');
+  if (waivable && ctx.forceUnverified) {
+    // Two different waivers: one says nobody could check, the other says what is
+    // there could not be read AND is about to be written over.
+    ctx.io.warn(fmt(result.reason === 'corrupted' ? 'repair_force_unreadable_warn' : 'repair_force_unverified_warn', String(manifest.version)));
+    return { outcome: rebuild ? 'rebuild' : 'present' };
+  }
+  return { outcome: 'refuse', reason: result.reason, detail: result.detail };
+}
+
+/**
+ * Phase A - asks the destination what lies under each in-scope version's part
+ * before anything is written. Without `--rebuild` a missing / mismatched /
+ * corrupted / auth failure fails the pair and an unverifiable result passes only
+ * under `forceUnverified`, as the payload is expected to be there already.
+ *
+ * With `--rebuild` the same gate runs and the answers are classified instead:
+ * an absent part is reconstructed, a sound one is left alone, and a part whose
+ * identity matches but whose size does not is the leftover of an interrupted
+ * run - reconstruction overwrites it. Identity alone cannot tell those two apart
+ * (verifyShard compares vault_id, index and version, all of which survive in a
+ * half-written file), so the size of a sibling part decides. A destination whose
+ * content cannot be identified at all is still refused: reconstruction writes
+ * over it, and BFS does not overwrite what it could not identify.
+ */
+async function scanPairAtDestination(options: DestinationScanOptions): Promise<DestinationScan> {
+  const { ctx, pair, newConfig, rebuild } = options;
   let provider: StorageProvider;
   try {
     provider = providerRegistry.create(newConfig, ctx.io);
-    await provider.authenticate();
-    provider.setVaultName(ctx.config.vault_name);
+    if (rebuild) {
+      // A rebuild destination is a possibly-fresh or wiped medium (lost disk,
+      // replaced server), so its base directory may not exist yet.
+      // probeConnection provisions it - exactly as init does - while a bare
+      // authenticate() lists the base path and hard-fails on a provider that
+      // lists strictly, refusing the pair before a part could be written.
+      provider.setVaultName(ctx.config.vault_name);
+      await provider.probeConnection();
+    } else {
+      await provider.authenticate();
+      provider.setVaultName(ctx.config.vault_name);
+    }
   } catch (err) {
     return { ok: false, reason: 'auth_failed', detail: err instanceof Error ? err.message : String(err) };
   }
+  const toRebuild: RebuildTarget[] = [];
+  const present: number[] = [];
   for (const manifest of ctx.scoped) {
     // The part is looked up under either name this pair can carry. Restoring a
     // name the backup records but the configuration lost means no manifest ever
@@ -265,17 +358,46 @@ async function verifyPairAtDestination(ctx: CommitContext, pair: RepairPair, new
     // with nothing to check and wave a foreign part of the same filename through.
     const ms = manifest.shards.find((s) => s.provider_id === pair.oldName) ?? manifest.shards.find((s) => s.provider_id === newConfig.id);
     if (!ms) continue; // this version does not use the migrated provider
-    const filename = `shard_${ms.shard_index}.bfs.${manifest.version}`;
-    const result = await provider.verifyShard({ provider_id: newConfig.id, path: filename }, { vault_id: ctx.config.vault_id, shard_index: ms.shard_index, version: manifest.version });
-    if (!result.ok) {
-      if (result.reason === 'unverifiable' && ctx.forceUnverified) {
-        ctx.io.warn(fmt('repair_force_unverified_warn', String(manifest.version)));
-        continue;
-      }
-      return { ok: false, reason: result.reason, detail: result.detail };
+    const underOldName = ms.provider_id === pair.oldName;
+    const verdict = await _classifyDestinationPart({ ctx, newConfig, rebuild, manifest, ms, provider, underOldName });
+    if (verdict.outcome === 'refuse') return { ok: false, reason: verdict.reason, detail: verdict.detail };
+    if (verdict.outcome === 'rebuild') toRebuild.push({ version: manifest.version, underOldName });
+    else present.push(manifest.version);
+  }
+  return { ok: true, rebuild: toRebuild, present };
+}
+
+/**
+ * True when the destination part is as long as a sibling part of the same
+ * version. Parts of one version are written to the same length, so a sibling is
+ * the cheapest yardstick - and `getSize` is a metadata call every medium can
+ * answer, unlike reading a header in place. The yardstick is approximate in one
+ * direction only: a part rebuilt onto a new address carries a location map of
+ * its own length, so a sound part can read as different and be reconstructed
+ * needlessly - which costs transfer, never data. An unreadable yardstick (no
+ * sibling left, or one that will not answer) returns true: without a length to
+ * compare against, the identity match is all there is, and it already passed.
+ */
+async function _sizeMatchesSiblings(options: Omit<ClassifyPartOptions, 'newConfig' | 'rebuild' | 'underOldName'> & { ref: { provider_id: string; path: string } }): Promise<boolean> {
+  const { ctx, manifest, ms, provider, ref } = options;
+  for (const sibling of manifest.shards) {
+    if (sibling.provider_id === ms.provider_id) continue;
+    const pc = ctx.config.providers.find((p) => p.id === sibling.provider_id);
+    if (!pc) continue;
+    try {
+      const siblingProvider = providerRegistry.create(pc, ctx.io);
+      await siblingProvider.authenticate();
+      siblingProvider.setVaultName(ctx.config.vault_name);
+      const expected = await siblingProvider.getSize({ provider_id: sibling.provider_id, path: `shard_${sibling.shard_index}.bfs.${manifest.version}` });
+      return (await provider.getSize(ref)) === expected;
+    } catch (err) {
+      // A sibling that cannot answer is skipped - but a storage presenting an
+      // identity it was not pinned under is not something to step over while
+      // measuring a file: it fails the pair, with the reason kept in repair.lock.
+      if (err instanceof TamperDetectedError) throw err;
     }
   }
-  return { ok: true };
+  return true;
 }
 
 /**
@@ -292,19 +414,56 @@ async function migrateInPlace(ctx: CommitContext, pair: RepairPair, newConfig: P
 }
 
 /**
- * Rebuild migration commit: add the new provider, Reed-Solomon-reconstruct the
- * lost shard onto it for each in-scope version (rebuildVersion swaps the
- * provider in the manifest + location maps), then drop the old provider once no
- * manifest references it.
+ * Rebuild migration commit: add the new provider, then Reed-Solomon-reconstruct
+ * the parts Phase A marked - {@link rebuildVersion} for a manifest that names the
+ * pair's source (it swaps the provider in the manifest + location maps),
+ * {@link rebuildShardInPlace} for one that already names the destination, where
+ * there is no provider to swap. Versions whose part was sound get their location
+ * maps pointed at the new address instead. A pair that reconstructed nothing
+ * rolls its config write back, so the pool keeps its size and the same command
+ * can be run again; the old provider is dropped once no manifest references it.
  */
-async function migrateWithRebuild(ctx: CommitContext, pair: RepairPair, newConfig: ProviderConfig): Promise<void> {
+async function migrateWithRebuild(options: MigrateWithRebuildOptions): Promise<void> {
+  const { ctx, pair, newConfig, scan } = options;
+  const before = ctx.config.providers;
   if (!ctx.config.providers.some((p) => p.id === newConfig.id)) {
     const providers = [...ctx.config.providers, newConfig];
     await writeConfig(ctx.rootDir, { ...ctx.config, providers });
     ctx.config.providers = providers;
   }
-  for (const version of ctx.versions) {
-    await rebuildVersion(ctx.rootDir, version, { removedProviderId: pair.oldName, targetProviderId: newConfig.id, io: ctx.io, ...(ctx.vaultPassword !== null ? { password: ctx.vaultPassword } : {}) });
+  let reconstructed = 0;
+  try {
+    for (const target of scan.rebuild) {
+      // A manifest naming the pair's source is the classic replacement: the part
+      // moves to a provider the backup has not heard of, so rebuildVersion swaps
+      // it in. A manifest naming the destination is the name the configuration
+      // lost: there is no provider to swap, the part is simply missing from the
+      // one it already records, and it is rebuilt where it stands.
+      if (target.underOldName) await rebuildVersion(ctx.rootDir, target.version, { removedProviderId: pair.oldName, targetProviderId: newConfig.id, io: ctx.io, ...(ctx.vaultPassword !== null ? { password: ctx.vaultPassword } : {}) });
+      else await rebuildShardInPlace(ctx.rootDir, target.version, { providerId: newConfig.id, io: ctx.io, ...(ctx.vaultPassword !== null ? { password: ctx.vaultPassword } : {}), newConnectionConfig: newConfig.config });
+      reconstructed += 1;
+    }
+  } catch (err) {
+    // A pair that reconstructed nothing leaves the pool the size it was. One
+    // entry too many and the scheme stops matching, which refuses every write
+    // AND the retry of this very command - the recorded name would already be
+    // taken by the half-finished repair. Once a version IS committed the entry
+    // has to stay: its part now lives under that name.
+    if (reconstructed === 0) {
+      await writeConfig(ctx.rootDir, { ...ctx.config, providers: before });
+      ctx.config.providers = before;
+    }
+    throw err;
+  }
+  // Versions whose part was already sound still need the location maps pointed
+  // at the new address; the rebuilt ones had theirs rewritten as they went.
+  if (scan.present.length > 0) {
+    await relocateProvider(ctx.rootDir, newConfig.id, { newConnectionConfig: newConfig.config, io: ctx.io, versions: scan.present, ...(ctx.vaultPassword !== null ? { password: ctx.vaultPassword } : {}) });
+    // relocateProvider persists its own config change (it refreshes the adapter
+    // package from the registry), so the in-memory copy is a version behind and
+    // the write below would roll that back.
+    const persisted = await readConfig(ctx.rootDir);
+    if (persisted) ctx.config.providers = persisted.providers;
   }
   const stillReferenced = (await listManifests(ctx.rootDir)).some((m) => m.shards.some((s) => s.provider_id === pair.oldName));
   if (!stillReferenced) {

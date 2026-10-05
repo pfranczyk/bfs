@@ -149,6 +149,11 @@ export async function suiteD(ctx: SmokeContext): Promise<SuiteResult> {
       if (advice === undefined) throw new Error(`expected a warning recommending \`bfs repair\` in: ${out.slice(0, 400)}`);
       assert(advice.includes('unk-en-p3'), `the advice must name the storage the backup records: ${advice}`);
       assert(advice.includes('Pool degraded'), `the advice must be the English degradation warning: ${advice}`);
+      // The free entry is as often an empty replacement as the same medium under a
+      // new name, and a migration without reconstruction refuses an empty one - so
+      // the form has to carry `--rebuild`, or this warning sends half the operators
+      // who follow it into a refusal.
+      assert(advice.includes('bfs repair --version all --rebuild'), `the repair form must carry the reconstruction: ${advice}`);
     }),
   );
 
@@ -165,6 +170,11 @@ export async function suiteD(ctx: SmokeContext): Promise<SuiteResult> {
       if (advice === undefined) throw new Error(`expected a warning recommending \`bfs repair\` in: ${out.slice(0, 400)}`);
       assert(advice.includes('unk-pl-p3'), `the advice must name the storage the backup records: ${advice}`);
       assert(advice.includes('Pula zdegradowana'), `the advice must be the Polish degradation warning: ${advice}`);
+      // The free entry is as often an empty replacement as the same medium under a
+      // new name, and a migration without reconstruction refuses an empty one - so
+      // the form has to carry `--rebuild`, or this warning sends half the operators
+      // who follow it into a refusal.
+      assert(advice.includes('bfs repair --version all --rebuild'), `the repair form must carry the reconstruction: ${advice}`);
     }),
   );
 
@@ -195,7 +205,10 @@ export async function suiteD(ctx: SmokeContext): Promise<SuiteResult> {
       const lost = manifest.shards.map((s) => s.provider_id).filter((id) => !configured.has(id));
       assert(lost.length === 1 && lost[0] === 'unk-en-p3', `expected the backup to record exactly one unconfigured storage (unk-en-p3), got: ${lost.join(', ') || '(none)'}`);
 
-      const rr = runBfs(['--lang', 'en', 'repair', '--version', 'all', 'unk-en-p3-renamed', `local:unk-en-p3 --path ${storageDir}`], vaultDir, undefined, unkEnv);
+      // Verbatim means the flag too: the advised form carries `--rebuild`, which
+      // here has nothing to reconstruct - the storage still holds its part - so
+      // the run is a relocation. That is what makes one form fit both shapes.
+      const rr = runBfs(['--lang', 'en', 'repair', '--version', 'all', '--rebuild', 'unk-en-p3-renamed', `local:unk-en-p3 --path ${storageDir}`], vaultDir, undefined, unkEnv);
       assert(rr.status === 0, `repair exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
 
       const after = await readConfig(vaultDir);

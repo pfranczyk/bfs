@@ -246,30 +246,36 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // -- provider remove --strategy remove: the recommended next steps ----------
+  // -- provider remove --strategy remove: the one next step ------------------
   // Dropping a storage leaves the backup with fewer storages than its scheme
-  // declares, and every command the removal recommends - `bfs pull`, `bfs push`,
-  // `bfs prune` - passes through the same scheme check, so all three refuse to
-  // run until the scheme matches the storages that are left. `bfs scheme set` is
-  // what unblocks them, which is why it has to lead the list; `bfs provider add`
-  // cannot, because it raises parity by one and so widens the very mismatch it
-  // would have to close.
+  // declares, and `bfs pull`, `bfs push` and `bfs prune` all pass through the
+  // same scheme check, so they refuse to run until the scheme matches the
+  // storages that are left. The removal names exactly the command that closes
+  // that gap - `bfs scheme set`, with the sum it has to reach - and nothing
+  // else: what the operator does with the backup afterwards is their choice, not
+  // the way out of the state this command leaves behind.
   //
   // Each test runs the real CLI in two parts. First the reality proof: the three
-  // recommended commands are blocked, then `bfs scheme set` with numbers that fit
-  // the remaining storages makes `bfs pull` work - evidence that the way out
-  // exists and starts where the list should point. Then the contract: the printed
-  // list names those steps in that order.
+  // commands are blocked, then `bfs scheme set` with numbers that fit the
+  // remaining storages makes `bfs pull` work - evidence that the one step named
+  // is enough. Then the contract: the line names that step and only that step.
 
   tests.push(
-    await runTest('B10a', 'provider remove --strategy remove - recommended steps are ordered and actionable (EN)', async () => {
+    await runTest('B10a', 'provider remove --strategy remove - names only the scheme command (EN)', async () => {
       const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rm-en', langEnv);
       const rr = runBfs(['--lang', 'en', 'provider', 'remove', 'rm-en-p4', '--strategy', 'remove', '--yes'], vaultDir, undefined, langEnv);
       assert(rr.status === 0, `remove exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
-      const steps = rr.stdout + rr.stderr;
+      // Only what follows the removal is the step; what the command says before it
+      // acts is a different message with its own contract. The step and the removal
+      // line both go to stdout, while warnings go to stderr - reading the two glued
+      // together would put a warning printed before the removal after the marker.
+      const removeOut = rr.stdout;
+      const marker = 'Provider "rm-en-p4" removed.';
+      assert(removeOut.includes(marker), `expected the removal to be reported in: ${removeOut.slice(0, 600)}`);
+      const steps = removeOut.slice(removeOut.indexOf(marker) + marker.length);
 
-      // Reality, part 1 - every recommended command is dead until the scheme is fixed.
-      for (const { label, args } of RECOMMENDED_AFTER_REMOVAL) {
+      // Reality, part 1 - every command behind the scheme check is dead until the scheme is fixed.
+      for (const { label, args } of BLOCKED_UNTIL_SCHEME_MATCHES) {
         const rb = runBfs(['--lang', 'en', ...args], vaultDir, undefined, langEnv);
         const blockedOut = rb.stdout + rb.stderr;
         assert(rb.status !== 0, `expected \`${label}\` to fail after removal, got exit ${rb.status ?? 'null'}\n${blockedOut.slice(0, 400)}`);
@@ -284,22 +290,32 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
       const rl = runBfs(['--lang', 'en', 'pull', '--force'], vaultDir, undefined, langEnv);
       assert(rl.status === 0, `expected \`bfs pull\` to work after \`bfs scheme set 2 1\`, got exit ${rl.status ?? 'null'}\nstdout: ${rl.stdout}\nstderr: ${rl.stderr}`);
 
-      // Contract - the printed list leads down that same road, in that order.
-      assert(/1\.\s*`bfs scheme set/.test(steps), `expected step 1 to be \`bfs scheme set\` in: ${steps.slice(0, 600)}`);
-      assert(/2\.\s*`bfs pull`/.test(steps), `expected step 2 to be \`bfs pull\` in: ${steps.slice(0, 600)}`);
-      assert(/3\.\s*`bfs push`/.test(steps), `expected step 3 to be \`bfs push\` in: ${steps.slice(0, 600)}`);
-      assert(/4\.\s*`bfs prune`/.test(steps), `expected step 4 to be \`bfs prune\` in: ${steps.slice(0, 600)}`);
+      // Contract - one step, carrying the sum the scheme has to reach. The colon
+      // keeps the heading apart from the plural one a list of steps would carry.
+      assert(steps.includes('Recommended next step:'), `the English line must carry its own wording, not only the command: ${steps.slice(0, 600)}`);
+      assert(steps.includes('bfs scheme set <N> <K>'), `expected the scheme command in: ${steps.slice(0, 600)}`);
+      assert(steps.includes('N + K = 3'), `expected the sum the scheme has to reach in: ${steps.slice(0, 600)}`);
+      for (const extra of ['bfs pull', 'bfs push', 'bfs prune', 'bfs repair', 'bfs provider add']) {
+        assert(!steps.includes(extra), `provider remove must name only the scheme command, found \`${extra}\` in: ${steps.slice(0, 600)}`);
+      }
     }),
   );
 
   tests.push(
-    await runTest('B10b', 'provider remove --strategy remove - recommended steps are ordered and actionable (PL)', async () => {
+    await runTest('B10b', 'provider remove --strategy remove - names only the scheme command (PL)', async () => {
       const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rm-pl', langEnv);
       const rr = runBfs(['--lang', 'pl', 'provider', 'remove', 'rm-pl-p4', '--strategy', 'remove', '--yes'], vaultDir, undefined, langEnv);
       assert(rr.status === 0, `remove exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
-      const steps = rr.stdout + rr.stderr;
+      // Only what follows the removal is the step; what the command says before it
+      // acts is a different message with its own contract. The step and the removal
+      // line both go to stdout, while warnings go to stderr - reading the two glued
+      // together would put a warning printed before the removal after the marker.
+      const removeOut = rr.stdout;
+      const marker = 'Nośnik "rm-pl-p4" usunięty.';
+      assert(removeOut.includes(marker), `expected the removal to be reported in: ${removeOut.slice(0, 600)}`);
+      const steps = removeOut.slice(removeOut.indexOf(marker) + marker.length);
 
-      for (const { label, args } of RECOMMENDED_AFTER_REMOVAL) {
+      for (const { label, args } of BLOCKED_UNTIL_SCHEME_MATCHES) {
         const rb = runBfs(['--lang', 'pl', ...args], vaultDir, undefined, langEnv);
         const blockedOut = rb.stdout + rb.stderr;
         assert(rb.status !== 0, `expected \`${label}\` to fail after removal, got exit ${rb.status ?? 'null'}\n${blockedOut.slice(0, 400)}`);
@@ -313,10 +329,12 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
       const rl = runBfs(['--lang', 'pl', 'pull', '--force'], vaultDir, undefined, langEnv);
       assert(rl.status === 0, `expected \`bfs pull\` to work after \`bfs scheme set 2 1\`, got exit ${rl.status ?? 'null'}\nstdout: ${rl.stdout}\nstderr: ${rl.stderr}`);
 
-      assert(/1\.\s*`bfs scheme set/.test(steps), `expected step 1 to be \`bfs scheme set\` in: ${steps.slice(0, 600)}`);
-      assert(/2\.\s*`bfs pull`/.test(steps), `expected step 2 to be \`bfs pull\` in: ${steps.slice(0, 600)}`);
-      assert(/3\.\s*`bfs push`/.test(steps), `expected step 3 to be \`bfs push\` in: ${steps.slice(0, 600)}`);
-      assert(/4\.\s*`bfs prune`/.test(steps), `expected step 4 to be \`bfs prune\` in: ${steps.slice(0, 600)}`);
+      assert(steps.includes('bfs scheme set <N> <K>'), `expected the scheme command in: ${steps.slice(0, 600)}`);
+      assert(steps.includes('N + K = 3'), `expected the sum the scheme has to reach in: ${steps.slice(0, 600)}`);
+      assert(steps.includes('Zalecany kolejny krok'), `the Polish line must carry its own wording, not only the command: ${steps.slice(0, 600)}`);
+      for (const extra of ['bfs pull', 'bfs push', 'bfs prune', 'bfs repair', 'bfs provider add']) {
+        assert(!steps.includes(extra), `provider remove must name only the scheme command, found \`${extra}\` in: ${steps.slice(0, 600)}`);
+      }
     }),
   );
 
@@ -687,11 +705,12 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
 }
 
 /**
- * The commands `bfs provider remove --strategy remove` tells the operator to run
- * next. All of them go through the scheme check, so all of them are unreachable
- * while the scheme still counts the storage that was dropped.
+ * Commands that go through the scheme check, so all of them are unreachable
+ * while the scheme still counts the storage that was dropped. None of them is
+ * named by `bfs provider remove --strategy remove` - the one command it names is
+ * the one that unblocks them.
  */
-const RECOMMENDED_AFTER_REMOVAL: Array<{ label: string; args: string[] }> = [
+const BLOCKED_UNTIL_SCHEME_MATCHES: Array<{ label: string; args: string[] }> = [
   { label: 'bfs pull', args: ['pull', '--force'] },
   { label: 'bfs push', args: ['push'] },
   { label: 'bfs prune', args: ['prune', '1', '--yes'] },

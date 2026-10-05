@@ -347,11 +347,11 @@ export function registerProviderRemove(providerCmd: Command): void {
         switch (strategy) {
           case 'remove':
             success(fmt('provider_remove_success', providerId));
-            info(t('provider_remove_next_steps'));
-            info(t('provider_remove_next_step_1'));
-            info(t('provider_remove_next_step_2'));
-            info(t('provider_remove_next_step_3'));
-            info(t('provider_remove_next_step_4'));
+            // One step and nothing else: the removal leaves a pool short of its
+            // scheme, and matching the two is the way out of that state. What the
+            // operator does with the backup afterwards is their choice, not part
+            // of it. `config` is the pool before the removal, which took one entry.
+            info(fmt('provider_remove_next_step', String(config.providers.length - 1)));
             break;
           case 'relocate':
             success(fmt('provider_relocate_success', providerId));

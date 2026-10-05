@@ -1,13 +1,15 @@
 # shellcheck shell=bash
 # Provider dropped from the pool with `--strategy remove`: the medium is gone
 # from the config but the stored scheme still demands the old N+K, so every
-# restore is blocked until the operator rescales it. This walks the exact
-# remediation list `bfs provider remove` prints - scheme set -> pull -> push ->
-# prune - and proves it ends in data the operator can restore bit-for-bit.
+# restore is blocked until the operator rescales it. `bfs provider remove`
+# names that one command and nothing else - how the pool comes to match its
+# scheme, not how to rebuild or replace anything - and this proves the command
+# it names is enough to restore bit-for-bit, then that a fresh copy and a prune
+# still work on the smaller pool.
 #
 # `remove` is the only strategy that leaves the vault in a self-inconsistent
-# state on purpose (no relocate target, no rebuild), so the guidance text is
-# load-bearing: it is the only thing telling the operator how to get out.
+# state on purpose (no relocate target, no rebuild), so the one line it prints
+# is load-bearing: it is what gets the operator out of that state.
 
 SCENARIO_NAME="provider remove: rescale scheme, restore"
 SCENARIO_DESC="drop p0 (--strategy remove) -> pull blocked by scheme mismatch -> scheme set 2 1 -> restore + healthy re-push"
@@ -39,13 +41,26 @@ scenario_run() {
   # -- The medium leaves the pool ---------------------------------------------
   run_bfs "$vault" provider remove p0 --strategy remove --yes
   assert_ok
-  # The remediation list is the operator's only exit from the inconsistent
-  # state, so pin it: the steps this scenario then executes, in order.
-  assert_out_contains 'Recommended next steps:'
-  assert_out_contains '1. `bfs scheme set <N> <K>`'
-  assert_out_contains '2. `bfs pull`'
-  assert_out_contains '3. `bfs push`'
-  assert_out_contains '4. `bfs prune`'
+  # One step, and it carries the arithmetic: the scheme has to add up to the
+  # storages that are left. Nothing about pulling, pushing, pruning, replacing
+  # or rebuilding - those are the operator's choices, not the way out of the
+  # inconsistent state this command leaves behind. Read off what follows the
+  # removal: what the command says before it does anything is a different
+  # message with its own contract. Both the step and the removal line go to
+  # stdout, while warnings go to stderr - read together, a warning printed before
+  # the removal would land after the marker.
+  assert_out_contains 'Provider "p0" removed.'
+  local epilogue="${BFS_STDOUT#*Provider \"p0\" removed.}" step
+  for step in 'bfs scheme set <N> <K>' 'N + K = 3'; do
+    printf '%s' "$epilogue" | grep -qF -- "$step" || _fail "the step after the removal must carry: $step
+$epilogue"
+  done
+  for step in 'bfs pull' 'bfs push' 'bfs prune' 'bfs repair' 'bfs provider add'; do
+    if printf '%s' "$epilogue" | grep -qF -- "$step"; then
+      _fail "the step after the removal must name only the scheme command, found: $step
+$epilogue"
+    fi
+  done
 
   # p0 is out of the config, v1 lost its redundancy...
   if grep -q '"id": "p0"' "$vault/.bfs/config.json"; then
@@ -68,7 +83,7 @@ $(cat "$vault/.bfs/config.json")"
   assert_out_contains 'requires 4 providers'
   assert_out_contains 'configured: 3'
 
-  # -- Step 1 of the printed list: match the scheme to the surviving media ----
+  # -- The named step: match the scheme to the surviving media ----------------
   run_bfs "$vault" scheme set 2 1
   assert_ok
   grep -q '"data_shards": 2' "$vault/.bfs/config.json" ||
@@ -76,7 +91,7 @@ $(cat "$vault/.bfs/config.json")"
 --- config ---
 $(cat "$vault/.bfs/config.json")"
 
-  # -- Step 2: pull. Wipe the working tree first (keep .bfs/) - this also drops
+  # -- Then a restore. Wipe the working tree first (keep .bfs/) - this also drops
   # .bfsignore, which `pull --force` preserves, so its round-trip through the
   # blob is proven along with the fixtures.
   find "$vault" -mindepth 1 -maxdepth 1 ! -name '.bfs' -exec rm -rf {} +
@@ -87,7 +102,7 @@ $(cat "$vault/.bfs/config.json")"
   # the removed medium. This is the whole point of the scenario.
   assert_restored "$vault" "$b1"
 
-  # -- Step 3: push a healthy copy onto the media that are left ---------------
+  # -- A healthy copy onto the media that are left ---------------------------
   # Change the tree first: v2 must differ from v1, otherwise the closing restore
   # could not tell which version it actually came back from.
   mutate_fixtures "$vault"
@@ -109,7 +124,7 @@ $(cat "$vault/.bfs/config.json")"
     _fail "v2 artefacts written to the removed medium p0: $(ls "${PV_LOCALDIR[0]}/$name/")"
   fi
 
-  # -- Step 4: drop the degraded version; the backup reads healthy again ------
+  # -- The degraded version dropped; the backup reads healthy again ---------
   run_bfs "$vault" prune 1 --yes
   assert_ok
   for i in 1 2 3; do
