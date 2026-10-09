@@ -23,7 +23,7 @@ REQUIRES_FTP=0
 scenario_run() {
   local vault="$SC_DIR/vault" name="bfs131" b1="$SC_DIR/v1.txt" spare="$SC_DIR/spare"
   make_fixtures "$vault"
-  # 4 media at 3/1: the floor `--strategy remove` accepts, and 2/1 is then the
+  # 4 media at 3/1: the floor `--strategy remove` accepts without --force, and 2/1 is then the
   # only legal scheme for the 3 survivors.
   build_pool "$SC_DIR" 4 0 "$name"
   mkdir -p "$spare"

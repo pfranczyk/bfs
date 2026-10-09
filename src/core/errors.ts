@@ -139,6 +139,24 @@ export class VaultCollisionError extends BfsError {
   }
 }
 
+/**
+ * Thrown when `provider remove --strategy remove` would take away more than the
+ * removal of a configuration entry: versions left with fewer parts than their
+ * own N, or a pool too small for any valid scheme. `--force` lifts it.
+ */
+export class ProviderRemoveRefusedError extends BfsError {
+  /** True when fewer storages would be left than the smallest valid scheme needs. */
+  readonly poolBelowMinimum: boolean;
+  /** Versions this removal would take below their N, ascending. */
+  readonly versionsBelowRecovery: number[];
+  constructor(message: string, poolBelowMinimum: boolean, versionsBelowRecovery: number[]) {
+    super(message);
+    this.name = 'ProviderRemoveRefusedError';
+    this.poolBelowMinimum = poolBelowMinimum;
+    this.versionsBelowRecovery = versionsBelowRecovery;
+  }
+}
+
 /** Thrown when `init` or `recovery` is asked to work in a directory that already describes a backup. */
 export class VaultAlreadyInitializedError extends BfsError {
   constructor(message: string) {

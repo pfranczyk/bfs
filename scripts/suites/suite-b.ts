@@ -338,6 +338,81 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
+  // -- provider remove --strategy remove: what it refuses without --force ------
+  // After one removal and `bfs scheme set 2 1`, a second removal would leave two
+  // storages - no valid scheme fits, so no backup can be made - and the two 3/1
+  // versions would keep only two parts each, below the three they need. The
+  // refusal names both, names `--force`, and says the parts stay on the
+  // storage: the removal drops a configuration entry, not data.
+
+  tests.push(
+    await runTest('B10g', 'provider remove --strategy remove - refuses without --force a removal below three storages and below a version N (EN)', async () => {
+      const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rmf-en', langEnv);
+      _removeAndMatchScheme({ vaultDir, id: 'rmf-en-p4', lang: 'en', env: langEnv });
+
+      const rr = runBfs(['--lang', 'en', 'provider', 'remove', 'rmf-en-p3', '--strategy', 'remove', '--yes'], vaultDir, undefined, langEnv);
+      const out = rr.stdout + rr.stderr;
+
+      assert(rr.status !== 0, `expected the removal to be refused, got exit ${rr.status ?? 'null'}\n${out.slice(0, 800)}`);
+      for (const part of ['--force', 'at least 3 storage providers', 'versions 1, 2', 'stay on the storage']) {
+        assert(out.includes(part), `expected the refusal to carry \`${part}\`: ${out.slice(0, 800)}`);
+      }
+      assert(!out.includes('Use relocate or rebuild instead'), `the refusal must not keep the old wording that hides --force: ${out.slice(0, 800)}`);
+      const config = await fs.readFile(path.join(vaultDir, '.bfs', 'config.json'), 'utf-8');
+      assert(config.includes('"id": "rmf-en-p3"'), 'a refused removal must leave the storage in config.json');
+    }),
+  );
+
+  tests.push(
+    await runTest('B10h', 'provider remove --strategy remove - refuses without --force a removal below three storages and below a version N (PL)', async () => {
+      const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rmf-pl', langEnv);
+      _removeAndMatchScheme({ vaultDir, id: 'rmf-pl-p4', lang: 'pl', env: langEnv });
+
+      const rr = runBfs(['--lang', 'pl', 'provider', 'remove', 'rmf-pl-p3', '--strategy', 'remove', '--yes'], vaultDir, undefined, langEnv);
+      const out = rr.stdout + rr.stderr;
+
+      assert(rr.status !== 0, `expected the removal to be refused, got exit ${rr.status ?? 'null'}\n${out.slice(0, 800)}`);
+      for (const part of ['--force', 'co najmniej 3 nośniki', 'wersje 1, 2', 'zostają na nośniku']) {
+        assert(out.includes(part), `expected the refusal to carry \`${part}\`: ${out.slice(0, 800)}`);
+      }
+      assert(!out.includes('Użyj relocate lub rebuild'), `the refusal must not keep the old wording that hides --force: ${out.slice(0, 800)}`);
+      const config = await fs.readFile(path.join(vaultDir, '.bfs', 'config.json'), 'utf-8');
+      assert(config.includes('"id": "rmf-pl-p3"'), 'a refused removal must leave the storage in config.json');
+    }),
+  );
+
+  // -- provider remove --strategy remove --force below three storages ---------
+  // Two storages carry no valid scheme, so `bfs scheme set` would be refused by
+  // the very command it names. Both the line after the removal and the refusal
+  // of every command behind the scheme check name the state, with no command.
+
+  for (const { id, lang, minimum, marker } of [
+    { id: 'B10i', lang: 'en' as const, minimum: 'at least 3 storage providers', marker: 'Provider "rmb-en-p3" removed.' },
+    { id: 'B10j', lang: 'pl' as const, minimum: 'co najmniej 3 nośniki', marker: 'Nośnik "rmb-pl-p3" usunięty.' },
+  ]) {
+    tests.push(
+      await runTest(id, `provider remove --force below three storages - names the state, no scheme command (${lang.toUpperCase()})`, async () => {
+        const vaultDir = await initVaultForRemoval(ctx.sourceDir, `rmb-${lang}`, langEnv);
+        _removeAndMatchScheme({ vaultDir, id: `rmb-${lang}-p4`, lang, env: langEnv });
+
+        const rr = runBfs(['--lang', lang, 'provider', 'remove', `rmb-${lang}-p3`, '--strategy', 'remove', '--yes', '--force'], vaultDir, undefined, langEnv);
+        assert(rr.status === 0, `forced removal exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
+        assert(rr.stdout.includes(marker), `expected the removal to be reported in: ${rr.stdout.slice(0, 600)}`);
+        const steps = rr.stdout.slice(rr.stdout.indexOf(marker) + marker.length);
+        assert(steps.includes(minimum), `expected the line after the removal to name the minimum (\`${minimum}\`): ${steps.slice(0, 600)}`);
+        for (const command of ['bfs scheme set', 'bfs provider add']) {
+          assert(!steps.includes(command), `below three storages the line after the removal must name no command, found \`${command}\`: ${steps.slice(0, 600)}`);
+        }
+
+        const rp = runBfs(['--lang', lang, 'pull', '--force', '--yes'], vaultDir, undefined, langEnv);
+        const pullOut = rp.stdout + rp.stderr;
+        assert(rp.status !== 0, `expected pull to be refused below three storages, got exit ${rp.status ?? 'null'}\n${pullOut.slice(0, 600)}`);
+        assert(pullOut.includes(minimum), `expected the pull refusal to name the minimum (\`${minimum}\`): ${pullOut.slice(0, 600)}`);
+        assert(!pullOut.includes('bfs scheme set'), `the pull refusal below three storages must not advise \`bfs scheme set\`: ${pullOut.slice(0, 600)}`);
+      }),
+    );
+  }
+
   // -- provider remove: what the [R]emove strategy promises -------------------
   // The strategy list is an Inquirer rawlist, but it is written to stdout before
   // the closed stdin cancels the prompt, so the wording is observable without a
@@ -717,11 +792,25 @@ const BLOCKED_UNTIL_SCHEME_MATCHES: Array<{ label: string; args: string[] }> = [
 ];
 
 /**
+ * Drops `id` with `--strategy remove` and matches the scheme to the three
+ * storages left (2/1), so the next removal is judged on its own.
+ *
+ * @throws when either command fails
+ */
+function _removeAndMatchScheme({ vaultDir, id, lang, env }: { vaultDir: string; id: string; lang: 'en' | 'pl'; env: NodeJS.ProcessEnv }): void {
+  const rr = runBfs(['--lang', lang, 'provider', 'remove', id, '--strategy', 'remove', '--yes'], vaultDir, undefined, env);
+  assert(rr.status === 0, `remove ${id} exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
+  const rs = runBfs(['--lang', lang, 'scheme', 'set', '2', '1'], vaultDir, undefined, env);
+  assert(rs.status === 0, `scheme set 2 1 exit ${rs.status ?? 'null'}\nstdout: ${rs.stdout}\nstderr: ${rs.stderr}`);
+}
+
+/**
  * Creates an isolated vault with four local providers (scheme 3+1) and two
- * pushed versions. `provider remove --strategy remove` refuses to drop a storage
- * from a pool of three or fewer, the pushed versions make the removal act on a
- * real backup, and the second version keeps `bfs prune 1` from being refused for
- * deleting the only restorable version - so prune reaches the scheme check.
+ * pushed versions. `provider remove --strategy remove` refuses without
+ * `--force` to drop a storage from a pool of three or fewer, the pushed
+ * versions make the removal act on a real backup, and the second version keeps
+ * `bfs prune 1` from being refused for deleting the only restorable version -
+ * so prune reaches the scheme check.
  *
  * @param sourceDir - Smoke temp root that holds the vault and provider dirs
  * @param name      - Prefix for the vault dir, vault name and provider names

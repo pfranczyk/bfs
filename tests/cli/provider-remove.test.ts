@@ -52,7 +52,7 @@ describe('provider remove', () => {
   it('should abort when no vault config', async () => {
     mockReadConfig.mockResolvedValue(null);
 
-    const result = await runCmd(['provider', 'remove', 'dysk-1']);
+    const result = await runCmd(['provider', 'remove', 'disk-1']);
 
     expect(result).toBe('abort');
     expect(capture.errors.some((l) => l.includes('bfs init'))).toBe(true);
@@ -64,34 +64,43 @@ describe('provider remove', () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     mockPrompt.mockResolvedValue({ strategy: 'cancel' } as never);
 
-    await runCmd(['provider', 'remove', 'dysk-1']);
+    const result = await runCmd(['provider', 'remove', 'disk-1']);
 
-    // Prompt was shown (strategy selection) - no "nie istnieje" error
-    expect(capture.errors.some((l) => l.includes('nie istnieje'))).toBe(false);
+    // The strategy prompt was reached (and cancelled) - the ID was not rejected.
+    expect(result).toBe('ok');
+    expect(capture.errors.some((l) => l.includes('does not exist'))).toBe(false);
   });
 
+  // The impact warning names the resolved storage, so a version that uses it
+  // shows which entry the index was turned into - not just that it was accepted.
   it('should resolve numeric index 0 to provider ID', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
+    mockListVersions.mockResolvedValue([{ version: 1, health: VersionHealth.Healthy, shards: [{ provider_id: 'disk-1', shard_index: 0, path: '' }] }] as never);
     mockPrompt.mockResolvedValue({ strategy: 'cancel' } as never);
 
-    await runCmd(['provider', 'remove', '0']);
+    const result = await runCmd(['provider', 'remove', '0']);
 
-    expect(capture.errors.some((l) => l.includes('nie istnieje'))).toBe(false);
+    expect(result).toBe('ok');
+    expect(capture.errors.some((l) => l.includes('does not exist'))).toBe(false);
+    expect(capture.errors.some((l) => l.includes('Provider "disk-1" is used in 1 version(s)'))).toBe(true);
   });
 
   it('should resolve numeric index 1 to second provider', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
+    mockListVersions.mockResolvedValue([{ version: 1, health: VersionHealth.Healthy, shards: [{ provider_id: 'disk-2', shard_index: 1, path: '' }] }] as never);
     mockPrompt.mockResolvedValue({ strategy: 'cancel' } as never);
 
-    await runCmd(['provider', 'remove', '1']);
+    const result = await runCmd(['provider', 'remove', '1']);
 
-    expect(capture.errors.some((l) => l.includes('nie istnieje'))).toBe(false);
+    expect(result).toBe('ok');
+    expect(capture.errors.some((l) => l.includes('does not exist'))).toBe(false);
+    expect(capture.errors.some((l) => l.includes('Provider "disk-2" is used in 1 version(s)'))).toBe(true);
   });
 
   it('should abort with error for non-existent ID', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    const result = await runCmd(['provider', 'remove', 'nieistniejący']);
+    const result = await runCmd(['provider', 'remove', 'nonexistent']);
 
     expect(result).toBe('abort');
     expect(capture.errors.some((l) => l.includes('does not exist'))).toBe(true);
@@ -111,7 +120,7 @@ describe('provider remove', () => {
   it('should show interactive list when no argument given', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     mockPrompt
-      .mockResolvedValueOnce({ chosen: 'dysk-1' } as never) // provider list
+      .mockResolvedValueOnce({ chosen: 'disk-1' } as never) // provider list
       .mockResolvedValue({ strategy: 'cancel' } as never); // strategy selection
 
     const result = await runCmd(['provider', 'remove']);
@@ -135,7 +144,7 @@ describe('provider remove', () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     mockPrompt.mockResolvedValue({ strategy: 'cancel' } as never);
 
-    const result = await runCmd(['provider', 'remove', 'dysk-1']);
+    const result = await runCmd(['provider', 'remove', 'disk-1']);
 
     expect(result).toBe('ok');
     expect(mockRemoveProvider).not.toHaveBeenCalled();
@@ -148,16 +157,16 @@ describe('provider remove', () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     mockPrompt.mockResolvedValueOnce({ strategy: 'remove' } as never).mockResolvedValueOnce({ confirmed: true } as never);
 
-    await runCmd(['provider', 'remove', 'dysk-1']);
+    await runCmd(['provider', 'remove', 'disk-1']);
 
-    expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'dysk-1', expect.objectContaining({ strategy: 'remove' }));
+    expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'disk-1', expect.objectContaining({ strategy: 'remove' }));
   });
 
   it('should not call removeProvider when confirmation declined', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     mockPrompt.mockResolvedValueOnce({ strategy: 'remove' } as never).mockResolvedValueOnce({ confirmed: false } as never);
 
-    const result = await runCmd(['provider', 'remove', 'dysk-1']);
+    const result = await runCmd(['provider', 'remove', 'disk-1']);
 
     expect(result).toBe('ok');
     expect(mockRemoveProvider).not.toHaveBeenCalled();
@@ -166,11 +175,11 @@ describe('provider remove', () => {
   it('should name the sum the scheme has to reach for the pool that is left', async () => {
     // Six storages, one removed: the step has to say five. Every other layer
     // removes one of four, so a number copied from there would pass them all.
-    const providers = [1, 2, 3, 4, 5, 6].map((n) => ({ id: `dysk-${n}`, type: 'local', config: { path: `/tmp/d${n}` } }));
+    const providers = [1, 2, 3, 4, 5, 6].map((n) => ({ id: `disk-${n}`, type: 'local', config: { path: `/tmp/d${n}` } }));
     mockReadConfig.mockResolvedValue(makeConfig({ providers, scheme: { data_shards: 4, parity_shards: 2 } }) as never);
     mockPrompt.mockResolvedValueOnce({ strategy: 'remove' } as never).mockResolvedValueOnce({ confirmed: true } as never);
 
-    await runCmd(['provider', 'remove', 'dysk-1']);
+    await runCmd(['provider', 'remove', 'disk-1']);
 
     const out = [...capture.logs, ...capture.errors].join('\n');
     expect(out).toContain('bfs scheme set <N> <K>');
@@ -196,19 +205,19 @@ describe('provider remove', () => {
       const spy = vi.mocked(LocalFsProvider.prototype.configureFromFlags);
       mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-      await runCmd(['provider', 'remove', 'dysk-1', '--strategy', 'relocate', '--config-file', './new.json']);
+      await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'relocate', '--config-file', './new.json']);
 
       expect(spy).toHaveBeenCalledOnce();
       const [input] = spy.mock.calls[0];
-      expect(input.name).toBe('dysk-1');
+      expect(input.name).toBe('disk-1');
       expect(input.rawArgs).toEqual(['--config-file', './new.json']);
-      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'dysk-1', expect.objectContaining({ strategy: 'relocate', newConnectionConfig: { path: '/adapter/new' } }));
+      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'disk-1', expect.objectContaining({ strategy: 'relocate', newConnectionConfig: { path: '/adapter/new' } }));
     });
 
     it('CI: without --new-type keeps current provider type (no newType in call)', async () => {
       mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-      await runCmd(['provider', 'remove', 'dysk-1', '--strategy', 'relocate', '--config-file', './new.json']);
+      await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'relocate', '--config-file', './new.json']);
 
       const call = mockRemoveProvider.mock.calls[0][2];
       expect(call).not.toHaveProperty('newType');
@@ -218,16 +227,16 @@ describe('provider remove', () => {
       const ftpSpy = vi.mocked(FtpProvider.prototype.configureFromFlags);
       mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-      await runCmd(['provider', 'remove', 'dysk-1', '--strategy', 'relocate', '--new-type', 'ftp', '--config-file', './ftp.json']);
+      await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'relocate', '--new-type', 'ftp', '--config-file', './ftp.json']);
 
       expect(ftpSpy).toHaveBeenCalledOnce();
-      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'dysk-1', expect.objectContaining({ strategy: 'relocate', newType: 'ftp' }));
+      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'disk-1', expect.objectContaining({ strategy: 'relocate', newType: 'ftp' }));
     });
 
     it('CI: --new-type equal to current type does not set newType', async () => {
       mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-      await runCmd(['provider', 'remove', 'dysk-1', '--strategy', 'relocate', '--new-type', 'local', '--config-file', './new.json']);
+      await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'relocate', '--new-type', 'local', '--config-file', './new.json']);
 
       const call = mockRemoveProvider.mock.calls[0][2];
       expect(call).not.toHaveProperty('newType');
@@ -237,7 +246,7 @@ describe('provider remove', () => {
       vi.mocked(LocalFsProvider.prototype.validateConfig).mockReturnValueOnce(['path must be absolute']);
       mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-      const result = await runCmd(['provider', 'remove', 'dysk-1', '--strategy', 'relocate', '--config-file', './bad.json']);
+      const result = await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'relocate', '--config-file', './bad.json']);
 
       expect(result).toBe('abort');
       expect(mockRemoveProvider).not.toHaveBeenCalled();
@@ -247,7 +256,7 @@ describe('provider remove', () => {
     it('CI: aborts when --new-type references unknown adapter', async () => {
       mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-      const result = await runCmd(['provider', 'remove', 'dysk-1', '--strategy', 'relocate', '--new-type', 'no-such-type']);
+      const result = await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'relocate', '--new-type', 'no-such-type']);
 
       expect(result).toBe('abort');
       expect(mockRemoveProvider).not.toHaveBeenCalled();
@@ -258,10 +267,10 @@ describe('provider remove', () => {
       mockReadConfig.mockResolvedValue(makeConfig() as never);
       mockPrompt.mockResolvedValueOnce({ strategy: 'relocate' } as never).mockResolvedValueOnce({ change: false } as never); // keep type
 
-      await runCmd(['provider', 'remove', 'dysk-1']);
+      await runCmd(['provider', 'remove', 'disk-1']);
 
       expect(interactiveSpy).toHaveBeenCalledOnce();
-      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'dysk-1', expect.objectContaining({ strategy: 'relocate', newConnectionConfig: { path: '/adapter/int' } }));
+      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'disk-1', expect.objectContaining({ strategy: 'relocate', newConnectionConfig: { path: '/adapter/int' } }));
       const call = mockRemoveProvider.mock.calls[0][2];
       expect(call).not.toHaveProperty('newType');
     });
@@ -274,10 +283,10 @@ describe('provider remove', () => {
         .mockResolvedValueOnce({ change: true } as never)
         .mockResolvedValueOnce({ newType: 'ftp' } as never);
 
-      await runCmd(['provider', 'remove', 'dysk-1']);
+      await runCmd(['provider', 'remove', 'disk-1']);
 
       expect(ftpInteractiveSpy).toHaveBeenCalledOnce();
-      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'dysk-1', expect.objectContaining({ strategy: 'relocate', newType: 'ftp' }));
+      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'disk-1', expect.objectContaining({ strategy: 'relocate', newType: 'ftp' }));
     });
   });
 
@@ -295,48 +304,48 @@ describe('provider remove', () => {
       mockPrompt
         .mockResolvedValueOnce({ strategy: 'rebuild' } as never)
         .mockResolvedValueOnce({ scope: 'all' } as never)
-        .mockResolvedValueOnce({ targetId: 'dysk-2' } as never);
+        .mockResolvedValueOnce({ targetId: 'disk-2' } as never);
 
-      await runCmd(['provider', 'remove', 'dysk-1']);
+      await runCmd(['provider', 'remove', 'disk-1']);
 
-      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'dysk-1', expect.objectContaining({ strategy: 'rebuild', targetProviderId: 'dysk-2', rebuildScope: 'all' }));
+      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'disk-1', expect.objectContaining({ strategy: 'rebuild', targetProviderId: 'disk-2', rebuildScope: 'all' }));
     });
 
     it('CI: existing target id - targetProviderId resolved, no configureFromFlags call', async () => {
       const spy = vi.mocked(LocalFsProvider.prototype.configureFromFlags);
       mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-      await runCmd(['provider', 'remove', 'dysk-1', '--strategy', 'rebuild', '--target', 'dysk-2']);
+      await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'rebuild', '--target', 'disk-2']);
 
       expect(spy).not.toHaveBeenCalled();
       expect(mockWriteConfig).not.toHaveBeenCalled();
-      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'dysk-1', expect.objectContaining({ strategy: 'rebuild', targetProviderId: 'dysk-2' }));
+      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'disk-1', expect.objectContaining({ strategy: 'rebuild', targetProviderId: 'disk-2' }));
     });
 
     it('CI: new target id + --new-type creates provider via configureFromFlags and writes config', async () => {
       const spy = vi.mocked(LocalFsProvider.prototype.configureFromFlags);
       mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-      await runCmd(['provider', 'remove', 'dysk-1', '--strategy', 'rebuild', '--target', 'dysk-spare', '--new-type', 'local', '--config-file', './spare.json']);
+      await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'rebuild', '--target', 'disk-spare', '--new-type', 'local', '--config-file', './spare.json']);
 
       expect(spy).toHaveBeenCalledOnce();
       const [input] = spy.mock.calls[0];
-      expect(input.name).toBe('dysk-spare');
+      expect(input.name).toBe('disk-spare');
       expect(input.rawArgs).toEqual(['--config-file', './spare.json']);
 
       expect(mockWriteConfig).toHaveBeenCalledOnce();
       const [, writtenConfig] = mockWriteConfig.mock.calls[0];
-      const added = writtenConfig.providers.find((p: { id: string }) => p.id === 'dysk-spare');
+      const added = writtenConfig.providers.find((p: { id: string }) => p.id === 'disk-spare');
       expect(added?.type).toBe('local');
       expect(added?.config).toEqual({ path: '/adapter/rebuild' });
 
-      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'dysk-1', expect.objectContaining({ strategy: 'rebuild', targetProviderId: 'dysk-spare' }));
+      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'disk-1', expect.objectContaining({ strategy: 'rebuild', targetProviderId: 'disk-spare' }));
     });
 
     it('CI: new target id without --new-type aborts', async () => {
       mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-      const result = await runCmd(['provider', 'remove', 'dysk-1', '--strategy', 'rebuild', '--target', 'dysk-spare']);
+      const result = await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'rebuild', '--target', 'disk-spare']);
 
       expect(result).toBe('abort');
       expect(mockRemoveProvider).not.toHaveBeenCalled();
@@ -346,7 +355,7 @@ describe('provider remove', () => {
     it('CI: new target id with invalid charset aborts', async () => {
       mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-      const result = await runCmd(['provider', 'remove', 'dysk-1', '--strategy', 'rebuild', '--target', 'bad name', '--new-type', 'local']);
+      const result = await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'rebuild', '--target', 'bad name', '--new-type', 'local']);
 
       expect(result).toBe('abort');
       expect(mockRemoveProvider).not.toHaveBeenCalled();
@@ -357,7 +366,7 @@ describe('provider remove', () => {
       vi.mocked(LocalFsProvider.prototype.validateConfig).mockReturnValueOnce(['path is required']);
       mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-      const result = await runCmd(['provider', 'remove', 'dysk-1', '--strategy', 'rebuild', '--target', 'dysk-spare', '--new-type', 'local']);
+      const result = await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'rebuild', '--target', 'disk-spare', '--new-type', 'local']);
 
       expect(result).toBe('abort');
       expect(mockWriteConfig).not.toHaveBeenCalled();
@@ -370,19 +379,19 @@ describe('provider remove', () => {
         .mockResolvedValueOnce({ strategy: 'rebuild' } as never)
         .mockResolvedValueOnce({ scope: 'latest' } as never)
         .mockResolvedValueOnce({ targetId: '__new_location__' } as never)
-        .mockResolvedValueOnce({ newId: 'dysk-spare' } as never)
+        .mockResolvedValueOnce({ newId: 'disk-spare' } as never)
         .mockResolvedValueOnce({ change: false } as never); // keep type = current (local)
 
-      await runCmd(['provider', 'remove', 'dysk-1']);
+      await runCmd(['provider', 'remove', 'disk-1']);
 
       expect(interactiveSpy).toHaveBeenCalledOnce();
       expect(mockWriteConfig).toHaveBeenCalledOnce();
       const [, writtenConfig] = mockWriteConfig.mock.calls[0];
-      const added = writtenConfig.providers.find((p: { id: string }) => p.id === 'dysk-spare');
+      const added = writtenConfig.providers.find((p: { id: string }) => p.id === 'disk-spare');
       expect(added?.type).toBe('local');
       expect(added?.config).toEqual({ path: '/adapter/rebuild-int' });
 
-      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'dysk-1', expect.objectContaining({ strategy: 'rebuild', targetProviderId: 'dysk-spare', rebuildScope: 'latest' }));
+      expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'disk-1', expect.objectContaining({ strategy: 'rebuild', targetProviderId: 'disk-spare', rebuildScope: 'latest' }));
     });
   });
 
@@ -391,16 +400,74 @@ describe('provider remove', () => {
   it('CI: --strategy remove --yes skips all prompts', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    await runCmd(['provider', 'remove', 'dysk-1', '--strategy', 'remove', '--yes']);
+    await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'remove', '--yes']);
 
     expect(mockPrompt).not.toHaveBeenCalled();
-    expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'dysk-1', expect.objectContaining({ strategy: 'remove' }));
+    expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'disk-1', expect.objectContaining({ strategy: 'remove' }));
+  });
+
+  // `--yes` confirms the removal itself; taking a version below its N, or the
+  // pool below three storages, is a separate consent that only `--force` gives.
+  it('CI: --strategy remove --yes does not consent to losing a version on its own', async () => {
+    mockReadConfig.mockResolvedValue(makeConfig() as never);
+
+    await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'remove', '--yes']);
+
+    expect(mockRemoveProvider.mock.calls[0]?.[2]).not.toHaveProperty('force', true);
+  });
+
+  // The two consents stay separate in the other direction too: --force does not
+  // stand in for the confirmation of the removal itself.
+  it('CI: --strategy remove --force without --yes aborts', async () => {
+    mockReadConfig.mockResolvedValue(makeConfig() as never);
+
+    const result = await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'remove', '--force']);
+
+    expect(result).toBe('abort');
+    expect(mockRemoveProvider).not.toHaveBeenCalled();
+  });
+
+  it('CI: --strategy remove --yes --force passes force to removeProvider', async () => {
+    mockReadConfig.mockResolvedValue(makeConfig() as never);
+
+    await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'remove', '--yes', '--force']);
+
+    expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'disk-1', expect.objectContaining({ strategy: 'remove', force: true }));
+  });
+
+  // Below three storages no scheme is valid (N >= 2, K >= 1), so the usual step
+  // after a removal - `bfs scheme set` with N + K = 2 - would be refused by the
+  // very command it names, and `bfs provider add` alone raises the parity along
+  // with the pool. The state is named, with no command.
+  it('should not advise a scheme the remaining storages cannot carry', async () => {
+    mockReadConfig.mockResolvedValue(makeConfig() as never);
+
+    await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'remove', '--yes', '--force']);
+
+    const out = capture.logs.join('\n');
+    expect(out).toContain('Provider "disk-1" removed.');
+    expect(out).not.toContain('bfs scheme set');
+    expect(out).not.toContain('N + K = 2');
+    expect(out).not.toContain('bfs provider add');
+    expect(out).toContain('at least 3 storage providers');
+  });
+
+  // The refusal advises `--force`; an operator who chose [R]emove at the prompt
+  // follows it by adding the flag to the same interactive command, so the flag
+  // has to reach removeProvider there as well, not only next to --strategy.
+  it('should pass --force to removeProvider when remove is chosen at the prompt', async () => {
+    mockReadConfig.mockResolvedValue(makeConfig() as never);
+    mockPrompt.mockResolvedValueOnce({ strategy: 'remove' } as never).mockResolvedValueOnce({ confirmed: true } as never);
+
+    await runCmd(['provider', 'remove', 'disk-1', '--force']);
+
+    expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'disk-1', expect.objectContaining({ strategy: 'remove', force: true }));
   });
 
   it('CI: --strategy remove without --yes aborts', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    const result = await runCmd(['provider', 'remove', 'dysk-1', '--strategy', 'remove']);
+    const result = await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'remove']);
 
     expect(result).toBe('abort');
     expect(mockRemoveProvider).not.toHaveBeenCalled();
@@ -409,7 +476,7 @@ describe('provider remove', () => {
   it('CI: invalid --strategy value aborts', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    const result = await runCmd(['provider', 'remove', 'dysk-1', '--strategy', 'bad']);
+    const result = await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'bad']);
 
     expect(result).toBe('abort');
   });
@@ -443,11 +510,11 @@ describe('provider remove', () => {
 
   it('should show affected versions warning when provider used in manifests', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
-    mockListVersions.mockResolvedValue([{ version: 1, health: VersionHealth.Healthy, shards: [{ provider_id: 'dysk-1', shard_index: 0, path: '' }] }] as never);
+    mockListVersions.mockResolvedValue([{ version: 1, health: VersionHealth.Healthy, shards: [{ provider_id: 'disk-1', shard_index: 0, path: '' }] }] as never);
     mockPrompt.mockResolvedValue({ strategy: 'cancel' } as never);
 
-    await runCmd(['provider', 'remove', 'dysk-1']);
+    await runCmd(['provider', 'remove', 'disk-1']);
 
-    expect(capture.errors.some((l) => l.includes('dysk-1'))).toBe(true);
+    expect(capture.errors.some((l) => l.includes('disk-1'))).toBe(true);
   });
 });

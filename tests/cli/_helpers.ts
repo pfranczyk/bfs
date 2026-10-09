@@ -160,9 +160,9 @@ export function makeConfig(overrides: object = {}) {
     encryption: { enabled: false, kdf: 'argon2id' as const },
     push_mode: PushMode.NewVersion,
     providers: [
-      { id: 'dysk-1', type: 'local', config: { path: '/tmp/d1' } },
-      { id: 'dysk-2', type: 'local', config: { path: '/tmp/d2' } },
-      { id: 'dysk-3', type: 'local', config: { path: '/tmp/d3' } },
+      { id: 'disk-1', type: 'local', config: { path: '/tmp/d1' } },
+      { id: 'disk-2', type: 'local', config: { path: '/tmp/d2' } },
+      { id: 'disk-3', type: 'local', config: { path: '/tmp/d3' } },
     ],
     ...overrides,
   };

@@ -60,9 +60,9 @@ describe('provider list', () => {
     await runCmd(['provider', 'list']);
 
     const output = capture.logs.join('\n');
-    expect(output).toContain('dysk-1');
-    expect(output).toContain('dysk-2');
-    expect(output).toContain('dysk-3');
+    expect(output).toContain('disk-1');
+    expect(output).toContain('disk-2');
+    expect(output).toContain('disk-3');
   });
 
   it('should show vault name and scheme in header', async () => {

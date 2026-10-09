@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`bfs provider remove --force`.** With `--strategy remove`, removes the
+  storage even when that would leave a version without enough parts to be
+  restored, or fewer than 3 storages - which the command otherwise refuses.
+  `--yes` keeps confirming only the removal itself.
+
 ### Changed
 
 - **`bfs provider remove --strategy remove` names one next step.** A removal leaves
@@ -18,6 +25,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state the removal leaves behind.
 
 ### Fixed
+
+- **`bfs provider remove --strategy remove` no longer silently costs a version
+  or the ability to make backups.** The removal checked only how many storages
+  were left, so a second removal could leave a version with fewer parts than it
+  needs to be restored - without a word, and with the version still reported as
+  degraded. It is now refused when
+  a version would end up below the parts it needs, or when fewer than 3 storages
+  would be left (no scheme fits fewer, so no backup could be made or restored).
+  The refusal names the versions and says the parts stay on the storage: only
+  the configuration entry is removed. `--force` removes the storage anyway and
+  marks such a version damaged. Below 3 storages the command and every restore
+  or backup command say that a backup needs at least 3 storage providers.
+
+- **An interrupted command no longer leaves `.bfs/config.json` or
+  `.bfs/state.json` cut in half.** Both files were rewritten in place, so a
+  process killed or a machine losing power during that write left a file that
+  was no longer valid JSON - and every later command stopped on a parser error,
+  with disaster recovery from the storages as the only way back. They are now
+  written to a temporary file that is flushed to disk and then swapped in, so
+  what is left after an interruption is either the old content or the new one.
+  Version manifests, which were already swapped in this way, and rewrites of an
+  operation's lock file now get the same flush, so they survive a power cut,
+  not only a killed process.
 
 - **`bfs repair --rebuild` now reconstructs the part when a replacement storage
   takes over a name the configuration lost - and says so instead of reporting a

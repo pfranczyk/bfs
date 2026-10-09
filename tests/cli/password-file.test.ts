@@ -125,9 +125,9 @@ describe('--password-file keeps the vault password out of argv', () => {
     // The password is forwarded for every strategy, so this pins the wiring; the
     // strategy that actually consumes it is `rebuild`, which reconstructs a shard
     // from parity. `--strategy` at all is the unattended shape of this command.
-    await runCmd(['provider', 'remove', 'dysk-1', '--strategy', 'remove', '--yes', '--password-file', passwordFile]);
+    await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'remove', '--yes', '--password-file', passwordFile]);
 
-    expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'dysk-1', expect.objectContaining({ password: SECRET }));
+    expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'disk-1', expect.objectContaining({ password: SECRET }));
   });
 
   it('should let an explicit --password win over --password-file for push', async () => {

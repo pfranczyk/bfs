@@ -43,7 +43,7 @@ assert_state_only() {
 scenario_run() {
   local vault="$SC_DIR/vault" cfg="$SC_DIR/vault/.bfs/config.json" name="bfs130" b1="$SC_DIR/v1.txt"
   make_fixtures "$vault"
-  # 4 media: the floor `--strategy remove` accepts (removeProvider refuses at
+  # 4 media: the floor `--strategy remove` accepts without --force (removeProvider refuses at
   # providers.length <= 3), which the middle state needs. 3/1 leaves 2/1 as the
   # only legal scheme for the 3 survivors.
   build_pool "$SC_DIR" 4 0 "$name"

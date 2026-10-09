@@ -82,7 +82,7 @@ describe('provider edit - IO interactivity', () => {
       create: (config: ProviderConfig, io: ProviderIO) => new ProbeProvider(config, io),
       help: () => ({ usage: '', description: '', flags: [], examples: [] }),
     });
-    vi.mocked(readConfig).mockResolvedValue(makeConfig({ providers: [{ id: 'dysk-1', type: PROBE_TYPE, config: { path: '/tmp/d1' } }] }) as never);
+    vi.mocked(readConfig).mockResolvedValue(makeConfig({ providers: [{ id: 'disk-1', type: PROBE_TYPE, config: { path: '/tmp/d1' } }] }) as never);
     vi.mocked(writeConfig).mockResolvedValue(undefined);
     prevTTY = stdinTty.isTTY;
   });
@@ -97,7 +97,7 @@ describe('provider edit - IO interactivity', () => {
   it('should hand the adapter a non-interactive IO under --ci, even on a TTY', async () => {
     stdinTty.isTTY = true;
 
-    const outcome = await runCmd(['provider', 'edit', 'dysk-1', '--ci', '--path', '/tmp/edited']);
+    const outcome = await runCmd(['provider', 'edit', 'disk-1', '--ci', '--path', '/tmp/edited']);
 
     // Positive gate: the edit really ran, so the assertion below is about the
     // value the adapter got - not about a command that bailed out early.

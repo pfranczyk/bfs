@@ -78,7 +78,7 @@ describe('pull', () => {
   it('should pass io with confirm for overwrite confirmation', async () => {
     // Pipeline step 4 (Mode A): "On disk: version X. Restoring version Y overwrites the directory."
     mockPull.mockImplementation(async (_dir, opts) => {
-      const cont = await opts.io.confirm('Na dysku: wersja 1. Przywrócenie wersji 2 nadpisze katalog. Kontynuować?');
+      const cont = await opts.io.confirm('On disk: version 1. Restoring version 2 overwrites the directory. Continue?');
       expect(cont).toBe(true);
       return { version: 1, extracted: 0, skipped: [] };
     });

@@ -19,7 +19,7 @@ REQUIRES_FTP=0
 scenario_run() {
   local vault="$SC_DIR/vault" b1="$SC_DIR/v1.txt" b2="$SC_DIR/v2.txt" name="bfs11b" i
   make_fixtures "$vault"
-  # 4 media is the floor `--strategy remove` accepts (removeProvider refuses at
+  # 4 media is the floor `--strategy remove` accepts without --force (removeProvider refuses at
   # providers.length <= 3), and 3 survivors leave 2/1 as the only legal scheme.
   # 3/1 is the sharpest starting scheme of the legal ones: p0 carries shard_0,
   # a DATA shard, and K=1 puts the restore of v1 exactly at RS tolerance - no
@@ -144,7 +144,7 @@ $(cat "$vault/.bfs/config.json")"
   assert_restored "$vault" "$b2"
 
   # -- Floor control: the pool is now at the minimum, so a second `remove` is
-  # refused. This is what makes 4 media the smallest pool this path can start
+  # refused without --force. This is what makes 4 media the smallest pool this path can start
   # from - the parameter choice above, asserted rather than assumed.
   run_bfs "$vault" provider remove p1 --strategy remove --yes
   assert_fail

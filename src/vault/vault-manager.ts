@@ -8,7 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { parseBlobFileTable, parseBlobFileTableFromFile, unpackBlob, unpackBlobFromFile } from '../core/blob-unpack.js';
 import { trackFile, untrackFile } from '../core/cleanup.js';
 import { decryptBlob, decryptStream, deriveKey, deriveShardNonce } from '../core/crypto.js';
-import { BfsError, CacheWriteError, ProviderError, PullSkippedError, ScratchWriteError, ShardCorruptedError, TamperDetectedError } from '../core/errors.js';
+import { BfsError, CacheWriteError, ProviderError, ProviderRemoveRefusedError, PullSkippedError, ScratchWriteError, ShardCorruptedError, TamperDetectedError } from '../core/errors.js';
 import { hashBuffer, hashFileExcludingTail, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
 import { DEFAULT_BFSIGNORE_CONTENT } from '../core/ignore-defaults.js';
 import { calcShardPayloadSize, rsDecode, rsDecodeStriped, rsRepair } from '../core/reed-solomon.js';
@@ -20,7 +20,7 @@ import type { FileEntry, ManifestShard, ProviderConfig, ProviderIO, PullResult, 
 import { type PushMode, VersionHealth } from '../types/index.js';
 import { checkVersionMismatch, detectMissingAdapters, formatMissingAdaptersMessage } from './adapter-preflight.js';
 import { parseVersionFromFilename } from './bootstrap.js';
-import { assertNoExistingVault, assertSchemeValid, readConfig, writeConfig } from './config.js';
+import { assertNoExistingVault, assertSchemeValid, MIN_PROVIDERS, readConfig, writeConfig } from './config.js';
 import type { HealReport } from './heal.js';
 import { applyHealthChange, deleteManifest, listManifests, listUnrecoveredVersions, readManifest, writeManifest } from './manifest.js';
 import { confirmRecoveredLocations } from './recovered-locations.js';
@@ -119,6 +119,12 @@ export interface RemoveProviderOptions {
   rebuildScope?: number[] | 'all' | 'latest';
   /** Password for encrypted vaults (heal / relocate). */
   password?: string;
+  /**
+   * 'remove': consent to a removal that takes a version below its N or leaves
+   * fewer storages than the smallest valid scheme needs. Without it such a
+   * removal is refused; it has no effect on the other strategies.
+   */
+  force?: boolean;
   io: ProviderIO;
 }
 
@@ -1486,7 +1492,12 @@ export async function prune(rootDir: string, options: PruneOptions): Promise<voi
 
 /**
  * Removes a provider from config, with three strategies:
- * - 'remove': marks affected manifests as degraded, updates config.
+ * - 'remove': drops the config entry and re-marks the versions that used it -
+ *   damaged once fewer than N of their parts are left on the configured
+ *   storages, otherwise healthy ones become degraded (a recorded deep-verify
+ *   rot is kept).
+ *   Refused without `force` when it would take a version below its N or leave
+ *   fewer than MIN_PROVIDERS storages; the medium's bytes are never touched.
  * - 'relocate': updates shard headers with new connection info.
  * - 'rebuild': downloads remaining shards, RS-repairs, uploads to target provider.
  *
@@ -1499,6 +1510,8 @@ export async function prune(rootDir: string, options: PruneOptions): Promise<voi
  *   (three lists and a line per failed version; configuration untouched), on
  *   validation failure, missing required options, or when the
  *   operator declines the post-recovery location confirmation.
+ * @throws ProviderRemoveRefusedError when 'remove' would take a version below
+ *   its N or the pool below MIN_PROVIDERS and `force` is not set (nothing written).
  */
 export async function removeProvider(rootDir: string, providerId: string, options: RemoveProviderOptions): Promise<void> {
   const config = await readConfig(rootDir);
@@ -1525,16 +1538,22 @@ export async function removeProvider(rootDir: string, providerId: string, option
   }
 
   if (options.strategy === 'remove') {
-    if (config.providers.length <= 3) {
-      throw new BfsError(t('provider_remove_min'));
-    }
-    const updatedProviders = config.providers.filter((p) => p.id !== providerId);
-    await writeConfig(rootDir, { ...config, providers: updatedProviders });
-
     const manifests = await listManifests(rootDir);
+    const assessment = _assessRemoval(config, manifests, providerId);
+    if ((assessment.poolBelowMinimum || assessment.versionsBelowRecovery.length > 0) && options.force !== true) {
+      throw new ProviderRemoveRefusedError(_describeRefusedRemoval(providerId, assessment), assessment.poolBelowMinimum, assessment.versionsBelowRecovery);
+    }
+    await writeConfig(rootDir, { ...config, providers: config.providers.filter((p) => p.id !== providerId) });
+
     for (const manifest of manifests) {
-      if (manifest.shards.some((s) => s.provider_id === providerId) && manifest.health === VersionHealth.Healthy) {
-        await writeManifest(rootDir, applyHealthChange(manifest, VersionHealth.Degraded));
+      const health = assessment.healthAfter.get(manifest.version);
+      if (health === undefined || health === manifest.health) continue;
+      // Dropping an entry repairs nothing on the other storages: rot a deep
+      // verify read there is still there, so its record and timestamp stay.
+      if (manifest.health_deep_rot === true) {
+        await writeManifest(rootDir, { ...manifest, health });
+      } else {
+        await writeManifest(rootDir, applyHealthChange(manifest, health));
       }
     }
     return;
@@ -1594,6 +1613,55 @@ function _describeRebuildReport(report: HealReport): string {
   const list = (versions: number[]): string => (versions.length > 0 ? versions.join(', ') : t('heal_rebuild_list_none'));
   const lines = report.failures.map((f) => fmt('heal_rebuild_version_failed', String(f.version), f.message));
   return [fmt('heal_rebuild_incomplete', list(report.versions_repaired), list(report.versions_degraded), list(report.versions_not_attempted)), ...lines, t('heal_rebuild_retry_hint')].join('\n');
+}
+
+/** What dropping one storage with `--strategy remove` would take away. */
+interface RemovalAssessment {
+  /** Fewer storages would be left than the smallest valid scheme needs. */
+  poolBelowMinimum: boolean;
+  /** Versions this removal would take below their N, ascending. */
+  versionsBelowRecovery: number[];
+  /** Health each version that used the storage has after the removal. */
+  healthAfter: Map<number, VersionHealth>;
+}
+
+/**
+ * Judges a `--strategy remove` against each version's own manifest: parts are
+ * counted on the storages still configured, so a partial push (which records
+ * only the uploaded parts) and an entry already gone from the config are both
+ * seen. A version is named only when this removal takes it below its N - one
+ * already below loses nothing it still had, so it must not demand force again.
+ */
+function _assessRemoval(config: VaultConfig, manifests: VersionManifest[], providerId: string): RemovalAssessment {
+  const before = new Set(config.providers.map((p) => p.id));
+  const after = new Set([...before].filter((id) => id !== providerId));
+  const versionsBelowRecovery: number[] = [];
+  const healthAfter = new Map<number, VersionHealth>();
+  for (const manifest of manifests) {
+    if (!manifest.shards.some((s) => s.provider_id === providerId)) continue;
+    const required = manifest.scheme.data_shards;
+    const partsAfter = manifest.shards.filter((s) => after.has(s.provider_id)).length;
+    const partsBefore = manifest.shards.filter((s) => before.has(s.provider_id)).length;
+    if (partsAfter < required) {
+      // Judged on parts alone: a recorded `damaged` can come from a storage that
+      // was only unreachable at the last verify and retires once it is back.
+      if (partsBefore >= required) versionsBelowRecovery.push(manifest.version);
+      healthAfter.set(manifest.version, VersionHealth.Damaged);
+    } else if (manifest.health === VersionHealth.Healthy) {
+      healthAfter.set(manifest.version, VersionHealth.Degraded);
+    }
+  }
+  versionsBelowRecovery.sort((a, b) => a - b);
+  return { poolBelowMinimum: after.size < MIN_PROVIDERS, versionsBelowRecovery, healthAfter };
+}
+
+/** Builds the refusal for a removal that needs `--force`, one clause per reason. */
+function _describeRefusedRemoval(providerId: string, assessment: RemovalAssessment): string {
+  const reasons: string[] = [];
+  if (assessment.poolBelowMinimum) reasons.push(t('provider_remove_reason_pool'));
+  const versions = assessment.versionsBelowRecovery;
+  if (versions.length > 0) reasons.push(fmt(versions.length === 1 ? 'provider_remove_reason_version' : 'provider_remove_reason_versions', versions.join(', ')));
+  return fmt('provider_remove_refused', providerId, reasons.join('; '));
 }
 
 /**

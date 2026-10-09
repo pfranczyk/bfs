@@ -4,7 +4,7 @@ import { BfsError } from '../../core/errors.js';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO, providerRegistry, validateProviderId } from '../../providers/provider.js';
 import type { CliProviderInput, ProviderConfig, ProviderIO, VaultConfig, VersionManifest } from '../../types/index.js';
-import { readConfig, writeConfig } from '../../vault/config.js';
+import { MIN_PROVIDERS, readConfig, writeConfig } from '../../vault/config.js';
 import { listVersions, removeProvider } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { isCiRun } from '../interactive-mode.js';
@@ -20,13 +20,14 @@ interface ProviderRemoveOpts {
   target?: string;
   scope?: string;
   yes?: boolean;
+  force?: boolean;
 }
 
 /**
  * Registers the `bfs provider remove <id>` command.
  *
  * CLI surface mirrors `bfs provider add --ci`: BFS recognizes a fixed set
- * of flags (`--strategy`, `--new-type`, `--target`, `--scope`, `--yes`,
+ * of flags (`--strategy`, `--new-type`, `--target`, `--scope`, `--yes`, `--force`,
  * `--password`, `--password-file`); every other CLI token flows verbatim to the provider via
  * `CliProviderInput.rawArgs`. Strategies `relocate` and
  * `rebuild`-new-target delegate building the new connection config to the
@@ -52,6 +53,7 @@ export function registerProviderRemove(providerCmd: Command): void {
     .option('--target <id>', t('provider_remove_opt_target'))
     .option('--scope <scope>', t('provider_remove_opt_scope'), 'all')
     .option('--yes', t('provider_remove_opt_yes'))
+    .option('--force', t('provider_remove_opt_force'))
     .action(async (providerId: string | undefined, opts: ProviderRemoveOpts, cmd: Command) => {
       const rootDir = resolveCwd(cmd);
       // --strategy supplies the decision this command would otherwise ask for; it
@@ -341,6 +343,7 @@ export function registerProviderRemove(providerCmd: Command): void {
           ...(targetProviderId !== undefined ? { targetProviderId } : {}),
           rebuildScope,
           ...(password !== undefined ? { password } : {}),
+          ...(opts.force === true ? { force: true } : {}),
           io,
         });
 
@@ -351,7 +354,9 @@ export function registerProviderRemove(providerCmd: Command): void {
             // scheme, and matching the two is the way out of that state. What the
             // operator does with the backup afterwards is their choice, not part
             // of it. `config` is the pool before the removal, which took one entry.
-            info(fmt('provider_remove_next_step', String(config.providers.length - 1)));
+            // Below the smallest valid pool no scheme fits, so `bfs scheme set`
+            // would refuse every pair - the state is named, with no command.
+            info(config.providers.length - 1 < MIN_PROVIDERS ? fmt('provider_remove_pool_below_minimum', String(config.providers.length - 1)) : fmt('provider_remove_next_step', String(config.providers.length - 1)));
             break;
           case 'relocate':
             success(fmt('provider_relocate_success', providerId));

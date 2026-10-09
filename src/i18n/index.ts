@@ -405,6 +405,8 @@ export interface Strings {
   scheme_invalid_parity_shards: string;
   /** %s = required, %s = current */
   scheme_providers_mismatch: string;
+  /** %s = required, %s = current */
+  scheme_providers_below_minimum: string;
 
   // --- provider: local-fs --------------------------------------------------
   /** %s = basePath */
@@ -456,6 +458,7 @@ export interface Strings {
   provider_remove_opt_target: string;
   provider_remove_opt_scope: string;
   provider_remove_opt_yes: string;
+  provider_remove_opt_force: string;
   /** %s = strategy string */
   provider_remove_strategy_invalid: string;
   provider_remove_no_providers: string;
@@ -621,7 +624,15 @@ export interface Strings {
   version_not_found: string;
   /** %s = provider name */
   provider_not_found_in_config: string;
-  provider_remove_min: string;
+  /** %s = storage name, %s = the reasons, joined */
+  provider_remove_refused: string;
+  provider_remove_reason_pool: string;
+  /** %s = the version number */
+  provider_remove_reason_version: string;
+  /** %s = the version numbers, comma-separated */
+  provider_remove_reason_versions: string;
+  /** %s = number of storages left after the removal */
+  provider_remove_pool_below_minimum: string;
   vault_encoding_rs: string;
   vault_uploading_shards: string;
   /** %s = i+1 (1-based), %s = N+K total */

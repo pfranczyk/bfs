@@ -1,9 +1,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { BfsError, VaultAlreadyInitializedError } from '../core/errors.js';
-import { isEnoent } from '../core/fs-utils.js';
+import { isEnoent, writeJsonAtomic } from '../core/fs-utils.js';
 import { fmt, t } from '../i18n/index.js';
 import type { VaultConfig } from '../types/index.js';
+
+/**
+ * Smallest pool any valid scheme fits: at least 2 data parts and 1 parity part.
+ * Below it no backup can be made or restored from the configuration.
+ */
+export const MIN_PROVIDERS = 3;
 
 /**
  * Reads .bfs/config.json from the given vault root directory.
@@ -22,19 +28,14 @@ export async function readConfig(rootDir: string): Promise<Nullable<VaultConfig>
 }
 
 /**
- * Writes VaultConfig to .bfs/config.json (pretty-printed JSON), restricted to
- * owner-only permissions because it holds provider connection secrets.
- * The .bfs directory must already exist.
+ * Writes VaultConfig to .bfs/config.json (pretty-printed JSON), replacing the
+ * file in one step so an interrupted write leaves the previous configuration
+ * in place, and restricted to owner-only permissions because it holds provider
+ * connection secrets (POSIX; Windows NTFS ignores the mode bits).
  * @throws on write failure.
  */
 export async function writeConfig(rootDir: string, config: VaultConfig): Promise<void> {
-  const filePath = path.join(rootDir, '.bfs', 'config.json');
-  // config.json holds provider connection secrets (e.g. FTP password), so keep
-  // it readable only by the owner. writeFile's mode applies when the file is
-  // created; chmod also covers overwriting an existing inode. POSIX enforces
-  // 0600; Windows NTFS ignores POSIX mode bits, so chmod is a best-effort no-op.
-  await fs.writeFile(filePath, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
-  await fs.chmod(filePath, 0o600).catch(() => {});
+  await writeJsonAtomic(path.join(rootDir, '.bfs', 'config.json'), config);
 }
 
 /**
@@ -155,6 +156,9 @@ export function assertSchemeValid(config: VaultConfig): void {
   }
   const required = data_shards + parity_shards;
   if (config.providers.length !== required) {
-    throw new BfsError(fmt('scheme_providers_mismatch', String(required), String(config.providers.length)));
+    // Below the smallest valid pool no scheme fits, so `bfs scheme set` - the way
+    // out above it - would be refused by that very command; the state is named.
+    const key = config.providers.length < MIN_PROVIDERS ? 'scheme_providers_below_minimum' : 'scheme_providers_mismatch';
+    throw new BfsError(fmt(key, String(required), String(config.providers.length)));
   }
 }
