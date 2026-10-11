@@ -261,6 +261,56 @@ export async function suiteA(vaultDir: string): Promise<SuiteResult> {
     }),
   );
 
+  // `provider add` (and `push`, which shares the message) names the collision
+  // and suggests no fix: the backup already has its name, so "use a different
+  // backup name" is impossible, and every other recipe would be a guess.
+  tests.push(
+    await runTest('A13b', 'bfs provider add onto a location holding a foreign backup -> abort, no fix suggested (EN + PL)', async () => {
+      const base = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-smoke-collision-add-'));
+      const srcA = path.join(base, 'A');
+      const srcB = path.join(base, 'B');
+      try {
+        await fs.mkdir(srcA);
+        await fs.mkdir(srcB);
+        await fs.writeFile(path.join(srcA, 'f.txt'), 'hello');
+
+        const media = (prefix: string) => [0, 1, 2].flatMap((i) => ['--provider', `local:${prefix}${i} --path ${path.join(base, `${prefix}${i}`)}`]);
+        const init = ['init', 'docs', '--ci', '--no-enc', '--no-compress', '--data-shards', '2', '--parity-shards', '1'];
+        const ra = runBfs([...init, ...media('a')], srcA);
+        assert(ra.status === 0, `machine A init should succeed, got exit ${ra.status ?? 'null'}: ${(ra.stdout + ra.stderr).slice(0, 200)}`);
+        const rp = runBfs(['push', '--new'], srcA);
+        assert(rp.status === 0, `machine A push should succeed, got exit ${rp.status ?? 'null'}: ${(rp.stdout + rp.stderr).slice(0, 200)}`);
+        const rb = runBfs([...init, ...media('b')], srcB);
+        assert(rb.status === 0, `machine B init should succeed, got exit ${rb.status ?? 'null'}: ${(rb.stdout + rb.stderr).slice(0, 200)}`);
+        const cfgPath = path.join(srcB, '.bfs', 'config.json');
+        const cfgBefore = await fs.readFile(cfgPath, 'utf8');
+        const add = ['provider', 'add', '--ci', '--name', 'intruder', '--type', 'local', '--path', path.join(base, 'a0')];
+        // `--lang` persists the choice in the user-level settings, which the run
+        // shares; an isolated XDG_CONFIG_HOME keeps it from leaking into later tests.
+        const langEnv: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: path.join(base, 'lang-config') };
+
+        const en = runBfs(['--lang', 'en', ...add], srcB, undefined, langEnv);
+        const pl = runBfs(['--lang', 'pl', ...add], srcB, undefined, langEnv);
+
+        assert(en.status !== 0, `EN provider add should abort on collision, got exit ${en.status ?? 'null'}`);
+        const enOut = en.stdout + en.stderr;
+        assert(enOut.includes('already holds a different backup of the same name'), `expected EN collision message, got: ${enOut.slice(0, 400)}`);
+        for (const advice of ['different backup name', 'remove the files', 'bfs recovery']) {
+          assert(!enOut.includes(advice), `EN collision must not suggest a fix ('${advice}'), got: ${enOut.slice(0, 400)}`);
+        }
+        assert(pl.status !== 0, `PL provider add should abort on collision, got exit ${pl.status ?? 'null'}`);
+        const plOut = pl.stdout + pl.stderr;
+        assert(plOut.includes('istnieje już inna kopia zapasowa o tej nazwie'), `expected PL collision message, got: ${plOut.slice(0, 400)}`);
+        for (const advice of ['innej nazwy kopii', 'usuń pliki', 'bfs recovery']) {
+          assert(!plOut.includes(advice), `PL collision must not suggest a fix ('${advice}'), got: ${plOut.slice(0, 400)}`);
+        }
+        assert((await fs.readFile(cfgPath, 'utf8')) === cfgBefore, 'machine B config.json must stay unchanged after a refused provider add');
+      } finally {
+        await fs.rm(base, { recursive: true, force: true }).catch(() => {});
+      }
+    }),
+  );
+
   // -- `--ci` belongs to BFS core, wherever it is typed ---------------------
   // The flag declares the mode of the whole run, so core collects it from the
   // command line regardless of position and no command or adapter consumes it.

@@ -113,7 +113,7 @@ export const en: Strings = {
   init_push_mode_prompt: 'Push mode:',
   init_push_mode_new: 'new_version - each push creates a new version (default)',
   init_push_mode_overwrite: 'overwrite - overwrite the current version',
-  init_push_mode_ask: 'ask - ask every time',
+  init_push_mode_ask: 'ask - ask when there is a version to overwrite',
   init_push_mode_invalid: 'Invalid --push-mode: "%s". Allowed: new_version|overwrite|ask',
   init_provider_format_invalid: 'Invalid --provider format: "%s". Expected: "type:name [adapter-flags]" (e.g. "local:usb1 --path /mnt/usb" or "ftp:nas --config-file ./nas.json"). See `bfs provider -h` for per-adapter flags.',
   init_provider_config_invalid: 'Provider configuration is invalid: %s',
@@ -735,9 +735,7 @@ export const en: Strings = {
   ssh_path_must_be_absolute: 'SSH adapter: "path" must be absolute (start with "/").',
   ssh_auth_conflict: 'SSH adapter: pass either --password or --private-key, not both.',
   ssh_auth_missing: 'SSH adapter: no credentials - pass --password, --private-key <path>, ' + 'or place a key at ~/.ssh/id_ed25519 or ~/.ssh/id_rsa.',
-  ssh_accept_new_offline:
-    '--accept-new-host-key needs to contact the server to capture and pin its host key, which an offline "provider edit" does not do. ' +
-    'Pin the new host explicitly with --known-host <SHA256:...>, or add it online via "bfs provider add".',
+  ssh_accept_new_offline: '--accept-new-host-key needs a connection to the server, and "bfs provider edit --ci" does not connect to it.',
   ssh_validate_host_required: 'SSH: host is required and must be a non-empty string',
   ssh_validate_port_invalid: 'SSH: port must be an integer between 1 and 65535',
   ssh_validate_path_required: 'SSH: path is required and must be a non-empty string',
@@ -823,8 +821,7 @@ Examples:
   repair_foreign_shard_detected: 'A backup part for version %s belongs to a different backup - aborting.',
   vault_collision_detected:
     'This location on storage "%s" already holds a different backup of the same name. BFS will not overwrite or delete data from another backup. To continue, manually remove the files at that location, use a different backup name, or run `bfs recovery` if this backup is yours. Aborting.',
-  vault_collision_detected_configured:
-    'This location on storage "%s" already holds a different backup of the same name. BFS will not overwrite or delete data from another backup. To continue, manually remove the files at that location, use a different backup name, or, if this backup is yours, run `bfs recovery` in another, empty directory. Aborting.',
+  vault_collision_detected_configured: 'This location on storage "%s" already holds a different backup of the same name. BFS will not overwrite or delete its data. Aborting.',
   repair_wrong_version_shard: 'A backup part for version %s does not match its expected version - aborting.',
   repair_force_unverified_warn: 'Continuing despite an unverifiable backup part for version %s.',
   repair_force_unreadable_warn: 'Continuing despite unreadable content at the destination for version %s - the reconstructed part will overwrite it.',

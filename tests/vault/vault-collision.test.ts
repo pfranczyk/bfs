@@ -296,12 +296,13 @@ describe('assertNoForeignVault', () => {
     await expect(assertNoForeignVault(makeProbeProvider('p0', { refs: ['shard_0.bfs.1'], headerVaultId: FOREIGN_VAULT_ID }), 'docs', OUR_VAULT_ID, io)).rejects.toThrow(VaultCollisionError);
   });
 
-  // The refusal ends in advice, and the advice differs by path. On `push` and
-  // `provider add` this directory already holds a configuration, and recovery
-  // refuses to replace one - so "run `bfs recovery`" only works pointed at
-  // another directory. A fresh `init` has no configuration yet, so there the
-  // recovery is run right here and the wording stays as it was.
-  it('should send a push/add collision to a recovery in another directory', async () => {
+  // On `push` and `provider add` the refusal names the collision and stops:
+  // what that other backup is and what should happen to it is the operator's
+  // call, so the message suggests no fix. Any recipe would be a guess, and "use
+  // a different backup name" is not even possible here - the name is given
+  // once, by `init`, and nothing renames it later. The `init` collision has its
+  // own key, which names another name and a recovery in this directory.
+  it('should name a push/add collision without suggesting a fix', async () => {
     const { io } = createMockProviderIO({}, root, false);
 
     const err = await assertNoForeignVault(makeProbeProvider('p0', { refs: ['shard_0.bfs.1'], headerVaultId: FOREIGN_VAULT_ID }), 'docs', OUR_VAULT_ID, io).then(
@@ -309,11 +310,14 @@ describe('assertNoForeignVault', () => {
       (e: unknown) => String(e),
     );
 
-    expect(err).toMatch(/run `bfs recovery` in another, empty directory/);
-    expect(err).not.toMatch(/run `bfs recovery` if this backup is yours/);
+    expect(err).toMatch(/storage "p0" already holds a different backup of the same name/);
+    expect(err).toMatch(/will not overwrite or delete/);
+    expect(err).not.toMatch(/different backup name/);
+    expect(err).not.toMatch(/remove the files/);
+    expect(err).not.toMatch(/bfs recovery/);
   });
 
-  it('should keep pointing a fresh init at a recovery in this directory', async () => {
+  it('should name another backup name and a recovery here on a fresh init', async () => {
     const { io } = createMockProviderIO({}, root, false);
 
     const err = await assertNoForeignVault(makeProbeProvider('p0', { refs: ['shard_0.bfs.1'], headerVaultId: FOREIGN_VAULT_ID }), 'docs', null, io).then(
@@ -321,8 +325,8 @@ describe('assertNoForeignVault', () => {
       (e: unknown) => String(e),
     );
 
+    expect(err).toMatch(/use a different backup name/);
     expect(err).toMatch(/run `bfs recovery` if this backup is yours/);
-    expect(err).not.toMatch(/in another, empty directory/);
   });
 
   it('should give the Polish operator the same split', async () => {
@@ -338,9 +342,13 @@ describe('assertNoForeignVault', () => {
       (e: unknown) => String(e),
     );
 
-    expect(configured).toMatch(/uruchom `bfs recovery` w innym, pustym katalogu/);
+    expect(configured).toMatch(/nośniku "p0" istnieje już inna kopia zapasowa o tej nazwie/);
+    expect(configured).toMatch(/nie nadpisze ani nie usunie/);
+    expect(configured).not.toMatch(/innej nazwy kopii/);
+    expect(configured).not.toMatch(/usuń pliki/);
+    expect(configured).not.toMatch(/bfs recovery/);
+    expect(fresh).toMatch(/użyj innej nazwy kopii/);
     expect(fresh).toMatch(/uruchom `bfs recovery`, jeśli to Twoja kopia/);
-    expect(fresh).not.toMatch(/w innym, pustym katalogu/);
   });
 
   it('should throw for a fresh init (expectedVaultId=null) when any shard is present', async () => {

@@ -23,8 +23,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are left. The four-step list ending in a fresh copy and a prune is gone: what to
   do with the backup afterwards is the operator's choice, not the way out of the
   state the removal leaves behind.
+- **Adapters (`bfs-vault/provider`): an offline refusal names the conflict, no
+  alternative required.** `CliProviderInput.offline` still obliges an adapter to
+  reject a flag that needs a live connection; the contract no longer asks the
+  refusal to point the operator at an offline-capable alternative.
 
 ### Fixed
+
+- **`--push-mode ask` no longer writes a backup as version 0, and a backup
+  stored that way can be restored.** With no version restored in the working
+  directory - the first push, or after pruning the version that was there - the
+  push offered to overwrite "v0" (and a run with no operator refused instead of
+  pushing), and taking it stored the backup as version 0, which
+  `bfs pull --version 0` refused as no versions available (and so did a plain
+  `bfs pull` when no other version existed). The push now creates the next
+  version without asking, since there is nothing to overwrite, and the
+  description of the mode in `bfs init` says it asks when there is a version to
+  overwrite. A backup stored as version 0 is restored by `bfs pull --version 0`,
+  or by a plain `bfs pull` when it is the only version. When `bfs recovery`
+  could not open version 0 with the passwords it was given and only recorded it
+  as not recovered, `bfs pull --version 0 --password <its password>` restores
+  it, as for any other version.
 
 - **`bfs provider remove --strategy remove` no longer silently costs a version
   or the ability to make backups.** The removal checked only how many storages
@@ -82,12 +101,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back to recovery - a storage skipped because nobody could confirm its host, a
   push that cannot confirm recovered locations - it now tells you to delete the
   `.bfs` directory first, so the advice works in the order it is given.
-- **A collision with another backup of the same name no longer points at a
-  recovery that would overwrite your own.** `bfs push` and `bfs provider add`
-  refuse a storage location holding a different backup, and offered `bfs recovery`
-  for the case where that data is yours - run in that directory, it replaced the
-  settings of the backup you were pushing. The advice now names another, empty
-  directory to recover into.
+- **A collision with another backup of the same name no longer sends you down a
+  path that does not work.** `bfs push` and `bfs provider add` refuse a storage
+  location holding a different backup. The refusal offered `bfs recovery` for the
+  case where that data is yours - run in that directory, it replaced the settings
+  of the backup you were pushing - and a different backup name, which a backup
+  that already exists cannot take. It now says only what is wrong: which storage
+  holds another backup of the same name, and that BFS will not touch it.
+- **`bfs provider edit --ci --accept-new-host-key` on SSH no longer points at
+  `bfs provider add`.** That command adds another storage and leaves the edited
+  one as it was. The refusal now says only what clashes: the flag needs a
+  connection to the server, and an edit with `--ci` makes none.
 
 ## [0.14.4] - 2026-09-12
 

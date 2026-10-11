@@ -1027,7 +1027,7 @@ export interface Strings {
   repair_foreign_shard_detected: string;
   /** %s = storage name (provider id) */
   vault_collision_detected: string;
-  /** %s = storage name (provider id); for a directory that already holds a configuration (push / provider add) */
+  /** %s = storage name (provider id); for a directory that already holds a configuration (push / provider add) - names the collision, no advice */
   vault_collision_detected_configured: string;
   /** %s = version */
   repair_wrong_version_shard: string;

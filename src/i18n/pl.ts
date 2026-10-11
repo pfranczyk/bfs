@@ -113,7 +113,7 @@ export const pl: Strings = {
   init_push_mode_prompt: 'Tryb push:',
   init_push_mode_new: 'new_version - każdy push tworzy nową wersję (domyślnie)',
   init_push_mode_overwrite: 'overwrite - nadpisz bieżącą wersję',
-  init_push_mode_ask: 'ask - pytaj za każdym razem',
+  init_push_mode_ask: 'ask - pytaj, gdy jest wersja do nadpisania',
   init_push_mode_invalid: 'Nieprawidłowy --push-mode: "%s". Dozwolone: new_version|overwrite|ask',
   init_provider_format_invalid: 'Nieprawidłowy format --provider: "%s". Oczekiwany: "typ:nazwa [flagi-adaptera]" (np. "local:usb1 --path /mnt/usb" lub "ftp:nas --config-file ./nas.json"). Flagi per adapter: `bfs provider -h`.',
   init_provider_config_invalid: 'Konfiguracja nośnika jest nieprawidłowa: %s',
@@ -738,9 +738,7 @@ export const pl: Strings = {
   ssh_path_must_be_absolute: 'Adapter SSH: "path" musi być bezwzględny (zaczynać się od "/").',
   ssh_auth_conflict: 'Adapter SSH: podaj albo --password, albo --private-key, nie oba.',
   ssh_auth_missing: 'Adapter SSH: brak poświadczeń - podaj --password, --private-key <path>, ' + 'albo umieść klucz w ~/.ssh/id_ed25519 lub ~/.ssh/id_rsa.',
-  ssh_accept_new_offline:
-    '--accept-new-host-key wymaga kontaktu z serwerem, aby pobrać i przypiąć klucz hosta - czego offline "provider edit" nie robi. ' +
-    'Przypnij nowy host jawnie przez --known-host <SHA256:...> albo dodaj go online przez "bfs provider add".',
+  ssh_accept_new_offline: '--accept-new-host-key wymaga połączenia z serwerem, a "bfs provider edit --ci" z serwerem się nie łączy.',
   ssh_validate_host_required: 'SSH: host jest wymagany i musi być niepustym stringiem',
   ssh_validate_port_invalid: 'SSH: port musi być liczbą całkowitą z zakresu 1-65535',
   ssh_validate_path_required: 'SSH: ścieżka jest wymagana i musi być niepustym stringiem',
@@ -826,8 +824,7 @@ Przykłady:
   repair_foreign_shard_detected: 'Fragment kopii dla wersji %s należy do innej kopii - przerywam.',
   vault_collision_detected:
     'W tej lokalizacji na nośniku "%s" istnieje już inna kopia zapasowa o tej nazwie. BFS nie nadpisze ani nie usunie danych innej kopii. Aby kontynuować, ręcznie usuń pliki z tej lokalizacji, użyj innej nazwy kopii, albo uruchom `bfs recovery`, jeśli to Twoja kopia. Przerywam.',
-  vault_collision_detected_configured:
-    'W tej lokalizacji na nośniku "%s" istnieje już inna kopia zapasowa o tej nazwie. BFS nie nadpisze ani nie usunie danych innej kopii. Aby kontynuować, ręcznie usuń pliki z tej lokalizacji, użyj innej nazwy kopii, albo - jeśli to Twoja kopia - uruchom `bfs recovery` w innym, pustym katalogu. Przerywam.',
+  vault_collision_detected_configured: 'W tej lokalizacji na nośniku "%s" istnieje już inna kopia zapasowa o tej nazwie. BFS nie nadpisze ani nie usunie jej danych. Przerywam.',
   repair_wrong_version_shard: 'Fragment kopii dla wersji %s nie odpowiada oczekiwanej wersji - przerywam.',
   repair_force_unverified_warn: 'Kontynuuję mimo niezweryfikowanego fragmentu kopii dla wersji %s.',
   repair_force_unreadable_warn: 'Kontynuuję mimo nieczytelnej zawartości na nośniku docelowym dla wersji %s - odbudowany fragment ją nadpisze.',

@@ -1347,7 +1347,11 @@ export async function pull(rootDir: string, options: PullOptions): Promise<PullR
 
   const state = await readState(rootDir);
   const targetVersion = options.version ?? state.latest_version;
-  if (targetVersion === 0) throw new BfsError(t('no_versions_available'));
+  // Version 0 marks "nothing pushed", but a backup can still sit under that
+  // number on the storage, so the state alone does not prove there is nothing
+  // to restore - a manifest for version 0, or a recovery's record that version 0
+  // is on the storage but not recovered, proves there is.
+  if (targetVersion === 0 && !(await _versionZeroExists(rootDir))) throw new BfsError(t('no_versions_available'));
 
   // Priority: CLI flag -> config.json -> default
   const cacheDir = options.cacheDir ?? config.cache_dir ?? path.join(rootDir, '.bfs', 'cache');
@@ -1384,6 +1388,11 @@ export async function pull(rootDir: string, options: PullOptions): Promise<PullR
   await _finalizePullState({ rootDir, cacheDir, state, targetVersion, manifest, isV2, plainBlob, blobCachePath, shardFailures, io: options.io });
 
   return { version: targetVersion, extracted: extracted.length, skipped };
+}
+
+async function _versionZeroExists(rootDir: string): Promise<boolean> {
+  if ((await readManifest(rootDir, 0)) !== null) return true;
+  return (await listUnrecoveredVersions(rootDir)).includes(0);
 }
 
 /**

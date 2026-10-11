@@ -73,8 +73,8 @@ export async function assertNoForeignVault(provider: StorageProvider, vaultName:
     if (header.vault_id === expectedVaultId) return; // our own shard - this location is ours
     io.debug(`vault collision at provider "${provider.id}": foreign vault_id=${header.vault_id}`);
     // `push` / `provider add` run in a directory that already holds a backup of
-    // its own, and recovery refuses to replace one - so the way to the foreign
-    // data leads through another, empty directory.
+    // its own, so its name is fixed; the refusal names the collision and leaves
+    // what to do about the other backup to the operator.
     throw new VaultCollisionError(fmt('vault_collision_detected_configured', provider.id), provider.id);
   }
   // Every shard header was unreadable: no proof of a foreign vault, so let the

@@ -199,11 +199,11 @@ describe('push', () => {
   it('should call io.choose when push_mode=ask and pass user answer to push', async () => {
     // push() itself calls io.choose internally - we verify the io passed
     // has a working choose() method backed by Inquirer
-    mockPrompt.mockResolvedValue({ value: 'New version (v1)' } as never);
+    mockPrompt.mockResolvedValue({ value: 'New version (v3)' } as never);
     mockPush.mockImplementation(async (_dir, opts) => {
       // Simulate vault-manager calling io.choose for push_mode=ask
-      const choice = await opts.io.choose('Create new version v1 or overwrite v0?', ['New version (v1)', 'Overwrite (v0)']);
-      expect(choice).toBe('New version (v1)');
+      const choice = await opts.io.choose('Create new version v3 or overwrite v2?', ['New version (v3)', 'Overwrite (v2)']);
+      expect(choice).toBe('New version (v3)');
       return okResult({ file_count: 0, total_size: 0 });
     });
 
@@ -214,10 +214,10 @@ describe('push', () => {
   });
 
   it('should call io.choose and select overwrite when user picks second option', async () => {
-    mockPrompt.mockResolvedValue({ value: 'Overwrite (v0)' } as never);
+    mockPrompt.mockResolvedValue({ value: 'Overwrite (v2)' } as never);
     mockPush.mockImplementation(async (_dir, opts) => {
-      const choice = await opts.io.choose('Create new version v1 or overwrite v0?', ['New version (v1)', 'Overwrite (v0)']);
-      expect(choice).toBe('Overwrite (v0)');
+      const choice = await opts.io.choose('Create new version v3 or overwrite v2?', ['New version (v3)', 'Overwrite (v2)']);
+      expect(choice).toBe('Overwrite (v2)');
       return okResult({ file_count: 0, total_size: 0 });
     });
 

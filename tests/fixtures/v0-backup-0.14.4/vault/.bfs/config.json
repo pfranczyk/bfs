@@ -1,0 +1,46 @@
+{
+  "vault_id": "86bf1484-6338-4d4f-8701-8fd404d0b1a2",
+  "vault_name": "v0fixture",
+  "version": 1,
+  "scheme": {
+    "data_shards": 2,
+    "parity_shards": 1
+  },
+  "encryption": {
+    "enabled": false,
+    "algorithm": "aes-256-gcm",
+    "kdf": "argon2id"
+  },
+  "compression": {
+    "enabled": false,
+    "algorithm": "deflate"
+  },
+  "push_mode": "ask",
+  "providers": [
+    {
+      "id": "p0",
+      "type": "local",
+      "adapterPackage": null,
+      "config": {
+        "path": "C:/bfs-v0-fixture/m0"
+      }
+    },
+    {
+      "id": "p1",
+      "type": "local",
+      "adapterPackage": null,
+      "config": {
+        "path": "C:/bfs-v0-fixture/m1"
+      }
+    },
+    {
+      "id": "p2",
+      "type": "local",
+      "adapterPackage": null,
+      "config": {
+        "path": "C:/bfs-v0-fixture/m2"
+      }
+    }
+  ],
+  "max_ram_mb": null
+}

@@ -1538,6 +1538,49 @@ describe('SshProvider', () => {
     });
   });
 
+  // --- --accept-new-host-key on an offline edit: the refusal names the conflict -
+  //
+  // `bfs provider edit --ci` never contacts the medium, so it cannot capture a
+  // new host key and refuses the flag. The refusal says what clashes - the flag
+  // needs a connection, the command makes none - and stops there. It does not
+  // guess a way out: whether the key changed because the server was reinstalled
+  // or because something else answers at that address is the operator's call,
+  // and a recipe that fits one case leads the other into a dead end (an
+  // interactive edit on an unchanged address keeps the old pin; `provider add`
+  // adds another storage instead of fixing this one).
+  describe('offline edit refusing --accept-new-host-key', () => {
+    const OFFLINE_EDIT_ARGS = ['--host', 'sshhost', '--user', 'sshuser', '--password', 'p', '--path', '/backup', '--accept-new-host-key'];
+
+    async function offlineRefusal(lang: string): Promise<string> {
+      const { io } = scriptIo({ interactive: false });
+      const p = new SshProvider({ id: 'ssh1', type: 'ssh', adapterPackage: null, config: {} }, { ...io, lang });
+      const refusal = p.configureFromFlags({ ...cliInput({ name: 'ssh1', rawArgs: OFFLINE_EDIT_ARGS }), offline: true });
+      await expect(refusal).rejects.toThrow(ProviderError);
+      return refusal.then(
+        () => '',
+        (e: unknown) => (e instanceof Error ? e.message : String(e)),
+      );
+    }
+
+    it('should name the flag and the offline command without suggesting a fix', async () => {
+      const message = await offlineRefusal('en');
+
+      expect(message).toContain('--accept-new-host-key');
+      expect(message).toContain('bfs provider edit --ci');
+      expect(message).not.toContain('--known-host');
+      expect(message).not.toContain('provider add');
+    });
+
+    it('should name the same conflict to a Polish operator without suggesting a fix', async () => {
+      const message = await offlineRefusal('pl');
+
+      expect(message).toContain('--accept-new-host-key wymaga');
+      expect(message).toContain('bfs provider edit --ci');
+      expect(message).not.toContain('--known-host');
+      expect(message).not.toContain('provider add');
+    });
+  });
+
   // --- M1: per-operation SFTP idle timeout (DoS) ---------------------------
   //
   // A malicious or hung-but-alive SSH server completes the handshake (so `ready`
