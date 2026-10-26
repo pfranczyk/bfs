@@ -61,8 +61,8 @@ const WRONG_PIN = flipFirstOctet(KNOWN_PIN);
 /** Shared state a test asserts against after driving the provider. */
 interface ServerState {
   passReceived: boolean;
-  /** True once the server-side TLS handshake completed (the `secure` event). */
-  tlsEstablished: boolean;
+  /** Control connections the server accepted - zero proves the client never dialled. */
+  connections: number;
 }
 
 /** Handle to a running in-process FTPS test server. */
@@ -143,10 +143,11 @@ function respondPhase2(stream: Duplex, line: string, state: ServerState): void {
  * received. Cross-platform (loopback, port 0) and self-tearing-down.
  */
 function startTlsFtpServer(): Promise<TlsFtpServerHandle> {
-  const state: ServerState = { passReceived: false, tlsEstablished: false };
+  const state: ServerState = { passReceived: false, connections: 0 };
   const sockets = new Set<net.Socket>();
 
   const server = net.createServer((socket) => {
+    state.connections += 1;
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
     // A client that rejects the self-signed cert (current code path) aborts the
@@ -161,12 +162,6 @@ function startTlsFtpServer(): Promise<TlsFtpServerHandle> {
         // reads our 234, i.e. after this synchronous handler returns).
         detachPlain();
         const tlsSocket = new tls.TLSSocket(socket, { isServer: true, key: KEY_PEM, cert: CERT_PEM });
-        // Fires only when the handshake COMPLETES - i.e. the client accepted the
-        // certificate (rejectUnauthorized:false). A client that rejects the cert
-        // (rejectUnauthorized:true) aborts before this, leaving tlsEstablished false.
-        tlsSocket.on('secure', () => {
-          state.tlsEstablished = true;
-        });
         tlsSocket.on('error', () => {});
         attachLineReader(tlsSocket, (l) => respondPhase2(tlsSocket, l, state));
       } else {
@@ -395,9 +390,9 @@ describe('FtpProvider - configureInteractiveForEdit keeps the stored pin and com
     expect(result?.cert_fingerprint).toBe(WRONG_PIN);
     expect(result?.cert_self_signed).toBe(true);
     expect(result?.password).toBe('rotated-password');
-    // No handshake at all: the reuse path never dials, so the certificate the
+    // No connection at all: the reuse path never dials, so the certificate the
     // server would present cannot enter the config.
-    expect(server.state.tlsEstablished).toBe(false);
+    expect(server.state.connections).toBe(0);
     // Not "no yes/no confirm about the certificate": after the fix no such
     // confirm exists anywhere, so that assertion would guard nothing. What has to
     // stay true is that the reuse branch asks the operator NOTHING at all.
@@ -433,14 +428,13 @@ describe('FtpProvider - configureInteractiveForEdit keeps the stored pin and com
     // it will never talk to again.
     const result = await provider.configureInteractiveForEdit?.(io, { existingConfig: existingFtpsConfig(oldPort) });
 
+    // The fingerprint exists only once the handshake has completed, so the pin
+    // itself proves the certificate came off the wire. The server-side `secure`
+    // event is no proof here: the capture closes its throwaway client the moment
+    // it holds the certificate, and depending on the Node release the server
+    // never gets to report the completed handshake.
     expect(result?.cert_fingerprint).toBe(KNOWN_PIN);
     expect(result?.cert_self_signed).toBe(true);
-    // The capture closes its throwaway client the moment it holds the
-    // certificate, so under TLS 1.3 the server's handshake-complete signal can
-    // land a tick later. Settle before reading it; the pin above already proves
-    // the fingerprint came off the wire.
-    await new Promise((r) => setTimeout(r, 30));
-    expect(server.state.tlsEstablished).toBe(true);
   }, 20000);
 
   it('drops the stored pin when the operator turns FTPS off, leaving a config that validates', async () => {
@@ -684,35 +678,31 @@ describe('FtpProvider - FTPS certificate pinning verifies BEFORE login (real TLS
   // trust denial that the transport turns into a generic ProviderError), not the
   // TamperDetectedError reserved for a pin that mismatches a presented cert.
   //
-  // The binding RED signal is tlsEstablished===true: the provider must COMPLETE
-  // the TLS handshake (rejectUnauthorized:false), read the presented cert, and
-  // only THEN refuse by policy. Current code fails the handshake outright
-  // (rejectUnauthorized:true on a self-signed cert) -> tlsEstablished stays false.
+  // The binding signal is the presented fingerprint inside the refusal: the
+  // provider must COMPLETE the TLS handshake (rejectUnauthorized:false), read the
+  // presented cert, and only THEN refuse by policy. A client that rejects the
+  // self-signed cert at the TLS layer (rejectUnauthorized:true) never learns the
+  // fingerprint, so its refusal cannot name it. The server-side `secure` event is
+  // no proof here: the refusal destroys the socket right after the handshake, and
+  // depending on the Node release the server never gets to report its completion.
   // This contract is what lets the TOFU opt-in trust a self-signed cert at all.
   //
-  // The IO says yes to every confirm on purpose. Without it the assertion is
-  // transparent: drop the non-interactive check and the code falls through to
-  // io.confirm, a mock that declines by default answers no, and the refusal
-  // still arrives as a ProviderError - from the operator-declined branch, which
-  // is a different contract. Consent that would be honoured turns removing the
-  // check into a completed login, so the refusal here can only be the policy one.
+  // The IO says yes to every confirm on purpose, as a second guard on the same
+  // point: drop the non-interactive check and the code falls through to
+  // io.confirm, where consent that is honoured turns the refusal into a completed
+  // login. A declining mock would instead end in the operator-declined branch -
+  // a different contract, whose refusal does not name the fingerprint.
   it('fails closed for an unpinned cert in non-interactive mode without --accept-new-cert', async () => {
     const { io: base } = createMockProviderIO({}, process.cwd(), false);
     const io: ProviderIO = { ...base, confirm: async () => true };
     const provider = new FtpProvider(makeFtpConfig(server.port, {}), io);
     provider.setVaultName('vault');
 
-    await expect(provider.getSize(SHARD_REF)).rejects.toThrow(ProviderError);
+    const attempt = provider.getSize(SHARD_REF);
+
+    await expect(attempt).rejects.toThrow(ProviderError);
+    await expect(attempt).rejects.toThrow(KNOWN_PIN);
     expect(server.state.passReceived).toBe(false);
-    // The provider completes the TLS handshake, reads the cert, and only THEN
-    // refuses by policy - destroying the socket immediately. Under TLS 1.3 the
-    // client sends its Finished last, so the server's `secure` event can land a
-    // tick AFTER the provider has already rejected. Settle briefly so the
-    // server-side handshake-complete signal flushes before we assert it: the
-    // binding property (handshake reached completion, refusal came from policy,
-    // not a TLS-layer rejection) is still what is being verified.
-    await new Promise((r) => setTimeout(r, 30));
-    expect(server.state.tlsEstablished).toBe(true);
   }, 20000);
 
   // TOFU opt-in - no pin but accept_new_cert is set (the `--accept-new-cert`

@@ -45,6 +45,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as not recovered, `bfs pull --version 0 --password <its password>` restores
   it, as for any other version.
 
+- **`bfs pull` no longer overwrites a working directory full of files without
+  asking.** Whether pull asked before overwriting depended on the version
+  recorded as restored in the directory, not on what the directory held. After
+  `bfs recovery` - or after pruning the version that was on disk - no version is
+  recorded, so pull overwrote the files there without a prompt, and a run with
+  no operator did so without refusing; an empty directory with a version
+  recorded got the question instead. Pull now asks whenever the working
+  directory holds files (anything but `.bfs/`, `.bfsignore` and what
+  `.bfsignore` excludes); when no version is restored there, the question speaks
+  of the files in the working directory rather than of a version on disk. A run
+  with no operator refuses until given `--yes`, so automation that runs
+  `bfs pull --ci` into a directory with files needs `--yes`.
+
 - **`bfs provider remove --strategy remove` no longer silently costs a version
   or the ability to make backups.** The removal checked only how many storages
   were left, so a second removal could leave a version with fewer parts than it
@@ -112,6 +125,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bfs provider add`.** That command adds another storage and leaves the edited
   one as it was. The refusal now says only what clashes: the flag needs a
   connection to the server, and an edit with `--ci` makes none.
+
+### Security
+
+- **An FTP server can no longer hang BFS with a crafted directory listing.** The
+  FTP library BFS uses (`basic-ftp`) is updated to a release that fixes
+  CVE-2026-102990: its parser for Unix-style directory listings took time growing
+  with the square of the line length, so a malicious or compromised FTP server
+  could freeze any BFS command that reaches it - including `bfs pull`,
+  `bfs push`, `bfs verify` and `bfs recovery` - at 100% CPU just by answering a
+  listing request.
 
 ## [0.14.4] - 2026-09-12
 

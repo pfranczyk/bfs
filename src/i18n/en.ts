@@ -502,6 +502,8 @@ export const en: Strings = {
   vault_no_cached_blob_pull: 'No cached backup data found - running full pull...',
   vault_pull_overwrite_confirm: 'On disk: version %s. Restoring version %s will overwrite directory. Continue?',
   pull_overwrite_no_operator: 'This run asks no questions, so overwriting version %s with version %s cannot be confirmed. Add --yes to give consent up front.',
+  vault_pull_overwrite_confirm_files: 'The working directory has files. Restoring version %s will overwrite them. Continue?',
+  pull_overwrite_files_no_operator: 'This run asks no questions, so overwriting the files in the working directory with version %s cannot be confirmed. Add --yes to give consent up front.',
   vault_unpacking_files: 'Unpacking files...',
   vault_pull_write_error_confirm: '%s file(s) could not be written:\n%s\nFix permissions, then press Y to retry or N to cancel.',
   vault_degraded_provider_unreachable: 'Pool degraded: one or more providers are unreachable. Use `bfs provider remove` to replace the provider, then `bfs push` to restore redundancy.',

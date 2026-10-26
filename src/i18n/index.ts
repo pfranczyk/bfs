@@ -644,6 +644,10 @@ export interface Strings {
   vault_pull_overwrite_confirm: string;
   /** %s = working_version, %s = targetVersion */
   pull_overwrite_no_operator: string;
+  /** %s = targetVersion - files on disk, no version restored in the directory */
+  vault_pull_overwrite_confirm_files: string;
+  /** %s = targetVersion - files on disk, no version restored in the directory */
+  pull_overwrite_files_no_operator: string;
   vault_unpacking_files: string;
   /** %s = count, %s = file list */
   vault_pull_write_error_confirm: string;

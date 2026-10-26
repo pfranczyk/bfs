@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, type Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,6 +10,7 @@ import { trackFile, untrackFile } from '../core/cleanup.js';
 import { decryptBlob, decryptStream, deriveKey, deriveShardNonce } from '../core/crypto.js';
 import { BfsError, CacheWriteError, ProviderError, ProviderRemoveRefusedError, PullSkippedError, ScratchWriteError, ShardCorruptedError, TamperDetectedError } from '../core/errors.js';
 import { hashBuffer, hashFileExcludingTail, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
+import { createIgnoreFilter } from '../core/ignore.js';
 import { DEFAULT_BFSIGNORE_CONTENT } from '../core/ignore-defaults.js';
 import { calcShardPayloadSize, rsDecode, rsDecodeStriped, rsRepair } from '../core/reed-solomon.js';
 import { computeShardHeaderSize, parseShardHeaderFromStream, placementMismatches, type ShardPlacement } from '../core/shard-io.js';
@@ -1167,16 +1168,7 @@ async function _downloadAndVerifyBlob({
   workingVersion,
   options,
 }: DownloadVerifyBlobOptions): Promise<{ plainBlob: Buffer; shardFailures: Map<number, ShardFailureReason> }> {
-  if (!options.force && !options.yes && workingVersion !== 0) {
-    // --yes and --force are exactly the channel for this consent, so a run with
-    // nobody in it is told to use one instead of being handed a cancellation it
-    // never chose and a retry that would end the same way.
-    if (options.io.interactive === false) {
-      throw new BfsError(fmt('pull_overwrite_no_operator', String(workingVersion), String(targetVersion)));
-    }
-    const cont = await options.io.confirm(fmt('vault_pull_overwrite_confirm', String(workingVersion), String(targetVersion)));
-    if (!cont) throw new BfsError(t('pull_cancelled'));
-  }
+  if (!options.force && !options.yes) await _confirmPullOverwrite({ rootDir, workingVersion, targetVersion, io: options.io });
   let plainBlob: Buffer = Buffer.alloc(0);
   let shardFailures = new Map<number, ShardFailureReason>();
   if (isV2) {
@@ -1231,6 +1223,67 @@ async function _interactiveUnpackRetry({ isV2, plainBlob, blobCachePath, initial
   }
   // Cleanup delegated to _finalizePullState, which reads the file table before deleting.
   return extracted;
+}
+
+interface PullOverwriteConsentOptions {
+  rootDir: string;
+  workingVersion: number;
+  targetVersion: number;
+  io: ProviderIO;
+}
+
+// Pull overwrites the working directory, so it asks first when that directory
+// holds files - and the trigger is the contents, not working_version: version 0
+// marks a directory after recovery too, still full of the operator's files.
+// Backup data found in the cache by `pull --cache` skips this: the cache holds
+// an unpack that was cut short, and resuming it is not a new decision.
+async function _confirmPullOverwrite({ rootDir, workingVersion, targetVersion, io }: PullOverwriteConsentOptions): Promise<void> {
+  if (!(await _workingDirHasFiles(rootDir))) return;
+  // With no version restored in the directory, naming one ("on disk: version 0")
+  // would be false - the files themselves are what is at stake.
+  const onDisk = workingVersion > 0;
+  // --yes and --force are exactly the channel for this consent, so a run with
+  // nobody in it is told to use one instead of being handed a cancellation it
+  // never chose and a retry that would end the same way.
+  if (io.interactive === false) {
+    throw new BfsError(onDisk ? fmt('pull_overwrite_no_operator', String(workingVersion), String(targetVersion)) : fmt('pull_overwrite_files_no_operator', String(targetVersion)));
+  }
+  const question = onDisk ? fmt('vault_pull_overwrite_confirm', String(workingVersion), String(targetVersion)) : fmt('vault_pull_overwrite_confirm_files', String(targetVersion));
+  if (!(await io.confirm(question))) throw new BfsError(t('pull_cancelled'));
+}
+
+// Files the operator would lose: everything but the vault's own scaffolding
+// (.bfs/ and the .bfsignore that `init` writes) and whatever a .bfsignore
+// pattern excludes, which pull never restores. Without the .bfsignore exception
+// a directory holding nothing else would still ask. Stops at the first file
+// found. A subdirectory that refuses to be read (`lost+found` on a mount point,
+// `System Volume Information` on a drive root) holds nothing pull restores, so
+// it is passed over rather than allowed to stop the restore; the working
+// directory itself refusing is still an error.
+async function _workingDirHasFiles(rootDir: string): Promise<boolean> {
+  const ignored = createIgnoreFilter(rootDir);
+  const walk = async (dir: string, prefix: string): Promise<boolean> => {
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch (err: unknown) {
+      if (prefix !== '' && _isAccessDenied(err)) return false;
+      throw err;
+    }
+    for (const entry of entries) {
+      const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+      if (rel === '.bfsignore' || ignored(rel)) continue;
+      if (entry.isFile()) return true;
+      if (entry.isDirectory() && (await walk(path.join(dir, entry.name), rel))) return true;
+    }
+    return false;
+  };
+  return walk(rootDir, '');
+}
+
+function _isAccessDenied(err: unknown): boolean {
+  const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
+  return code === 'EACCES' || code === 'EPERM';
 }
 
 interface UnpackFilesOptions {

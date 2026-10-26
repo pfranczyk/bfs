@@ -502,6 +502,8 @@ export const pl: Strings = {
   vault_no_cached_blob_pull: 'Brak zbuforowanych danych - wykonuję pełne pobieranie...',
   vault_pull_overwrite_confirm: 'Na dysku: wersja %s. Przywrócenie wersji %s nadpisze katalog. Kontynuować?',
   pull_overwrite_no_operator: 'Ten przebieg nie zadaje pytań, więc nie ma jak potwierdzić nadpisania wersji %s wersją %s. Dodaj --yes, aby wyrazić zgodę z góry.',
+  vault_pull_overwrite_confirm_files: 'W katalogu roboczym są pliki. Przywrócenie wersji %s je nadpisze. Kontynuować?',
+  pull_overwrite_files_no_operator: 'Ten przebieg nie zadaje pytań, więc nie ma jak potwierdzić nadpisania plików w katalogu roboczym wersją %s. Dodaj --yes, aby wyrazić zgodę z góry.',
   vault_unpacking_files: 'Rozpakowywanie plików...',
   vault_pull_write_error_confirm: '%s plik(ów) nie można było zapisać:\n%s\nNapraw uprawnienia, naciśnij Y aby ponowić lub N aby anulować.',
   vault_degraded_provider_unreachable: 'Pula zdegradowana: jeden lub więcej nośników jest niedostępnych. Użyj `bfs provider remove`, aby zastąpić nośnik, a następnie `bfs push`, aby przywrócić redundancję.',

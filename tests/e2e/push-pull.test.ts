@@ -297,7 +297,7 @@ describe('Scenario 3: versioning and restoring a chosen version', () => {
     for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
-  it('should track state correctly across push/pull/push cycles', { timeout: 30_000 }, async () => {
+  it('should track state correctly across push/pull/push cycles', async () => {
     await init(root, {
       vault_name: 'ver-vault',
       scheme: { data_shards: 3, parity_shards: 1 },
@@ -435,7 +435,7 @@ describe('Scenario 5: large file, 50 MB', () => {
     for (const d of [root, ...pdirs]) await fs.rm(d, { recursive: true, force: true });
   });
 
-  it('should push and pull 50 MB file with SHA-256 verification', { timeout: 60_000 }, async () => {
+  it('should push and pull 50 MB file with SHA-256 verification', async () => {
     await init(root, {
       vault_name: 'large-vault',
       scheme: { data_shards: 2, parity_shards: 1 },

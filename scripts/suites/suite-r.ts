@@ -32,7 +32,9 @@ import { createTestFiles, initTestVault, readJson, verifyShaHashes } from '../sm
 // R20/R21 ask the same of `bfs recovery`. R22..R27 move from naming a cause to
 // the way out of one: a storage the configuration lost gets one route, chosen by
 // what the configuration can still do, and all three states are pinned in both
-// languages.
+// languages. R28/R29 pin that pull refuses to overwrite a working directory full
+// of files when no operator can consent - keyed on the directory's contents, not
+// on working_version - in both languages.
 
 export async function suiteR(): Promise<SuiteResult> {
   const tests: TestResult[] = [];
@@ -725,6 +727,57 @@ export async function suiteR(): Promise<SuiteResult> {
     await runTest('R27', 'verify names the storage when every storage is taken and offers no command (PL)', () => {
       const r = runBfs(['--lang', 'pl', 'verify'], lostVaultDir, undefined, langEnv);
       assertStateOnly(r.stdout + r.stderr, NAMED_PL, 'every storage taken');
+    }),
+  );
+
+  // -- R28/R29 - pull refuses to overwrite a working directory with no operator -
+  // Pull overwrites the working directory, so a run with nobody in it cannot take
+  // that step on its own when the directory holds files. The decision keys on the
+  // directory's contents, not on working_version: pushing twice and pruning the
+  // newest leaves working_version 0 (the state recovery also leaves) with the
+  // operator's files still on disk. The refusal names the files, not a bogus
+  // "version 0" on disk, and points at --yes - in both languages.
+  const arrangeConsentVault = async (tag: string): Promise<string> => {
+    const dir = path.join(tmpBase, `consent-${tag}`);
+    const providers = [1, 2, 3].map((n) => ({ id: `cp${n}`, dir: path.join(tmpBase, `consent-${tag}-p${n}`) }));
+    await initTestVault(dir, `consent-${tag}`, providers, ['--no-enc']);
+    const marker = path.join(dir, 'hello.txt');
+    await fs.writeFile(marker, 'v1-content', 'utf-8');
+    const p1 = runBfs(['push'], dir);
+    assert(p1.status === 0, `setup push v1 exit ${p1.status ?? 'null'}\n${p1.stdout}\n${p1.stderr}`);
+    await fs.writeFile(marker, 'v2-content', 'utf-8');
+    const p2 = runBfs(['push', '--new'], dir);
+    assert(p2.status === 0, `setup push v2 exit ${p2.status ?? 'null'}\n${p2.stdout}\n${p2.stderr}`);
+    const pr = runBfs(['prune', '2', '--yes'], dir);
+    assert(pr.status === 0, `setup prune exit ${pr.status ?? 'null'}\n${pr.stdout}\n${pr.stderr}`);
+    const state = await readJson<{ latest_version: number; working_version: number }>(path.join(dir, '.bfs', 'state.json'));
+    assert(state.latest_version === 1 && state.working_version === 0, `setup must leave latest 1 / working 0, got ${JSON.stringify(state)}`);
+    return dir;
+  };
+
+  tests.push(
+    await runTest('R28', 'pull refuses to overwrite a directory of files with no operator (EN)', async () => {
+      const dir = await arrangeConsentVault('en');
+
+      const r = runBfs(['--lang', 'en', 'pull', '--ci'], dir, undefined, langEnv);
+      assert(r.status !== 0, `pull must refuse to overwrite without consent, got exit ${r.status ?? 'null'}\n${r.stdout}\n${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('overwriting the files in the working directory with version 1 cannot be confirmed'), `the refusal must name the files on disk, not a bogus on-disk version: ${out.slice(0, 500)}`);
+      assert(out.includes('--yes'), `the refusal must name the flag that gives consent up front: ${out.slice(0, 500)}`);
+      assert((await fs.readFile(path.join(dir, 'hello.txt'), 'utf-8')) === 'v2-content', 'the operator file must be left untouched by a refused pull');
+    }),
+  );
+
+  tests.push(
+    await runTest('R29', 'pull refuses to overwrite a directory of files with no operator (PL)', async () => {
+      const dir = await arrangeConsentVault('pl');
+
+      const r = runBfs(['--lang', 'pl', 'pull', '--ci'], dir, undefined, langEnv);
+      assert(r.status !== 0, `pull must refuse to overwrite without consent, got exit ${r.status ?? 'null'}\n${r.stdout}\n${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('nadpisania plików w katalogu roboczym wersją 1'), `the Polish refusal must name the files on disk, not a bogus on-disk version: ${out.slice(0, 500)}`);
+      assert(out.includes('--yes'), `the refusal must name the flag that gives consent up front: ${out.slice(0, 500)}`);
+      assert((await fs.readFile(path.join(dir, 'hello.txt'), 'utf-8')) === 'v2-content', 'the operator file must be left untouched by a refused pull');
     }),
   );
 
