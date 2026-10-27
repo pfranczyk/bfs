@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.5] - 2026-10-27
+
 ### Added
 
 - **`bfs provider remove --force`.** With `--strategy remove`, removes the
@@ -1629,7 +1631,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.4...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.5...HEAD
+[0.14.5]: https://github.com/pfranczyk/bfs/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/pfranczyk/bfs/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/pfranczyk/bfs/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/pfranczyk/bfs/compare/v0.14.1...v0.14.2
