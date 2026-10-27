@@ -246,7 +246,11 @@ export async function suiteQ(): Promise<SuiteResult> {
         const r = runBfs(['provider', 'edit', 'ssh1', '--ci', '--host', SSH_HOST, '--port', String(SSH_PORT), '--user', SSH_USER, '--password', SSH_PASSWORD, '--path', REMOTE_PATHS[0], '--accept-new-host-key'], vaultDir);
         assert(r.status !== 0, `expected non-zero exit (offline refusal), got ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
         const combined = r.stdout + r.stderr;
-        assert(combined.includes('--known-host'), `refusal must point the operator at --known-host, got:\n${combined}`);
+        // The refusal names the conflict and suggests no fix: here the address is
+        // unchanged and a pin exists, so any recipe would be a guess.
+        assert(combined.includes('bfs provider edit --ci'), `refusal must name the offline command, got:\n${combined}`);
+        assert(!combined.includes('--known-host'), `refusal must not suggest --known-host, got:\n${combined}`);
+        assert(!combined.includes('provider add'), `refusal must not suggest provider add, got:\n${combined}`);
 
         const after = await readJson<{ providers: Array<{ id: string; config: Record<string, unknown> }> }>(path.join(vaultDir, '.bfs', 'config.json'));
         const ssh1After = after.providers.find((p) => p.id === 'ssh1');
@@ -254,8 +258,8 @@ export async function suiteQ(): Promise<SuiteResult> {
       }),
     );
 
-    // Q9 - the offline-capable alternative the refusal points at: --known-host
-    // pins the fingerprint verbatim, without dialing the server. Runs last: it
+    // Q9 - --known-host pins the fingerprint verbatim, without dialing the
+    // server: the offline edit can take a pin, just not capture one. Runs last: it
     // writes a placeholder pin that would fail a real handshake, so no later test
     // may use ssh1 for a live op.
     tests.push(

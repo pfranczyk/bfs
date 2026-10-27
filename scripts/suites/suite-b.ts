@@ -246,30 +246,36 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // -- provider remove --strategy remove: the recommended next steps ----------
+  // -- provider remove --strategy remove: the one next step ------------------
   // Dropping a storage leaves the backup with fewer storages than its scheme
-  // declares, and every command the removal recommends - `bfs pull`, `bfs push`,
-  // `bfs prune` - passes through the same scheme check, so all three refuse to
-  // run until the scheme matches the storages that are left. `bfs scheme set` is
-  // what unblocks them, which is why it has to lead the list; `bfs provider add`
-  // cannot, because it raises parity by one and so widens the very mismatch it
-  // would have to close.
+  // declares, and `bfs pull`, `bfs push` and `bfs prune` all pass through the
+  // same scheme check, so they refuse to run until the scheme matches the
+  // storages that are left. The removal names exactly the command that closes
+  // that gap - `bfs scheme set`, with the sum it has to reach - and nothing
+  // else: what the operator does with the backup afterwards is their choice, not
+  // the way out of the state this command leaves behind.
   //
   // Each test runs the real CLI in two parts. First the reality proof: the three
-  // recommended commands are blocked, then `bfs scheme set` with numbers that fit
-  // the remaining storages makes `bfs pull` work - evidence that the way out
-  // exists and starts where the list should point. Then the contract: the printed
-  // list names those steps in that order.
+  // commands are blocked, then `bfs scheme set` with numbers that fit the
+  // remaining storages makes `bfs pull` work - evidence that the one step named
+  // is enough. Then the contract: the line names that step and only that step.
 
   tests.push(
-    await runTest('B10a', 'provider remove --strategy remove - recommended steps are ordered and actionable (EN)', async () => {
+    await runTest('B10a', 'provider remove --strategy remove - names only the scheme command (EN)', async () => {
       const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rm-en', langEnv);
       const rr = runBfs(['--lang', 'en', 'provider', 'remove', 'rm-en-p4', '--strategy', 'remove', '--yes'], vaultDir, undefined, langEnv);
       assert(rr.status === 0, `remove exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
-      const steps = rr.stdout + rr.stderr;
+      // Only what follows the removal is the step; what the command says before it
+      // acts is a different message with its own contract. The step and the removal
+      // line both go to stdout, while warnings go to stderr - reading the two glued
+      // together would put a warning printed before the removal after the marker.
+      const removeOut = rr.stdout;
+      const marker = 'Provider "rm-en-p4" removed.';
+      assert(removeOut.includes(marker), `expected the removal to be reported in: ${removeOut.slice(0, 600)}`);
+      const steps = removeOut.slice(removeOut.indexOf(marker) + marker.length);
 
-      // Reality, part 1 - every recommended command is dead until the scheme is fixed.
-      for (const { label, args } of RECOMMENDED_AFTER_REMOVAL) {
+      // Reality, part 1 - every command behind the scheme check is dead until the scheme is fixed.
+      for (const { label, args } of BLOCKED_UNTIL_SCHEME_MATCHES) {
         const rb = runBfs(['--lang', 'en', ...args], vaultDir, undefined, langEnv);
         const blockedOut = rb.stdout + rb.stderr;
         assert(rb.status !== 0, `expected \`${label}\` to fail after removal, got exit ${rb.status ?? 'null'}\n${blockedOut.slice(0, 400)}`);
@@ -284,22 +290,32 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
       const rl = runBfs(['--lang', 'en', 'pull', '--force'], vaultDir, undefined, langEnv);
       assert(rl.status === 0, `expected \`bfs pull\` to work after \`bfs scheme set 2 1\`, got exit ${rl.status ?? 'null'}\nstdout: ${rl.stdout}\nstderr: ${rl.stderr}`);
 
-      // Contract - the printed list leads down that same road, in that order.
-      assert(/1\.\s*`bfs scheme set/.test(steps), `expected step 1 to be \`bfs scheme set\` in: ${steps.slice(0, 600)}`);
-      assert(/2\.\s*`bfs pull`/.test(steps), `expected step 2 to be \`bfs pull\` in: ${steps.slice(0, 600)}`);
-      assert(/3\.\s*`bfs push`/.test(steps), `expected step 3 to be \`bfs push\` in: ${steps.slice(0, 600)}`);
-      assert(/4\.\s*`bfs prune`/.test(steps), `expected step 4 to be \`bfs prune\` in: ${steps.slice(0, 600)}`);
+      // Contract - one step, carrying the sum the scheme has to reach. The colon
+      // keeps the heading apart from the plural one a list of steps would carry.
+      assert(steps.includes('Recommended next step:'), `the English line must carry its own wording, not only the command: ${steps.slice(0, 600)}`);
+      assert(steps.includes('bfs scheme set <N> <K>'), `expected the scheme command in: ${steps.slice(0, 600)}`);
+      assert(steps.includes('N + K = 3'), `expected the sum the scheme has to reach in: ${steps.slice(0, 600)}`);
+      for (const extra of ['bfs pull', 'bfs push', 'bfs prune', 'bfs repair', 'bfs provider add']) {
+        assert(!steps.includes(extra), `provider remove must name only the scheme command, found \`${extra}\` in: ${steps.slice(0, 600)}`);
+      }
     }),
   );
 
   tests.push(
-    await runTest('B10b', 'provider remove --strategy remove - recommended steps are ordered and actionable (PL)', async () => {
+    await runTest('B10b', 'provider remove --strategy remove - names only the scheme command (PL)', async () => {
       const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rm-pl', langEnv);
       const rr = runBfs(['--lang', 'pl', 'provider', 'remove', 'rm-pl-p4', '--strategy', 'remove', '--yes'], vaultDir, undefined, langEnv);
       assert(rr.status === 0, `remove exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
-      const steps = rr.stdout + rr.stderr;
+      // Only what follows the removal is the step; what the command says before it
+      // acts is a different message with its own contract. The step and the removal
+      // line both go to stdout, while warnings go to stderr - reading the two glued
+      // together would put a warning printed before the removal after the marker.
+      const removeOut = rr.stdout;
+      const marker = 'Nośnik "rm-pl-p4" usunięty.';
+      assert(removeOut.includes(marker), `expected the removal to be reported in: ${removeOut.slice(0, 600)}`);
+      const steps = removeOut.slice(removeOut.indexOf(marker) + marker.length);
 
-      for (const { label, args } of RECOMMENDED_AFTER_REMOVAL) {
+      for (const { label, args } of BLOCKED_UNTIL_SCHEME_MATCHES) {
         const rb = runBfs(['--lang', 'pl', ...args], vaultDir, undefined, langEnv);
         const blockedOut = rb.stdout + rb.stderr;
         assert(rb.status !== 0, `expected \`${label}\` to fail after removal, got exit ${rb.status ?? 'null'}\n${blockedOut.slice(0, 400)}`);
@@ -313,12 +329,89 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
       const rl = runBfs(['--lang', 'pl', 'pull', '--force'], vaultDir, undefined, langEnv);
       assert(rl.status === 0, `expected \`bfs pull\` to work after \`bfs scheme set 2 1\`, got exit ${rl.status ?? 'null'}\nstdout: ${rl.stdout}\nstderr: ${rl.stderr}`);
 
-      assert(/1\.\s*`bfs scheme set/.test(steps), `expected step 1 to be \`bfs scheme set\` in: ${steps.slice(0, 600)}`);
-      assert(/2\.\s*`bfs pull`/.test(steps), `expected step 2 to be \`bfs pull\` in: ${steps.slice(0, 600)}`);
-      assert(/3\.\s*`bfs push`/.test(steps), `expected step 3 to be \`bfs push\` in: ${steps.slice(0, 600)}`);
-      assert(/4\.\s*`bfs prune`/.test(steps), `expected step 4 to be \`bfs prune\` in: ${steps.slice(0, 600)}`);
+      assert(steps.includes('bfs scheme set <N> <K>'), `expected the scheme command in: ${steps.slice(0, 600)}`);
+      assert(steps.includes('N + K = 3'), `expected the sum the scheme has to reach in: ${steps.slice(0, 600)}`);
+      assert(steps.includes('Zalecany kolejny krok'), `the Polish line must carry its own wording, not only the command: ${steps.slice(0, 600)}`);
+      for (const extra of ['bfs pull', 'bfs push', 'bfs prune', 'bfs repair', 'bfs provider add']) {
+        assert(!steps.includes(extra), `provider remove must name only the scheme command, found \`${extra}\` in: ${steps.slice(0, 600)}`);
+      }
     }),
   );
+
+  // -- provider remove --strategy remove: what it refuses without --force ------
+  // After one removal and `bfs scheme set 2 1`, a second removal would leave two
+  // storages - no valid scheme fits, so no backup can be made - and the two 3/1
+  // versions would keep only two parts each, below the three they need. The
+  // refusal names both, names `--force`, and says the parts stay on the
+  // storage: the removal drops a configuration entry, not data.
+
+  tests.push(
+    await runTest('B10g', 'provider remove --strategy remove - refuses without --force a removal below three storages and below a version N (EN)', async () => {
+      const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rmf-en', langEnv);
+      _removeAndMatchScheme({ vaultDir, id: 'rmf-en-p4', lang: 'en', env: langEnv });
+
+      const rr = runBfs(['--lang', 'en', 'provider', 'remove', 'rmf-en-p3', '--strategy', 'remove', '--yes'], vaultDir, undefined, langEnv);
+      const out = rr.stdout + rr.stderr;
+
+      assert(rr.status !== 0, `expected the removal to be refused, got exit ${rr.status ?? 'null'}\n${out.slice(0, 800)}`);
+      for (const part of ['--force', 'at least 3 storage providers', 'versions 1, 2', 'stay on the storage']) {
+        assert(out.includes(part), `expected the refusal to carry \`${part}\`: ${out.slice(0, 800)}`);
+      }
+      assert(!out.includes('Use relocate or rebuild instead'), `the refusal must not keep the old wording that hides --force: ${out.slice(0, 800)}`);
+      const config = await fs.readFile(path.join(vaultDir, '.bfs', 'config.json'), 'utf-8');
+      assert(config.includes('"id": "rmf-en-p3"'), 'a refused removal must leave the storage in config.json');
+    }),
+  );
+
+  tests.push(
+    await runTest('B10h', 'provider remove --strategy remove - refuses without --force a removal below three storages and below a version N (PL)', async () => {
+      const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rmf-pl', langEnv);
+      _removeAndMatchScheme({ vaultDir, id: 'rmf-pl-p4', lang: 'pl', env: langEnv });
+
+      const rr = runBfs(['--lang', 'pl', 'provider', 'remove', 'rmf-pl-p3', '--strategy', 'remove', '--yes'], vaultDir, undefined, langEnv);
+      const out = rr.stdout + rr.stderr;
+
+      assert(rr.status !== 0, `expected the removal to be refused, got exit ${rr.status ?? 'null'}\n${out.slice(0, 800)}`);
+      for (const part of ['--force', 'co najmniej 3 nośniki', 'wersje 1, 2', 'zostają na nośniku']) {
+        assert(out.includes(part), `expected the refusal to carry \`${part}\`: ${out.slice(0, 800)}`);
+      }
+      assert(!out.includes('Użyj relocate lub rebuild'), `the refusal must not keep the old wording that hides --force: ${out.slice(0, 800)}`);
+      const config = await fs.readFile(path.join(vaultDir, '.bfs', 'config.json'), 'utf-8');
+      assert(config.includes('"id": "rmf-pl-p3"'), 'a refused removal must leave the storage in config.json');
+    }),
+  );
+
+  // -- provider remove --strategy remove --force below three storages ---------
+  // Two storages carry no valid scheme, so `bfs scheme set` would be refused by
+  // the very command it names. Both the line after the removal and the refusal
+  // of every command behind the scheme check name the state, with no command.
+
+  for (const { id, lang, minimum, marker } of [
+    { id: 'B10i', lang: 'en' as const, minimum: 'at least 3 storage providers', marker: 'Provider "rmb-en-p3" removed.' },
+    { id: 'B10j', lang: 'pl' as const, minimum: 'co najmniej 3 nośniki', marker: 'Nośnik "rmb-pl-p3" usunięty.' },
+  ]) {
+    tests.push(
+      await runTest(id, `provider remove --force below three storages - names the state, no scheme command (${lang.toUpperCase()})`, async () => {
+        const vaultDir = await initVaultForRemoval(ctx.sourceDir, `rmb-${lang}`, langEnv);
+        _removeAndMatchScheme({ vaultDir, id: `rmb-${lang}-p4`, lang, env: langEnv });
+
+        const rr = runBfs(['--lang', lang, 'provider', 'remove', `rmb-${lang}-p3`, '--strategy', 'remove', '--yes', '--force'], vaultDir, undefined, langEnv);
+        assert(rr.status === 0, `forced removal exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
+        assert(rr.stdout.includes(marker), `expected the removal to be reported in: ${rr.stdout.slice(0, 600)}`);
+        const steps = rr.stdout.slice(rr.stdout.indexOf(marker) + marker.length);
+        assert(steps.includes(minimum), `expected the line after the removal to name the minimum (\`${minimum}\`): ${steps.slice(0, 600)}`);
+        for (const command of ['bfs scheme set', 'bfs provider add']) {
+          assert(!steps.includes(command), `below three storages the line after the removal must name no command, found \`${command}\`: ${steps.slice(0, 600)}`);
+        }
+
+        const rp = runBfs(['--lang', lang, 'pull', '--force', '--yes'], vaultDir, undefined, langEnv);
+        const pullOut = rp.stdout + rp.stderr;
+        assert(rp.status !== 0, `expected pull to be refused below three storages, got exit ${rp.status ?? 'null'}\n${pullOut.slice(0, 600)}`);
+        assert(pullOut.includes(minimum), `expected the pull refusal to name the minimum (\`${minimum}\`): ${pullOut.slice(0, 600)}`);
+        assert(!pullOut.includes('bfs scheme set'), `the pull refusal below three storages must not advise \`bfs scheme set\`: ${pullOut.slice(0, 600)}`);
+      }),
+    );
+  }
 
   // -- provider remove: what the [R]emove strategy promises -------------------
   // The strategy list is an Inquirer rawlist, but it is written to stdout before
@@ -687,22 +780,37 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
 }
 
 /**
- * The commands `bfs provider remove --strategy remove` tells the operator to run
- * next. All of them go through the scheme check, so all of them are unreachable
- * while the scheme still counts the storage that was dropped.
+ * Commands that go through the scheme check, so all of them are unreachable
+ * while the scheme still counts the storage that was dropped. None of them is
+ * named by `bfs provider remove --strategy remove` - the one command it names is
+ * the one that unblocks them.
  */
-const RECOMMENDED_AFTER_REMOVAL: Array<{ label: string; args: string[] }> = [
+const BLOCKED_UNTIL_SCHEME_MATCHES: Array<{ label: string; args: string[] }> = [
   { label: 'bfs pull', args: ['pull', '--force'] },
   { label: 'bfs push', args: ['push'] },
   { label: 'bfs prune', args: ['prune', '1', '--yes'] },
 ];
 
 /**
+ * Drops `id` with `--strategy remove` and matches the scheme to the three
+ * storages left (2/1), so the next removal is judged on its own.
+ *
+ * @throws when either command fails
+ */
+function _removeAndMatchScheme({ vaultDir, id, lang, env }: { vaultDir: string; id: string; lang: 'en' | 'pl'; env: NodeJS.ProcessEnv }): void {
+  const rr = runBfs(['--lang', lang, 'provider', 'remove', id, '--strategy', 'remove', '--yes'], vaultDir, undefined, env);
+  assert(rr.status === 0, `remove ${id} exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
+  const rs = runBfs(['--lang', lang, 'scheme', 'set', '2', '1'], vaultDir, undefined, env);
+  assert(rs.status === 0, `scheme set 2 1 exit ${rs.status ?? 'null'}\nstdout: ${rs.stdout}\nstderr: ${rs.stderr}`);
+}
+
+/**
  * Creates an isolated vault with four local providers (scheme 3+1) and two
- * pushed versions. `provider remove --strategy remove` refuses to drop a storage
- * from a pool of three or fewer, the pushed versions make the removal act on a
- * real backup, and the second version keeps `bfs prune 1` from being refused for
- * deleting the only restorable version - so prune reaches the scheme check.
+ * pushed versions. `provider remove --strategy remove` refuses without
+ * `--force` to drop a storage from a pool of three or fewer, the pushed
+ * versions make the removal act on a real backup, and the second version keeps
+ * `bfs prune 1` from being refused for deleting the only restorable version -
+ * so prune reaches the scheme check.
  *
  * @param sourceDir - Smoke temp root that holds the vault and provider dirs
  * @param name      - Prefix for the vault dir, vault name and provider names

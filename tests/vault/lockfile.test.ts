@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LockConcurrentActiveError, LockPartialStatePushError, LockReservationUnreadableError } from '../../src/core/errors.js';
 import { writeJsonAtomic } from '../../src/core/fs-utils.js';
 import {
@@ -62,6 +62,7 @@ describe('writeJsonAtomic', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -92,7 +93,109 @@ describe('writeJsonAtomic', () => {
     const content = await fs.readFile(filePath, 'utf-8');
     expect(JSON.parse(content)).toEqual({ new: true });
   });
+
+  // A rename only replaces the file atomically for a process that dies; when
+  // the machine loses power, the kernel may have persisted the rename before
+  // the temporary file's bytes, leaving an empty destination. Flushing the
+  // temporary file before the rename, and the directory entry after it, is
+  // what makes the swap survive a power cut. Flushing the directory needs a
+  // platform-specific mode (read-only on POSIX, read-write on Windows); the
+  // flushes here are real, so the directory event only appears when the mode
+  // this platform got actually flushed it.
+  it('should flush the temporary file before the rename and the directory after it', async () => {
+    const filePath = path.join(tmpDir, 'state.json');
+    const events: string[] = [];
+    const realOpen = fs.open.bind(fs);
+    const realWriteFile = fs.writeFile.bind(fs);
+    const realRename = fs.rename.bind(fs);
+    vi.spyOn(fs, 'writeFile').mockImplementation(async (file, data, options) => {
+      events.push(`write ${path.basename(String(file))}`);
+      await realWriteFile(file, data, options);
+    });
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      events.push(`rename -> ${path.basename(String(to))}`);
+      await realRename(from, to);
+    });
+    vi.spyOn(fs, 'open').mockImplementation(async (file, flags, mode) => {
+      const handle = await realOpen(file, flags, mode);
+      const target = String(file) === tmpDir ? 'dir' : path.basename(String(file));
+      const realSync = handle.sync.bind(handle);
+      // Recorded only once the flush succeeded: a failure the writer tolerates
+      // would otherwise leave the expected event behind a flush that never happened.
+      handle.sync = async () => {
+        await realSync();
+        events.push(`sync ${target}`);
+      };
+      return handle;
+    });
+
+    await writeJsonAtomic(filePath, { latest_version: 1 });
+
+    const tmpName = `state.json.${process.pid}.tmp`;
+    expect(events).toEqual([`write ${tmpName}`, `sync ${tmpName}`, 'rename -> state.json', 'sync dir']);
+  });
+
+  // By the time the directory is flushed the new file is already in place. A
+  // filesystem that cannot flush a directory at all (network shares, FUSE)
+  // must not turn that finished write into a failed command.
+  it('should complete the write when the filesystem cannot flush the directory', async () => {
+    const filePath = path.join(tmpDir, 'state.json');
+    _failDirectorySync(tmpDir, 'EINVAL');
+
+    await writeJsonAtomic(filePath, { latest_version: 1 });
+
+    vi.restoreAllMocks();
+    expect(JSON.parse(await fs.readFile(filePath, 'utf-8'))).toEqual({ latest_version: 1 });
+  });
+
+  it('should fail the write when flushing the directory hits an I/O error', async () => {
+    const filePath = path.join(tmpDir, 'state.json');
+    _failDirectorySync(tmpDir, 'EIO');
+
+    await expect(writeJsonAtomic(filePath, { latest_version: 1 })).rejects.toMatchObject({ code: 'EIO' });
+  });
+
+  // An unflushed temporary file is exactly what a power cut turns into an empty
+  // destination, so a failed flush must stop the write before the rename.
+  it('should leave the destination untouched when flushing the temporary file fails', async () => {
+    const filePath = path.join(tmpDir, 'state.json');
+    await fs.writeFile(filePath, '{"latest_version": 0}', 'utf-8');
+    const realOpen = fs.open.bind(fs);
+    vi.spyOn(fs, 'open').mockImplementation(async (file, flags, mode) => {
+      const handle = await realOpen(file, flags, mode);
+      if (String(file).endsWith('.tmp')) handle.sync = () => Promise.reject(Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' }));
+      return handle;
+    });
+
+    await expect(writeJsonAtomic(filePath, { latest_version: 1 })).rejects.toMatchObject({ code: 'EIO' });
+
+    vi.restoreAllMocks();
+    expect(await fs.readFile(filePath, 'utf-8')).toBe('{"latest_version": 0}');
+    // The abandoned copy is removed: for config.json it carries every storage secret.
+    expect((await fs.readdir(tmpDir)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  // POSIX-only: the .bfs/ tree is kept owner-only, so a parent this write has
+  // to create must not come out world-readable. NTFS ignores the mode bits.
+  it.skipIf(process.platform === 'win32')('should create a missing parent directory with 0700 permissions', async () => {
+    const filePath = path.join(tmpDir, 'fresh', 'state.json');
+
+    await writeJsonAtomic(filePath, { latest_version: 1 });
+
+    const stat = await fs.stat(path.dirname(filePath));
+    expect(stat.mode & 0o777).toBe(0o700);
+  });
 });
+
+/** Makes the flush of `dir` (and only of `dir`) fail with the given errno code. */
+function _failDirectorySync(dir: string, code: string): void {
+  const realOpen = fs.open.bind(fs);
+  vi.spyOn(fs, 'open').mockImplementation(async (file, flags, mode) => {
+    const handle = await realOpen(file, flags, mode);
+    if (String(file) === dir) handle.sync = () => Promise.reject(Object.assign(new Error(`${code}: fsync`), { code }));
+    return handle;
+  });
+}
 
 describe('readLock', () => {
   let tmpDir: string;

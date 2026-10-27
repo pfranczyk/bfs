@@ -148,7 +148,7 @@ describe('storage specs parsed from flags - IO interactivity', () => {
   it('should refuse an untrustable secure storage when repair parses a migration off a TTY', async () => {
     stdinTty.isTTY = undefined;
 
-    await runCmd(['repair', 'dysk-1', FTP_SPEC, '--cwd', root]);
+    await runCmd(['repair', 'disk-1', FTP_SPEC, '--cwd', root]);
 
     const errors = capture.errors.join('\n');
     expect(errors).toContain(CONFLICT);
@@ -166,7 +166,7 @@ describe('storage specs parsed from flags - IO interactivity', () => {
     // into failing immediately would satisfy the negative half alone.
     stdinTty.isTTY = true;
 
-    await runCmd(['repair', 'dysk-1', FTP_SPEC, '--cwd', root]);
+    await runCmd(['repair', 'disk-1', FTP_SPEC, '--cwd', root]);
 
     const errors = capture.errors.join('\n');
     expect(errors).not.toContain(CONFLICT);

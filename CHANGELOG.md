@@ -7,6 +7,137 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.5] - 2026-10-27
+
+### Added
+
+- **`bfs provider remove --force`.** With `--strategy remove`, removes the
+  storage even when that would leave a version without enough parts to be
+  restored, or fewer than 3 storages - which the command otherwise refuses.
+  `--yes` keeps confirming only the removal itself.
+
+### Changed
+
+- **`bfs provider remove --strategy remove` names one next step.** A removal leaves
+  fewer storages than the scheme requires, which refuses every restore, push and
+  prune until the two match - so the command now prints the one step that closes
+  that gap, `bfs scheme set`, with the sum N + K has to reach for the storages that
+  are left. The four-step list ending in a fresh copy and a prune is gone: what to
+  do with the backup afterwards is the operator's choice, not the way out of the
+  state the removal leaves behind.
+- **Adapters (`bfs-vault/provider`): an offline refusal names the conflict, no
+  alternative required.** `CliProviderInput.offline` still obliges an adapter to
+  reject a flag that needs a live connection; the contract no longer asks the
+  refusal to point the operator at an offline-capable alternative.
+
+### Fixed
+
+- **`--push-mode ask` no longer writes a backup as version 0, and a backup
+  stored that way can be restored.** With no version restored in the working
+  directory - the first push, or after pruning the version that was there - the
+  push offered to overwrite "v0" (and a run with no operator refused instead of
+  pushing), and taking it stored the backup as version 0, which
+  `bfs pull --version 0` refused as no versions available (and so did a plain
+  `bfs pull` when no other version existed). The push now creates the next
+  version without asking, since there is nothing to overwrite, and the
+  description of the mode in `bfs init` says it asks when there is a version to
+  overwrite. A backup stored as version 0 is restored by `bfs pull --version 0`,
+  or by a plain `bfs pull` when it is the only version. When `bfs recovery`
+  could not open version 0 with the passwords it was given and only recorded it
+  as not recovered, `bfs pull --version 0 --password <its password>` restores
+  it, as for any other version.
+
+- **`bfs pull` no longer overwrites a working directory full of files without
+  asking.** Whether pull asked before overwriting depended on the version
+  recorded as restored in the directory, not on what the directory held. After
+  `bfs recovery` - or after pruning the version that was on disk - no version is
+  recorded, so pull overwrote the files there without a prompt, and a run with
+  no operator did so without refusing; an empty directory with a version
+  recorded got the question instead. Pull now asks whenever the working
+  directory holds files (anything but `.bfs/`, `.bfsignore` and what
+  `.bfsignore` excludes); when no version is restored there, the question speaks
+  of the files in the working directory rather than of a version on disk. A run
+  with no operator refuses until given `--yes`, so automation that runs
+  `bfs pull --ci` into a directory with files needs `--yes`.
+
+- **`bfs provider remove --strategy remove` no longer silently costs a version
+  or the ability to make backups.** The removal checked only how many storages
+  were left, so a second removal could leave a version with fewer parts than it
+  needs to be restored - without a word, and with the version still reported as
+  degraded. It is now refused when
+  a version would end up below the parts it needs, or when fewer than 3 storages
+  would be left (no scheme fits fewer, so no backup could be made or restored).
+  The refusal names the versions and says the parts stay on the storage: only
+  the configuration entry is removed. `--force` removes the storage anyway and
+  marks such a version damaged. Below 3 storages the command and every restore
+  or backup command say that a backup needs at least 3 storage providers.
+
+- **An interrupted command no longer leaves `.bfs/config.json` or
+  `.bfs/state.json` cut in half.** Both files were rewritten in place, so a
+  process killed or a machine losing power during that write left a file that
+  was no longer valid JSON - and every later command stopped on a parser error,
+  with disaster recovery from the storages as the only way back. They are now
+  written to a temporary file that is flushed to disk and then swapped in, so
+  what is left after an interruption is either the old content or the new one.
+  Version manifests, which were already swapped in this way, and rewrites of an
+  operation's lock file now get the same flush, so they survive a power cut,
+  not only a killed process.
+
+- **`bfs repair --rebuild` now reconstructs the part when a replacement storage
+  takes over a name the configuration lost - and says so instead of reporting a
+  success it did not perform.** Replacing a storage dropped with
+  `bfs provider remove --strategy remove` ends with pointing a free configuration
+  entry at the name the backup records. The rebuild looked the work up under the
+  entry being replaced, which no backup had ever heard of, found nothing to do and
+  finished with a success message - leaving the new storage empty and the version
+  degraded. The same run now checks the destination before writing anything, as
+  the migration without `--rebuild` always did: a part that is not there is
+  reconstructed from the remaining ones, a sound one is left untouched, and a part
+  whose identity matches but whose length does not - what an interrupted run
+  leaves behind - is rebuilt over. A part belonging to another backup is still
+  refused, and so is content that cannot be identified at all, which
+  `--force-unverified` waives. A run that reconstructs nothing leaves the storage
+  pool the size it was, so the same command can simply be run again. The warning
+  `bfs pull` prints for a storage outside the configuration names this form, so
+  following it works on a brand-new storage.
+- **`bfs recovery` no longer overwrites the settings of a backup that is already
+  in the directory.** Run where `.bfs/config.json` described a backup - the same
+  one or a different one - it rebuilt straight over it: the storage settings were
+  replaced, the versions the directory still listed became unreachable, and
+  anything waiting in the cache for `bfs push --cache` was deleted first. Recovery
+  now refuses, names the backup that is there, and gives three ways on: work with
+  that backup through its own commands, delete the `.bfs` directory here and run
+  recovery again, or run recovery in another directory. Nothing is written or
+  deleted before the refusal, and no storage settings are asked for. A directory
+  left behind by an interrupted recovery - no settings file, or one that cannot be
+  read as a backup - still lets recovery start over, so a failed run stays
+  repeatable; a settings file that cannot be read at all is named as a read error
+  instead of being taken for an empty directory. Wherever something else sends you
+  back to recovery - a storage skipped because nobody could confirm its host, a
+  push that cannot confirm recovered locations - it now tells you to delete the
+  `.bfs` directory first, so the advice works in the order it is given.
+- **A collision with another backup of the same name no longer sends you down a
+  path that does not work.** `bfs push` and `bfs provider add` refuse a storage
+  location holding a different backup. The refusal offered `bfs recovery` for the
+  case where that data is yours - run in that directory, it replaced the settings
+  of the backup you were pushing - and a different backup name, which a backup
+  that already exists cannot take. It now says only what is wrong: which storage
+  holds another backup of the same name, and that BFS will not touch it.
+- **`bfs provider edit --ci --accept-new-host-key` on SSH no longer points at
+  `bfs provider add`.** That command adds another storage and leaves the edited
+  one as it was. The refusal now says only what clashes: the flag needs a
+  connection to the server, and an edit with `--ci` makes none.
+
+### Security
+
+- **An FTP server can no longer hang BFS with a crafted directory listing.** The
+  FTP library BFS uses (`basic-ftp`) is updated to a release that fixes
+  CVE-2026-102990: its parser for Unix-style directory listings took time growing
+  with the square of the line length, so a malicious or compromised FTP server
+  could freeze any BFS command that reaches it - including `bfs pull`,
+  `bfs push`, `bfs verify` and `bfs recovery` - at 100% CPU just by answering a
+  listing request.
+
 ## [0.14.4] - 2026-09-12
 
 ### Fixed
@@ -1500,7 +1631,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.4...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.5...HEAD
+[0.14.5]: https://github.com/pfranczyk/bfs/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/pfranczyk/bfs/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/pfranczyk/bfs/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/pfranczyk/bfs/compare/v0.14.1...v0.14.2

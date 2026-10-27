@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, assert, beforeEach, describe, expect, it } from 'vitest';
 // Side-effect import: registers the built-in local adapter in the global registry.
 import '../../src/providers/local-fs.js';
+import { setLang } from '../../src/i18n/index.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
 import type { ProviderConfig, ProviderIO } from '../../src/types/index.js';
 import { PushMode } from '../../src/types/index.js';
@@ -88,15 +89,43 @@ describe('a run with no operator explains what it cannot confirm', () => {
   });
 
   afterEach(async () => {
+    setLang('en');
     await fs.rm(base, { recursive: true, force: true }).catch(() => {});
   });
 
+  // This refusal is printed where .bfs/config.json exists, and recovery refuses a
+  // directory that holds one - so the redo it points at works only after .bfs/ is
+  // deleted, and the sentence has to say so in that order.
   it('should send the operator to `bfs recovery --trust-locations` when the recovered locations cannot be confirmed', async () => {
     await setupVault(root, dirs);
     const config = await readConfig(root);
     assert(config !== null, 'the vault set up above must have a config on disk');
 
-    await expect(confirmRecoveredLocations(config, noOperatorIO())).rejects.toThrow(/bfs recovery[\s\S]*--trust-locations/);
+    const err = await confirmRecoveredLocations(config, noOperatorIO()).then(
+      () => null,
+      (e: unknown) => String(e),
+    );
+
+    assert(err !== null, 'a run with nobody to confirm the locations must not be let through');
+    expect(err).toMatch(/bfs recovery[\s\S]*--trust-locations/);
+    expect(err).toMatch(/delete the \.bfs directory here and redo the recovery/);
+    expect(err).not.toMatch(/or redo the recovery with/);
+  });
+
+  it('should give the Polish operator the same order: delete .bfs/, then redo the recovery', async () => {
+    await setupVault(root, dirs);
+    const config = await readConfig(root);
+    assert(config !== null, 'the vault set up above must have a config on disk');
+    setLang('pl');
+
+    const err = await confirmRecoveredLocations(config, noOperatorIO()).then(
+      () => null,
+      (e: unknown) => String(e),
+    );
+
+    assert(err !== null, 'a run with nobody to confirm the locations must not be let through');
+    expect(err).toMatch(/usuń stąd katalog \.bfs i powtórz odzyskiwanie/);
+    expect(err).not.toMatch(/albo powtórz odzyskiwanie:/);
   });
 
   // The pair matters more here than anywhere else in this file. An operator who

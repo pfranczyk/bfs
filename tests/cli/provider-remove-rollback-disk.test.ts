@@ -43,13 +43,13 @@ describe('provider remove - withdrawn target on disk', () => {
   });
 
   it('should leave no trace of the target in the config file a failed rebuild wrote', async () => {
-    const outcome = await runCmd(['--cwd', rootDir, 'provider', 'remove', 'dysk-1', '--strategy', 'rebuild', '--target', 'dysk-4', '--new-type', 'local', '--path', targetDir, '--scope', 'all']);
+    const outcome = await runCmd(['--cwd', rootDir, 'provider', 'remove', 'disk-1', '--strategy', 'rebuild', '--target', 'disk-4', '--new-type', 'local', '--path', targetDir, '--scope', 'all']);
 
     expect(outcome).toBe('abort');
 
     const onDisk = await readConfig(rootDir);
-    expect(onDisk?.providers.map((p) => p.id)).toEqual(['dysk-1', 'dysk-2', 'dysk-3']);
-    expect(await fs.readFile(path.join(rootDir, '.bfs', 'config.json'), 'utf-8')).not.toContain('dysk-4');
+    expect(onDisk?.providers.map((p) => p.id)).toEqual(['disk-1', 'disk-2', 'disk-3']);
+    expect(await fs.readFile(path.join(rootDir, '.bfs', 'config.json'), 'utf-8')).not.toContain('disk-4');
     expect(console_.logs.join('\n')).toContain('has been removed again');
   });
 });

@@ -93,11 +93,11 @@ describe('provider add', () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     const cfg = await writeConfigFile({ path: '/mnt/d4' });
 
-    await runCmd(['provider', 'add', '--ci', '--name', 'dysk-4', '--type', 'local', '--config-file', cfg]);
+    await runCmd(['provider', 'add', '--ci', '--name', 'disk-4', '--type', 'local', '--config-file', cfg]);
 
     expect(mockWriteConfig).toHaveBeenCalledOnce();
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
-    expect(writtenConfig.providers.some((p: { id: string }) => p.id === 'dysk-4')).toBe(true);
+    expect(writtenConfig.providers.some((p: { id: string }) => p.id === 'disk-4')).toBe(true);
   });
 
   it('CI: should increment parity_shards by 1 after adding provider', async () => {
@@ -105,7 +105,7 @@ describe('provider add', () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never); // starts with parity_shards: 1
     const cfg = await writeConfigFile({ path: '/mnt/d4' });
 
-    await runCmd(['provider', 'add', '--ci', '--name', 'dysk-4', '--type', 'local', '--config-file', cfg]);
+    await runCmd(['provider', 'add', '--ci', '--name', 'disk-4', '--type', 'local', '--config-file', cfg]);
 
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
     expect(writtenConfig.scheme.parity_shards).toBe(2); // 1 + 1
@@ -137,17 +137,17 @@ describe('provider add', () => {
   it('CI: should show success message with provider name and new scheme (pipeline krok 8)', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    await runCmd(['provider', 'add', '--ci', '--name', 'dysk-4', '--type', 'local']);
+    await runCmd(['provider', 'add', '--ci', '--name', 'disk-4', '--type', 'local']);
 
     const output = capture.logs.join('\n');
-    expect(output).toContain('dysk-4');
+    expect(output).toContain('disk-4');
     expect(output).toContain('push');
   });
 
   it('CI: should suggest bfs push in success message', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    await runCmd(['provider', 'add', '--ci', '--name', 'dysk-4', '--type', 'local']);
+    await runCmd(['provider', 'add', '--ci', '--name', 'disk-4', '--type', 'local']);
 
     expect(capture.logs.some((l) => l.includes('push'))).toBe(true);
   });
@@ -155,7 +155,7 @@ describe('provider add', () => {
   it('CI: should skip all inquirer prompts in CI mode', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    await runCmd(['provider', 'add', '--ci', '--name', 'dysk-4', '--type', 'local']);
+    await runCmd(['provider', 'add', '--ci', '--name', 'disk-4', '--type', 'local']);
 
     expect(mockPrompt).not.toHaveBeenCalled();
   });
@@ -179,7 +179,7 @@ describe('provider add', () => {
     // the config untouched.
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    const result = await runCmd(['provider', 'add', '--ci', '--name', 'dysk-4', '--type', 'local', '--config-file', path.join(os.tmpdir(), 'this-does-not-exist-bfs-test.json')]);
+    const result = await runCmd(['provider', 'add', '--ci', '--name', 'disk-4', '--type', 'local', '--config-file', path.join(os.tmpdir(), 'this-does-not-exist-bfs-test.json')]);
 
     expect(result).toBe('abort');
     expect(mockWriteConfig).not.toHaveBeenCalled();
@@ -352,19 +352,19 @@ describe('provider add', () => {
   it('CI: should abort when --type is missing', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    const result = await runCmd(['provider', 'add', '--ci', '--name', 'dysk-4']);
+    const result = await runCmd(['provider', 'add', '--ci', '--name', 'disk-4']);
 
     expect(result).toBe('abort');
     expect(mockWriteConfig).not.toHaveBeenCalled();
   });
 
   it('CI: should abort when provider name already exists', async () => {
-    mockReadConfig.mockResolvedValue(makeConfig() as never); // has dysk-1, dysk-2, dysk-3
+    mockReadConfig.mockResolvedValue(makeConfig() as never); // has disk-1, disk-2, disk-3
 
-    const result = await runCmd(['provider', 'add', '--ci', '--name', 'dysk-1', '--type', 'local']);
+    const result = await runCmd(['provider', 'add', '--ci', '--name', 'disk-1', '--type', 'local']);
 
     expect(result).toBe('abort');
-    expect(capture.errors.some((e) => e.includes('dysk-1'))).toBe(true);
+    expect(capture.errors.some((e) => e.includes('disk-1'))).toBe(true);
     expect(mockWriteConfig).not.toHaveBeenCalled();
   });
 
@@ -372,7 +372,7 @@ describe('provider add', () => {
 
   it('interactive: should prompt for name and type (path goes through configureInteractive)', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
-    mockPrompt.mockResolvedValueOnce({ name: 'dysk-4' } as never).mockResolvedValueOnce({ type: 'local' } as never);
+    mockPrompt.mockResolvedValueOnce({ name: 'disk-4' } as never).mockResolvedValueOnce({ type: 'local' } as never);
 
     await runCmd(['provider', 'add']);
 
@@ -384,7 +384,7 @@ describe('provider add', () => {
 
   it('interactive: should display current providers list before prompting', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
-    mockPrompt.mockResolvedValueOnce({ name: 'dysk-4' } as never).mockResolvedValueOnce({ type: 'local' } as never);
+    mockPrompt.mockResolvedValueOnce({ name: 'disk-4' } as never).mockResolvedValueOnce({ type: 'local' } as never);
 
     await runCmd(['provider', 'add']);
 
@@ -527,7 +527,7 @@ describe('interactive provider add - connectivity probe + recovery', () => {
   beforeEach(() => {
     capture = captureConsole();
     mockWriteConfig.mockResolvedValue(undefined);
-    mockReadConfig.mockResolvedValue(makeConfig() as never); // 2/1 scheme, dysk-1..3
+    mockReadConfig.mockResolvedValue(makeConfig() as never); // 2/1 scheme, disk-1..3
   });
 
   afterEach(() => {

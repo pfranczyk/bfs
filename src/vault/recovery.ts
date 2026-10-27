@@ -6,7 +6,7 @@ import type { ProviderConfig, ProviderIO, StorageProvider, VaultConfig, VersionM
 import { PushMode, VersionHealth } from '../types/index.js';
 import { checkVersionMismatch, detectMissingAdapters, formatMissingAdaptersMessage } from './adapter-preflight.js';
 import { type BootstrapResult, bootstrapFromProvider, parseVersionFromFilename } from './bootstrap.js';
-import { writeConfig } from './config.js';
+import { assertRecoveryTargetFree, writeConfig } from './config.js';
 import { readManifest, writeManifest, writeUnrecoveredMarker } from './manifest.js';
 import { writeState } from './state.js';
 import type { VersionLoss } from './verify.js';
@@ -135,6 +135,12 @@ function reconstructConfig(bootstrap: BootstrapResult, latestManifest: VersionMa
 export async function recover(rootDir: string, options: RecoveryOptions): Promise<RecoveryReport> {
   const { vaultName, provider: bootstrapProvider, io } = options;
 
+  // -- 0. Refuse a directory that already describes a backup -----------------
+  // Before anything is created or emptied: the very next step clears
+  // .bfs/cache/, which is where `bfs push --cache` resumes an interrupted push
+  // from, and the run ends by replacing .bfs/config.json.
+  await assertRecoveryTargetFree(rootDir);
+
   // -- 1. Create / reset .bfs/ and .bfs/cache/ ------------------------------
   // 0700: .bfs/ holds config.json (provider secrets) and cached plaintext
   // blobs, so keep the whole tree owner-only on POSIX (no-op on Windows NTFS).
@@ -223,10 +229,11 @@ export async function recover(rootDir: string, options: RecoveryOptions): Promis
   // known to stand. A run that ends by refusing must leave nothing behind, or the
   // directory keeps announcing versions while holding no config to reach them.
   for (const version of unrecoveredVersions) {
-    // Recovery runs more than once - the messages that send an operator here say
-    // so - and each run brings whichever passwords are at hand. A run without the
-    // password for a version already rebuilt must leave that manifest alone: it is
-    // the only local record of where that version lives. A file that cannot be
+    // A run interrupted before it wrote the configuration leaves these manifests
+    // behind, and the next run starts over in that directory with whichever
+    // passwords are at hand. A run without the password for a version already
+    // rebuilt must leave that manifest alone: it is the only local record of
+    // where that version lives. A file that cannot be
     // read is left alone for the same reason, and never costs the whole recovery.
     const existing = await readManifest(rootDir, version).catch(() => 'unreadable' as const);
     if (existing === null) await writeUnrecoveredMarker(rootDir, version);

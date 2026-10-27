@@ -3,6 +3,15 @@ import path from 'node:path';
 import { UnsafePathError } from './errors.js';
 
 /**
+ * Error codes with which a filesystem says it cannot open or flush a directory
+ * at all (some network shares and FUSE mounts), as opposed to failing to store
+ * data - modelled on what PostgreSQL tolerates when flushing a directory. EPERM
+ * is deliberately absent: it is what Windows returns for a directory opened
+ * without write access, and tolerating it would hide a wrong open mode.
+ */
+const UNSUPPORTED_DIR_SYNC_CODES = new Set(['EBADF', 'EINVAL', 'EACCES', 'EISDIR', 'ENOTSUP']);
+
+/**
  * Returns true when an unknown error is a Node.js ENOENT (file/directory not found).
  * Use this to distinguish "file missing" from other I/O errors in catch blocks.
  */
@@ -96,22 +105,62 @@ export function isSafeFilename(name: string): boolean {
 }
 
 /**
- * Atomically writes JSON to a file via .tmp + rename.
+ * Atomically and durably writes JSON to a file via .tmp + fsync + rename.
  * On POSIX and Windows, rename is atomic when source and destination are on
- * the same filesystem (parent directory of filePath). A crash mid-write leaves
- * the .tmp file behind (cleanup is the caller's responsibility) but never a
- * half-written destination file.
+ * the same filesystem (parent directory of filePath), so a process dying
+ * mid-write leaves at most the .tmp file behind but never a half-written
+ * destination file; a write that fails without the process dying removes its
+ * .tmp file before rethrowing. The temporary file is flushed before the
+ * rename and the directory after it, so a power cut leaves either the old or
+ * the new content too - without the first flush the kernel may persist the
+ * rename ahead of the bytes and leave an empty file under the final name. A
+ * filesystem that refuses the directory flush as unsupported is tolerated. A
+ * missing parent directory is created owner-only (0700).
  *
  * @param filePath Absolute path to the destination file.
  * @param data JSON-serializable payload (pretty-printed with 2-space indent).
+ * @throws on write, flush or rename failure - an I/O failure of the directory
+ * flush arrives after the rename, with the new content already in place.
  */
 export async function writeJsonAtomic(filePath: string, data: unknown): Promise<void> {
   const tmpPath = `${filePath}.${process.pid}.tmp`;
   const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true });
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   // The temp file is always freshly created, so its create-time mode sticks and
-  // the atomic rename carries 0600 to the destination - keeping forensic lock
-  // files owner-only on POSIX (no-op on Windows NTFS).
-  await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), { encoding: 'utf-8', mode: 0o600 });
-  await fs.rename(tmpPath, filePath);
+  // the atomic rename carries 0600 to the destination - keeping config, state
+  // and forensic lock files owner-only on POSIX (no-op on Windows NTFS).
+  try {
+    await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    await _fsyncPath(tmpPath, 'r+');
+    await fs.rename(tmpPath, filePath);
+  } catch (err: unknown) {
+    // A failed write must not leave a copy behind - for config.json it holds
+    // every storage secret. Only a process that dies here leaves one.
+    await fs.unlink(tmpPath).catch(() => {});
+    throw err;
+  }
+  // Windows flushes a directory only through a handle with write access, while
+  // POSIX refuses to open a directory for writing (EISDIR).
+  await _fsyncPath(dir, process.platform === 'win32' ? 'r+' : 'r').catch(_tolerateUnsupportedDirSync);
+}
+
+/**
+ * By the time the directory is flushed the new file is already in place, so a
+ * filesystem that does not support the flush must not turn a finished write
+ * into a failed command; anything else is a real I/O failure and propagates.
+ */
+function _tolerateUnsupportedDirSync(err: unknown): void {
+  const code = typeof err === 'object' && err !== null && 'code' in err ? (err as NodeJS.ErrnoException).code : undefined;
+  if (code !== undefined && UNSUPPORTED_DIR_SYNC_CODES.has(code)) return;
+  throw err;
+}
+
+/** Flushes a file or directory to stable storage through a short-lived handle. */
+async function _fsyncPath(target: string, flags: 'r' | 'r+'): Promise<void> {
+  const handle = await fs.open(target, flags);
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 }

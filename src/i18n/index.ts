@@ -405,6 +405,8 @@ export interface Strings {
   scheme_invalid_parity_shards: string;
   /** %s = required, %s = current */
   scheme_providers_mismatch: string;
+  /** %s = required, %s = current */
+  scheme_providers_below_minimum: string;
 
   // --- provider: local-fs --------------------------------------------------
   /** %s = basePath */
@@ -456,6 +458,7 @@ export interface Strings {
   provider_remove_opt_target: string;
   provider_remove_opt_scope: string;
   provider_remove_opt_yes: string;
+  provider_remove_opt_force: string;
   /** %s = strategy string */
   provider_remove_strategy_invalid: string;
   provider_remove_no_providers: string;
@@ -497,11 +500,8 @@ export interface Strings {
   provider_remove_target_invalid: string;
   /** %s = id */
   provider_remove_success: string;
-  provider_remove_next_steps: string;
-  provider_remove_next_step_1: string;
-  provider_remove_next_step_2: string;
-  provider_remove_next_step_3: string;
-  provider_remove_next_step_4: string;
+  /** %s = number of storages left after the removal */
+  provider_remove_next_step: string;
   /** %s = id */
   provider_remove_target_reverted: string;
   /** %s = id */
@@ -598,6 +598,11 @@ export interface Strings {
   loss_on_not_configured: string;
   /** %s = comma-separated provider ids */
   loss_on_foreign_part: string;
+  // The migration form of `bfs repair` that the warning after a degraded restore
+  // hands to the operator. The command and its flags are the same in both
+  // languages; only the placeholders standing for the operator's own values are
+  // translated.
+  loss_repair_form: string;
   /** %s = comma-separated provider ids */
   loss_on_read_failed: string;
   /** %s = comma-separated provider ids */
@@ -619,7 +624,15 @@ export interface Strings {
   version_not_found: string;
   /** %s = provider name */
   provider_not_found_in_config: string;
-  provider_remove_min: string;
+  /** %s = storage name, %s = the reasons, joined */
+  provider_remove_refused: string;
+  provider_remove_reason_pool: string;
+  /** %s = the version number */
+  provider_remove_reason_version: string;
+  /** %s = the version numbers, comma-separated */
+  provider_remove_reason_versions: string;
+  /** %s = number of storages left after the removal */
+  provider_remove_pool_below_minimum: string;
   vault_encoding_rs: string;
   vault_uploading_shards: string;
   /** %s = i+1 (1-based), %s = N+K total */
@@ -631,6 +644,10 @@ export interface Strings {
   vault_pull_overwrite_confirm: string;
   /** %s = working_version, %s = targetVersion */
   pull_overwrite_no_operator: string;
+  /** %s = targetVersion - files on disk, no version restored in the directory */
+  vault_pull_overwrite_confirm_files: string;
+  /** %s = targetVersion - files on disk, no version restored in the directory */
+  pull_overwrite_files_no_operator: string;
   vault_unpacking_files: string;
   /** %s = count, %s = file list */
   vault_pull_write_error_confirm: string;
@@ -639,7 +656,7 @@ export interface Strings {
   vault_degraded_adapter_missing: string;
   vault_degraded_corrupt: string;
   vault_degraded_foreign_part: string;
-  /** %s = comma-separated provider names recorded in the backup */
+  /** %s = comma-separated provider names recorded in the backup, %s = loss_repair_form */
   vault_degraded_provider_not_configured: string;
 
   // --- recovery operations (vault layer) ----------------------------------
@@ -737,6 +754,10 @@ export interface Strings {
   recovery_no_manifests: string;
   /** %s = version */
   recovery_manifest_unreadable: string;
+  /** %s = backup name read from .bfs/config.json */
+  recovery_vault_exists: string;
+  /** %s = why .bfs/config.json could not be read (errno code or message) */
+  recovery_vault_check_failed: string;
 
   // --- Provider runtime errors (FTP + LocalFS shared shape) ----------------
   /** %s = path */
@@ -1010,10 +1031,14 @@ export interface Strings {
   repair_foreign_shard_detected: string;
   /** %s = storage name (provider id) */
   vault_collision_detected: string;
+  /** %s = storage name (provider id); for a directory that already holds a configuration (push / provider add) - names the collision, no advice */
+  vault_collision_detected_configured: string;
   /** %s = version */
   repair_wrong_version_shard: string;
   /** %s = version */
   repair_force_unverified_warn: string;
+  /** %s = version */
+  repair_force_unreadable_warn: string;
   /** %s = version */
   repair_ask_vault_password: string;
   /** %s = version */

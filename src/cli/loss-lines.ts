@@ -33,7 +33,9 @@ export function versionLabel(version: number): string {
  *
  * Grouped rather than one line per part: the count is what the operator reads
  * first, and a wide pool losing three parts to one dead switch has one thing to
- * fix, not three. A version that lost nothing contributes no line.
+ * fix, not three. A version that lost nothing contributes no line. The lines say
+ * what is the case and stop there: what to do about a medium depends on why it
+ * left - removed for good, replaced, renamed - which a report cannot tell.
  *
  * @param versions - Per-version loss causes, in the order they should be printed
  */

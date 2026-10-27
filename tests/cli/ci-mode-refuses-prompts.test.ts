@@ -41,7 +41,7 @@ import { assertPruneKeepsARestorableVersion, listVersions, prune, removeProvider
 
 /** One manifest per version, enough for prune/provider-remove to see them. */
 function manifests(versions: number[]): unknown[] {
-  return versions.map((version) => ({ version, health: 'healthy', shards: [{ shard_index: 2, provider_id: 'dysk-3' }] }));
+  return versions.map((version) => ({ version, health: 'healthy', shards: [{ shard_index: 2, provider_id: 'disk-3' }] }));
 }
 
 /** Runs a command and reports what came out, without letting anything escape. */
@@ -115,7 +115,7 @@ describe('a run that declared --ci never reaches a CLI prompt', () => {
   });
 
   it('should refuse `provider remove <id>` with no --strategy instead of asking for one', async () => {
-    const r = await runCapturing(['--ci', 'provider', 'remove', 'dysk-3']);
+    const r = await runCapturing(['--ci', 'provider', 'remove', 'disk-3']);
 
     expect(`${r.errors}${r.escaped}`).not.toContain(PROMPT_SENTINEL);
     expect(`${r.errors}${r.escaped}`).toMatch(/--strategy/);
@@ -123,7 +123,7 @@ describe('a run that declared --ci never reaches a CLI prompt', () => {
   });
 
   it('should carry out `provider remove <id> --strategy remove --yes`, so the refusal names a way through', async () => {
-    const r = await runCapturing(['--ci', 'provider', 'remove', 'dysk-3', '--strategy', 'remove', '--yes']);
+    const r = await runCapturing(['--ci', 'provider', 'remove', 'disk-3', '--strategy', 'remove', '--yes']);
 
     expect(`${r.errors}${r.escaped}`).not.toContain(PROMPT_SENTINEL);
     expect(removeProvider).toHaveBeenCalledTimes(1);
@@ -183,7 +183,7 @@ describe('a --ci run names the secret it is missing before it starts working', (
   it('should name --password before putting the adapter to work', async () => {
     const configuring = vi.spyOn(LocalFsProvider.prototype, 'configureFromFlags');
 
-    const r = await runCapturing(['--ci', 'provider', 'remove', 'dysk-3', '--strategy', 'relocate', '--path', '/tmp/relocated']);
+    const r = await runCapturing(['--ci', 'provider', 'remove', 'disk-3', '--strategy', 'relocate', '--path', '/tmp/relocated']);
 
     expect(`${r.errors}${r.escaped}`).toMatch(/--password(?!-)/);
     // ...and not by teaching the one message every unanswerable question shares to
@@ -200,7 +200,7 @@ describe('a --ci run names the secret it is missing before it starts working', (
   // password out of the process list. A guard that only looks at --password
   // turns a complete command line away.
   it('should accept --password-file as the secret the command line carries', async () => {
-    const r = await runCapturing(['--ci', 'provider', 'remove', 'dysk-3', '--strategy', 'relocate', '--path', '/tmp/relocated', '--password-file', '/tmp/nonexistent-pw']);
+    const r = await runCapturing(['--ci', 'provider', 'remove', 'disk-3', '--strategy', 'relocate', '--path', '/tmp/relocated', '--password-file', '/tmp/nonexistent-pw']);
 
     expect(`${r.errors}${r.escaped}`).not.toMatch(/--password(?!-)/);
   });
@@ -209,7 +209,7 @@ describe('a --ci run names the secret it is missing before it starts working', (
   // password at all. A guard keyed on "encrypted backup + no secret" refuses a
   // command that is complete.
   it('should not ask a --strategy remove to carry a password it never uses', async () => {
-    const r = await runCapturing(['--ci', 'provider', 'remove', 'dysk-3', '--strategy', 'remove', '--yes']);
+    const r = await runCapturing(['--ci', 'provider', 'remove', 'disk-3', '--strategy', 'remove', '--yes']);
 
     expect(`${r.errors}${r.escaped}`).not.toMatch(/--password/);
     expect(removeProvider).toHaveBeenCalledTimes(1);
@@ -219,7 +219,7 @@ describe('a --ci run names the secret it is missing before it starts working', (
   // has checked --target - so a guard dropped into the relocate branch alone
   // leaves this one refusing without naming a flag.
   it('should name --password for a rebuild too, not only for a relocate', async () => {
-    const r = await runCapturing(['--ci', 'provider', 'remove', 'dysk-3', '--strategy', 'rebuild', '--target', 'dysk-2']);
+    const r = await runCapturing(['--ci', 'provider', 'remove', 'disk-3', '--strategy', 'rebuild', '--target', 'disk-2']);
 
     expect(`${r.errors}${r.escaped}`).toMatch(/--password(?!-)/);
     expect(`${r.errors}${r.escaped}`).not.toMatch(/needs an answer to/);
@@ -231,7 +231,7 @@ describe('a --ci run names the secret it is missing before it starts working', (
   // one. The order is easy to lose - the command's own rebuild branch reaches
   // for the password before it looks at --target.
   it('should name the missing --target ahead of the password when both are absent', async () => {
-    const r = await runCapturing(['--ci', 'provider', 'remove', 'dysk-3', '--strategy', 'rebuild']);
+    const r = await runCapturing(['--ci', 'provider', 'remove', 'disk-3', '--strategy', 'rebuild']);
 
     expect(`${r.errors}${r.escaped}`).toMatch(/--target/);
     expect(removeProvider).not.toHaveBeenCalled();
@@ -241,7 +241,7 @@ describe('a --ci run names the secret it is missing before it starts working', (
   // resolvePassword and the run dies further down with the generic "nobody to
   // ask" message - the exact outcome the guard is here to replace.
   it('should treat an empty --password as no password at all', async () => {
-    const r = await runCapturing(['--ci', 'provider', 'remove', 'dysk-3', '--strategy', 'relocate', '--path', '/tmp/relocated', '--password', '']);
+    const r = await runCapturing(['--ci', 'provider', 'remove', 'disk-3', '--strategy', 'relocate', '--path', '/tmp/relocated', '--password', '']);
 
     expect(`${r.errors}${r.escaped}`).toMatch(/--password(?!-)/);
     expect(`${r.errors}${r.escaped}`).not.toMatch(/needs an answer to/);
@@ -249,7 +249,7 @@ describe('a --ci run names the secret it is missing before it starts working', (
   });
 
   it('should carry out the same relocate once --password is supplied', async () => {
-    const r = await runCapturing(['--ci', 'provider', 'remove', 'dysk-3', '--strategy', 'relocate', '--path', '/tmp/relocated', '--password', 'secret123']);
+    const r = await runCapturing(['--ci', 'provider', 'remove', 'disk-3', '--strategy', 'relocate', '--path', '/tmp/relocated', '--password', 'secret123']);
 
     expect(`${r.errors}${r.escaped}`).not.toMatch(/--password(?!-)/);
     expect(removeProvider).toHaveBeenCalledTimes(1);

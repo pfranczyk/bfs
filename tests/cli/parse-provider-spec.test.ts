@@ -22,18 +22,18 @@ describe('validateProviderIdsUnique', () => {
   });
 
   it('should throw when a newId collides with an existing config id', () => {
-    expect(() => validateProviderIdsUnique(['dysk-4'], ['dysk-1', 'dysk-2', 'dysk-4'])).toThrow();
+    expect(() => validateProviderIdsUnique(['disk-4'], ['disk-1', 'disk-2', 'disk-4'])).toThrow();
   });
 
   it('should name the colliding id in the message on an existing-config collision', () => {
     let message = '';
     try {
-      validateProviderIdsUnique(['dysk-4'], ['dysk-1', 'dysk-2', 'dysk-4']);
+      validateProviderIdsUnique(['disk-4'], ['disk-1', 'disk-2', 'disk-4']);
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     }
 
-    expect(message).toContain('dysk-4');
+    expect(message).toContain('disk-4');
   });
 
   it('should not throw when all newIds are unique and no existing ids are given', () => {

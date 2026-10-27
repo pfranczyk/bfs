@@ -1312,9 +1312,8 @@ export class SshProvider implements StorageProvider {
     if (input.rawArgs.includes('--accept-new-host-key')) {
       // Accepting a new host key means dialing the server to capture and pin it
       // (TOFU). An offline edit never contacts the medium, so it cannot complete
-      // this - refuse and point the operator at the offline-capable pin flag
-      // (--known-host <SHA256:...>) rather than persist a null pin with accept-new
-      // armed (which would trust any key on the next connection).
+      // this - refuse, naming that conflict, rather than persist a null pin with
+      // accept-new armed (which would trust any key on the next connection).
       if (input.offline === true) {
         throw new ProviderError(tFor(this.io.lang, 'ssh_accept_new_offline'));
       }

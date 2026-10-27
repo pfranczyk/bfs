@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { assert, runBfs, runTest } from '../smoke-runner.js';
 import type { SuiteResult, TestResult } from '../smoke-types.js';
-import { initTestVault, readJson, verifyShaHashes } from '../smoke-vault.js';
+import { createTestFiles, initTestVault, readJson, verifyShaHashes } from '../smoke-vault.js';
 
 // --- Suite R - verify verdicts and what they tell the operator ----------------
 //
@@ -28,6 +28,13 @@ import { initTestVault, readJson, verifyShaHashes } from '../smoke-vault.js';
 // restore that SUCCEEDS: an encrypted version where one refused part is covered
 // by the parity, and the password must not be blamed for it. Each builds its own
 // vault, so the cumulative damage R3/R5 inflict above stays out of the way.
+//
+// R20/R21 ask the same of `bfs recovery`. R22..R27 move from naming a cause to
+// the way out of one: a storage the configuration lost gets one route, chosen by
+// what the configuration can still do, and all three states are pinned in both
+// languages. R28/R29 pin that pull refuses to overwrite a working directory full
+// of files when no operator can consent - keyed on the directory's contents, not
+// on working_version - in both languages.
 
 export async function suiteR(): Promise<SuiteResult> {
   const tests: TestResult[] = [];
@@ -621,6 +628,156 @@ export async function suiteR(): Promise<SuiteResult> {
       assert(line.includes('Wersja v001'), `the line must name the version it belongs to: ${line}`);
       assert(line.includes('c2') && line.includes('c3'), `both media short of a part belong in that one line: ${line}`);
       assert(!line.includes('c1'), `the medium that still holds its part must not be blamed: ${line}`);
+    }),
+  );
+
+  // -- R22..R27 - a storage outside the configuration: the state, not a remedy --
+  // The cause line says which storage the configuration lost, and that is all
+  // verify says about it. What to do next depends on why the storage left -
+  // removed for good, replaced, renamed by an interrupted repair - which verify
+  // cannot tell, so no command is offered. The pool can be in three states under
+  // that one line, counted differently in each, so a remedy keyed to the counts
+  // would surface in one and not the others - all three are provoked on the same
+  // vault, in a chain where every step changes one thing: a storage nobody uses,
+  // the pool one storage short, and the pool matching again with every storage
+  // taken. Both languages carry each state, because only this layer compares them.
+  //
+  // 4 storages at 3/1, not the suite's usual 3 at 2/1: `provider remove` refuses
+  // to go below three, and only a pool of four can lose one and still be rescaled
+  // to a legal scheme.
+  const lostVaultDir = path.join(tmpBase, 'lost-vault');
+  const lostDirs = [1, 2, 3, 4].map((n) => path.join(tmpBase, `d${n}`));
+  const lostVaultName = 'lost-vault';
+  const lostCfgPath = path.join(lostVaultDir, '.bfs', 'config.json');
+  const NAMED_EN = 'Storage recorded in this backup but absent from the configuration: d4.';
+  const NAMED_PL = 'Nośniki zapisane w tej kopii, ale nieobecne w konfiguracji: d4.';
+  const COMMANDS = ['bfs repair', 'bfs scheme set', 'bfs push', 'bfs pull', 'bfs prune', 'bfs provider add'];
+
+  /** Fails unless the run names the storage and offers none of the commands an operator could be pointed at. */
+  function assertStateOnly(out: string, named: string, state: string): void {
+    assert(out.includes(named), `the storage must be named under the name the backup records (${state}): ${out.slice(0, 700)}`);
+    for (const command of COMMANDS) assert(!out.includes(command), `verify must not offer \`${command}\` (${state}): ${out.slice(0, 700)}`);
+  }
+
+  tests.push(
+    await runTest('R22', 'verify names a storage nobody uses and offers no command (EN)', async () => {
+      await Promise.all([lostVaultDir, ...lostDirs].map((d) => fs.mkdir(d, { recursive: true })));
+      await createTestFiles(lostVaultDir);
+      const initArgs = ['init', lostVaultName, '--ci', '--no-enc', '--data-shards', '3', '--parity-shards', '1'];
+      for (const [i, dir] of lostDirs.entries()) initArgs.push('--provider', `local:d${i + 1} --path ${dir}`);
+      const inited = runBfs(initArgs, lostVaultDir);
+      assert(inited.status === 0, `init exit ${inited.status ?? 'null'}\n${inited.stdout}\n${inited.stderr}`);
+      const pushed = runBfs(['push'], lostVaultDir);
+      assert(pushed.status === 0, `push exit ${pushed.status ?? 'null'}\n${pushed.stdout}\n${pushed.stderr}`);
+
+      // The shape an interrupted `bfs repair` leaves: the configuration carries
+      // the new name, the manifests still carry the old one. d4-renamed is then
+      // configured and used by nothing.
+      const cfg = await readJson<{ providers: Array<{ id: string }> }>(lostCfgPath);
+      const renamed = cfg.providers.find((p) => p.id === 'd4');
+      if (renamed === undefined) throw new Error(`fixture must have d4 (got: ${cfg.providers.map((p) => p.id).join(', ')})`);
+      renamed.id = 'd4-renamed';
+      await fs.writeFile(lostCfgPath, JSON.stringify(cfg, null, 2));
+
+      const r = runBfs(['--lang', 'en', 'verify'], lostVaultDir, undefined, langEnv);
+      assertStateOnly(r.stdout + r.stderr, NAMED_EN, 'a storage nobody uses');
+    }),
+  );
+
+  tests.push(
+    await runTest('R23', 'verify names a storage nobody uses and offers no command (PL)', () => {
+      const r = runBfs(['--lang', 'pl', 'verify'], lostVaultDir, undefined, langEnv);
+      assertStateOnly(r.stdout + r.stderr, NAMED_PL, 'a storage nobody uses');
+    }),
+  );
+
+  tests.push(
+    await runTest('R24', 'verify names the storage when the pool is short and offers no command (EN)', async () => {
+      // The storage leaves the configuration through the command built for it,
+      // so the state is the one operators actually reach: three entries against
+      // a scheme that wants four.
+      const removed = runBfs(['provider', 'remove', 'd4-renamed', '--strategy', 'remove', '--yes'], lostVaultDir);
+      assert(removed.status === 0, `provider remove exit ${removed.status ?? 'null'}\n${removed.stdout}\n${removed.stderr}`);
+
+      const r = runBfs(['--lang', 'en', 'verify'], lostVaultDir, undefined, langEnv);
+      assertStateOnly(r.stdout + r.stderr, NAMED_EN, 'the pool one storage short');
+    }),
+  );
+
+  tests.push(
+    await runTest('R25', 'verify names the storage when the pool is short and offers no command (PL)', () => {
+      const r = runBfs(['--lang', 'pl', 'verify'], lostVaultDir, undefined, langEnv);
+      assertStateOnly(r.stdout + r.stderr, NAMED_PL, 'the pool one storage short');
+    }),
+  );
+
+  tests.push(
+    await runTest('R26', 'verify names the storage when every storage is taken and offers no command (EN)', async () => {
+      // The counts agree again, but version 1 was written across four storages and
+      // uses all three that are left - nothing is free.
+      const rescaled = runBfs(['scheme', 'set', '2', '1'], lostVaultDir);
+      assert(rescaled.status === 0, `scheme set exit ${rescaled.status ?? 'null'}\n${rescaled.stdout}\n${rescaled.stderr}`);
+
+      const r = runBfs(['--lang', 'en', 'verify'], lostVaultDir, undefined, langEnv);
+      assertStateOnly(r.stdout + r.stderr, NAMED_EN, 'every storage taken');
+    }),
+  );
+
+  tests.push(
+    await runTest('R27', 'verify names the storage when every storage is taken and offers no command (PL)', () => {
+      const r = runBfs(['--lang', 'pl', 'verify'], lostVaultDir, undefined, langEnv);
+      assertStateOnly(r.stdout + r.stderr, NAMED_PL, 'every storage taken');
+    }),
+  );
+
+  // -- R28/R29 - pull refuses to overwrite a working directory with no operator -
+  // Pull overwrites the working directory, so a run with nobody in it cannot take
+  // that step on its own when the directory holds files. The decision keys on the
+  // directory's contents, not on working_version: pushing twice and pruning the
+  // newest leaves working_version 0 (the state recovery also leaves) with the
+  // operator's files still on disk. The refusal names the files, not a bogus
+  // "version 0" on disk, and points at --yes - in both languages.
+  const arrangeConsentVault = async (tag: string): Promise<string> => {
+    const dir = path.join(tmpBase, `consent-${tag}`);
+    const providers = [1, 2, 3].map((n) => ({ id: `cp${n}`, dir: path.join(tmpBase, `consent-${tag}-p${n}`) }));
+    await initTestVault(dir, `consent-${tag}`, providers, ['--no-enc']);
+    const marker = path.join(dir, 'hello.txt');
+    await fs.writeFile(marker, 'v1-content', 'utf-8');
+    const p1 = runBfs(['push'], dir);
+    assert(p1.status === 0, `setup push v1 exit ${p1.status ?? 'null'}\n${p1.stdout}\n${p1.stderr}`);
+    await fs.writeFile(marker, 'v2-content', 'utf-8');
+    const p2 = runBfs(['push', '--new'], dir);
+    assert(p2.status === 0, `setup push v2 exit ${p2.status ?? 'null'}\n${p2.stdout}\n${p2.stderr}`);
+    const pr = runBfs(['prune', '2', '--yes'], dir);
+    assert(pr.status === 0, `setup prune exit ${pr.status ?? 'null'}\n${pr.stdout}\n${pr.stderr}`);
+    const state = await readJson<{ latest_version: number; working_version: number }>(path.join(dir, '.bfs', 'state.json'));
+    assert(state.latest_version === 1 && state.working_version === 0, `setup must leave latest 1 / working 0, got ${JSON.stringify(state)}`);
+    return dir;
+  };
+
+  tests.push(
+    await runTest('R28', 'pull refuses to overwrite a directory of files with no operator (EN)', async () => {
+      const dir = await arrangeConsentVault('en');
+
+      const r = runBfs(['--lang', 'en', 'pull', '--ci'], dir, undefined, langEnv);
+      assert(r.status !== 0, `pull must refuse to overwrite without consent, got exit ${r.status ?? 'null'}\n${r.stdout}\n${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('overwriting the files in the working directory with version 1 cannot be confirmed'), `the refusal must name the files on disk, not a bogus on-disk version: ${out.slice(0, 500)}`);
+      assert(out.includes('--yes'), `the refusal must name the flag that gives consent up front: ${out.slice(0, 500)}`);
+      assert((await fs.readFile(path.join(dir, 'hello.txt'), 'utf-8')) === 'v2-content', 'the operator file must be left untouched by a refused pull');
+    }),
+  );
+
+  tests.push(
+    await runTest('R29', 'pull refuses to overwrite a directory of files with no operator (PL)', async () => {
+      const dir = await arrangeConsentVault('pl');
+
+      const r = runBfs(['--lang', 'pl', 'pull', '--ci'], dir, undefined, langEnv);
+      assert(r.status !== 0, `pull must refuse to overwrite without consent, got exit ${r.status ?? 'null'}\n${r.stdout}\n${r.stderr}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('nadpisania plików w katalogu roboczym wersją 1'), `the Polish refusal must name the files on disk, not a bogus on-disk version: ${out.slice(0, 500)}`);
+      assert(out.includes('--yes'), `the refusal must name the flag that gives consent up front: ${out.slice(0, 500)}`);
+      assert((await fs.readFile(path.join(dir, 'hello.txt'), 'utf-8')) === 'v2-content', 'the operator file must be left untouched by a refused pull');
     }),
   );
 

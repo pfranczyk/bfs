@@ -1,0 +1,39 @@
+{
+  "version": 0,
+  "pushed_at": "2026-10-10T11:00:47.942Z",
+  "file_count": 2,
+  "total_size": 221,
+  "blob_hash": "2167085752ae8d87ed256c61c535dcbcd12c9400f968e82481798f6af7446cdd",
+  "scheme": {
+    "data_shards": 2,
+    "parity_shards": 1
+  },
+  "encrypted": false,
+  "rs_striped": true,
+  "rs_stripe_size": 248,
+  "encrypted_per_shard": false,
+  "shards": [
+    {
+      "shard_index": 0,
+      "provider_id": "p0",
+      "provider_type": "local",
+      "remote_path": "C:/bfs-v0-fixture/m0/v0fixture/shard_0.bfs.0",
+      "shard_hash": "c05c735c4dfb796ebd97f97a2afce3ed9fd2fa397043ff593d26082cae2b9849"
+    },
+    {
+      "shard_index": 1,
+      "provider_id": "p1",
+      "provider_type": "local",
+      "remote_path": "C:/bfs-v0-fixture/m1/v0fixture/shard_1.bfs.0",
+      "shard_hash": "2b9947fdb562f68b2e788797dab5d0724ec255ccf2787b02739407a15d4fc940"
+    },
+    {
+      "shard_index": 2,
+      "provider_id": "p2",
+      "provider_type": "local",
+      "remote_path": "C:/bfs-v0-fixture/m2/v0fixture/shard_2.bfs.0",
+      "shard_hash": "70384b79480e463de31756fcb6d47c860eed231c39e01a66172068370dc2692f"
+    }
+  ],
+  "health": "healthy"
+}

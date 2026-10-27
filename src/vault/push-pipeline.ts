@@ -642,6 +642,12 @@ async function _resolveTargetVersion(options: TargetVersionOptions): Promise<num
       targetVersion = state.working_version > 0 ? state.working_version : state.latest_version + 1;
       break;
     case PushMode.Ask: {
+      // No version on disk (first push, after pruning the one that was there) means
+      // nothing to overwrite: version 0 is the "no backup" marker, never a target.
+      if (state.working_version === 0) {
+        targetVersion = state.latest_version + 1;
+        break;
+      }
       const choice = await io.choose(`Create new version v${state.latest_version + 1} or overwrite v${state.working_version}?`, [`New version (v${state.latest_version + 1})`, `Overwrite (v${state.working_version})`]);
       targetVersion = choice.startsWith('Overwrite') ? state.working_version : state.latest_version + 1;
       break;

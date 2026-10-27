@@ -17,3 +17,6 @@
 *.pdf binary
 *.zip binary
 *.wasm binary
+
+# Frozen backup written by a released version: every byte is part of the test.
+tests/fixtures/v0-backup-0.14.4/** binary

@@ -67,14 +67,14 @@ describe('provider remove - what decides whether it may ask', () => {
   });
 
   it('should stay interactive on a TTY when only a --strategy is given', async () => {
-    await runCmd(['provider', 'remove', 'dysk-3', '--strategy', 'remove', '--yes']);
+    await runCmd(['provider', 'remove', 'disk-3', '--strategy', 'remove', '--yes']);
 
     expect(hoisted.captured).not.toBeNull();
     expect(hoisted.captured?.interactive).toBe(true);
   });
 
   it('should build a non-interactive IO when the run declares --ci', async () => {
-    await runCmd(['--ci', 'provider', 'remove', 'dysk-3', '--strategy', 'remove', '--yes']);
+    await runCmd(['--ci', 'provider', 'remove', 'disk-3', '--strategy', 'remove', '--yes']);
 
     expect(hoisted.captured).not.toBeNull();
     expect(hoisted.captured?.interactive).toBe(false);
@@ -86,14 +86,14 @@ describe('provider remove - what decides whether it may ask', () => {
   // sees the flag accepted and gets the opposite mode, and the adapter receives a
   // token that was never addressed to it.
   it('should declare the mode when --ci follows the sub-command', async () => {
-    await runCmd(['provider', 'remove', 'dysk-3', '--strategy', 'remove', '--yes', '--ci']);
+    await runCmd(['provider', 'remove', 'disk-3', '--strategy', 'remove', '--yes', '--ci']);
 
     expect(hoisted.captured).not.toBeNull();
     expect(hoisted.captured?.interactive).toBe(false);
   });
 
   it('should declare the mode when --ci sits among the adapter flags', async () => {
-    await runCmd(['provider', 'remove', 'dysk-3', '--ci', '--strategy', 'remove', '--yes']);
+    await runCmd(['provider', 'remove', 'disk-3', '--ci', '--strategy', 'remove', '--yes']);
 
     expect(hoisted.captured).not.toBeNull();
     expect(hoisted.captured?.interactive).toBe(false);

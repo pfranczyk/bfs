@@ -33,3 +33,9 @@ mutate_fixtures() {
   printf 'hello world (edited)\n' >"$d/hello.txt"
   printf 'brand new file in v2\n' >"$d/new-file.txt"
 }
+
+# wipe_working_tree <dir> - remove everything but .bfs/, so a restore has to
+# bring every file back instead of passing on files left from an earlier step.
+wipe_working_tree() {
+  find "$1" -mindepth 1 -maxdepth 1 ! -name .bfs -exec rm -rf {} +
+}

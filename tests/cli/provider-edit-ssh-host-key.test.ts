@@ -11,18 +11,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // an offline edit never does. Persisting `accept_new_host_key: true` with NO
 // `host_key_fingerprint` would leave a later non-interactive `push` trusting ANY
 // host key, so an offline flag edit REFUSES the flag (CommandAbort, nothing
-// written) and points the operator to `--known-host <SHA256:...>` - the only way
-// to establish trust without contacting the medium.
+// written). The refusal names that conflict and suggests no fix: the edit
+// cannot tell a reinstalled server from a different one answering at the same
+// address, so any recipe would be a guess. `--known-host <SHA256:...>` is the
+// way to set trust without contacting the medium (pinned by the guard below).
 //
 // What enforces that is the `input.offline === true` guard in
 // SshProvider.configureFromFlags (src/providers/ssh.ts), which provider-edit.ts
-// arms unconditionally on the flag path. It runs BEFORE the capture gate
-// (`this.io.interactive === false`), so no combination of terminal and flags
-// reaches captureHostKey from this command.
+// arms unconditionally on the flag path. It runs BEFORE the host-key capture,
+// so no combination of terminal and flags reaches captureHostKey from the
+// `--ci` path of this command.
 //
-// CRITICAL (a mock IO is not runtime IO): a test injecting `interactive: false`
-// into a mock IO would let the capture gate fire against the ssh2 mock and pin a
-// fingerprint, hiding whether the offline guard is doing its job. So this drives
+// CRITICAL (a mock IO is not runtime IO): a test calling configureFromFlags
+// directly without the offline flag would let the capture fire against the
+// ssh2 mock and pin a fingerprint, hiding whether the command arms the offline
+// guard at all. So this drives
 // the REAL command via `runCmd`, with the real `createCliProviderIO` and a
 // simulated TTY (`process.stdin.isTTY = true`), and asserts on the CONTENT of
 // the persisted provider config.
@@ -33,8 +36,8 @@ const KNOWN_HOST_FP = 'SHA256:knownhostAAAABBBBCCCCDDDDeeeeFFFFgggghhhh0000';
 const OLD_FP = 'SHA256:oldpinnnAAAABBBBCCCCDDDDeeeeFFFFgggghhhh1111';
 
 // --- ssh2 mock: keep the test hermetic (no real network) ----------------------
-// No path here reaches a server - the offline guard refuses before the capture
-// gate. The mock only guarantees that if any path DID reach captureHostKey, it
+// No path here reaches a server - the offline guard refuses before the capture.
+// The mock only guarantees that if any path DID reach captureHostKey, it
 // would resolve a fingerprint locally instead of dialing a real server.
 const SERVER_KEY = Buffer.from('mock-ssh-ed25519-host-key');
 
@@ -133,16 +136,15 @@ describe('provider edit ssh on a TTY - host-key trust must stay offline-safe', (
     vi.restoreAllMocks();
   });
 
-  // --- MAIN RED --------------------------------------------------------------
+  // --- Offline refusal of --accept-new-host-key --------------------------------
 
   it('should refuse --accept-new-host-key offline and never persist accept_new_host_key with a null fingerprint', async () => {
     vi.mocked(readConfig).mockResolvedValue(makeConfig({ providers: [makeSshProvider()] }) as never);
 
     const result = await runCmd(['provider', 'edit', 'nas', '--ci', '--host', 'newhost', '--user', 'u', '--password', 'pw', '--path', '/backup', '--accept-new-host-key']);
 
-    // RED today: on a TTY the capture gate is skipped, so the command persists the
-    // MITM combination - accept_new_host_key=true with NO host_key_fingerprint.
-    // The fix must instead abort without writing, so this combination never lands.
+    // Persisting accept_new_host_key=true with NO host_key_fingerprint would arm
+    // the MITM combination; the command must abort without writing instead.
     const wroteArmedMitm =
       vi.mocked(writeConfig).mock.calls.length > 0 &&
       (() => {
@@ -152,8 +154,7 @@ describe('provider edit ssh on a TTY - host-key trust must stay offline-safe', (
       })();
     expect(wroteArmedMitm).toBe(false);
 
-    // The offline edit cannot complete TOFU, so it must refuse and redirect the
-    // operator to --known-host.
+    // The offline edit cannot complete TOFU, so it must refuse.
     expect(result).toBe('abort');
     expect(vi.mocked(writeConfig)).not.toHaveBeenCalled();
     // Refusal is offline - no medium contact even on the reject path.
@@ -161,7 +162,19 @@ describe('provider edit ssh on a TTY - host-key trust must stay offline-safe', (
     expect(healthSpy).not.toHaveBeenCalled();
   });
 
-  // --- GUARD (green today): --known-host pins offline -------------------------
+  it('should name the conflict in the refusal without suggesting a fix', async () => {
+    vi.mocked(readConfig).mockResolvedValue(makeConfig({ providers: [makeSshProvider()] }) as never);
+
+    await runCmd(['provider', 'edit', 'nas', '--ci', '--host', 'newhost', '--user', 'u', '--password', 'pw', '--path', '/backup', '--accept-new-host-key']);
+
+    const refusal = capture.errors.join('\n');
+    expect(refusal).toContain('--accept-new-host-key');
+    expect(refusal).toContain('bfs provider edit --ci');
+    expect(refusal).not.toContain('--known-host');
+    expect(refusal).not.toContain('provider add');
+  });
+
+  // --- GUARD: --known-host pins offline ----------------------------------------
 
   it('should pin host_key_fingerprint from --known-host without contacting the server', async () => {
     vi.mocked(readConfig).mockResolvedValue(makeConfig({ providers: [makeSshProvider()] }) as never);
@@ -180,7 +193,7 @@ describe('provider edit ssh on a TTY - host-key trust must stay offline-safe', (
     expect(healthSpy).not.toHaveBeenCalled();
   });
 
-  // --- GUARD (green today): full replacement resets stale host-key trust ------
+  // --- GUARD: full replacement resets stale host-key trust --------------------
 
   it('should drop the old host_key_fingerprint when the config is replaced without a host-key flag', async () => {
     vi.mocked(readConfig).mockResolvedValue(makeConfig({ providers: [makeSshProvider({ host_key_fingerprint: OLD_FP })] }) as never);

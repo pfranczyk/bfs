@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!docs/index.html"]
+    "includes": ["**", "!docs/index.html", "!tests/fixtures/v0-backup-0.14.4"]
   },
   "formatter": {
     "enabled": true,

@@ -354,6 +354,11 @@ describe('pull attributes a failed restore to the right cause', () => {
     // the recorded media went missing, so the backup's own name for it is what
     // this asserts.
     expect(advice).toMatch(/\bp2\b(?!-)/);
+    // The sentence takes two substitutions - the media it lists and the command
+    // form it hands over - and both are filled left to right. Asserted on the
+    // joined text, because a warning carrying the right words in the wrong slots
+    // reads as advice and parses as nothing.
+    expect(advice).toContain('configuration: p2.');
   });
 
   it('should offer both ways forward for a medium the configuration no longer lists', async () => {

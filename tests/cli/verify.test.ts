@@ -17,9 +17,19 @@ import { verifyAll } from '../../src/vault/verify.js';
 const mockListVersions = vi.mocked(listVersions);
 const mockVerifyAll = vi.mocked(verifyAll);
 
-/** VerifyReport fixture matching VerifyReport type from vault/verify.ts. */
-function makeReport(versions: Array<{ version: number; health: VersionHealth; available_shards: number; total_shards: number; tolerance: number }>) {
-  return { versions: versions.map((v) => ({ ...v, header_advisory: null, retained_from_deep: false, loss_causes: [] as VersionLoss[] })) };
+/**
+ * VerifyReport fixture shaped like VerifyReport from vault/verify.ts.
+ *
+ * `pool` describes the pool behind a storage the versions record but the
+ * configuration does not list. It is not part of the report type: the counts are
+ * handed in on purpose, so a remedy that came back keyed to them would have them
+ * to read - and the tests reading the output would see it.
+ */
+function makeReport(
+  versions: Array<{ version: number; health: VersionHealth; available_shards: number; total_shards: number; tolerance: number }>,
+  pool: Nullable<{ configured: number; required: number; missing: number; unused: number }> = null,
+) {
+  return { versions: versions.map((v) => ({ ...v, header_advisory: null, retained_from_deep: false, loss_causes: [] as VersionLoss[] })), unknown_provider: pool };
 }
 
 function makeManifest(version: number, dataN = 2, parityK = 1) {
@@ -278,6 +288,63 @@ describe('verify', () => {
 
     const warned = capture.errors.join('\n');
     expect(warned).not.toContain('Version v001 - ');
+  });
+
+  // --- a storage outside the configuration: the state, and only the state -----
+  // The cause line names the storage the backup records and the configuration
+  // no longer lists. Saying what is the case is what verify is for; what to do
+  // about it depends on why the storage left - removed for good, replaced,
+  // renamed by an interrupted repair - which verify cannot tell. So no command
+  // is offered: not the repair that would bring the name back, not the scheme
+  // change, not a fresh copy. Each state the pool can be in is checked on its
+  // own: the pool is counted differently in each, so a remedy keyed to those
+  // counts would surface in one state and not the others.
+
+  /** Report carrying versions that lost a part to a name the config lost. */
+  function reportWithUnknownProvider(pool: { configured: number; required: number; missing: number; unused: number }, versions = [5]) {
+    const report = makeReport(
+      versions.map((version) => ({ version, health: VersionHealth.Degraded, available_shards: 2, total_shards: 3, tolerance: 0 })),
+      pool,
+    );
+    for (const v of report.versions) v.loss_causes = [{ cause: 'provider_not_configured', providers: ['usb-2'] }];
+    return report;
+  }
+
+  const POOL_STATES = [
+    { label: 'a configured storage is used by no version', pool: { configured: 3, required: 3, missing: 1, unused: 1 } },
+    { label: 'fewer storages are configured than the scheme requires', pool: { configured: 3, required: 4, missing: 1, unused: 0 } },
+    { label: 'every configured storage is already taken', pool: { configured: 3, required: 3, missing: 1, unused: 0 } },
+  ];
+  const COMMANDS = ['bfs repair', 'bfs scheme set', 'bfs push', 'bfs pull', 'bfs prune', 'bfs provider add'];
+
+  for (const { label, pool } of POOL_STATES) {
+    it(`should name the storage and offer no command when ${label}`, async () => {
+      mockVerifyAll.mockResolvedValue(reportWithUnknownProvider(pool));
+      mockListVersions.mockResolvedValue([makeManifest(5)] as never);
+
+      await runCmdExitCode(['verify']);
+
+      const out = [...capture.logs, ...capture.errors].join('\n');
+      for (const command of COMMANDS) expect(out, `verify must not offer \`${command}\``).not.toContain(command);
+      // The warning channel carries the cause line and nothing after it - so a
+      // remedy reworded to name no command at all is caught as well.
+      const warnings = capture.errors.filter((line) => line.trim() !== '');
+      expect(warnings).toEqual([expect.stringContaining('Version v005 - Storage recorded in this backup but absent from the configuration: usb-2.')]);
+    });
+  }
+
+  it('should name the storage under every version that lost it', async () => {
+    mockVerifyAll.mockResolvedValue(reportWithUnknownProvider({ configured: 3, required: 3, missing: 1, unused: 1 }, [5, 6, 7]));
+    mockListVersions.mockResolvedValue([makeManifest(5), makeManifest(6), makeManifest(7)] as never);
+
+    await runCmdExitCode(['verify']);
+
+    // Every version gets its own state line - the version number is the whole
+    // reason those lines carry one.
+    const out = [...capture.logs, ...capture.errors].join('\n');
+    expect(out).toContain('Version v005 - Storage recorded');
+    expect(out).toContain('Version v006 - Storage recorded');
+    expect(out).toContain('Version v007 - Storage recorded');
   });
 
   it('should explain a verdict it carried over from a deep check', async () => {

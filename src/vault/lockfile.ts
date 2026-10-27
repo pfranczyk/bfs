@@ -112,7 +112,7 @@ export async function readLock<T>(filePath: string): Promise<Nullable<T>> {
   }
 }
 
-/** Atomically writes a lockfile (via .tmp + rename in `writeJsonAtomic`). */
+/** Atomically and durably writes a lockfile (via .tmp + fsync + rename in `writeJsonAtomic`). */
 export async function writeLockAtomic<T>(filePath: string, lock: T): Promise<void> {
   await writeJsonAtomic(filePath, lock);
 }

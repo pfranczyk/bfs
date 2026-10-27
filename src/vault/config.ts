@@ -1,9 +1,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { BfsError, VaultAlreadyInitializedError } from '../core/errors.js';
-import { isEnoent } from '../core/fs-utils.js';
+import { isEnoent, writeJsonAtomic } from '../core/fs-utils.js';
 import { fmt, t } from '../i18n/index.js';
 import type { VaultConfig } from '../types/index.js';
+
+/**
+ * Smallest pool any valid scheme fits: at least 2 data parts and 1 parity part.
+ * Below it no backup can be made or restored from the configuration.
+ */
+export const MIN_PROVIDERS = 3;
 
 /**
  * Reads .bfs/config.json from the given vault root directory.
@@ -22,19 +28,14 @@ export async function readConfig(rootDir: string): Promise<Nullable<VaultConfig>
 }
 
 /**
- * Writes VaultConfig to .bfs/config.json (pretty-printed JSON), restricted to
- * owner-only permissions because it holds provider connection secrets.
- * The .bfs directory must already exist.
+ * Writes VaultConfig to .bfs/config.json (pretty-printed JSON), replacing the
+ * file in one step so an interrupted write leaves the previous configuration
+ * in place, and restricted to owner-only permissions because it holds provider
+ * connection secrets (POSIX; Windows NTFS ignores the mode bits).
  * @throws on write failure.
  */
 export async function writeConfig(rootDir: string, config: VaultConfig): Promise<void> {
-  const filePath = path.join(rootDir, '.bfs', 'config.json');
-  // config.json holds provider connection secrets (e.g. FTP password), so keep
-  // it readable only by the owner. writeFile's mode applies when the file is
-  // created; chmod also covers overwriting an existing inode. POSIX enforces
-  // 0600; Windows NTFS ignores POSIX mode bits, so chmod is a best-effort no-op.
-  await fs.writeFile(filePath, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
-  await fs.chmod(filePath, 0o600).catch(() => {});
+  await writeJsonAtomic(path.join(rootDir, '.bfs', 'config.json'), config);
 }
 
 /**
@@ -99,6 +100,41 @@ export async function assertNoExistingVault(rootDir: string): Promise<void> {
 }
 
 /**
+ * Aborts when the working directory already describes a backup, so `recovery`
+ * never replaces a live configuration. Rebuilding over one swaps the provider
+ * settings for those of whichever backup was recovered and leaves the previous
+ * manifests behind as orphans, cutting the directory off from versions it still
+ * lists - and it does so before the operator sees a single result.
+ *
+ * What counts as a backup is the same thing `assertNoExistingVault` names in its
+ * refusal: a file yielding a backup name. The difference from that guard is
+ * deliberate. `init` keys on the FILE, because a directory it cannot read is
+ * still someone's; recovery is the command that rebuilds an unreadable one, so
+ * an empty, truncated or nameless file has to let it through - that is what
+ * keeps a failed recovery repeatable.
+ *
+ * A read that fails outright is neither: it says nothing about whether a backup
+ * is here, and starting over during a momentary lock would destroy a live one.
+ *
+ * @param rootDir - Vault root directory to inspect
+ * @throws VaultAlreadyInitializedError when .bfs/config.json names a backup
+ * @throws BfsError when the file cannot be read at all, so its presence is undecided
+ */
+export async function assertRecoveryTargetFree(rootDir: string): Promise<void> {
+  const filePath = path.join(rootDir, '.bfs', 'config.json');
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, 'utf-8');
+  } catch (err: unknown) {
+    if (isEnoent(err)) return;
+    const reason = (err as NodeJS.ErrnoException).code ?? (err instanceof Error ? err.message : String(err));
+    throw new BfsError(fmt('recovery_vault_check_failed', reason));
+  }
+  const name = _vaultNameIn(content);
+  if (name !== null) throw new VaultAlreadyInitializedError(fmt('recovery_vault_exists', name));
+}
+
+/**
  * Validates scheme + providers in the loaded config. Fails fast with a
  * user-level message before any provider work starts, instead of letting
  * lower layers throw cryptic internal errors.
@@ -120,6 +156,9 @@ export function assertSchemeValid(config: VaultConfig): void {
   }
   const required = data_shards + parity_shards;
   if (config.providers.length !== required) {
-    throw new BfsError(fmt('scheme_providers_mismatch', String(required), String(config.providers.length)));
+    // Below the smallest valid pool no scheme fits, so `bfs scheme set` - the way
+    // out above it - would be refused by that very command; the state is named.
+    const key = config.providers.length < MIN_PROVIDERS ? 'scheme_providers_below_minimum' : 'scheme_providers_mismatch';
+    throw new BfsError(fmt(key, String(required), String(config.providers.length)));
   }
 }

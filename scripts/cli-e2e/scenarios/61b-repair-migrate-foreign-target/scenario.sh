@@ -3,7 +3,7 @@
 # storage the backup records is missing from the configuration. The first
 # argument is a storage the configuration HAS, the target is the name the backup
 # records. Because no manifest carries the first argument, the identity gate of
-# the migration (`verifyPairAtDestination` in src/vault/repair.ts) finds nothing
+# the migration (`scanPairAtDestination` in src/vault/repair.ts) finds nothing
 # to check and the destination is only ever probed for a file of the right NAME.
 #
 # A mistyped destination must not pass for a successful repair. Two mistypes,

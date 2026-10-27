@@ -5,6 +5,7 @@ import type { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ProviderError, VaultCollisionError } from '../../src/core/errors.js';
 import { serializeShardHeader } from '../../src/core/shard-io.js';
+import { setLang } from '../../src/i18n/index.js';
 import { createMockProviderIO, type ProviderFactory, providerRegistry } from '../../src/providers/provider.js';
 import type { ProviderConfig, ProviderHelp, RemoteRef, ShardHeader, StorageProvider, VerifyShardResult } from '../../src/types/index.js';
 import { PushMode } from '../../src/types/index.js';
@@ -276,6 +277,7 @@ describe('assertNoForeignVault', () => {
   });
 
   afterEach(async () => {
+    setLang('en');
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -292,6 +294,61 @@ describe('assertNoForeignVault', () => {
   it('should throw when the location holds a DIFFERENT backup (foreign vault_id)', async () => {
     const { io } = createMockProviderIO({}, root, false);
     await expect(assertNoForeignVault(makeProbeProvider('p0', { refs: ['shard_0.bfs.1'], headerVaultId: FOREIGN_VAULT_ID }), 'docs', OUR_VAULT_ID, io)).rejects.toThrow(VaultCollisionError);
+  });
+
+  // On `push` and `provider add` the refusal names the collision and stops:
+  // what that other backup is and what should happen to it is the operator's
+  // call, so the message suggests no fix. Any recipe would be a guess, and "use
+  // a different backup name" is not even possible here - the name is given
+  // once, by `init`, and nothing renames it later. The `init` collision has its
+  // own key, which names another name and a recovery in this directory.
+  it('should name a push/add collision without suggesting a fix', async () => {
+    const { io } = createMockProviderIO({}, root, false);
+
+    const err = await assertNoForeignVault(makeProbeProvider('p0', { refs: ['shard_0.bfs.1'], headerVaultId: FOREIGN_VAULT_ID }), 'docs', OUR_VAULT_ID, io).then(
+      () => null,
+      (e: unknown) => String(e),
+    );
+
+    expect(err).toMatch(/storage "p0" already holds a different backup of the same name/);
+    expect(err).toMatch(/will not overwrite or delete/);
+    expect(err).not.toMatch(/different backup name/);
+    expect(err).not.toMatch(/remove the files/);
+    expect(err).not.toMatch(/bfs recovery/);
+  });
+
+  it('should name another backup name and a recovery here on a fresh init', async () => {
+    const { io } = createMockProviderIO({}, root, false);
+
+    const err = await assertNoForeignVault(makeProbeProvider('p0', { refs: ['shard_0.bfs.1'], headerVaultId: FOREIGN_VAULT_ID }), 'docs', null, io).then(
+      () => null,
+      (e: unknown) => String(e),
+    );
+
+    expect(err).toMatch(/use a different backup name/);
+    expect(err).toMatch(/run `bfs recovery` if this backup is yours/);
+  });
+
+  it('should give the Polish operator the same split', async () => {
+    const { io } = createMockProviderIO({}, root, false);
+    setLang('pl');
+
+    const configured = await assertNoForeignVault(makeProbeProvider('p0', { refs: ['shard_0.bfs.1'], headerVaultId: FOREIGN_VAULT_ID }), 'docs', OUR_VAULT_ID, io).then(
+      () => null,
+      (e: unknown) => String(e),
+    );
+    const fresh = await assertNoForeignVault(makeProbeProvider('p0', { refs: ['shard_0.bfs.1'], headerVaultId: FOREIGN_VAULT_ID }), 'docs', null, io).then(
+      () => null,
+      (e: unknown) => String(e),
+    );
+
+    expect(configured).toMatch(/nośniku "p0" istnieje już inna kopia zapasowa o tej nazwie/);
+    expect(configured).toMatch(/nie nadpisze ani nie usunie/);
+    expect(configured).not.toMatch(/innej nazwy kopii/);
+    expect(configured).not.toMatch(/usuń pliki/);
+    expect(configured).not.toMatch(/bfs recovery/);
+    expect(fresh).toMatch(/użyj innej nazwy kopii/);
+    expect(fresh).toMatch(/uruchom `bfs recovery`, jeśli to Twoja kopia/);
   });
 
   it('should throw for a fresh init (expectedVaultId=null) when any shard is present', async () => {

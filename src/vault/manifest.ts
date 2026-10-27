@@ -229,7 +229,9 @@ export async function deleteManifest(rootDir: string, version: number): Promise<
  * Verify provenance (`health_deep_rot`, `health_checked_at`) is cleared, because
  * it describes a check performed against the previous state of the media: keeping
  * it would let a stale "payload rot was read off the media" claim outlive the
- * repair that fixed it. The next verify re-establishes both.
+ * repair that fixed it. The next verify re-establishes both. A change that
+ * repairs nothing on the media - dropping a configuration entry - must not go
+ * through here for a version with recorded rot, or the record would be lost.
  *
  * `deepRot` is the exception: a repair streams every sibling in full and checks
  * its trailing SHA-256, so when it finds rot it has read the bytes at the depth

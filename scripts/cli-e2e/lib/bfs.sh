@@ -38,3 +38,29 @@ $BFS_STDERR"
 
   return 0
 }
+
+# Exit code a process killed by run_bfs_crashing_on dies with - distinct from
+# every code the CLI itself returns, so asserting it proves the death landed
+# inside the targeted write.
+CRASH_EXIT=86
+
+# run_bfs_crashing_on <file> <workdir> <bfs-args...> - run_bfs, except that the
+# process dies halfway through writing .bfs/<file> (see lib/fs-crash-hooks.mjs).
+run_bfs_crashing_on() {
+  local file="$1"
+  shift
+  # Restored afterwards rather than unset, so options the caller's environment
+  # already carried survive this one call.
+  local had_node_options="${NODE_OPTIONS+set}" saved_node_options="${NODE_OPTIONS:-}"
+  export NODE_OPTIONS="${saved_node_options:+$saved_node_options }--import ./scripts/cli-e2e/lib/fs-crash.mjs"
+  export BFS_CRASH_FILE="$file"
+  export BFS_CRASH_EXIT="$CRASH_EXIT"
+  run_bfs "$@"
+  unset BFS_CRASH_FILE BFS_CRASH_EXIT
+  if [ -n "$had_node_options" ]; then
+    export NODE_OPTIONS="$saved_node_options"
+  else
+    unset NODE_OPTIONS
+  fi
+  return 0
+}

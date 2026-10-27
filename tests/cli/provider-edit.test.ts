@@ -77,18 +77,18 @@ describe('provider edit', () => {
   // --- CI happy path --------------------------------------------------------
 
   it('CI: should replace the provider connection-config and write updated config', async () => {
-    mockReadConfig.mockResolvedValue(makeConfig() as never); // dysk-1..3, scheme 2/1
+    mockReadConfig.mockResolvedValue(makeConfig() as never); // disk-1..3, scheme 2/1
     const cfg = await writeConfigFile({ path: '/mnt/new-a' });
 
-    await runCmd(['provider', 'edit', 'dysk-1', '--ci', '--config-file', cfg]);
+    await runCmd(['provider', 'edit', 'disk-1', '--ci', '--config-file', cfg]);
 
     expect(mockWriteConfig).toHaveBeenCalledOnce();
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
-    const edited = writtenConfig.providers.find((p: { id: string }) => p.id === 'dysk-1');
+    const edited = writtenConfig.providers.find((p: { id: string }) => p.id === 'disk-1');
     // New path replaces the old one wholesale (full config replacement).
     expect(edited?.config).toEqual({ path: '/mnt/new-a' });
     // id and type are NOT changed by edit.
-    expect(edited?.id).toBe('dysk-1');
+    expect(edited?.id).toBe('disk-1');
     expect(edited?.type).toBe('local');
   });
 
@@ -96,7 +96,7 @@ describe('provider edit', () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never); // scheme 2/1
     const cfg = await writeConfigFile({ path: '/mnt/new-a' });
 
-    await runCmd(['provider', 'edit', 'dysk-1', '--ci', '--config-file', cfg]);
+    await runCmd(['provider', 'edit', 'disk-1', '--ci', '--config-file', cfg]);
 
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
     expect(writtenConfig.scheme.data_shards).toBe(2);
@@ -107,13 +107,13 @@ describe('provider edit', () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     const cfg = await writeConfigFile({ path: '/mnt/new-a' });
 
-    await runCmd(['provider', 'edit', 'dysk-1', '--ci', '--config-file', cfg]);
+    await runCmd(['provider', 'edit', 'disk-1', '--ci', '--config-file', cfg]);
 
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
-    const dysk2 = writtenConfig.providers.find((p: { id: string }) => p.id === 'dysk-2');
-    const dysk3 = writtenConfig.providers.find((p: { id: string }) => p.id === 'dysk-3');
-    expect(dysk2?.config).toEqual({ path: '/tmp/d2' });
-    expect(dysk3?.config).toEqual({ path: '/tmp/d3' });
+    const disk2 = writtenConfig.providers.find((p: { id: string }) => p.id === 'disk-2');
+    const disk3 = writtenConfig.providers.find((p: { id: string }) => p.id === 'disk-3');
+    expect(disk2?.config).toEqual({ path: '/tmp/d2' });
+    expect(disk3?.config).toEqual({ path: '/tmp/d3' });
     expect(writtenConfig.providers).toHaveLength(3);
   });
 
@@ -122,7 +122,7 @@ describe('provider edit', () => {
   it('CI: should abort when the provider id does not exist', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
-    const result = await runCmd(['provider', 'edit', 'nieistnieje', '--ci', '--config-file', '/whatever.json']);
+    const result = await runCmd(['provider', 'edit', 'nonexistent', '--ci', '--config-file', '/whatever.json']);
 
     expect(result).toBe('abort');
     expect(mockWriteConfig).not.toHaveBeenCalled();
@@ -133,7 +133,7 @@ describe('provider edit', () => {
   it('CI: should abort when vault config is missing', async () => {
     mockReadConfig.mockResolvedValue(null);
 
-    const result = await runCmd(['provider', 'edit', 'dysk-1', '--ci', '--config-file', '/whatever.json']);
+    const result = await runCmd(['provider', 'edit', 'disk-1', '--ci', '--config-file', '/whatever.json']);
 
     expect(result).toBe('abort');
     expect(mockWriteConfig).not.toHaveBeenCalled();
@@ -146,7 +146,7 @@ describe('provider edit', () => {
     vi.spyOn(LocalFsProvider.prototype, 'validateConfig').mockReturnValue(['path must be absolute']);
     const cfg = await writeConfigFile({ path: '/mnt/new-a' });
 
-    const result = await runCmd(['provider', 'edit', 'dysk-1', '--ci', '--config-file', cfg]);
+    const result = await runCmd(['provider', 'edit', 'disk-1', '--ci', '--config-file', cfg]);
 
     expect(result).toBe('abort');
     expect(mockWriteConfig).not.toHaveBeenCalled();
@@ -155,10 +155,10 @@ describe('provider edit', () => {
   // --- No-changes -----------------------------------------------------------
 
   it('CI: should not write config when the new config equals the current one', async () => {
-    mockReadConfig.mockResolvedValue(makeConfig() as never); // dysk-1 path /tmp/d1
+    mockReadConfig.mockResolvedValue(makeConfig() as never); // disk-1 path /tmp/d1
     const cfg = await writeConfigFile({ path: '/tmp/d1' }); // identical to current
 
-    await runCmd(['provider', 'edit', 'dysk-1', '--ci', '--config-file', cfg]);
+    await runCmd(['provider', 'edit', 'disk-1', '--ci', '--config-file', cfg]);
 
     expect(mockWriteConfig).not.toHaveBeenCalled();
     // A no-changes notice must reach the user (exact i18n key lands in GREEN).
@@ -173,7 +173,7 @@ describe('provider edit', () => {
     const healthSpy = vi.spyOn(LocalFsProvider.prototype, 'healthCheck').mockResolvedValue({ ok: true } as never);
     const cfg = await writeConfigFile({ path: '/mnt/new-a' });
 
-    const result = await runCmd(['provider', 'edit', 'dysk-1', '--ci', '--config-file', cfg]);
+    const result = await runCmd(['provider', 'edit', 'disk-1', '--ci', '--config-file', cfg]);
 
     // Positive gate so this stays RED until the command exists (a missing
     // command never calls probe/health either - that would be a false green).
@@ -194,7 +194,7 @@ describe('provider edit', () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     const cfg = await writeConfigFile({ path: '/mnt/changed' });
 
-    await runCmd(['provider', 'edit', 'dysk-1', '--ci', '--config-file', cfg]);
+    await runCmd(['provider', 'edit', 'disk-1', '--ci', '--config-file', cfg]);
 
     const out = [...capture.logs, ...capture.errors].join('\n');
     expect(/push|resync/i.test(out)).toBe(true);
@@ -240,7 +240,7 @@ describe('provider edit', () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     vi.spyOn(LocalFsProvider.prototype, 'configureFromFlags').mockRejectedValue(new Error('bad config file'));
 
-    const result = await runCmd(['provider', 'edit', 'dysk-1', '--ci', '--config-file', '/bad.json']);
+    const result = await runCmd(['provider', 'edit', 'disk-1', '--ci', '--config-file', '/bad.json']);
 
     expect(result).toBe('abort');
     expect(mockWriteConfig).not.toHaveBeenCalled();
@@ -261,8 +261,8 @@ describe('provider edit', () => {
 
   it('interactive: should edit the provider chosen from the picker when no id is given', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
-    // Picker returns dysk-2; the adapter then re-supplies a new path.
-    mockPrompt.mockResolvedValue({ chosen: 'dysk-2' } as never);
+    // Picker returns disk-2; the adapter then re-supplies a new path.
+    mockPrompt.mockResolvedValue({ chosen: 'disk-2' } as never);
     // The interactive edit routes through the adapter's edit-aware hook, so that
     // is the method to stand in for - LocalFs implements it.
     vi.spyOn(LocalFsProvider.prototype, 'configureInteractiveForEdit').mockResolvedValue({ path: '/mnt/picked' });
@@ -272,7 +272,7 @@ describe('provider edit', () => {
     expect(result).toBe('ok');
     expect(mockWriteConfig).toHaveBeenCalledOnce();
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
-    const edited = writtenConfig.providers.find((p: { id: string }) => p.id === 'dysk-2');
+    const edited = writtenConfig.providers.find((p: { id: string }) => p.id === 'disk-2');
     expect(edited?.config).toEqual({ path: '/mnt/picked' });
   });
 

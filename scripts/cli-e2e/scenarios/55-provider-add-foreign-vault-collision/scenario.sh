@@ -39,8 +39,18 @@ scenario_run() {
   # -- provider add on B, targeting A's media -> foreign vault at that location -
   run_bfs "$wsB" provider add --ci --name intruder --type local --path "$(winpath "$a0")"
   assert_fail
+  assert_out_contains "already holds a different backup of the same name"
+  # The refusal names the collision and suggests no fix - any recipe would be a
+  # guess, and a different name is not even possible: only init gives one.
+  local advice
+  for advice in "different backup name" "remove the files" "bfs recovery"; do
+    if printf '%s' "$BFS_OUT" | grep -qF "$advice"; then
+      _fail "provider add collision still suggests a fix ('$advice'):"$'\n'"$BFS_OUT"
+    fi
+  done
   # The intruder provider must NOT have been persisted into B's config.
   if grep -q "intruder" "$wsB/.bfs/config.json"; then
     _fail "provider 'intruder' was added to B's config despite the collision"
   fi
+  return 0
 }

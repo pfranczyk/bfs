@@ -1,3 +1,6 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { ExitPromptError } from '@inquirer/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VersionHealth } from '../../src/types/index.js';
@@ -200,6 +203,44 @@ describe('recovery', () => {
     expect(warned).toContain('Version v002 - Backup data missing on: nas-1, nas-2.');
   });
 
+  // A recovered directory reaches this state through an older version that names
+  // a provider the rebuilt configuration does not list - the configuration is
+  // rebuilt from the NEWEST version, so anything an older one used and the newest
+  // one does not is absent from it. Recovery names that storage under every
+  // version that lost it, through the same renderer as `bfs verify`, and like
+  // verify it offers no command for it: what to do depends on why the storage
+  // left, which a machine rebuilt from the media knows even less about. Only the
+  // warning channel is read - the closing line of a recovery names `bfs pull` as
+  // the next step for the whole backup, which is a different thing.
+
+  it('should name the absent provider under every version and offer no command for it', async () => {
+    mockRecover.mockResolvedValue({
+      ...recoveryReport,
+      // Not part of the report type: the counts of the pool are handed in anyway,
+      // so a remedy that came back keyed to them would have them to read.
+      unknown_provider: { configured: 3, required: 3, missing: 1, unused: 0 },
+      versions: [
+        { version: 2, health: VersionHealth.Degraded, consensus: true, loss_causes: [{ cause: 'provider_not_configured', providers: ['usb-2'] }] },
+        { version: 3, health: VersionHealth.Degraded, consensus: true, loss_causes: [{ cause: 'provider_not_configured', providers: ['usb-2'] }] },
+        { version: 4, health: VersionHealth.Healthy, consensus: true, loss_causes: [] },
+      ],
+    } as never);
+
+    await runCmd(['recovery', '--provider', 'local', '--name', 'my-vault', '--bootstrap', '--path /mnt/usb']);
+
+    const warned = capture.errors.join('\n');
+    expect(warned).toContain('Version v002 - Storage recorded in this backup but absent from the configuration: usb-2.');
+    expect(warned).toContain('Version v003 - Storage recorded in this backup but absent from the configuration: usb-2.');
+    // Read everywhere, so a remedy moved to another channel is still caught...
+    const everything = [...capture.logs, ...capture.errors].join('\n');
+    for (const command of ['bfs repair', 'bfs scheme set', 'bfs push', 'bfs prune', 'bfs provider add']) {
+      expect(everything, `recovery must not offer \`${command}\` for the absent provider`).not.toContain(command);
+    }
+    // ...except `bfs pull`, which the closing line names as the next step for the
+    // whole backup - so for that one only the warnings are read.
+    expect(warned, 'recovery must not offer `bfs pull` for the absent provider').not.toContain('bfs pull');
+  });
+
   // --- CI mode: parse adapter flags via configureFromFlags ------------------
   // Regression for the user's bug report - `bfs recovery --provider ftp
   // --path bfsuser@host/ftp/bfsuser` returned "530 Login incorrect" because
@@ -374,5 +415,84 @@ describe('recovery', () => {
 
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ password: 'ftp-secret' }) }), expect.anything());
     expect(mockRecover).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ passwords: ['vault-secret'] }));
+  });
+
+  // --- A directory that already holds a backup ------------------------------
+  // The refusal to replace a live configuration comes first - before any
+  // question and before any flag check. Every other message this command prints
+  // advises a way to run it again, and in this directory that way ends in the
+  // same refusal; asking for storage settings first would make the operator type
+  // them for nothing.
+
+  describe('in a directory that already holds a backup', () => {
+    let dir = '';
+
+    beforeEach(async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-cli-recovery-live-'));
+      await fs.mkdir(path.join(dir, '.bfs'), { recursive: true });
+      await fs.writeFile(path.join(dir, '.bfs', 'config.json'), JSON.stringify({ vault_name: 'kept' }), 'utf-8');
+    });
+
+    afterEach(async () => {
+      await fs.rm(dir, { recursive: true, force: true });
+    });
+
+    it('should refuse before asking anything', async () => {
+      // Should a question slip through, it is answered with "cancel" - the run
+      // then ends on its own terms and the assertions below name what went wrong.
+      mockPrompt.mockResolvedValue({ providerType: '__cancel__' } as never);
+
+      const result = await runCmd(['--cwd', dir, 'recovery']);
+
+      expect(result).toBe('abort');
+      expect(capture.errors.some((l) => l.includes('already holds a backup named "kept"'))).toBe(true);
+      expect(mockPrompt).not.toHaveBeenCalled();
+      expect(mockRecover).not.toHaveBeenCalled();
+    });
+
+    // The adapter's configureFromFlags may reach the server (an opt-in to trust
+    // records the fingerprint it sees), so it must not run for a command that is
+    // about to be refused.
+    it('should refuse before building the bootstrap storage from --bootstrap', async () => {
+      const fromFlags = vi.spyOn(LocalFsProvider.prototype, 'configureFromFlags');
+
+      const result = await runCmd(['--cwd', dir, 'recovery', '--provider', 'local', '--name', 'kept', '--bootstrap', '--path /mnt/usb']);
+
+      expect(result).toBe('abort');
+      expect(capture.errors.some((l) => l.includes('already holds a backup named "kept"'))).toBe(true);
+      expect(fromFlags).not.toHaveBeenCalled();
+      expect(mockCreate).not.toHaveBeenCalled();
+      expect(mockRecover).not.toHaveBeenCalled();
+    });
+
+    it('should refuse before checking the --bootstrap flags', async () => {
+      const result = await runCmd(['--cwd', dir, 'recovery', '--name', 'kept', '--bootstrap', '--path /mnt/usb']);
+
+      expect(result).toBe('abort');
+      expect(capture.errors.some((l) => l.includes('already holds a backup named "kept"'))).toBe(true);
+      expect(capture.errors.some((l) => l.includes('--bootstrap requires --provider'))).toBe(false);
+    });
+
+    // `--ci` without --bootstrap is refused with advice to add it; in this
+    // directory that advice leads straight into the refusal above.
+    it('should refuse in place of the --ci bootstrap advice', async () => {
+      const result = await runCmd(['--cwd', dir, '--ci', 'recovery']);
+
+      expect(result).toBe('abort');
+      expect(capture.errors.some((l) => l.includes('already holds a backup named "kept"'))).toBe(true);
+      expect(capture.errors.some((l) => l.includes('Add --bootstrap'))).toBe(false);
+    });
+
+    it('should run in a directory next to it that holds no backup', async () => {
+      const empty = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-cli-recovery-empty-'));
+      try {
+        const result = await runCmd(['--cwd', empty, 'recovery', '--provider', 'local', '--name', 'kept', '--bootstrap', '--path /mnt/usb']);
+
+        expect(result).toBe('ok');
+        expect(mockRecover).toHaveBeenCalledWith(path.resolve(empty), expect.objectContaining({ vaultName: 'kept' }));
+      } finally {
+        await fs.rm(empty, { recursive: true, force: true });
+      }
+    });
   });
 });

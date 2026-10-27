@@ -120,8 +120,8 @@ export interface RepairPair {
 // --- Vault state (.bfs/state.json) ---------------------------
 
 export interface VaultState {
-  latest_version: number; // highest version present on providers (0 = no pushes)
-  working_version: number; // version currently on disk (0 = no pull/push)
+  latest_version: number; // highest version present on providers (0 = no pushes, unless a manifest for version 0 exists)
+  working_version: number; // version currently on disk (0 = no pull/push, or version 0 restored)
   // false after `bfs recovery` rebuilt the config from an untrusted location
   // map, until the first push/heal shows the operator the provider locations and
   // they confirm. Absent = legacy / never recovered = treated as confirmed.
@@ -488,7 +488,8 @@ export interface CliProviderInput {
    * (`bfs provider edit` is offline by contract). An adapter whose flag requires
    * a live connection - e.g. SSH `--accept-new-host-key`, which must dial the
    * server to capture and pin the host key - MUST reject that flag when this is
-   * set, pointing the operator at an offline-capable alternative (`--known-host`).
+   * set, naming the conflict: the flag needs a connection the command does not
+   * make.
    * Absent/false: the command may contact the medium (add / init / repair /
    * recovery bootstrap).
    */
