@@ -11,6 +11,12 @@
 //   env PTY_ANSWERS  = JSON [{ "anchor": "<substring>", "value": "<secret>" }, ...]
 //                      answers are fed in order: the i-th value is written + Enter
 //                      the first time its anchor appears in the terminal output.
+//                      An optional "after": "<substring>" holds the answer back
+//                      until the anchor appears AFTER that text. Needed when the
+//                      same prompt is asked again: its label is redrawn in the
+//                      echo of every keystroke of the previous answer, so the
+//                      bare anchor would fire before the new prompt exists - and
+//                      inquirer drops keystrokes that arrive before it starts.
 //   env PTY_TIMEOUT  = max ms before the child is killed (default 90000).
 //
 // All terminal output is mirrored to stdout so the bash scenario can assert on
@@ -47,10 +53,16 @@ let idx = 0;
 
 const feedReadyAnswers = () => {
   while (idx < answers.length) {
-    const { anchor, value } = answers[idx];
+    const { anchor, value, after } = answers[idx];
     // Match against ANSI-stripped text: inquirer interleaves cursor/colour
     // escapes with the prompt, which would otherwise break a substring anchor.
-    const pos = clean.indexOf(anchor, searchFrom);
+    let from = searchFrom;
+    if (typeof after === 'string') {
+      const afterPos = clean.indexOf(after, searchFrom);
+      if (afterPos === -1) return;
+      from = afterPos + after.length;
+    }
+    const pos = clean.indexOf(anchor, from);
     if (pos === -1) return;
     child.write(`${value}\r`);
     searchFrom = pos + anchor.length;

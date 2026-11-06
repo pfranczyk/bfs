@@ -15,9 +15,14 @@
 # without that shard's map recovery cannot learn where the other providers are.
 # Here the bootstrap provider's v2 shard is intact and carries the full provider
 # list; only its v1 shard is damaged, so every v1 sibling is reachable.
+#
+# Recovery reports the differing salt on that storage with the command to check
+# the backup, and the part can then be rebuilt in place with the correct
+# password typed at the prompt - judged against a sibling whose map opens, not
+# against the damaged part.
 
-SCENARIO_NAME="recovery keeps a version whose bootstrap shard has a damaged KDF salt"
-SCENARIO_DESC="encrypted 2/1, v1 primary salt corrupt; v1 manifest must come from a healthy sibling"
+SCENARIO_NAME="recovery keeps and reports a version whose bootstrap shard has a damaged KDF salt"
+SCENARIO_DESC="encrypted 2/1, v1 primary salt corrupt; v1 manifest from a healthy sibling, salt line, verify --deep, repair --rebuild via prompt"
 REQUIRES_LOCAL=3
 REQUIRES_FTP=0
 
@@ -80,6 +85,12 @@ scenario_run() {
     _fail "recovery prompted for the v1 password although the healthy siblings carry the version's salt and open with --password"
   fi
 
+  # Kept for the assertions on the salt line at the end: the steps below
+  # overwrite BFS_OUT, and the check the line points to - plus the rebuild an
+  # operator may choose after it - are executed first, so a path that does not
+  # work is reported as such rather than hidden behind a missing sentence.
+  local recovery_out="$BFS_OUT"
+
   # Control - the undamaged version is recovered.
   assert_file "$vault/.bfs/manifests/v002.json"
 
@@ -89,4 +100,47 @@ scenario_run() {
   run_bfs "$vault" pull --version 1 --force --yes --password "$pw"
   assert_ok
   assert_restored "$vault" "$b1"
+
+  # The check the line points to works in the state it is printed in: the deep
+  # check sees the damaged part (the salt sits under the part's trailing
+  # SHA-256, which this damage did not recompute).
+  run_bfs "$vault" verify --deep
+  assert_exit 4
+  # The way out the operator may choose after that check: rebuild the part in
+  # place (empty settings keep its location). Run at a real terminal with the
+  # correct password typed at the prompt - the path an operator takes - and the
+  # retry left blank, so a prompt judged against the damaged part fails fast
+  # instead of hanging.
+  local repair_answers
+  repair_answers="[{\"anchor\":\"Encryption password for version 1\",\"value\":\"$pw\"},{\"anchor\":\"Wrong password for version 1\",\"value\":\"\"}]"
+  run_bfs_pty "$vault" "$repair_answers" --lang en repair --version 1 "${PV_ID[0]}" "" --rebuild
+  if printf '%s' "$BFS_OUT" | grep -qF "Wrong password for version 1"; then
+    _fail "repair told the operator the correct password is wrong - it was judged against the damaged part"
+  fi
+  assert_ok
+  run_bfs "$vault" verify --deep
+  assert_ok
+  # The rebuilt part carries data: with a healthy sibling gone, restoring v1 has
+  # to read it.
+  rm -f "$(shard_file 1 1)"
+  wipe_working_tree "$vault"
+  run_bfs "$vault" pull --version 1 --force --yes --password "$pw"
+  assert_ok
+  assert_restored "$vault" "$b1"
+
+  # What was seen is reported as such, not just the medium: p0's header carries
+  # a salt the other parts do not, under the name the configuration gives that
+  # storage, with the command to check the backup. BFS does not know why, so no
+  # cause is guessed and no repair is offered.
+  BFS_OUT="$recovery_out"
+  assert_out_contains "Version 1: the header on storage ${PV_ID[0]} carries a different key salt than the other parts"
+  assert_out_contains "Check the backup with \`bfs verify --deep\`"
+  if printf '%s' "$BFS_OUT" | grep -qF "bfs repair --version"; then
+    _fail "the salt line offered a repair command; it reports the state and the check only"
+  fi
+  # Control - the undamaged version names no salt mismatch.
+  if printf '%s' "$BFS_OUT" | grep -qF "Version 2: the header on storage"; then
+    _fail "recovery reported a key salt mismatch for v2, whose parts are all intact"
+  fi
+  return 0
 }

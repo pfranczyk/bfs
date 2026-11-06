@@ -54,7 +54,7 @@ describe('blob-pack / blob-unpack - skip behavior', () => {
       if (String(p).endsWith('bad.txt')) {
         throw new Error('EACCES: permission denied, open bad.txt');
       }
-      return realReadFile(p, ...(rest as []));
+      return realReadFile(p, ...rest);
     });
 
     const { blob, skipped } = await packBlob(srcDir, filter);

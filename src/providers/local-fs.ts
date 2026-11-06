@@ -472,9 +472,9 @@ export class LocalFsProvider implements StorageProvider {
 
   /**
    * Interactively prompts for the base directory path via ProviderIO.
-   * Retries on empty input, non-directory, or non-existent path - surfaces
-   * the reason via `io.warn()` so the user understands why the prompt
-   * re-asked.
+   * Retries on empty input, a non-directory, a path running through a file, a
+   * path that cannot be checked, or a non-existent path - surfaces the reason
+   * via `io.warn()` so the user understands why the prompt re-asked.
    * @returns config fragment `{ path }` to persist in VaultConfig
    */
   async configureInteractive(io: ProviderIO): Promise<Record<string, unknown>> {
@@ -484,17 +484,9 @@ export class LocalFsProvider implements StorageProvider {
         io.warn(t('path_required'));
         continue;
       }
-      try {
-        const stat = await fs.stat(basePath);
-        if (!stat.isDirectory()) {
-          io.warn(t('path_not_dir'));
-          continue;
-        }
-      } catch {
-        io.warn(fmt('dir_not_exist', basePath));
-        continue;
-      }
-      return { path: basePath };
+      const verdict = await _classifyBasePath(basePath);
+      if (verdict.kind === 'dir') return { path: basePath };
+      io.warn(verdict.kind === 'missing' ? fmt('dir_not_exist', basePath) : _unusablePathWarning(verdict));
     }
   }
 
@@ -504,8 +496,8 @@ export class LocalFsProvider implements StorageProvider {
    * command exists for the case where the medium is NOT there - an unplugged
    * drive, a share that moved, a mount point that differs between machines - so
    * re-prompting until the path exists would leave nothing to type. A path that
-   * exists but is a file is still refused outright; that is a typo, not an
-   * absent medium.
+   * is a file, or runs through one, is still refused outright; that is a typo,
+   * not an absent medium - no directory can ever appear under a file.
    *
    * @param io   - ProviderIO carrying the prompt and the confirmation
    * @param _ctx - existing connection-config (the prompt is not prefilled from it)
@@ -518,23 +510,19 @@ export class LocalFsProvider implements StorageProvider {
         io.warn(t('path_required'));
         continue;
       }
-      try {
-        const stat = await fs.stat(basePath);
-        if (!stat.isDirectory()) {
-          io.warn(t('path_not_dir'));
-          continue;
-        }
-      } catch (err) {
-        // Only an absent path is offered for confirmation. A permission wall or a
-        // parent that is itself a file leaves a path that cannot be used at all,
-        // so standing behind it would buy the operator nothing.
-        if (!isEnoent(err)) {
-          io.warn(fmt('dir_not_exist', basePath));
-          continue;
-        }
-        if (!(await io.confirm(fmt('local_edit_path_missing_confirm', basePath)))) continue;
+      const verdict = await _classifyBasePath(basePath);
+      switch (verdict.kind) {
+        case 'dir':
+          return { path: basePath };
+        case 'missing':
+          if (await io.confirm(fmt('local_edit_path_missing_confirm', basePath))) return { path: basePath };
+          break;
+        default:
+          // Only an absent path is offered for confirmation. A path through a
+          // file, or one that could not be checked, cannot be used as it stands,
+          // so standing behind it would buy the operator nothing.
+          io.warn(_unusablePathWarning(verdict));
       }
-      return { path: basePath };
     }
   }
 
@@ -677,3 +665,71 @@ const localFsFactory: ProviderFactory = {
 };
 
 providerRegistry.register('local', localFsFactory);
+
+// --- Base path classification ------------------------------------------------
+
+/** What a typed base path is, as far as the interactive prompts need to know. */
+type BasePathVerdict = { kind: 'dir' } | { kind: 'not_dir' } | { kind: 'missing' } | { kind: 'blocked_by_file'; file: string } | { kind: 'uncheckable'; at: string; code: string };
+
+/**
+ * Classifies a typed base path by what actually stands on it, not by the error
+ * code `fs.stat` reports for it: the platforms disagree there - a path under a
+ * file is ENOTDIR on Linux and ENOENT on Windows, the very code that means "not
+ * there yet". The path as typed is checked first, so the kernel resolves `..`
+ * behind a link the way every later use of the path will. Only when nothing
+ * usable is there is the path walked upwards - lexically, from itself - to the
+ * nearest existing entry: the path itself being a file (`file/` typed with a
+ * trailing separator) makes it not a directory, a file above it makes it
+ * unusable, and nothing existing on the way - an unplugged drive, a dangling
+ * link to one, an offline share - is a medium that is merely absent. The walk
+ * folds `..` textually, so when the kernel answered ENOTDIR for the typed path
+ * and the walk finds no file (`file/../x` on POSIX), "absent" is not claimed:
+ * the kernel already saw a file on the way.
+ */
+async function _classifyBasePath(basePath: string): Promise<BasePathVerdict> {
+  let typedCode: string;
+  try {
+    return (await fs.stat(basePath)).isDirectory() ? { kind: 'dir' } : { kind: 'not_dir' };
+  } catch (err) {
+    typedCode = _errorCode(err);
+    if (!_isAbsentOnTheWay(err)) return { kind: 'uncheckable', at: basePath, code: typedCode };
+  }
+  const missing: BasePathVerdict = typedCode === 'ENOTDIR' ? { kind: 'uncheckable', at: basePath, code: typedCode } : { kind: 'missing' };
+  const typed = path.resolve(basePath);
+  for (let current = typed; ; current = path.dirname(current)) {
+    try {
+      const stat = await fs.stat(current);
+      if (stat.isDirectory()) return missing;
+      return current === typed ? { kind: 'not_dir' } : { kind: 'blocked_by_file', file: current };
+    } catch (err) {
+      if (!_isAbsentOnTheWay(err)) return { kind: 'uncheckable', at: current, code: _errorCode(err) };
+    }
+    if (path.dirname(current) === current) return missing;
+  }
+}
+
+/** ENOENT and ENOTDIR both say "nothing usable here"; which one is platform noise. */
+function _isAbsentOnTheWay(err: unknown): boolean {
+  return isEnoent(err) || _errnoCode(err) === 'ENOTDIR';
+}
+
+function _errorCode(err: unknown): string {
+  return _errnoCode(err) ?? (err instanceof Error ? err.message : String(err));
+}
+
+function _errnoCode(err: unknown): Nullable<string> {
+  if (typeof err !== 'object' || err === null || !('code' in err)) return null;
+  return typeof err.code === 'string' ? err.code : null;
+}
+
+/** The warning for a base path that cannot be used as it stands. */
+function _unusablePathWarning(verdict: Exclude<BasePathVerdict, { kind: 'dir' } | { kind: 'missing' }>): string {
+  switch (verdict.kind) {
+    case 'not_dir':
+      return t('path_not_dir');
+    case 'blocked_by_file':
+      return fmt('path_blocked_by_file', verdict.file);
+    case 'uncheckable':
+      return fmt('dir_check_failed', verdict.at, verdict.code);
+  }
+}

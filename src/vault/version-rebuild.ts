@@ -201,6 +201,8 @@ export async function rebuildVersionManifest(version: number, entries: readonly 
     }
   }
 
+  warnSaltOutliers(version, collected, { blobHash: sourceMeta.blob_hash, vaultId, locationMap: src.location_map }, io);
+
   // Build the manifest from the MAP SOURCE's header metadata (provenance): a
   // manifest mixing one shard's map with another's blob_hash/scheme/stripe would
   // describe a version that does not exist.
@@ -226,4 +228,36 @@ export async function rebuildVersionManifest(version: number, entries: readonly 
     if (sourceMeta.encrypted) manifest.encrypted_per_shard = true;
   }
   return { outcome: 'recovered', manifest, consensusOk };
+}
+
+/**
+ * Names every part whose key salt differs from the salt shared by the most
+ * parts. Every part of one push carries the same Argon2id salt, so a part that
+ * does not is reported as seen - not judged: rot in its header and an
+ * interrupted overwrite leave the same picture, and the operator is pointed at
+ * the check, not at a repair.
+ *
+ * Only parts of our backup with the map source's content hash are weighed: a
+ * part of another push or another backup already has its own sentence, and its
+ * salt is not this version's. The yardstick is the salt more parts carry than
+ * any other, not the map source, because the source itself can be the odd one
+ * out; when two salts tie for the lead there is nothing to call "the other
+ * parts" and no part is named. The storage is named as the configuration knows
+ * it - the location map's `provider_id` for that index - never the id the part
+ * was read under.
+ */
+function warnSaltOutliers(version: number, collected: ReadonlyArray<{ header: ShardHeader; shardIndex: number }>, source: { blobHash: string; vaultId: string; locationMap: readonly ShardLocation[] }, io: ProviderIO): void {
+  const peers = collected.flatMap((c) => (c.header.vault_id === source.vaultId && c.header.blob_hash === source.blobHash && c.header.kdf_salt !== null ? [{ shardIndex: c.shardIndex, salt: c.header.kdf_salt.toString('hex') }] : []));
+  const counts = new Map<string, number>();
+  for (const p of peers) counts.set(p.salt, (counts.get(p.salt) ?? 0) + 1);
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const [top, runnerUp] = ranked;
+  if (!top || !runnerUp || top[1] === runnerUp[1]) return; // one salt, or a tie for the lead
+  const leading = top[0];
+  const outliers = peers.filter((p) => p.salt !== leading).sort((a, b) => a.shardIndex - b.shardIndex);
+  for (const p of outliers) {
+    const storage = source.locationMap.find((loc) => loc.shard_index === p.shardIndex)?.provider_id;
+    if (storage === undefined) continue; // the map does not know this index - nothing to name it by
+    io.warn(fmt('recovery_kdf_salt_mismatch', String(version), storage));
+  }
 }

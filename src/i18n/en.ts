@@ -71,6 +71,8 @@ export const en: Strings = {
   path_required: 'Path is required',
   path_not_dir: 'Path is not a directory',
   dir_not_exist: 'Directory does not exist: %s',
+  path_blocked_by_file: '%s is a file - no directory can exist under it',
+  dir_check_failed: 'Cannot check directory %s (%s)',
 
   // --- init -----------------------------------------------------------------
   init_header: '\n  BFS - backup setup\n',
@@ -589,6 +591,7 @@ export const en: Strings = {
   recovery_consensus_filename_mismatch: 'Version %s: filename/header mismatch - skipping',
   recovery_consensus_failed: 'Version %s: consensus failed (fields: %s) - marking as untrusted',
   recovery_map_from_sibling: 'Version %s: location map recovered from a sibling - medium(s) %s could not supply it; verify/repair them',
+  recovery_kdf_salt_mismatch: 'Version %s: the header on storage %s carries a different key salt than the other parts. Check the backup with `bfs verify --deep`.',
   recovery_no_manifests: 'Could not reconstruct any valid backup version from the available providers.',
   recovery_manifest_unreadable: 'The latest backup version %s could not be read after recovery.',
   recovery_vault_exists:

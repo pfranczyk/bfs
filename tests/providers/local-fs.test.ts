@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderError, UnsafePathError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
 import { buildShard, parseShardHeaderFromStream } from '../../src/core/shard-io.js';
@@ -35,6 +35,49 @@ async function writeConfigFile(content: string): Promise<string> {
   const file = path.join(dir, 'cfg.json');
   await fs.writeFile(file, content, 'utf8');
   return file;
+}
+
+/**
+ * ProviderIO answering the path prompt from `replies` in order, confirming
+ * everything, and recording what reached the operator. A prompt beyond the last
+ * reply throws, so a flow that keeps re-asking fails with a reason instead of
+ * spinning until the test times out.
+ */
+function scriptedIO(replies: readonly string[]): { io: ProviderIO; warns: string[]; asked: () => number; confirms: () => number } {
+  const { io: base } = createMockProviderIO();
+  const warns: string[] = [];
+  let asked = 0;
+  let confirms = 0;
+  const io: ProviderIO = {
+    ...base,
+    async ask(): Promise<string> {
+      const reply = replies[asked];
+      asked += 1;
+      if (reply === undefined) throw new Error(`path prompt asked ${asked} times, only ${replies.length} replies scripted`);
+      return reply;
+    },
+    async confirm(): Promise<boolean> {
+      confirms += 1;
+      return true;
+    },
+    warn(message: string): void {
+      warns.push(message);
+    },
+  };
+  return { io, warns, asked: () => asked, confirms: () => confirms };
+}
+
+/**
+ * The single warning the operator saw, with every path that runs on past
+ * `filePath` (into its would-be `sub` directory) taken out. What is left names
+ * `filePath` only if the warning names the FILE - not the path typed, and not a
+ * parent of it that merely starts with the file's path.
+ */
+function warningNamingOnly(warns: readonly string[], filePath: string): string {
+  expect(warns).toHaveLength(1);
+  const warning = warns[0];
+  assert(warning !== undefined, 'expected exactly one warning');
+  return warning.split(path.join(filePath, 'sub')).join('');
 }
 
 function makeConfig(basePath: string, id = 'test-local'): ProviderConfig {
@@ -366,6 +409,75 @@ describe('LocalFsProvider', () => {
 
       expect(config).toEqual({ path: tmpDir });
     });
+
+    // The reason a path is refused decides what the operator types next, so the
+    // warning must describe the path as it is. "Does not exist" sends them off to
+    // create a directory - impossible under a file, and beside the point when the
+    // path could not be inspected at all (whether it exists is then unknown).
+    it('should name the file standing in the way when the path runs through a file', async () => {
+      // Two levels below the file, so the parent of the typed path is not the
+      // file itself: naming `dirname(typed)` would name `<file>/sub`.
+      const filePath = path.join(tmpDir, 'a-file.txt');
+      await fs.writeFile(filePath, 'x', 'utf8');
+      const script = scriptedIO([path.join(filePath, 'sub', 'deeper'), tmpDir]);
+      const p = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const config = await p.configureInteractive(script.io);
+
+      expect(config).toEqual({ path: tmpDir });
+      expect(warningNamingOnly(script.warns, filePath)).toContain(filePath);
+      expect(script.warns[0]).not.toContain('does not exist');
+    });
+
+    it.each(['EACCES', 'EPERM', 'ELOOP'])('should report a path it cannot inspect (%s) with the reason, not as missing', async (code) => {
+      // The code is forced rather than provoked: a permission wall that
+      // reproduces on Windows, Linux and macOS alike - and under a root account -
+      // cannot be built from the filesystem.
+      const denied = path.join(tmpDir, 'walled-off');
+      vi.spyOn(fs, 'stat').mockImplementation(async (target) => {
+        if (String(target) === denied) throw Object.assign(new Error(`${code}: operation not permitted`), { code });
+        return { isDirectory: () => true } as never;
+      });
+      const script = scriptedIO([denied, tmpDir]);
+      const p = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const config = await p.configureInteractive(script.io);
+
+      expect(config).toEqual({ path: tmpDir });
+      expect(script.warns).toHaveLength(1);
+      expect(script.warns[0]).toContain(denied);
+      expect(script.warns[0]).toContain(code);
+      expect(script.warns[0]).not.toContain('does not exist');
+    });
+
+    // POSIX kernels resolve `..` after following a link, `path.resolve` folds it
+    // textually; Windows folds it textually too, so there both agree. A path the
+    // kernel finds must be accepted, whatever its textual reading says.
+    it.skipIf(process.platform === 'win32')('should accept a directory reached through `..` behind a link', async () => {
+      await fs.mkdir(path.join(tmpDir, 'real', 'inner'), { recursive: true });
+      await fs.mkdir(path.join(tmpDir, 'real', 'data'));
+      await fs.mkdir(path.join(tmpDir, 'nest'));
+      await fs.symlink(path.join(tmpDir, 'real', 'inner'), path.join(tmpDir, 'nest', 'link'), 'dir');
+      const typed = `${path.join(tmpDir, 'nest', 'link')}/../data`;
+      const script = scriptedIO([typed]);
+      const p = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const config = await p.configureInteractive(script.io);
+
+      expect(config).toEqual({ path: typed });
+      expect(script.warns).toEqual([]);
+    });
+
+    it('should keep reporting a path with nothing in its way as missing', async () => {
+      const missing = path.join(tmpDir, 'not-there', 'deeper');
+      const script = scriptedIO([missing, tmpDir]);
+      const p = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const config = await p.configureInteractive(script.io);
+
+      expect(config).toEqual({ path: tmpDir });
+      expect(script.warns).toEqual([`Directory does not exist: ${missing}`]);
+    });
   });
 
   // --- configureInteractiveForEdit ------------------------------------------
@@ -464,6 +576,185 @@ describe('LocalFsProvider', () => {
       expect(config).toEqual({ path: tmpDir });
       expect(asked).toBe(2);
       expect(confirms).toBe(0);
+    });
+
+    // A path running through a file can never become a directory, so it is the
+    // same typo as the file itself - whatever error code the platform reports for
+    // it. Linux answers ENOTDIR, Windows answers ENOENT, and this test runs on the
+    // real filesystem of both: deciding on the code alone offers the Windows
+    // operator an unusable path for confirmation.
+    it('should re-ask, without offering it for confirmation, a path that runs through a file', async () => {
+      const filePath = path.join(tmpDir, 'a-file.txt');
+      await fs.writeFile(filePath, 'x', 'utf8');
+      const script = scriptedIO([path.join(filePath, 'sub', 'deeper'), tmpDir]);
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const config = await p.configureInteractiveForEdit?.(script.io, { existingConfig: { path: tmpDir } });
+
+      expect(config).toEqual({ path: tmpDir });
+      expect(script.asked()).toBe(2);
+      expect(script.confirms()).toBe(0);
+      expect(warningNamingOnly(script.warns, filePath)).toContain(filePath);
+      expect(script.warns[0]).not.toContain('does not exist');
+    });
+
+    it('should treat a file typed with a trailing separator as the file itself', async () => {
+      // Windows stats `file\` as the file itself; Linux answers ENOTDIR for
+      // `file/`. Both are the file, so both get the answer the bare file gets -
+      // not "missing", and not a parent named as the obstacle.
+      const filePath = path.join(tmpDir, 'a-file.txt');
+      await fs.writeFile(filePath, 'x', 'utf8');
+      const script = scriptedIO([filePath + path.sep, tmpDir]);
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const config = await p.configureInteractiveForEdit?.(script.io, { existingConfig: { path: tmpDir } });
+
+      expect(config).toEqual({ path: tmpDir });
+      expect(script.confirms()).toBe(0);
+      expect(script.warns).toEqual(['Path is not a directory']);
+    });
+
+    // Controls for the walk above a missing path. Only a FILE on the way makes a
+    // path unusable; everything below is a medium that is not there yet - the
+    // very case `provider edit` exists for - and must still reach confirmation.
+    it('should offer a path nested under a missing directory for confirmation', async () => {
+      const missing = path.join(tmpDir, 'not-mounted', 'backups');
+      const script = scriptedIO([missing]);
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const config = await p.configureInteractiveForEdit?.(script.io, { existingConfig: { path: tmpDir } });
+
+      expect(config).toEqual({ path: missing });
+      expect(script.confirms()).toBe(1);
+      expect(script.warns).toEqual([]);
+    });
+
+    it('should offer a path for confirmation when nothing on its way exists, down to the root', async () => {
+      // An unmapped drive letter or an offline share: not even the root answers.
+      // Forced, because no root is missing on the machine running the test.
+      const unmapped = path.join(tmpDir, 'offline-share', 'backups');
+      const statSpy = vi.spyOn(fs, 'stat').mockRejectedValue(Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' }));
+      const script = scriptedIO([unmapped]);
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const config = await p.configureInteractiveForEdit?.(script.io, { existingConfig: { path: tmpDir } });
+
+      expect(config).toEqual({ path: unmapped });
+      expect(script.confirms()).toBe(1);
+      // The walk asked `fs.stat` about a directory above the real `tmpDir`, so
+      // the answer came from the forced "nothing exists" - not from another call
+      // finding a real directory on the way. This guards the control against a
+      // vacuous pass; the defect itself is pinned by the tests above.
+      const asked = statSpy.mock.calls.map(([target]) => path.resolve(String(target)));
+      expect(asked).toContain(path.dirname(tmpDir));
+    });
+
+    it('should name the file, not the path below it, when the platform answers ENOTDIR', async () => {
+      // Forced so the Linux answer is exercised on every platform: deciding by
+      // error code (ENOTDIR -> name the parent) would otherwise pass wherever
+      // the platform answers ENOENT for a path under a file.
+      const filePath = path.join(tmpDir, 'a-file.txt');
+      await fs.writeFile(filePath, 'x', 'utf8');
+      const realStat = fs.stat.bind(fs);
+      vi.spyOn(fs, 'stat').mockImplementation(async (target, ...rest) => {
+        if (path.resolve(String(target)).startsWith(filePath + path.sep)) throw Object.assign(new Error('ENOTDIR: not a directory'), { code: 'ENOTDIR' });
+        return realStat(target, ...rest) as never;
+      });
+      const script = scriptedIO([path.join(filePath, 'sub', 'deeper'), tmpDir]);
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const config = await p.configureInteractiveForEdit?.(script.io, { existingConfig: { path: tmpDir } });
+
+      expect(config).toEqual({ path: tmpDir });
+      expect(script.confirms()).toBe(0);
+      expect(warningNamingOnly(script.warns, filePath)).toContain(filePath);
+    });
+
+    it('should offer a path for confirmation when it runs through a link to a missing target', async () => {
+      // A mount point kept as a link to a drive that is unplugged. A junction is
+      // used because Windows creates one without elevated rights.
+      const mount = path.join(tmpDir, 'usb');
+      await fs.symlink(path.join(tmpDir, 'unplugged-drive'), mount, 'junction');
+      const typed = path.join(mount, 'backups');
+      const script = scriptedIO([typed]);
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const config = await p.configureInteractiveForEdit?.(script.io, { existingConfig: { path: tmpDir } });
+
+      expect(config).toEqual({ path: typed });
+      expect(script.confirms()).toBe(1);
+      expect(script.warns).toEqual([]);
+    });
+
+    it('should name the ancestor it could not check, not offer the path for confirmation', async () => {
+      // The typed path is absent, but an entry above it refuses inspection - a
+      // folder in another user's profile on Windows, which has no traversal
+      // check. Whether a file stands there is unknown, so the path is refused,
+      // naming where the check failed. Forced: no portable permission wall.
+      const walled = path.join(tmpDir, 'walled');
+      const typed = path.join(walled, 'backups');
+      vi.spyOn(fs, 'stat').mockImplementation(async (target) => {
+        const resolved = path.resolve(String(target));
+        if (resolved === typed) throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
+        if (resolved === walled) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+        return { isDirectory: () => true } as never;
+      });
+      const script = scriptedIO([typed, tmpDir]);
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const config = await p.configureInteractiveForEdit?.(script.io, { existingConfig: { path: tmpDir } });
+
+      expect(config).toEqual({ path: tmpDir });
+      expect(script.confirms()).toBe(0);
+      expect(script.warns).toEqual([`Cannot check directory ${walled} (EPERM)`]);
+    });
+
+    it.skipIf(process.platform === 'win32')('should not offer for confirmation a path the kernel found a file on, even when `..` hides it textually', async () => {
+      // `file/../backups` folds to `<tmp>/backups` textually, while the kernel
+      // answers ENOTDIR because it walks through the file first. No directory
+      // can be created there, so "not there yet" must not be claimed.
+      const filePath = path.join(tmpDir, 'a-file.txt');
+      await fs.writeFile(filePath, 'x', 'utf8');
+      const script = scriptedIO([`${filePath}/../backups`, tmpDir]);
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const config = await p.configureInteractiveForEdit?.(script.io, { existingConfig: { path: tmpDir } });
+
+      expect(config).toEqual({ path: tmpDir });
+      expect(script.confirms()).toBe(0);
+      expect(script.warns).toHaveLength(1);
+      expect(script.warns[0]).toContain('ENOTDIR');
+    });
+
+    it('should offer a missing relative path for confirmation', async () => {
+      const relative = path.join('bfs-not-mounted-relative', 'backups');
+      const script = scriptedIO([relative]);
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const config = await p.configureInteractiveForEdit?.(script.io, { existingConfig: { path: tmpDir } });
+
+      expect(config).toEqual({ path: relative });
+      expect(script.confirms()).toBe(1);
+    });
+
+    it.each(['EACCES', 'EPERM', 'ELOOP'])('should report a path it cannot inspect (%s) with the reason, not as missing', async (code) => {
+      // Forced for the same reason as in the add flow: no portable permission wall.
+      const denied = path.join(tmpDir, 'walled-off');
+      vi.spyOn(fs, 'stat').mockImplementation(async (target) => {
+        if (String(target) === denied) throw Object.assign(new Error(`${code}: operation not permitted`), { code });
+        return { isDirectory: () => true } as never;
+      });
+      const script = scriptedIO([denied, tmpDir]);
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const config = await p.configureInteractiveForEdit?.(script.io, { existingConfig: { path: tmpDir } });
+
+      expect(config).toEqual({ path: tmpDir });
+      expect(script.confirms()).toBe(0);
+      expect(script.warns).toHaveLength(1);
+      expect(script.warns[0]).toContain(denied);
+      expect(script.warns[0]).toContain(code);
+      expect(script.warns[0]).not.toContain('does not exist');
     });
   });
 

@@ -78,6 +78,10 @@ export interface Strings {
   path_not_dir: string;
   /** %s = path */
   dir_not_exist: string;
+  /** %s = the file standing where a directory of the typed path would have to be */
+  path_blocked_by_file: string;
+  /** %s = path as typed, %s = error code the check failed with */
+  dir_check_failed: string;
 
   // --- init -----------------------------------------------------------------
   init_header: string;
@@ -751,6 +755,8 @@ export interface Strings {
   recovery_consensus_failed: string;
   /** %s = version, %s = comma-separated provider ids that could not supply the map */
   recovery_map_from_sibling: string;
+  /** %s = version, %s = configured storage name */
+  recovery_kdf_salt_mismatch: string;
   recovery_no_manifests: string;
   /** %s = version */
   recovery_manifest_unreadable: string;

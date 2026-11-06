@@ -10,7 +10,7 @@ import { rebuildShardInPlace, rebuildVersion, relocateProvider, updateLocationMa
 import { secretFieldsForType, splitLocationSecrets } from './location-map.js';
 import { acquireRepairLock, LOCK_FORMAT_VERSION, type RepairLock, type RepairLockFailedPair, type RepairLockFailedShard, type RepairLockSucceededPair, removeLock, repairLockPath, writeLockAtomic } from './lockfile.js';
 import { listManifests, writeManifest } from './manifest.js';
-import { tryDecryptLocationMap } from './password-pool.js';
+import { tryDecryptAnyLocationMap } from './password-pool.js';
 import { buildRemotePath } from './push-pipeline.js';
 
 /** Input to {@link repairVault}. Version resolution and spec parsing happen in the CLI layer. */
@@ -68,7 +68,7 @@ export async function repairVault(rootDir: string, options: RepairOptions): Prom
 
   // -- Phase 2a - plaintext integrity pre-check + vault-password resolution --
   const passwordPool = [...passwords];
-  const vaultPassword = await precheckAndResolvePassword(config, scoped, passwordPool, io);
+  const vaultPassword = await precheckAndResolvePassword(scoped, { config, passwordPool, io, repaired: new Set(pairs.map((p) => p.oldName)) });
 
   // -- Lock -- (secrets in each "<params>" are redacted for the forensic file) --
   // acquireRepairLock is the atomic acquisition point: it writes repair.lock
@@ -488,42 +488,86 @@ async function renameProviderInManifests(rootDir: string, oldName: string, newCo
   }
 }
 
+/** One probed shard header and the storage it was read from. */
+interface ProbedHeader {
+  readonly header: ShardHeader;
+  readonly headerBytes: Buffer;
+  readonly providerId: string;
+}
+
+/** What the password pre-check reads with and resolves against. */
+interface PrecheckContext {
+  readonly config: VaultConfig;
+  readonly passwordPool: string[];
+  readonly io: ProviderIO;
+  /** Storages being repaired - their recorded location is the one being replaced. */
+  readonly repaired: ReadonlySet<string>;
+}
+
 /**
- * For each in-scope version, probes one reachable shard header to detect a
+ * For each in-scope version, probes the first reachable shard header to detect a
  * foreign shard (plaintext vault_id mismatch) and, for encrypted backups,
- * resolves a working vault password (reused for every version). Read-only: runs
- * before the lock so a bad password or foreign shard aborts without side effects.
+ * resolves a working vault password (reused for every version). Only after a
+ * password has been tried and has not opened that first part are the version's
+ * other parts read, and the password settled on them too: a part whose own salt
+ * is damaged would otherwise turn the correct password into a refusal - and
+ * block the very rebuild that replaces that part. A version whose first part
+ * opens reads nothing more. The storages being repaired are left out of that
+ * wider search: a moved storage's recorded location is the one being abandoned,
+ * and reaching for it could prompt to create a path that is gone or send a
+ * secret to an address that is being left; a part rebuilt in place is the one
+ * being replaced, so it settles nothing. Runs before the lock, so a bad password or
+ * foreign shard aborts before anything is written to the backup.
  *
  * @returns the working password, or null when no version in scope is encrypted
  * @throws TamperDetectedError on a foreign shard; DecryptionError when no password works
  */
-async function precheckAndResolvePassword(config: VaultConfig, scoped: VersionManifest[], passwordPool: string[], io: ProviderIO): Promise<Nullable<string>> {
+async function precheckAndResolvePassword(scoped: VersionManifest[], ctx: PrecheckContext): Promise<Nullable<string>> {
   let resolved: Nullable<string> = null;
   for (const manifest of scoped) {
-    const probe = await probeShardHeader(config, manifest, io);
+    const probe = await probeShardHeader(ctx.config, manifest, ctx.io);
     if (!probe) continue; // no reachable shard for this version - nothing to check
 
-    if (probe.header.vault_id !== config.vault_id) {
+    if (probe.header.vault_id !== ctx.config.vault_id) {
       throw new TamperDetectedError(fmt('repair_foreign_shard_detected', String(manifest.version)));
     }
 
     if (manifest.encrypted && resolved === null) {
-      const result = await tryDecryptLocationMap(probe.header, probe.headerBytes, passwordPool, io, {
-        poolExhausted: fmt('repair_pool_password_failed', String(manifest.version)),
-        ask: fmt('repair_ask_vault_password', String(manifest.version)),
-        retry: fmt('repair_wrong_vault_password_retry', String(manifest.version)),
-      });
-      // "Attempts exhausted" is only true where attempts were possible. A run
-      // with no terminal never gets to try, whether it declared `--ci` or simply
-      // has nobody watching, so it hears which flag supplies more passwords.
-      // Both reach here as the same signal: `--ci` is what makes the caller build
-      // a ProviderIO that reports itself non-interactive on a terminal too.
-      const noOperator = io.interactive === false;
-      if (!result) throw new DecryptionError(fmt(noOperator ? 'repair_password_required_ci' : 'repair_password_exhausted', String(manifest.version)));
-      resolved = result.password;
+      resolved = await resolveVersionPassword(manifest, probe, ctx);
     }
   }
   return resolved;
+}
+
+/**
+ * Settles the vault password for one encrypted version, starting from its first
+ * reachable part; the other parts of the push this version records are read
+ * only when a password has failed on what is in hand.
+ *
+ * @returns the working password
+ * @throws DecryptionError when no password opens any of the parts
+ */
+async function resolveVersionPassword(manifest: VersionManifest, first: ProbedHeader, ctx: PrecheckContext): Promise<string> {
+  const { config, io } = ctx;
+  const version = String(manifest.version);
+  // A sibling counts only when it is a part of the push this version records: a
+  // part of another push left by an interrupted overwrite may open under an
+  // older password that opens none of the recorded parts.
+  const readRecordedSiblings = async (): Promise<readonly ProbedHeader[]> =>
+    (await probeSiblingHeaders(config, manifest, io, new Set([...ctx.repaired, first.providerId]))).filter((p) => p.header.vault_id === config.vault_id && p.header.blob_hash === manifest.blob_hash);
+  const result = await tryDecryptAnyLocationMap([first], ctx.passwordPool, io, {
+    prompts: { poolExhausted: fmt('repair_pool_password_failed', version), ask: fmt('repair_ask_vault_password', version), retry: fmt('repair_wrong_vault_password_retry', version) },
+    keyCache: null,
+    moreCandidates: readRecordedSiblings,
+  });
+  // "Attempts exhausted" is only true where attempts were possible. A run
+  // with no terminal never gets to try, whether it declared `--ci` or simply
+  // has nobody watching, so it hears which flag supplies more passwords.
+  // Both reach here as the same signal: `--ci` is what makes the caller build
+  // a ProviderIO that reports itself non-interactive on a terminal too.
+  const noOperator = io.interactive === false;
+  if (!result) throw new DecryptionError(fmt(noOperator ? 'repair_password_required_ci' : 'repair_password_exhausted', version));
+  return result.password;
 }
 
 /**
@@ -531,29 +575,60 @@ async function precheckAndResolvePassword(config: VaultConfig, scoped: VersionMa
  * Verifies the filename encodes the same index/version the header claims.
  * Returns null when no provider is reachable; re-throws integrity violations.
  */
-async function probeShardHeader(config: VaultConfig, manifest: VersionManifest, io: ProviderIO): Promise<Nullable<{ header: ShardHeader; headerBytes: Buffer }>> {
+async function probeShardHeader(config: VaultConfig, manifest: VersionManifest, io: ProviderIO): Promise<Nullable<ProbedHeader>> {
   for (const ms of manifest.shards) {
-    const pc = config.providers.find((p) => p.id === ms.provider_id);
-    if (!pc) continue;
-    const filename = `shard_${ms.shard_index}.bfs.${manifest.version}`;
     try {
-      const provider = providerRegistry.create(pc, io);
-      await provider.authenticate();
-      provider.setVaultName(config.vault_name);
-      const bytes = await provider.downloadHeader({ provider_id: ms.provider_id, path: filename }, SHARD_HEADER_READ_BYTES);
-      const parsed = await parseShardHeaderFromStream(Readable.from(bytes));
-      parsed.payloadStream.on('error', () => {}).destroy();
-      const named = parseVersionFromFilename(filename);
-      if (!named || named.shardIndex !== parsed.header.shard_index || named.version !== parsed.header.version) {
-        throw new ShardCorruptedError(fmt('repair_wrong_version_shard', String(manifest.version)));
-      }
-      return { header: parsed.header, headerBytes: bytes };
+      const probe = await readProbeHeader(config, manifest, ms, io);
+      if (probe) return probe;
     } catch (err) {
       if (err instanceof TamperDetectedError || err instanceof ShardCorruptedError) throw err;
       // provider unreachable or header unreadable - try the next sibling
     }
   }
   return null;
+}
+
+/**
+ * Reads the headers of a version's other reachable shards, skipping the storages
+ * in `skip`. Used only to settle the password, so nothing here refuses: a shard
+ * that cannot be read, or is filed under the wrong name, is simply left out.
+ */
+async function probeSiblingHeaders(config: VaultConfig, manifest: VersionManifest, io: ProviderIO, skip: ReadonlySet<string>): Promise<ProbedHeader[]> {
+  const probes: ProbedHeader[] = [];
+  for (const ms of manifest.shards) {
+    if (skip.has(ms.provider_id)) continue;
+    try {
+      const probe = await readProbeHeader(config, manifest, ms, io);
+      if (probe) probes.push(probe);
+    } catch {
+      // unreachable, unreadable or misfiled - it cannot settle the password
+    }
+  }
+  return probes;
+}
+
+/**
+ * Reads and parses one shard's header from its configured storage and checks that
+ * its filename encodes the index/version the header claims.
+ *
+ * @returns the header, or null when the storage is not in the configuration
+ * @throws ShardCorruptedError when the shard is filed under the wrong name
+ */
+async function readProbeHeader(config: VaultConfig, manifest: VersionManifest, ms: ManifestShard, io: ProviderIO): Promise<Nullable<ProbedHeader>> {
+  const pc = config.providers.find((p) => p.id === ms.provider_id);
+  if (!pc) return null;
+  const filename = `shard_${ms.shard_index}.bfs.${manifest.version}`;
+  const provider = providerRegistry.create(pc, io);
+  await provider.authenticate();
+  provider.setVaultName(config.vault_name);
+  const bytes = await provider.downloadHeader({ provider_id: ms.provider_id, path: filename }, SHARD_HEADER_READ_BYTES);
+  const parsed = await parseShardHeaderFromStream(Readable.from(bytes));
+  parsed.payloadStream.on('error', () => {}).destroy();
+  const named = parseVersionFromFilename(filename);
+  if (!named || named.shardIndex !== parsed.header.shard_index || named.version !== parsed.header.version) {
+    throw new ShardCorruptedError(fmt('repair_wrong_version_shard', String(manifest.version)));
+  }
+  return { header: parsed.header, headerBytes: bytes, providerId: ms.provider_id };
 }
 
 /**

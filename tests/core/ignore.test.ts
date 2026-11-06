@@ -154,6 +154,39 @@ describe('appendToBfsignore', () => {
     expect(filter('starXYZ.txt')).toBe(false);
   });
 
+  // A '*' at the END of a name puts the escape right before the end of the
+  // pattern - a different code path from a mid-name '*'. A matcher that reads a
+  // trailing escaped '*' as a wildcard turns `/data\*` into "every name starting
+  // with data" and `/\*` into "every top-level entry", so the push gate that
+  // appended it would silently drop those neighbours from every later backup.
+  it('should keep a trailing escaped wildcard literal so neighbours stay in the backup', async () => {
+    dir = makeTmpDir();
+
+    await appendToBfsignore(dir, ['data*', '*', 'sub/*']);
+
+    const filter = createIgnoreFilter(dir);
+    expect(filter('data*')).toBe(true);
+    expect(filter('*')).toBe(true);
+    expect(filter('sub/*')).toBe(true);
+    expect(filter('data.db')).toBe(false);
+    expect(filter('database/rows.bin')).toBe(false);
+    expect(filter('readme.txt')).toBe(false);
+    expect(filter('sub/notes.txt')).toBe(false);
+  });
+
+  // An escaped '?' must match the literal name at all; a matcher that compiles
+  // it into a rule matching nothing leaves the entry in the scan, and the push
+  // gate then refuses it as unignorable instead of excluding it.
+  it('should make an escaped question mark match only the literal name', async () => {
+    dir = makeTmpDir();
+
+    await appendToBfsignore(dir, ['q?']);
+
+    const filter = createIgnoreFilter(dir);
+    expect(filter('q?')).toBe(true);
+    expect(filter('qa')).toBe(false);
+  });
+
   it('should insert a separating newline when the file lacks a trailing one', async () => {
     dir = makeTmpDir('*.log'); // no trailing newline
 

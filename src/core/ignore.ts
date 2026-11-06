@@ -26,7 +26,7 @@ export function createIgnoreFilter(rootDir: string): IgnoreFilter {
  * Converts a relative path into a gitignore pattern matching that path, anchored
  * to the root with a leading slash and escaping gitignore metacharacters (`\`,
  * `#`, `!`, `[`, `]`, `*`, `?`) so a literal name is not read as a comment,
- * negation, or glob. Names with trailing whitespace or an embedded newline
+ * negation, or glob. Names with trailing spaces or an embedded newline
  * cannot be represented as a matching pattern here; the caller detects a name
  * that stays unmatched with a progress guard rather than relying on this
  * function to encode every possible name.

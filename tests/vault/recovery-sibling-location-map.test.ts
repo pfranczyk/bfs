@@ -301,6 +301,15 @@ describe('recover() resolving a version location map across sibling shards', () 
       warnsNaming(logs, DAMAGED_MEDIUM_ID),
       `recovery must name the medium whose map could not be opened ("${DAMAGED_MEDIUM_ID}") so verify/repair can be pointed at it - healing the version silently leaves a damaged shard nobody knows about`,
     ).toBeGreaterThanOrEqual(1);
+    // The damage here is a rotted GCM tag on an INTACT salt (the fixture test
+    // above proves the salt survived). The salt sentence reports a different
+    // observation, so it must not be printed for this one.
+    const saltMarker = fmt('recovery_kdf_salt_mismatch', '\u0000', '\u0000').split('\u0000')[2] ?? '';
+    expect(saltMarker, 'the salt marker must be a real fragment of the sentence').not.toBe('');
+    expect(
+      logs.filter((l) => l.level === 'warn' && l.message.includes(saltMarker)),
+      'a damaged map under an intact salt is not a salt mismatch - naming it one would send the operator after the wrong fault',
+    ).toEqual([]);
   });
 
   it('should resolve a sibling map without asking the operator anything', async () => {

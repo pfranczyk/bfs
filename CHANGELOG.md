@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.6] - 2026-11-06
+
+### Changed
+
+- **`bfs recovery` reports a part whose key salt differs.** When one part's
+  header carries a different key salt than the other parts of its version, the
+  storage holding it is named - as the configuration names it - with the command
+  to check the backup, `bfs verify --deep`. `bfs pull` says the same when it
+  rebuilds a version that recovery could not open. Nothing else about the run
+  changes: the version is still rebuilt from the other parts.
+- **`.bfsignore` patterns follow git more closely in edge cases.** BFS now
+  requires version 7.0.13 or later of its pattern library, `ignore`. Compared
+  with older 7.x versions, a backslash makes the next character literal (`\*`
+  excludes only a file named `*`, not every file), `[!...]` and `[^...]` negate
+  a character class, a line holding only `!` is ignored instead of re-including
+  everything excluded above it, POSIX classes such as `[[:alpha:]]` are
+  recognised, a bracket expression never matches a slash, a leading `**/**/`
+  behaves like `**/`, a trailing `/**/` no longer excludes a file directly under
+  that directory, and only trailing spaces - not tabs - are trimmed from a
+  pattern. The default `.bfsignore` uses none of these forms, so what it
+  excludes is unchanged; a pattern relying on these or other edge cases may now
+  include or exclude different files.
+
+### Fixed
+
+- **Accepting the REPL offer to add a name ending in `*` to `.bfsignore` no
+  longer drops the files that start with that name.** When `push` in the REPL
+  meets a symbolic link or special file it cannot back up, it offers to write
+  the escaped name to `.bfsignore`. For a name ending in `*` (possible on Linux
+  and macOS), an older version of the pattern library read that entry as a
+  wildcard: for a link `data*` it also excluded `data.db` and the whole
+  `database/`, and the push still reported success, so every later backup
+  silently lacked them. The entry no longer matches names that merely start
+  with it. If you accepted such an offer, check `.bfsignore` for lines ending in
+  `\*` and push again: backups made before this version may be missing those
+  files. A name containing `?` was refused as impossible to add; it is now added
+  and excluded.
+- **`bfs repair` accepts the correct password when one part's header is
+  damaged.** The password was checked against the first reachable part of a
+  version only; when that part's key salt had rotted, the correct password was
+  reported as wrong - at the prompt over and over, or as "no password matched"
+  with `--password` - and the rebuild that would replace the damaged part never
+  ran. The password is now checked against the other reachable parts of the
+  version too: all supplied passwords first, then the prompt. A wrong password
+  is still refused.
+- **Local storage prompts say why a path was refused.** Wherever BFS asks for a
+  local storage path interactively (`bfs init`, `bfs provider add`,
+  `bfs provider edit` and others), a path that runs through a file (`file.txt/sub`)
+  is refused with the name of that file, and a path that could not be checked
+  (no permission, for example) is refused with the error code. Both used to be
+  reported as "Directory does not exist", which reads as an instruction to
+  create a directory - impossible under a file. On Windows, `bfs provider edit`
+  also offered to save such a path anyway; it is now asked again, as on Linux.
+  In `bfs provider edit`, a directory that is merely absent - an unplugged
+  drive, a share that moved - is still offered for saving, as before.
+
 ## [0.14.5] - 2026-10-27
 
 ### Added
@@ -1631,7 +1687,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.5...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.6...HEAD
+[0.14.6]: https://github.com/pfranczyk/bfs/compare/v0.14.5...v0.14.6
 [0.14.5]: https://github.com/pfranczyk/bfs/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/pfranczyk/bfs/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/pfranczyk/bfs/compare/v0.14.2...v0.14.3

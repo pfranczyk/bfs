@@ -18,23 +18,10 @@ vi.mock('../../src/providers/provider.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/providers/provider.js')>();
   return { ...actual, createCliProviderIO: vi.fn(() => ({ ask: vi.fn(), askSecret: vi.fn(), confirm: vi.fn(), choose: vi.fn(), info: vi.fn(), warn: vi.fn(), progress: vi.fn() })) };
 });
-// scanDir uses fs/promises - return empty directory so tests don't hit disk.
-// --config-file path validation uses fs.access + fs.constants. readFile answers
-// ENOENT by default: these tests run against a directory holding no backup, and
-// the re-init guard asks about .bfs/config.json before anything else. A test
-// that wants the other answer overrides readFile for its own run.
-vi.mock('node:fs/promises', () => {
-  const mock = {
-    readdir: vi.fn().mockResolvedValue([]),
-    stat: vi.fn().mockResolvedValue({ isDirectory: () => true, size: 0 }),
-    access: vi.fn().mockResolvedValue(undefined),
-    readFile: vi.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
-    constants: { R_OK: 4, W_OK: 2, X_OK: 1, F_OK: 0 },
-  };
-  return { default: mock, ...mock };
-});
 
 import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import inquirer from 'inquirer';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { init } from '../../src/vault/vault-manager.js';
@@ -47,33 +34,45 @@ const ciBaseArgs = ['init', 'myvault', '--ci', '--data-shards', '2', '--parity-s
 
 describe('init', () => {
   let capture: ReturnType<typeof captureConsole>;
+  // Every run gets a real, empty working directory. The command scans it and the
+  // re-init guard inspects it, so a fake filesystem would have to answer each of
+  // those reads the way the guard expects - and a guard switching from one fs
+  // call to another would flip that answer for tests that are not about it.
+  let root: string;
 
-  beforeEach(() => {
+  /** Runs `bfs <tokens>` with `--cwd` pointing at this test's working directory. */
+  function runInRoot(tokens: string[]): ReturnType<typeof runCmd> {
+    return runCmd(['--cwd', root, ...tokens]);
+  }
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-init-cli-'));
     capture = captureConsole();
     mockInit.mockResolvedValue(undefined);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     capture.restore();
     vi.clearAllMocks();
+    await fs.rm(root, { recursive: true, force: true });
   });
 
   // --- CI mode - basic -------------------------------------------------
 
   it('CI: should call init with vault_name from argument', async () => {
-    await runCmd(ciBaseArgs);
+    await runInRoot(ciBaseArgs);
 
     expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ vault_name: 'myvault' }));
   });
 
   it('CI: should pass scheme N=2 K=1 from flags', async () => {
-    await runCmd(ciBaseArgs);
+    await runInRoot(ciBaseArgs);
 
     expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ scheme: { data_shards: 2, parity_shards: 1 } }));
   });
 
   it('CI: should pass providers from --provider flags', async () => {
-    await runCmd(ciBaseArgs);
+    await runInRoot(ciBaseArgs);
 
     expect(mockInit).toHaveBeenCalledWith(
       expect.any(String),
@@ -88,68 +87,68 @@ describe('init', () => {
   });
 
   it('CI: should enable encryption by default', async () => {
-    await runCmd(ciBaseArgs);
+    await runInRoot(ciBaseArgs);
 
     expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ encryption: expect.objectContaining({ enabled: true }) }));
   });
 
   it('CI: should disable encryption when --no-enc given', async () => {
-    await runCmd([...ciBaseArgs, '--no-enc']);
+    await runInRoot([...ciBaseArgs, '--no-enc']);
 
     expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ encryption: expect.objectContaining({ enabled: false }) }));
   });
 
   it('CI: should warn about an unencrypted backup when --no-enc given', async () => {
-    await runCmd([...ciBaseArgs, '--no-enc']);
+    await runInRoot([...ciBaseArgs, '--no-enc']);
 
     expect(capture.errors.join('\n')).toMatch(/NOT encrypted/);
   });
 
   it('CI: should not warn about encryption when encryption stays enabled', async () => {
-    await runCmd(ciBaseArgs);
+    await runInRoot(ciBaseArgs);
 
     expect(capture.errors.join('\n')).not.toMatch(/NOT encrypted/);
   });
 
   it('CI: should keep encryption enabled when --enc given (no-op)', async () => {
-    await runCmd([...ciBaseArgs, '--enc']);
+    await runInRoot([...ciBaseArgs, '--enc']);
 
     expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ encryption: expect.objectContaining({ enabled: true }) }));
   });
 
   it('CI: should set push_mode=new_version by default', async () => {
-    await runCmd(ciBaseArgs);
+    await runInRoot(ciBaseArgs);
 
     expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ push_mode: PushMode.NewVersion }));
   });
 
   it('CI: should pass push_mode=ask when --push-mode ask given', async () => {
-    await runCmd([...ciBaseArgs, '--push-mode', 'ask']);
+    await runInRoot([...ciBaseArgs, '--push-mode', 'ask']);
 
     expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ push_mode: PushMode.Ask }));
   });
 
   it('CI: should pass push_mode=overwrite when --push-mode overwrite given', async () => {
-    await runCmd([...ciBaseArgs, '--push-mode', 'overwrite']);
+    await runInRoot([...ciBaseArgs, '--push-mode', 'overwrite']);
 
     expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ push_mode: PushMode.Overwrite }));
   });
 
   it('CI: should abort when --push-mode is invalid', async () => {
-    const result = await runCmd([...ciBaseArgs, '--push-mode', 'bad']);
+    const result = await runInRoot([...ciBaseArgs, '--push-mode', 'bad']);
 
     expect(result).toBe('abort');
     expect(mockInit).not.toHaveBeenCalled();
   });
 
   it('CI: should skip all inquirer prompts', async () => {
-    await runCmd(ciBaseArgs);
+    await runInRoot(ciBaseArgs);
 
     expect(mockPrompt).not.toHaveBeenCalled();
   });
 
   it('CI: should show success message with vault name', async () => {
-    await runCmd(ciBaseArgs);
+    await runInRoot(ciBaseArgs);
 
     const output = capture.logs.join('\n');
     expect(output).toContain('myvault');
@@ -161,7 +160,7 @@ describe('init', () => {
   it('CI: should abort when init throws', async () => {
     mockInit.mockRejectedValue(new Error('Scheme requires 3 providers, configured: 2'));
 
-    const result = await runCmd(ciBaseArgs);
+    const result = await runInRoot(ciBaseArgs);
 
     expect(result).toBe('abort');
     expect(capture.errors.some((e) => e.includes('Scheme requires'))).toBe(true);
@@ -170,7 +169,7 @@ describe('init', () => {
   // --- Input validation in CI mode (no magic defaults) ----------------------
 
   it('CI: should abort when --ci given without vault_name argument', async () => {
-    const result = await runCmd(['init', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2', '--provider', 'local:p3 --path /mnt/d3']);
+    const result = await runInRoot(['init', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2', '--provider', 'local:p3 --path /mnt/d3']);
 
     expect(result).toBe('abort');
     expect(mockInit).not.toHaveBeenCalled();
@@ -179,7 +178,7 @@ describe('init', () => {
   });
 
   it('CI: should abort when --data-shards is missing', async () => {
-    const result = await runCmd(['init', 'myvault', '--ci', '--parity-shards', '1', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2', '--provider', 'local:p3 --path /mnt/d3']);
+    const result = await runInRoot(['init', 'myvault', '--ci', '--parity-shards', '1', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2', '--provider', 'local:p3 --path /mnt/d3']);
 
     expect(result).toBe('abort');
     expect(mockInit).not.toHaveBeenCalled();
@@ -187,7 +186,7 @@ describe('init', () => {
   });
 
   it('CI: should abort when --parity-shards is missing', async () => {
-    const result = await runCmd(['init', 'myvault', '--ci', '--data-shards', '2', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2', '--provider', 'local:p3 --path /mnt/d3']);
+    const result = await runInRoot(['init', 'myvault', '--ci', '--data-shards', '2', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2', '--provider', 'local:p3 --path /mnt/d3']);
 
     expect(result).toBe('abort');
     expect(mockInit).not.toHaveBeenCalled();
@@ -195,7 +194,7 @@ describe('init', () => {
   });
 
   it('CI: should abort when --data-shards < 2', async () => {
-    const result = await runCmd(['init', 'myvault', '--ci', '--data-shards', '1', '--parity-shards', '1', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2']);
+    const result = await runInRoot(['init', 'myvault', '--ci', '--data-shards', '1', '--parity-shards', '1', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2']);
 
     expect(result).toBe('abort');
     expect(mockInit).not.toHaveBeenCalled();
@@ -203,7 +202,7 @@ describe('init', () => {
   });
 
   it('CI: should abort when --parity-shards < 1', async () => {
-    const result = await runCmd(['init', 'myvault', '--ci', '--data-shards', '2', '--parity-shards', '0', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2']);
+    const result = await runInRoot(['init', 'myvault', '--ci', '--data-shards', '2', '--parity-shards', '0', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2']);
 
     expect(result).toBe('abort');
     expect(mockInit).not.toHaveBeenCalled();
@@ -211,7 +210,7 @@ describe('init', () => {
   });
 
   it('CI: should abort when --data-shards is not a number', async () => {
-    const result = await runCmd(['init', 'myvault', '--ci', '--data-shards', 'abc', '--parity-shards', '1', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2', '--provider', 'local:p3 --path /mnt/d3']);
+    const result = await runInRoot(['init', 'myvault', '--ci', '--data-shards', 'abc', '--parity-shards', '1', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2', '--provider', 'local:p3 --path /mnt/d3']);
 
     expect(result).toBe('abort');
     expect(mockInit).not.toHaveBeenCalled();
@@ -219,7 +218,7 @@ describe('init', () => {
   });
 
   it('CI: should abort when --provider count does not match N+K', async () => {
-    const result = await runCmd(['init', 'myvault', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2']);
+    const result = await runInRoot(['init', 'myvault', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'local:p1 --path /mnt/d1', '--provider', 'local:p2 --path /mnt/d2']);
 
     expect(result).toBe('abort');
     expect(mockInit).not.toHaveBeenCalled();
@@ -227,7 +226,7 @@ describe('init', () => {
   });
 
   it('CI: should NOT run any Inquirer prompt when validation fails', async () => {
-    await runCmd(['init', '--ci']);
+    await runInRoot(['init', '--ci']);
 
     expect(mockPrompt).not.toHaveBeenCalled();
   });
@@ -252,7 +251,7 @@ describe('init', () => {
       .mockResolvedValueOnce({ pushMode: PushMode.NewVersion } as never) // push_mode
       .mockResolvedValueOnce({ maxRamStr: '1024' } as never); // max_ram_mb
 
-    await runCmd(['init']);
+    await runInRoot(['init']);
 
     expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ vault_name: 'interaktywny-vault' }));
   });
@@ -273,7 +272,7 @@ describe('init', () => {
       .mockResolvedValueOnce({ pushMode: PushMode.NewVersion } as never) // push_mode
       .mockResolvedValueOnce({ maxRamStr: '1024' } as never); // max_ram_mb
 
-    await runCmd(['init', 'myvault']);
+    await runInRoot(['init', 'myvault']);
 
     // First prompt should be for encryption, not vault name
     expect(mockPrompt).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ name: 'encEnabled' })]));
@@ -294,7 +293,7 @@ describe('init', () => {
     it('should forward every post-head token as rawArgs (no BFS interpretation)', async () => {
       const spy = vi.mocked(LocalFsProvider.prototype.configureFromFlags);
 
-      await runCmd([
+      await runInRoot([
         'init',
         'myvault',
         '--ci',
@@ -321,7 +320,7 @@ describe('init', () => {
     it('should preserve quoted values containing spaces in rawArgs', async () => {
       const spy = vi.mocked(LocalFsProvider.prototype.configureFromFlags);
 
-      await runCmd([
+      await runInRoot([
         'init',
         'myvault',
         '--ci',
@@ -344,7 +343,7 @@ describe('init', () => {
     it('should construct the provider io with workDir=rootDir', async () => {
       const createCliProviderIOSpy = vi.mocked(await import('../../src/providers/provider.js')).createCliProviderIO;
 
-      await runCmd([
+      await runInRoot([
         'init',
         'myvault',
         '--ci',
@@ -360,14 +359,15 @@ describe('init', () => {
         'local:p3 --config-file ./d3.json',
       ]);
 
-      expect(createCliProviderIOSpy).toHaveBeenCalled();
-      const passedWorkDir = createCliProviderIOSpy.mock.calls.at(-1)?.[0];
-      expect(typeof passedWorkDir).toBe('string');
-      expect(passedWorkDir?.length).toBeGreaterThan(0);
+      // Every io the command builds, not just the last: the adapter resolves
+      // `--config-file ./d1.json` through an earlier one than the vault layer gets.
+      const passedWorkDirs = createCliProviderIOSpy.mock.calls.map(([workDir]) => workDir);
+      expect(passedWorkDirs.length).toBeGreaterThan(0);
+      expect(passedWorkDirs.every((workDir) => workDir === path.resolve(root))).toBe(true);
     });
 
     it('should abort when provider id has whitespace', async () => {
-      const result = await runCmd([
+      const result = await runInRoot([
         'init',
         'myvault',
         '--ci',
@@ -391,7 +391,7 @@ describe('init', () => {
     it('should abort when the provider reports invalid config', async () => {
       vi.mocked(LocalFsProvider.prototype.validateConfig).mockReturnValueOnce(['path must be absolute']);
 
-      const result = await runCmd([
+      const result = await runInRoot([
         'init',
         'myvault',
         '--ci',
@@ -422,14 +422,14 @@ describe('init', () => {
 
   describe('CI: multi-segment --provider spec is rejected', () => {
     it('should abort on a 3-segment local spec', async () => {
-      const result = await runCmd(['init', 'myvault', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'local:p1:/legacy/path', '--provider', 'local:p2 --path /mnt/d2', '--provider', 'local:p3 --path /mnt/d3']);
+      const result = await runInRoot(['init', 'myvault', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'local:p1:/legacy/path', '--provider', 'local:p2 --path /mnt/d2', '--provider', 'local:p3 --path /mnt/d3']);
 
       expect(result).toBe('abort');
       expect(mockInit).not.toHaveBeenCalled();
     });
 
     it('should abort on a colon-separated 8-segment FTP spec', async () => {
-      const result = await runCmd([
+      const result = await runInRoot([
         'init',
         'myvault',
         '--ci',
@@ -459,14 +459,14 @@ describe('init', () => {
 
   describe('CI: duplicate --provider id is rejected', () => {
     it('should abort when two --provider specs share the same id', async () => {
-      const result = await runCmd(['init', 'myvault', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'local:dup --path /mnt/d1', '--provider', 'local:dup --path /mnt/d2', '--provider', 'local:ok --path /mnt/d3']);
+      const result = await runInRoot(['init', 'myvault', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'local:dup --path /mnt/d1', '--provider', 'local:dup --path /mnt/d2', '--provider', 'local:ok --path /mnt/d3']);
 
       expect(result).toBe('abort');
       expect(mockInit).not.toHaveBeenCalled();
     });
 
     it('should name the colliding id in the error when two --provider specs share an id', async () => {
-      await runCmd(['init', 'myvault', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'local:dup --path /mnt/d1', '--provider', 'local:dup --path /mnt/d2', '--provider', 'local:ok --path /mnt/d3']);
+      await runInRoot(['init', 'myvault', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'local:dup --path /mnt/d1', '--provider', 'local:dup --path /mnt/d2', '--provider', 'local:ok --path /mnt/d3']);
 
       expect(capture.errors.some((e) => e.includes('dup'))).toBe(true);
     });
@@ -476,7 +476,7 @@ describe('init', () => {
 
   describe('CI: --provider ftp inline grammar', () => {
     it('should accept full ftp inline spec', async () => {
-      await runCmd([
+      await runInRoot([
         'init',
         'myvault',
         '--ci',
@@ -509,31 +509,25 @@ describe('init', () => {
   // before saying no.
 
   describe('a directory that already holds a backup', () => {
-    /** Makes .bfs/config.json readable, as if a backup had been initialized here. */
-    function existingBackup(vaultName: string): void {
-      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ vault_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', vault_name: vaultName, scheme: { data_shards: 2, parity_shards: 1 }, providers: [] }));
+    /** Writes .bfs/config.json into the working directory, as if a backup had been initialized here. */
+    async function existingBackup(vaultName: string): Promise<void> {
+      await fs.mkdir(path.join(root, '.bfs'));
+      await fs.writeFile(path.join(root, '.bfs', 'config.json'), JSON.stringify({ vault_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', vault_name: vaultName, scheme: { data_shards: 2, parity_shards: 1 }, providers: [] }));
     }
 
-    // vi.clearAllMocks() in the outer afterEach resets calls, not implementations,
-    // so the readFile above would answer for every later test in this file and
-    // refuse an init none of them set up. Put the file back out of reach here.
-    afterEach(() => {
-      vi.mocked(fs.readFile).mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-    });
-
     it('should abort before delegating to the vault layer', async () => {
-      existingBackup('docs');
+      await existingBackup('docs');
 
-      const result = await runCmd(ciBaseArgs);
+      const result = await runInRoot(ciBaseArgs);
 
       expect(result).toBe('abort');
       expect(mockInit).not.toHaveBeenCalled();
     });
 
     it('should name the backup standing in the way, without pointing at `bfs clear`', async () => {
-      existingBackup('docs');
+      await existingBackup('docs');
 
-      await runCmd(ciBaseArgs);
+      await runInRoot(ciBaseArgs);
 
       // Both halves belong in one test: on its own, "does not mention bfs clear"
       // is satisfied by an empty output and would guard nothing. `bfs clear`

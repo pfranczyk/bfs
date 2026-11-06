@@ -71,6 +71,8 @@ export const pl: Strings = {
   path_required: 'Ścieżka jest wymagana',
   path_not_dir: 'Ścieżka nie jest katalogiem',
   dir_not_exist: 'Katalog nie istnieje: %s',
+  path_blocked_by_file: '%s to plik - pod nim nie może powstać katalog',
+  dir_check_failed: 'Nie można sprawdzić katalogu %s (%s)',
 
   // --- init -----------------------------------------------------------------
   init_header: '\n  BFS - konfiguracja kopii zapasowej\n',
@@ -590,6 +592,7 @@ export const pl: Strings = {
   recovery_consensus_filename_mismatch: 'Wersja %s: niezgodność nazwy pliku/nagłówka - pomijam',
   recovery_consensus_failed: 'Wersja %s: konsensus nieudany (pola: %s) - oznaczam jako niezaufaną',
   recovery_map_from_sibling: 'Wersja %s: mapa lokalizacji odzyskana z rodzeństwa - nośnik(i) %s nie mógł jej dostarczyć; zweryfikuj/napraw je',
+  recovery_kdf_salt_mismatch: 'Wersja %s: nagłówek na nośniku %s ma inną sól klucza niż pozostałe części. Sprawdź kopię przez `bfs verify --deep`.',
   recovery_no_manifests: 'Nie udało się odtworzyć żadnej poprawnej wersji kopii zapasowej z dostępnych nośników.',
   recovery_manifest_unreadable: 'Nie udało się odczytać najnowszej wersji %s kopii zapasowej po odzyskaniu.',
   recovery_vault_exists:

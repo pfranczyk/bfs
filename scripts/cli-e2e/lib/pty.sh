@@ -7,7 +7,9 @@
 #   <answers-json>  JSON array, fed in order:
 #                   '[{"anchor":"required to reconnect","value":"bfspass"}]'
 #                   The value is typed + Enter the first time its anchor
-#                   substring appears in the terminal output.
+#                   substring appears in the terminal output. An optional
+#                   "after" substring holds it back until the anchor appears
+#                   after that text (see lib/pty-run.mjs for when it is needed).
 # Sets the same globals as run_bfs: BFS_EXIT / BFS_STDOUT / BFS_STDERR / BFS_OUT.
 # Never aborts the caller (always returns 0); scenarios assert on the outcome.
 

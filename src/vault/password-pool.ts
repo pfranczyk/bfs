@@ -16,6 +16,12 @@ export interface PasswordPromptText {
 /** Result of opening one shard's location map: the map, its key, and the password. */
 type MapDecryptResult = { location_map: ShardLocation[]; encKey: Buffer; password: string };
 
+/** One shard header a password can be tried against. */
+export interface PasswordCandidate {
+  readonly header: ShardHeader;
+  readonly headerBytes: Buffer;
+}
+
 /**
  * Tries every pooled password (MRU order, most-recently-added first) against one
  * shard's encrypted location map, without prompting. Returns the map on the first
@@ -59,14 +65,62 @@ export async function tryPooledPasswords(header: ShardHeader, headerBytes: Buffe
  * @returns the decrypted map, key, and password, or null
  */
 export async function promptForVaultPassword(header: ShardHeader, headerBytes: Buffer, passwordPool: string[], io: ProviderIO, prompts: PasswordPromptText, keyCache?: Map<string, Buffer>): Promise<Nullable<MapDecryptResult>> {
-  if (!header.encrypted || !header.kdf_salt) return null;
+  return promptAgainstCandidates(new CandidateSet([{ header, headerBytes }], null), passwordPool, io, { prompts, keyCache: keyCache ?? null });
+}
+
+/** How {@link tryDecryptAnyLocationMap} asks, caches and widens its search. */
+export interface AnyLocationMapOptions {
+  readonly prompts: PasswordPromptText;
+  /** (password,salt)->key memo shared with earlier attempts; null starts a fresh one. */
+  readonly keyCache: Nullable<Map<string, Buffer>>;
+  /**
+   * Further parts of the same version, read only after a password has been tried
+   * and failed on the candidates in hand - so a version whose first part opens,
+   * or a run that never gets to try one, reads nothing more.
+   */
+  readonly moreCandidates: Nullable<() => Promise<readonly PasswordCandidate[]>>;
+}
+
+/** The candidates in hand, plus the deferred ones loaded at most once. */
+class CandidateSet {
+  private loaded = false;
+  constructor(
+    private readonly current: PasswordCandidate[],
+    private readonly more: Nullable<() => Promise<readonly PasswordCandidate[]>>,
+  ) {}
+
+  /** The candidates read so far. */
+  get list(): readonly PasswordCandidate[] {
+    return this.current;
+  }
+
+  /** Reads the deferred candidates once; returns the newly added ones. */
+  async widen(): Promise<readonly PasswordCandidate[]> {
+    if (this.loaded || !this.more) return [];
+    this.loaded = true;
+    const added = await this.more();
+    this.current.push(...added);
+    return added;
+  }
+}
+
+/**
+ * Prompts until a typed password opens the map of ANY of the candidates, or a
+ * blank entry gives up. A typed password that opens none of the candidates in
+ * hand is tried on the deferred ones before the operator hears "wrong", so one
+ * part whose header no longer opens (a damaged salt) does not turn the correct
+ * password into a "wrong password".
+ */
+async function promptAgainstCandidates(candidates: CandidateSet, passwordPool: string[], io: ProviderIO, opts: { prompts: PasswordPromptText; keyCache: Nullable<Map<string, Buffer>> }): Promise<Nullable<MapDecryptResult>> {
+  const { prompts } = opts;
+  const keyCache = opts.keyCache ?? undefined;
+  if (!candidates.list.some(isSealed)) return null;
   // A run with no operator (`--bootstrap`, cron, closed stdin) cannot be asked:
   // the question would never be answered, and the wait ends the process rather
   // than the prompt. Treat the password as unavailable and let the caller skip
   // what it cannot open. `=== false` on purpose - an absent field means an
   // interactive terminal, per the ProviderIO contract.
   if (io.interactive === false) return null;
-  const salt = header.kdf_salt;
   // Unbounded on purpose: at this critical moment the operator keeps trying; a
   // blank entry gives up.
   let firstTry = true;
@@ -79,12 +133,27 @@ export async function promptForVaultPassword(header: ShardHeader, headerBytes: B
     }
     firstTry = false;
     if (!pwd) return null;
-    const resolved = await attempt(headerBytes, salt, pwd, keyCache);
+    const resolved = (await attemptOnAny(candidates.list, pwd, keyCache)) ?? (await attemptOnAny(await candidates.widen(), pwd, keyCache));
     if (resolved) {
       passwordPool.push(pwd);
       return resolved;
     }
   }
+}
+
+/** True for a shard whose location map is sealed under a password. */
+function isSealed(c: PasswordCandidate): boolean {
+  return c.header.encrypted && c.header.kdf_salt !== null;
+}
+
+/** Tries one password on each candidate in turn; the first map it opens wins. */
+async function attemptOnAny(candidates: readonly PasswordCandidate[], pwd: string, keyCache?: Map<string, Buffer>): Promise<Nullable<MapDecryptResult>> {
+  for (const c of candidates) {
+    if (!c.header.encrypted || !c.header.kdf_salt) continue;
+    const resolved = await attempt(c.headerBytes, c.header.kdf_salt, pwd, keyCache);
+    if (resolved) return resolved;
+  }
+  return null;
 }
 
 /**
@@ -102,11 +171,47 @@ export async function promptForVaultPassword(header: ShardHeader, headerBytes: B
  * @returns the decrypted location map, derived key, and the working password, or null
  */
 export async function tryDecryptLocationMap(header: ShardHeader, headerBytes: Buffer, passwordPool: string[], io: ProviderIO, prompts: PasswordPromptText): Promise<Nullable<MapDecryptResult>> {
-  const pooled = await tryPooledPasswords(header, headerBytes, passwordPool);
-  if (pooled) return pooled;
-  if (!header.encrypted || !header.kdf_salt) return null;
-  if (passwordPool.length > 0) io.warn(prompts.poolExhausted);
-  return promptForVaultPassword(header, headerBytes, passwordPool, io, prompts);
+  return tryDecryptAnyLocationMap([{ header, headerBytes }], passwordPool, io, { prompts, keyCache: null, moreCandidates: null });
+}
+
+/**
+ * Resolves the vault key from any of several shards of ONE version. The pool is
+ * tried on the candidates in hand; when it opens none of them, the deferred
+ * candidates (`moreCandidates`) are read and the pool tried on those too, before
+ * the operator is asked. A typed password is tried the same way. The parts of a
+ * version share one salt and one password, so a part whose own header no longer
+ * opens - a damaged salt - must not decide the password for the rest; and since
+ * the further parts are read only after a password failed, a version whose first
+ * part opens costs no extra read. The pool-exhausted warning is emitted once,
+ * and only when a non-empty pool opened nothing. Keys are memoized per
+ * (password, salt), so a wrong password costs one derivation per distinct salt,
+ * not one per part.
+ *
+ * @param candidates   headers in hand, in probe order
+ * @param passwordPool shared MRU pool, mutated on a successful manual attempt
+ * @param io           ProviderIO for the warning and the interactive prompt
+ * @param opts         prompt text, key memo and the deferred candidates
+ * @returns the decrypted location map, derived key, and the working password, or null
+ */
+export async function tryDecryptAnyLocationMap(candidates: readonly PasswordCandidate[], passwordPool: string[], io: ProviderIO, opts: AnyLocationMapOptions): Promise<Nullable<MapDecryptResult>> {
+  const keyCache = opts.keyCache ?? new Map<string, Buffer>();
+  const set = new CandidateSet([...candidates], opts.moreCandidates);
+  if (passwordPool.length > 0) {
+    const pooled = (await tryPoolOn(set.list, passwordPool, keyCache)) ?? (await tryPoolOn(await set.widen(), passwordPool, keyCache));
+    if (pooled) return pooled;
+  }
+  if (!set.list.some(isSealed)) return null;
+  if (passwordPool.length > 0) io.warn(opts.prompts.poolExhausted);
+  return promptAgainstCandidates(set, passwordPool, io, { prompts: opts.prompts, keyCache });
+}
+
+/** Tries the whole pool on each candidate in turn; the first map it opens wins. */
+async function tryPoolOn(candidates: readonly PasswordCandidate[], passwordPool: string[], keyCache: Map<string, Buffer>): Promise<Nullable<MapDecryptResult>> {
+  for (const c of candidates) {
+    const pooled = await tryPooledPasswords(c.header, c.headerBytes, passwordPool, keyCache);
+    if (pooled) return pooled;
+  }
+  return null;
 }
 
 /**

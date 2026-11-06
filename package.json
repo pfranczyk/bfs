@@ -1,6 +1,6 @@
 {
   "name": "bfs-vault",
-  "version": "0.14.5",
+  "version": "0.14.6",
   "description": "Encrypted CLI backup split across local, FTP and SSH storages with Reed-Solomon parity - any N of N+K parts restore everything",
   "type": "module",
   "preferGlobal": true,
@@ -75,19 +75,19 @@
     "basic-ftp": "^6.2.1",
     "chalk": "^5.6.2",
     "commander": "^15.0.0",
-    "ignore": "^7.0.5",
+    "ignore": "^7.0.13",
     "inquirer": "^14.0.2",
     "ora": "^9.4.1",
     "ssh2": "^1.17.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.6",
-    "@lydell/node-pty": "^1.2.0-beta.14",
-    "@types/node": "^26.1.2",
-    "@types/ssh2": "^1.15.5",
+    "@biomejs/biome": "^2.5.15",
+    "@lydell/node-pty": "^1.2.0-beta.15",
+    "@types/node": "^26.6.5",
+    "@types/ssh2": "^1.15.6",
     "tsup": "^8.5.1",
-    "tsx": "^4.23.5",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.12"
   }
 }

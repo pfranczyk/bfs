@@ -41,21 +41,10 @@ vi.mock('inquirer', () => ({
     type = 'separator';
   },
 }));
-// scanDir / compressibility analysis hit fs - return an empty directory so the
-// test stays off disk (mirrors tests/cli/init.test.ts). readFile answers ENOENT:
-// the re-init guard asks about .bfs/config.json first, and these runs are about
-// the probe loop in a directory that holds no backup.
-vi.mock('node:fs/promises', () => {
-  const mock = {
-    readdir: vi.fn().mockResolvedValue([]),
-    stat: vi.fn().mockResolvedValue({ isDirectory: () => true, size: 0 }),
-    access: vi.fn().mockResolvedValue(undefined),
-    readFile: vi.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
-    constants: { R_OK: 4, W_OK: 2, X_OK: 1, F_OK: 0 },
-  };
-  return { default: mock, ...mock };
-});
 
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import inquirer from 'inquirer';
 import { init } from '../../src/vault/vault-manager.js';
 
@@ -209,13 +198,23 @@ function scriptInteractivePrompts(): void {
 
 describe('interactive init - provider connectivity probe + retry', () => {
   let capture: ReturnType<typeof captureConsole>;
+  // A real, empty working directory per run: the command scans it and the
+  // re-init guard inspects it, and these tests are about the probe loop - not
+  // about how a fake filesystem answers whichever call the guard happens to use.
+  let root: string;
 
-  beforeEach(() => {
+  /** Runs `bfs <tokens>` with `--cwd` pointing at this test's working directory. */
+  function runInRoot(tokens: string[]): ReturnType<typeof runCmd> {
+    return runCmd(['--cwd', root, ...tokens]);
+  }
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-init-probe-'));
     capture = captureConsole();
     mockInit.mockResolvedValue(undefined);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     capture.restore();
     // mockReset (not just clearAllMocks) drains the mockResolvedValueOnce queue:
     // a test that aborts early (ABORT path) consumes fewer prompts than it
@@ -227,6 +226,8 @@ describe('interactive init - provider connectivity probe + retry', () => {
     vi.restoreAllMocks();
     // Drop the mock provider type so other suites see a clean registry.
     (providerRegistry as unknown as { entries: Map<string, unknown> }).entries.delete(PROBE_TYPE);
+    // Last, so a removal that throws cannot skip the mock and registry resets above.
+    await fs.rm(root, { recursive: true, force: true });
   });
 
   it('RETRY: should re-probe the same config and complete init after a transient failure', async () => {
@@ -237,7 +238,7 @@ describe('interactive init - provider connectivity probe + retry', () => {
     const { chooseCalls } = installProbeIO(0); // pick RETRY (index 0)
     scriptInteractivePrompts();
 
-    const result = await runCmd(['init', 'myvault']);
+    const result = await runInRoot(['init', 'myvault']);
 
     // The recovery choice prompt must actually have been presented.
     expect(chooseCalls.length).toBeGreaterThanOrEqual(1);
@@ -259,7 +260,7 @@ describe('interactive init - provider connectivity probe + retry', () => {
     const { chooseCalls } = installProbeIO(1); // pick RE-ENTER (index 1)
     scriptInteractivePrompts();
 
-    const result = await runCmd(['init', 'myvault']);
+    const result = await runInRoot(['init', 'myvault']);
 
     expect(chooseCalls.length).toBeGreaterThanOrEqual(1);
     // configureInteractive ran again for the failing provider: 3 base configs
@@ -275,7 +276,7 @@ describe('interactive init - provider connectivity probe + retry', () => {
     const { chooseCalls } = installProbeIO(2); // pick ABORT (index 2)
     scriptInteractivePrompts();
 
-    const result = await runCmd(['init', 'myvault']);
+    const result = await runInRoot(['init', 'myvault']);
 
     // The recovery prompt was shown and the operator chose abort.
     expect(chooseCalls.length).toBeGreaterThanOrEqual(1);
@@ -309,7 +310,7 @@ describe('interactive init - provider connectivity probe + retry', () => {
     const { chooseCalls } = installProbeIO(1); // pick RE-ENTER (index 1)
     scriptInteractivePrompts();
 
-    const result = await runCmd(['init', 'myvault']);
+    const result = await runInRoot(['init', 'myvault']);
 
     // The recovery choice prompt was presented regardless of the failure text.
     expect(chooseCalls.length).toBeGreaterThanOrEqual(1);
@@ -333,7 +334,7 @@ describe('interactive init - provider connectivity probe + retry', () => {
     const { chooseCalls } = installProbeIO(1); // pick RE-ENTER (index 1)
     scriptInteractivePrompts();
 
-    const result = await runCmd(['init', 'myvault']);
+    const result = await runInRoot(['init', 'myvault']);
 
     // The probeConnection failure surfaced the recovery prompt.
     expect(chooseCalls.length).toBeGreaterThanOrEqual(1);
@@ -363,7 +364,7 @@ describe('interactive init - provider connectivity probe + retry', () => {
     const { chooseCalls } = installProbeIO(1); // pick RE-ENTER (index 1)
     scriptInteractivePrompts();
 
-    const result = await runCmd(['init', 'myvault']);
+    const result = await runInRoot(['init', 'myvault']);
 
     // The validation failure (NOT a probe failure) surfaced the recovery prompt.
     expect(chooseCalls.length).toBeGreaterThanOrEqual(1);

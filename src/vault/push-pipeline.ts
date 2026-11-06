@@ -1154,7 +1154,7 @@ export async function _handleExcludedEntries(options: HandleExcludedEntriesOptio
     excluded = (await scanDirClassified(rootDir, createIgnoreFilter(rootDir))).excluded;
     // Progress guard: an entry still present after being appended to .bfsignore
     // has a name that cannot be encoded as a matching ignore pattern (trailing
-    // whitespace, an embedded newline, ...). Stop with a clear error instead of
+    // spaces, an embedded newline, ...). Stop with a clear error instead of
     // re-appending it forever.
     const stuck = excluded.filter((e) => beforePaths.has(e.path));
     if (stuck.length > 0) throw new BfsError(fmt('push_excluded_unignorable', _formatExcludedList(stuck)));

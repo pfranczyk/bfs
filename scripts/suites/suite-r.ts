@@ -631,6 +631,78 @@ export async function suiteR(): Promise<SuiteResult> {
     }),
   );
 
+  // -- R30/R31 - recovery names a part whose key salt differs, in both languages --
+  // Every part of a version carries the same Argon2id salt, so one part whose
+  // salt rotted still lets recovery take the map from a sibling. The line
+  // reports what was seen on that storage, named the way the configuration does
+  // (never the id recovery bootstrapped with), with the command to check the
+  // backup - and nothing more: BFS does not know why the salt differs, so it
+  // guesses no cause and offers no repair. Only this layer compares the EN/PL
+  // pair.
+  const keyVaultDir = path.join(tmpBase, 'key-vault');
+  const keyBootstrapDir = path.join(tmpBase, 'key-g1');
+  const keyDirs = [keyBootstrapDir, path.join(tmpBase, 'key-g2'), path.join(tmpBase, 'key-g3')];
+  const keyVaultName = 'key-vault';
+  const keyPassword = 'KeySalt123!';
+
+  /** Flips one byte of the KDF salt in a v2 encrypted part header, checksum left stale. */
+  async function damageKeySalt(file: string): Promise<void> {
+    const bytes = await fs.readFile(file);
+    // magic(4) + format(2) + vault uuid(16) + name length(2), then the name, then
+    // blob size(8) + blob hash(32) + N(2) + K(2) + index(2) + version(4) + flag(1).
+    const saltAt = 0x18 + bytes.readUInt16LE(0x16) + 51;
+    bytes[saltAt] = (bytes[saltAt] ?? 0) ^ 0xff;
+    await fs.writeFile(file, bytes);
+  }
+
+  /** Runs recovery from the medium holding the damaged part and returns its output. */
+  function recoverKeyVault(lang: string): string {
+    const r = runBfs(['--lang', lang, 'recovery', '--provider', 'local', '--name', keyVaultName, '--password', keyPassword, '--bootstrap', `--path ${keyBootstrapDir}`], keyVaultDir, undefined, langEnv);
+    assert(r.status === 0, `recovery must rebuild metadata past one damaged salt, got exit ${r.status ?? 'null'}\n${r.stdout}\n${r.stderr}`);
+    return r.stdout + r.stderr;
+  }
+
+  tests.push(
+    await runTest('R30', 'recovery names a part whose key salt differs (EN)', async () => {
+      await initTestVault(
+        keyVaultDir,
+        keyVaultName,
+        keyDirs.map((dir, i) => ({ id: `g${i + 1}`, dir })),
+        ['--enc', '--no-compress'],
+      );
+      for (const flag of ['--new', '--new']) {
+        const p = runBfs(['push', flag, '--password', keyPassword], keyVaultDir);
+        assert(p.status === 0, `push exit ${p.status ?? 'null'}\n${p.stdout}\n${p.stderr}`);
+      }
+      await damageKeySalt(path.join(keyBootstrapDir, keyVaultName, 'shard_0.bfs.1'));
+      await fs.rm(path.join(keyVaultDir, '.bfs'), { recursive: true, force: true });
+
+      const out = recoverKeyVault('en');
+
+      const line = out.split('\n').find((l) => l.includes('carries a different key salt'));
+      if (line === undefined) throw new Error(`recovery must report the differing salt on the damaged part: ${out.slice(0, 600)}`);
+      assert(line.includes('Version 1') && line.includes('storage g1'), `the line must name the version and the configured storage: ${line}`);
+      assert(line.includes('bfs verify --deep'), `the line must carry the check in runnable form: ${line}`);
+      assert(!line.includes('bfs repair'), `the line reports the state and the check, not a repair: ${line}`);
+      assert(!line.includes('bootstrap-local'), `the line must not name the bootstrap id, which no command accepts: ${line}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('R31', 'recovery names a part whose key salt differs (PL)', async () => {
+      await fs.rm(path.join(keyVaultDir, '.bfs'), { recursive: true, force: true });
+
+      const out = recoverKeyVault('pl');
+
+      const line = out.split('\n').find((l) => l.includes('ma inną sól klucza'));
+      if (line === undefined) throw new Error(`the Polish report must report the differing salt on the damaged part: ${out.slice(0, 600)}`);
+      assert(line.includes('Wersja 1') && line.includes('nośniku g1'), `the line must name the version and the configured storage: ${line}`);
+      assert(line.includes('bfs verify --deep'), `the line must carry the check in runnable form: ${line}`);
+      assert(!line.includes('bfs repair'), `the line reports the state and the check, not a repair: ${line}`);
+      assert(!line.includes('bootstrap-local'), `the line must not name the bootstrap id, which no command accepts: ${line}`);
+    }),
+  );
+
   // -- R22..R27 - a storage outside the configuration: the state, not a remedy --
   // The cause line says which storage the configuration lost, and that is all
   // verify says about it. What to do next depends on why the storage left -
