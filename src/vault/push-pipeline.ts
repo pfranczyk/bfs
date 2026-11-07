@@ -19,7 +19,7 @@ import { deriveKey, deriveShardNonce, encryptStream, exceedsGcmPlaintextLimit, G
 import type { SkippedFile } from '../core/errors.js';
 import { BfsError, BlobWriteError, ProviderError, PushCacheCorruptedError, PushCacheNoLockError, PushCacheUnavailableError, PushDriftError, PushExcludedError, PushSkippedError, ScratchWriteError } from '../core/errors.js';
 import { hashBuffer, hashStream, SHA256_BYTES } from '../core/hash.js';
-import { appendToBfsignore, createIgnoreFilter } from '../core/ignore.js';
+import { appendToBfsignore, createIgnoreFilter, isBfsignoreWritable } from '../core/ignore.js';
 import { calcShardPayloadSize, rsEncodeStriped } from '../core/reed-solomon.js';
 import { buildShardStream, serializeShardHeader, uuidToBuffer, V2_MAX_STRIPE_SIZE } from '../core/shard-io.js';
 import { fmt, t } from '../i18n/index.js';
@@ -1098,14 +1098,18 @@ const EXCLUDED_LIST_LIMIT = 10;
 /**
  * Renders excluded entries as an indented, labelled file list for prompts and
  * warnings. Truncates to EXCLUDED_LIST_LIMIT lines with a "... and N more" tail.
+ * A path holding a control character is shown as a JSON string, so `notes\r`
+ * does not print as `notes` and a line feed does not split the list.
  *
  * @param excluded - Entries excluded by type (symlinks/special files)
  * @returns Multi-line string; each line is `  - <label>: <path>`
  */
 export function _formatExcludedList(excluded: readonly ExcludedEntry[]): string {
   const label = (reason: ExcludedEntry['reason']): string => (reason === 'symlink' ? t('push_excluded_label_symlink') : t('push_excluded_label_special'));
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are exactly what is detected
+  const shownPath = (path: string): string => (/[\u0000-\u001f\u007f]/.test(path) ? JSON.stringify(path) : path);
   const shown = excluded.slice(0, EXCLUDED_LIST_LIMIT);
-  const lines = shown.map((e) => `  - ${label(e.reason)}: ${e.path}`);
+  const lines = shown.map((e) => `  - ${label(e.reason)}: ${shownPath(e.path)}`);
   if (excluded.length > shown.length) lines.push(`  ... and ${excluded.length - shown.length} more`);
   return lines.join('\n');
 }
@@ -1121,8 +1125,10 @@ interface HandleExcludedEntriesOptions {
  * Gate for entries that cannot be backed up (symlinks / special files), detected
  * before packing. No-op when there are none. With allowExcluded it warns and
  * returns them (packing then drops them). Interactive mode lists them and offers
- * to append them to .bfsignore and retry, looping until the scan is clean or the
- * user declines. Non-interactive without allowExcluded throws PushExcludedError
+ * to append them to .bfsignore and retry, looping until the scan is clean, the
+ * user declines, or an entry cannot be excluded by a pattern (a name with a line
+ * break gets no line; an entry still present after its line was written would
+ * loop). Non-interactive without allowExcluded throws PushExcludedError
  * (CLI exit code 3). Symlinks/special files are a permanent, by-design exclusion,
  * distinct from unreadable files (which keep the cache/`--cache` flow).
  *
@@ -1130,7 +1136,8 @@ interface HandleExcludedEntriesOptions {
  * @returns Entries excluded from the backup (allowExcluded path); [] when added to
  *          .bfsignore or none existed
  * @throws PushExcludedError in non-interactive mode when entries cannot be backed up
- * @throws BfsError when the user declines the interactive prompt
+ * @throws BfsError when the user declines the interactive prompt, or when an
+ *         accepted entry cannot be excluded by a .bfsignore pattern
  */
 export async function _handleExcludedEntries(options: HandleExcludedEntriesOptions): Promise<ExcludedEntry[]> {
   const { rootDir, io } = options;
@@ -1145,17 +1152,20 @@ export async function _handleExcludedEntries(options: HandleExcludedEntriesOptio
     }
     const cont = await io.confirm(fmt('push_excluded_confirm', String(excluded.length), _formatExcludedList(excluded)));
     if (!cont) throw new BfsError(t('push_cancelled'));
-    const beforePaths = new Set(excluded.map((e) => e.path));
+    const writable = excluded.filter((e) => isBfsignoreWritable(e.path));
     await appendToBfsignore(
       rootDir,
-      excluded.map((e) => e.path),
+      writable.map((e) => e.path),
     );
-    io.info(fmt('push_excluded_added', String(excluded.length)));
+    // A name with a line break gets no line at all: whatever would be written
+    // reads back as some other name and would later drop that file instead.
+    const unwritable = excluded.filter((e) => !isBfsignoreWritable(e.path));
+    if (unwritable.length > 0) throw new BfsError(fmt('push_excluded_unignorable', _formatExcludedList(unwritable)));
+    io.info(fmt('push_excluded_added', String(writable.length)));
+    const beforePaths = new Set(writable.map((e) => e.path));
     excluded = (await scanDirClassified(rootDir, createIgnoreFilter(rootDir))).excluded;
-    // Progress guard: an entry still present after being appended to .bfsignore
-    // has a name that cannot be encoded as a matching ignore pattern (trailing
-    // spaces, an embedded newline, ...). Stop with a clear error instead of
-    // re-appending it forever.
+    // Progress guard: an entry still present after its pattern was appended
+    // would be re-appended forever. Stop with a clear error instead.
     const stuck = excluded.filter((e) => beforePaths.has(e.path));
     if (stuck.length > 0) throw new BfsError(fmt('push_excluded_unignorable', _formatExcludedList(stuck)));
   }

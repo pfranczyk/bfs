@@ -199,7 +199,7 @@ export const pl: Strings = {
   push_excluded_confirm: '%s wpis(ów) nie może trafić do kopii:\n%s\nDodać je do .bfsignore i ponowić?',
   push_excluded_allowed: 'Pomijanie %s wpis(ów), których nie można zbackupować:\n%s',
   push_excluded_added: 'Dodano %s wpis(ów) do .bfsignore; ponawianie...',
-  push_excluded_unignorable: 'Tych wpisów nie można automatycznie dodać do .bfsignore (nazwy zawierają np. spację na końcu, znak nowej linii lub podobny). Usuń je lub zmień nazwy, potem ponów:\n%s',
+  push_excluded_unignorable: 'Tych wpisów nie można automatycznie dodać do .bfsignore (np. nazwy zawierają znak nowej linii lub powrotu karetki). Usuń je lub zmień nazwy, potem ponów:\n%s',
   vault_compressing: 'Kompresowanie...',
   vault_decompressing: 'Dekompresowanie...',
   opt_temp_dir_desc: 'Katalog dla plików tymczasowych podczas push/pull',

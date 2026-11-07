@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -102,6 +103,63 @@ describe('createIgnoreFilter - comments', () => {
   });
 });
 
+// Git decides letter case by the filesystem (`core.ignorecase`): case-sensitive
+// on Linux, case-insensitive on Windows and macOS. A matcher that always ignores
+// case lets the push-gate entry `/Readme` (a symlink) exclude a regular file
+// `README` on Linux, and the push still reports success.
+describe('createIgnoreFilter - letter case follows the filesystem, as in git', () => {
+  let dir: string;
+
+  afterEach(() => rmSync(dir, { recursive: true }));
+
+  function filesystemIgnoresCase(root: string): boolean {
+    writeFileSync(join(root, 'caseprobe'), '');
+    const ignoresCase = existsSync(join(root, 'CASEPROBE'));
+    rmSync(join(root, 'caseprobe'));
+    return ignoresCase;
+  }
+
+  it('should exclude a name differing only in case exactly when the filesystem ignores case', async () => {
+    dir = makeTmpDir();
+    const ignoresCase = filesystemIgnoresCase(dir);
+    await appendToBfsignore(dir, ['Readme']);
+
+    const filter = createIgnoreFilter(dir);
+
+    expect(filter('Readme')).toBe(true);
+    expect(filter('README')).toBe(ignoresCase);
+  });
+
+  // Windows can make a single directory case-sensitive, and git honours that
+  // directory, not the operating system. The rule has to come from the backup
+  // directory itself, or a case-sensitive directory on Windows loses README.
+  it.runIf(process.platform === 'win32')('should match case-sensitively in a case-sensitive directory on Windows', async ({ skip }) => {
+    dir = makeTmpDir();
+    try {
+      execFileSync('fsutil', ['file', 'setCaseSensitiveInfo', dir, 'enable'], { stdio: 'ignore' });
+    } catch {
+      skip();
+    }
+    if (filesystemIgnoresCase(dir)) skip();
+    await appendToBfsignore(dir, ['Readme']);
+
+    const filter = createIgnoreFilter(dir);
+
+    expect(filter('Readme')).toBe(true);
+    expect(filter('README')).toBe(false);
+  });
+
+  it('should apply the same case rule to hand-written patterns', () => {
+    dir = makeTmpDir('*.JPG\n');
+    const ignoresCase = filesystemIgnoresCase(dir);
+
+    const filter = createIgnoreFilter(dir);
+
+    expect(filter('photo.JPG')).toBe(true);
+    expect(filter('photo.jpg')).toBe(ignoresCase);
+  });
+});
+
 describe('createIgnoreFilter - no .bfsignore file', () => {
   it('should not throw when .bfsignore does not exist', () => {
     const dir = makeTmpDir(); // no .bfsignore written
@@ -185,6 +243,23 @@ describe('appendToBfsignore', () => {
     const filter = createIgnoreFilter(dir);
     expect(filter('q?')).toBe(true);
     expect(filter('qa')).toBe(false);
+  });
+
+  // Git keeps a trailing space of a .gitignore line only when it is escaped with
+  // a backslash. Written bare, `/notes ` reads as `/notes`: the entry the gate
+  // meant to exclude stays in the scan, and once that entry is gone the line
+  // silently drops a regular file `notes` from every later backup.
+  it('should escape trailing spaces so the entry excludes only the name with the spaces', async () => {
+    dir = makeTmpDir();
+
+    await appendToBfsignore(dir, ['notes ', 'sub/two  ']);
+
+    const filter = createIgnoreFilter(dir);
+    expect(filter('notes ')).toBe(true);
+    expect(filter('notes')).toBe(false);
+    expect(filter('sub/two  ')).toBe(true);
+    expect(filter('sub/two ')).toBe(false);
+    expect(filter('sub/two')).toBe(false);
   });
 
   it('should insert a separating newline when the file lacks a trailing one', async () => {

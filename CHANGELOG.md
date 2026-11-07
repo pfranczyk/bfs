@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.7] - 2026-11-07
+
+### Changed
+
+- **`.bfsignore` matches letter case the way git does.** Whether `README` and
+  `Readme` are the same name now depends on the filesystem of the backup
+  directory, as git's `core.ignorecase` does - not on the operating system, so
+  a directory made case-sensitive on Windows is matched case-sensitively too.
+  On a case-sensitive directory (usual on Linux) this changes patterns in both
+  directions: `*.JPG` no longer excludes `photo.jpg`, so more
+  files go into the backup, and `!Keep.log` below `*.log` no longer brings
+  `keep.log` back, so that file leaves the backup. Write each spelling you mean
+  (or a class such as `*.[Jj][Pp][Gg]`) to keep the old behaviour.
+
+### Fixed
+
+- **Accepting the REPL offer to add an entry to `.bfsignore` no longer drops
+  other files from later backups.** When `push` in the REPL meets a symbolic
+  link or special file it cannot back up, it offers to write its name to
+  `.bfsignore`. On a case-sensitive directory the written entry for a link
+  `Readme` also excluded a regular file `README`; the entry for a name ending
+  in a space (`notes `) was read without the space and, once the link was gone,
+  excluded a regular file `notes`. Both happened while `push` reported success.
+  The entry now matches exactly the name it was written for. A name containing
+  a line break or a carriage return cannot be written as an exact entry, so the
+  offer now refuses it and writes no line for it - remove or rename that entry
+  and push again. The list of such entries shows these characters
+  escaped, so `notes\r` no longer looks like `notes`.
+
 ## [0.14.6] - 2026-11-06
 
 ### Changed
@@ -1687,7 +1716,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.6...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.7...HEAD
+[0.14.7]: https://github.com/pfranczyk/bfs/compare/v0.14.6...v0.14.7
 [0.14.6]: https://github.com/pfranczyk/bfs/compare/v0.14.5...v0.14.6
 [0.14.5]: https://github.com/pfranczyk/bfs/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/pfranczyk/bfs/compare/v0.14.3...v0.14.4

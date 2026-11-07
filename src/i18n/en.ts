@@ -199,7 +199,7 @@ export const en: Strings = {
   push_excluded_confirm: '%s entr(y/ies) cannot be backed up:\n%s\nAdd them to .bfsignore and retry?',
   push_excluded_allowed: 'Skipping %s entr(y/ies) that cannot be backed up:\n%s',
   push_excluded_added: 'Added %s entr(y/ies) to .bfsignore; retrying...',
-  push_excluded_unignorable: 'These entries cannot be added to .bfsignore automatically (their names contain a trailing space, a newline, or similar). Remove or rename them, then retry:\n%s',
+  push_excluded_unignorable: 'These entries cannot be added to .bfsignore automatically (for example, their names contain a line break or a carriage return). Remove or rename them, then retry:\n%s',
   vault_compressing: 'Compressing...',
   vault_decompressing: 'Decompressing...',
   opt_temp_dir_desc: 'Directory for temporary files during push/pull',
