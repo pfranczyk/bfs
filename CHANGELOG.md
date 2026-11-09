@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`bfs provider add` fills the place a removed storage left.** After
+  `bfs provider remove --strategy remove` the pool is one storage short of the
+  N+K scheme. Adding a storage now takes that place and keeps the scheme, so
+  the original redundancy comes back without lowering the scheme with
+  `bfs scheme set` first and raising it again afterwards; the version that lost
+  its part is rebuilt onto the new storage with `bfs repair --rebuild`. On a
+  pool that already matches the scheme, `provider add` still adds one parity
+  part. The message after the add says which of the two happened.
+- **The step after `bfs provider remove --strategy remove` and the refusal of
+  `pull`, `push` and `prune` on a short pool name both ways back** - a new
+  storage with `bfs provider add` (the scheme stays) or a scheme matched to the
+  storages you have with `bfs scheme set`. Below three storages, where no
+  scheme fits, they name `bfs provider add`.
+
+### Fixed
+
+- **An interrupted `bfs repair --rebuild` onto a replacement can be finished.**
+  When the rebuild failed after rebuilding at least one version, running the
+  same command again was refused with "Provider ... already exists", while
+  every backup command was refused because the configuration held one storage
+  more than the scheme - a state with no named way out. The retry now accepts the
+  storage the first run configured with the same settings and rebuilds the
+  versions still missing their part.
+- **A configuration with more storages than the scheme uses is explained, not
+  sent to `bfs scheme set`.** That state is what a rebuild onto a new storage
+  leaves when it stops halfway; the advice to rescale would have been accepted
+  and counted a storage without data as holding a part. The refusal now says
+  what usually caused it and that running the rebuild again finishes it.
+
 ## [0.14.7] - 2026-11-07
 
 ### Changed

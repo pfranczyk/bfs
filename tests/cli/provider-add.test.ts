@@ -112,6 +112,74 @@ describe('provider add', () => {
     expect(writtenConfig.scheme.data_shards).toBe(2); // unchanged
   });
 
+  // A pool short of its scheme (the state `provider remove --strategy remove`
+  // leaves) is closed by the new storage itself: it takes the missing place and
+  // the scheme stays. Raising parity there would grow the required count along
+  // with the pool and leave the gap exactly as wide as before.
+  it('CI: should keep the scheme when the new provider fills a pool short of it', async () => {
+    const providers = [1, 2, 3].map((n) => ({ id: `disk-${n}`, type: 'local', config: { path: `/tmp/d${n}` } }));
+    mockReadConfig.mockResolvedValue(makeConfig({ providers, scheme: { data_shards: 3, parity_shards: 1 } }) as never);
+    const cfg = await writeConfigFile({ path: '/mnt/d4' });
+
+    await runCmd(['provider', 'add', '--ci', '--name', 'disk-4', '--type', 'local', '--config-file', cfg]);
+
+    const [, writtenConfig] = mockWriteConfig.mock.calls[0];
+    expect(writtenConfig.providers).toHaveLength(4);
+    expect(writtenConfig.scheme).toEqual({ data_shards: 3, parity_shards: 1 });
+    const out = capture.logs.join('\n');
+    expect(out).toContain('Provider "disk-4" added in place of a missing storage.');
+    expect(out).toContain('Scheme stays 3/1.');
+    expect(out).not.toContain('apply the new scheme');
+    expect(out).not.toContain('still missing');
+  });
+
+  // Two places missing (a forced removal): one storage fills one of them, and
+  // the message says how many are still missing, so the operator knows the
+  // backup commands stay refused until the next one is added.
+  it('CI: should fill one place and name how many are still missing when two are', async () => {
+    const providers = [1, 2].map((n) => ({ id: `disk-${n}`, type: 'local', config: { path: `/tmp/d${n}` } }));
+    mockReadConfig.mockResolvedValue(makeConfig({ providers, scheme: { data_shards: 3, parity_shards: 1 } }) as never);
+    const cfg = await writeConfigFile({ path: '/mnt/d3' });
+
+    await runCmd(['provider', 'add', '--ci', '--name', 'disk-3', '--type', 'local', '--config-file', cfg]);
+
+    const [, writtenConfig] = mockWriteConfig.mock.calls[0];
+    expect(writtenConfig.providers).toHaveLength(3);
+    expect(writtenConfig.scheme).toEqual({ data_shards: 3, parity_shards: 1 });
+    const out = capture.logs.join('\n');
+    expect(out).toContain('Scheme stays 3/1');
+    expect(out).toContain('storages still missing: 1');
+  });
+
+  // Control for the two above: on a pool that already matches the scheme,
+  // `provider add` adds one more parity part and advises `bfs push`.
+  it('CI: should still raise parity and advise bfs push when the pool matches the scheme', async () => {
+    mockReadConfig.mockResolvedValue(makeConfig() as never);
+    const cfg = await writeConfigFile({ path: '/mnt/d4' });
+
+    await runCmd(['provider', 'add', '--ci', '--name', 'disk-4', '--type', 'local', '--config-file', cfg]);
+
+    const [, writtenConfig] = mockWriteConfig.mock.calls[0];
+    expect(writtenConfig.scheme).toEqual({ data_shards: 2, parity_shards: 2 });
+    const out = capture.logs.join('\n');
+    expect(out).toContain('Provider "disk-4" added. Scheme: 2/2.');
+    expect(out).not.toContain('in place of a missing storage');
+  });
+
+  // The warning before an interactive add promises a scheme change; on a short
+  // pool there is none, so the warning has to say what will happen instead.
+  it('interactive: should warn that the new provider takes a missing place on a short pool', async () => {
+    const providers = [1, 2, 3].map((n) => ({ id: `disk-${n}`, type: 'local', config: { path: `/tmp/d${n}` } }));
+    mockReadConfig.mockResolvedValue(makeConfig({ providers, scheme: { data_shards: 3, parity_shards: 1 } }) as never);
+    mockPrompt.mockResolvedValueOnce({ name: 'disk-4' } as never).mockResolvedValueOnce({ type: 'local' } as never);
+
+    await runCmd(['provider', 'add']);
+
+    const out = [...capture.logs, ...capture.errors].join('\n');
+    expect(out).toContain('takes a missing place');
+    expect(out).not.toContain('changes the N+K scheme');
+  });
+
   it('CI: should save new provider config with correct type and path', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     const cfg = await writeConfigFile({ path: '/mnt/nas' });

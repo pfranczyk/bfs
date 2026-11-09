@@ -205,6 +205,100 @@ describe('repair --rebuild onto the storage replacing one the configuration lost
     expect(cfg.providers.map((p) => p.id).sort()).toEqual(['p0', 'p1', 'p3']);
   });
 
+  it('should finish on a second run a rebuild that failed after committing one version', async () => {
+    // The first run rebuilds v1 and fails on v2, so the recorded name stays in
+    // the configuration next to the free entry - one entry more than the scheme,
+    // which refuses every backup command until the rebuild is finished. Given
+    // the same pair again, the repair layer rebuilds only what is still missing
+    // and drops the free entry (the CLI-level acceptance of the retry is pinned
+    // separately).
+    const providerDirs = [await tmp(), await tmp(), await tmp()];
+    const replacement = await tmp();
+    const { root, io } = await buildVault(providerDirs, 2, 1);
+    await fs.writeFile(path.join(root, 'a.txt'), 'aaa v2', 'utf-8');
+    await push(root, { io });
+    const cfg = await readVaultConfig(root);
+    await writeConfig(root, { ...cfg, providers: [...cfg.providers.filter((p) => p.id !== 'p2'), provider('p3', replacement)] });
+    dirs = [root, ...providerDirs, replacement];
+    const [first] = providerDirs;
+    assert(first !== undefined, 'fixture must have a first storage');
+    const held = `${shardPath(first, 0, 2)}.held`;
+    await fs.rename(shardPath(first, 0, 2), held);
+
+    const firstRun = await repairWithRebuild(root, migrationPair(replacement), [1, 2], io);
+    expect(firstRun.failed_pairs.map((p) => p.name)).toEqual(['p3']);
+    expect((await readVaultConfig(root)).providers.map((p) => p.id).sort()).toEqual(['p0', 'p1', 'p2', 'p3']);
+    await fs.rename(held, shardPath(first, 0, 2));
+    // The failed run keeps its lock for the record, under this test's own PID -
+    // which reads as a live peer. A real retry is a new process that finds the
+    // lock stale and drops it; removing it here is that step.
+    await fs.rm(path.join(root, '.bfs', 'repair.lock'), { force: true });
+
+    const secondRun = await repairWithRebuild(root, migrationPair(replacement), [1, 2], io);
+
+    expect(secondRun.failed_pairs).toEqual([]);
+    expect(existsSync(shardPath(replacement, 2, 2))).toBe(true);
+    expect((await readVaultConfig(root)).providers.map((p) => p.id).sort()).toEqual(['p0', 'p1', 'p2']);
+    expect((await verifyVersion(root, 1, io)).health).toBe(VersionHealth.Healthy);
+    expect((await verifyVersion(root, 2, io)).health).toBe(VersionHealth.Healthy);
+  });
+
+  it('should not configure the recorded name twice when the retry finds nothing left to rebuild', async () => {
+    // A retry narrowed to the versions the first run already rebuilt (or one
+    // run after a crash past the last rebuild) finds the part sound and takes
+    // the relocation path instead of the rebuild path. That path renames the
+    // free entry to the recorded name - which the first run already put into
+    // the configuration - so it must not leave two entries under one name.
+    const providerDirs = [await tmp(), await tmp(), await tmp()];
+    const replacement = await tmp();
+    const { root, io } = await buildVault(providerDirs, 2, 1);
+    await fs.writeFile(path.join(root, 'a.txt'), 'aaa v2', 'utf-8');
+    await push(root, { io });
+    const cfg = await readVaultConfig(root);
+    await writeConfig(root, { ...cfg, providers: [...cfg.providers.filter((p) => p.id !== 'p2'), provider('p3', replacement)] });
+    dirs = [root, ...providerDirs, replacement];
+    const [first] = providerDirs;
+    assert(first !== undefined, 'fixture must have a first storage');
+    const held = `${shardPath(first, 0, 2)}.held`;
+    await fs.rename(shardPath(first, 0, 2), held);
+    await repairWithRebuild(root, migrationPair(replacement), [1, 2], io);
+    await fs.rename(held, shardPath(first, 0, 2));
+    await fs.rm(path.join(root, '.bfs', 'repair.lock'), { force: true });
+
+    await repairWithRebuild(root, migrationPair(replacement), [1], io);
+
+    const ids = (await readVaultConfig(root)).providers.map((p) => p.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.filter((id) => id === 'p2')).toHaveLength(1);
+  });
+
+  it('should keep the replaced storage for the versions outside a retried range', async () => {
+    // The classic replacement `old -> new` over a narrow range rebuilds the
+    // versions in range onto the new storage and keeps the old one, because an
+    // older version still records it. The retry of that very command finds the
+    // in-range parts already on the new storage, so nothing is rebuilt - and it
+    // must still leave the old storage in the configuration and in the older
+    // version's manifest, where its part lives. Renaming it away would point
+    // that version at a file the new storage never received.
+    const providerDirs = [await tmp(), await tmp(), await tmp()];
+    const replacement = await tmp();
+    const { root, io } = await buildVault(providerDirs, 2, 1);
+    await fs.writeFile(path.join(root, 'a.txt'), 'aaa v2', 'utf-8');
+    await push(root, { io });
+    dirs = [root, ...providerDirs, replacement];
+    const classic: RepairPair = { oldName: 'p2', params: `local:p3 --path ${replacement}`, rawParams: ['--path', replacement], isMigration: true, newConfig: provider('p3', replacement) };
+    await repairWithRebuild(root, classic, [2], io);
+    expect((await readVaultConfig(root)).providers.map((p) => p.id).sort()).toEqual(['p0', 'p1', 'p2', 'p3']);
+    await fs.rm(path.join(root, '.bfs', 'repair.lock'), { force: true });
+
+    await repairWithRebuild(root, classic, [2], io);
+
+    expect((await readVaultConfig(root)).providers.map((p) => p.id).sort()).toEqual(['p0', 'p1', 'p2', 'p3']);
+    const v1 = JSON.parse(await fs.readFile(path.join(root, '.bfs', 'manifests', 'v001.json'), 'utf-8')) as { shards: Array<{ provider_id: string }> };
+    expect(v1.shards.map((s) => s.provider_id)).toContain('p2');
+    expect(v1.shards.map((s) => s.provider_id)).not.toContain('p3');
+  });
+
   it('should rebuild over a part the interrupted run left half-written', async () => {
     // The shape a power cut leaves behind: the header went out first and still
     // parses, so the identity check calls the part ours - while the payload is

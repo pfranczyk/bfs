@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO, providerRegistry, validateProviderId } from '../../providers/provider.js';
-import type { CliProviderInput, ProviderConfig } from '../../types/index.js';
+import type { CliProviderInput, ProviderConfig, VaultConfig } from '../../types/index.js';
 import { readConfig, writeConfig } from '../../vault/config.js';
 import { assertNoForeignVault } from '../../vault/vault-collision.js';
 import { resolveCwd } from '../cwd.js';
@@ -26,8 +26,9 @@ interface ProviderAddOpts {
  * BFS blind to provider-specific configuration - adapters define their own
  * flag grammar and decide how to interpret it.
  *
- * Adding a provider changes the N+K scheme - user must run `bfs push`
- * afterwards to rebalance the remote shards.
+ * On a pool shorter than its N+K scheme the new provider takes a missing place
+ * and the scheme stays; on any other pool it adds one parity part, and the
+ * user runs `bfs push` afterwards to write a version across the wider scheme.
  *
  * @param providerCmd - The `bfs provider` sub-command to attach to
  */
@@ -61,7 +62,8 @@ export function registerProviderAdd(providerCmd: Command): void {
         for (const p of config.providers) {
           console.log(`  - ${p.id} (${p.type})`);
         }
-        warn(t('provider_add_warn'));
+        const required = config.scheme.data_shards + config.scheme.parity_shards;
+        warn(config.providers.length < required ? fmt('provider_add_warn_fill', String(config.providers.length), String(required), String(config.scheme.data_shards), String(config.scheme.parity_shards)) : t('provider_add_warn'));
       }
 
       let name: string;
@@ -186,12 +188,33 @@ export function registerProviderAdd(providerCmd: Command): void {
       }
 
       const newProvider: ProviderConfig = { id: name, type, adapterPackage, config: providerConfig };
-      config.providers.push(newProvider);
-
-      // Adjust parity shard count: keep data_shards, increase parity by 1
-      config.scheme.parity_shards += 1;
-
+      const outcome = addToPool(config, newProvider);
       await writeConfig(rootDir, config);
-      success(fmt('provider_add_success', newProvider.id, String(config.scheme.data_shards), String(config.scheme.parity_shards)));
+      success(outcome);
     });
+}
+
+/**
+ * Adds a storage to the pool and adjusts the scheme to what the pool needs.
+ * A pool shorter than its scheme (a storage removed with `--strategy remove`)
+ * gets the missing place filled and keeps the scheme: raising parity there
+ * would grow the required count together with the pool and leave the gap as
+ * wide as it was. Any other pool gains one parity part with the new storage.
+ *
+ * @param config      - Vault config, mutated in place
+ * @param newProvider - The storage to add
+ * @returns The success message naming which of the two happened
+ */
+function addToPool(config: VaultConfig, newProvider: ProviderConfig): string {
+  const required = config.scheme.data_shards + config.scheme.parity_shards;
+  const wasShort = config.providers.length < required;
+  config.providers.push(newProvider);
+  const n = String(config.scheme.data_shards);
+  if (wasShort) {
+    const missing = required - config.providers.length;
+    const k = String(config.scheme.parity_shards);
+    return missing > 0 ? fmt('provider_add_filled_short', newProvider.id, n, k, String(missing)) : fmt('provider_add_filled', newProvider.id, n, k);
+  }
+  config.scheme.parity_shards += 1;
+  return fmt('provider_add_success', newProvider.id, n, String(config.scheme.parity_shards));
 }

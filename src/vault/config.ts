@@ -156,9 +156,26 @@ export function assertSchemeValid(config: VaultConfig): void {
   }
   const required = data_shards + parity_shards;
   if (config.providers.length !== required) {
-    // Below the smallest valid pool no scheme fits, so `bfs scheme set` - the way
-    // out above it - would be refused by that very command; the state is named.
-    const key = config.providers.length < MIN_PROVIDERS ? 'scheme_providers_below_minimum' : 'scheme_providers_mismatch';
-    throw new BfsError(fmt(key, String(required), String(config.providers.length)));
+    throw new BfsError(fmt(schemeMismatchKey(config.providers.length, required), String(required), String(config.providers.length)));
   }
+}
+
+/**
+ * Picks the message for a pool that does not match its scheme, by which side
+ * is larger. A short pool has two ways out - a new storage takes the missing
+ * place, or the scheme is matched to the storages left - except below the
+ * smallest valid pool, where no scheme fits and only a new storage helps. A
+ * pool larger than its scheme is what a rebuild onto a new storage leaves when
+ * it stops halfway (the new entry is written first, the old one goes last);
+ * `bfs scheme set` with the larger sum would be accepted there and count the
+ * free entry as a place holding a part, so the message names the state and
+ * the rebuild that finishes it instead.
+ *
+ * @param providerCount - Storages in the configuration
+ * @param required      - Storages the scheme uses (N + K)
+ * @returns The i18n key for the refusal
+ */
+function schemeMismatchKey(providerCount: number, required: number): 'scheme_providers_below_minimum' | 'scheme_providers_short' | 'scheme_providers_surplus' {
+  if (providerCount < MIN_PROVIDERS) return 'scheme_providers_below_minimum';
+  return providerCount < required ? 'scheme_providers_short' : 'scheme_providers_surplus';
 }

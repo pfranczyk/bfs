@@ -246,22 +246,24 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
-  // -- provider remove --strategy remove: the one next step ------------------
+  // -- provider remove --strategy remove: the two ways back -------------------
   // Dropping a storage leaves the backup with fewer storages than its scheme
   // declares, and `bfs pull`, `bfs push` and `bfs prune` all pass through the
-  // same scheme check, so they refuse to run until the scheme matches the
-  // storages that are left. The removal names exactly the command that closes
-  // that gap - `bfs scheme set`, with the sum it has to reach - and nothing
-  // else: what the operator does with the backup afterwards is their choice, not
-  // the way out of the state this command leaves behind.
+  // same scheme check, so they refuse to run until the pool and the scheme
+  // match again. Two commands close that gap: `bfs provider add`, whose new
+  // storage takes the missing place and keeps the scheme, and `bfs scheme set`,
+  // with the sum it has to reach, which lowers it. The removal names both and
+  // nothing else: what the operator does with the backup afterwards is their
+  // choice, not the way out of the state this command leaves behind.
   //
   // Each test runs the real CLI in two parts. First the reality proof: the three
   // commands are blocked, then `bfs scheme set` with numbers that fit the
-  // remaining storages makes `bfs pull` work - evidence that the one step named
-  // is enough. Then the contract: the line names that step and only that step.
+  // remaining storages makes `bfs pull` work (the `bfs provider add` route is
+  // executed end to end by the provider-add tests below). Then the contract: the
+  // line names those two steps and only those.
 
   tests.push(
-    await runTest('B10a', 'provider remove --strategy remove - names only the scheme command (EN)', async () => {
+    await runTest('B10a', 'provider remove --strategy remove - names provider add and scheme set (EN)', async () => {
       const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rm-en', langEnv);
       const rr = runBfs(['--lang', 'en', 'provider', 'remove', 'rm-en-p4', '--strategy', 'remove', '--yes'], vaultDir, undefined, langEnv);
       assert(rr.status === 0, `remove exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
@@ -280,8 +282,8 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
         const blockedOut = rb.stdout + rb.stderr;
         assert(rb.status !== 0, `expected \`${label}\` to fail after removal, got exit ${rb.status ?? 'null'}\n${blockedOut.slice(0, 400)}`);
         assert(blockedOut.includes('Scheme requires 4 providers, configured: 3'), `expected provider-count mismatch from \`${label}\`: ${blockedOut.slice(0, 400)}`);
-        assert(blockedOut.includes('Match the scheme to the storages you have with `bfs scheme set <N> <K>`.'), `expected \`bfs scheme set <N> <K>\` as the way out of the mismatch from \`${label}\`: ${blockedOut.slice(0, 400)}`);
-        assert(!blockedOut.includes('bfs provider add'), `\`bfs provider add\` raises the required provider count together with the pool, so it never closes this gap and must not be advised by \`${label}\`: ${blockedOut.slice(0, 400)}`);
+        assert(blockedOut.includes('Add the missing storage with `bfs provider add` (the scheme stays)'), `expected \`bfs provider add\` as a way out of a short pool from \`${label}\`: ${blockedOut.slice(0, 400)}`);
+        assert(blockedOut.includes('match the scheme to the storages you have with `bfs scheme set <N> <K>`.'), `expected \`bfs scheme set <N> <K>\` as the other way out of the mismatch from \`${label}\`: ${blockedOut.slice(0, 400)}`);
       }
 
       // Reality, part 2 - `bfs scheme set` is the step that opens the road.
@@ -290,19 +292,22 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
       const rl = runBfs(['--lang', 'en', 'pull', '--force'], vaultDir, undefined, langEnv);
       assert(rl.status === 0, `expected \`bfs pull\` to work after \`bfs scheme set 2 1\`, got exit ${rl.status ?? 'null'}\nstdout: ${rl.stdout}\nstderr: ${rl.stderr}`);
 
-      // Contract - one step, carrying the sum the scheme has to reach. The colon
-      // keeps the heading apart from the plural one a list of steps would carry.
+      // Contract - the two ways back, the scheme that stays and the sum the scheme
+      // has to reach. The colon keeps the heading apart from the plural one a
+      // list of steps would carry.
       assert(steps.includes('Recommended next step:'), `the English line must carry its own wording, not only the command: ${steps.slice(0, 600)}`);
+      assert(steps.includes('bfs provider add'), `expected the add command in: ${steps.slice(0, 600)}`);
+      assert(steps.includes('the scheme stays 3/1'), `expected the scheme the add route keeps in: ${steps.slice(0, 600)}`);
       assert(steps.includes('bfs scheme set <N> <K>'), `expected the scheme command in: ${steps.slice(0, 600)}`);
       assert(steps.includes('N + K = 3'), `expected the sum the scheme has to reach in: ${steps.slice(0, 600)}`);
-      for (const extra of ['bfs pull', 'bfs push', 'bfs prune', 'bfs repair', 'bfs provider add']) {
-        assert(!steps.includes(extra), `provider remove must name only the scheme command, found \`${extra}\` in: ${steps.slice(0, 600)}`);
+      for (const extra of ['bfs pull', 'bfs push', 'bfs prune', 'bfs repair']) {
+        assert(!steps.includes(extra), `provider remove must name only the add and scheme commands, found \`${extra}\` in: ${steps.slice(0, 600)}`);
       }
     }),
   );
 
   tests.push(
-    await runTest('B10b', 'provider remove --strategy remove - names only the scheme command (PL)', async () => {
+    await runTest('B10b', 'provider remove --strategy remove - names provider add and scheme set (PL)', async () => {
       const vaultDir = await initVaultForRemoval(ctx.sourceDir, 'rm-pl', langEnv);
       const rr = runBfs(['--lang', 'pl', 'provider', 'remove', 'rm-pl-p4', '--strategy', 'remove', '--yes'], vaultDir, undefined, langEnv);
       assert(rr.status === 0, `remove exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
@@ -320,8 +325,8 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
         const blockedOut = rb.stdout + rb.stderr;
         assert(rb.status !== 0, `expected \`${label}\` to fail after removal, got exit ${rb.status ?? 'null'}\n${blockedOut.slice(0, 400)}`);
         assert(blockedOut.includes('Schemat wymaga 4 nośników, skonfigurowano: 3'), `expected provider-count mismatch from \`${label}\`: ${blockedOut.slice(0, 400)}`);
-        assert(blockedOut.includes('Dopasuj schemat do posiadanych nośników przez `bfs scheme set <N> <K>`.'), `expected \`bfs scheme set <N> <K>\` as the way out of the mismatch from \`${label}\`: ${blockedOut.slice(0, 400)}`);
-        assert(!blockedOut.includes('bfs provider add'), `\`bfs provider add\` raises the required provider count together with the pool, so it never closes this gap and must not be advised by \`${label}\`: ${blockedOut.slice(0, 400)}`);
+        assert(blockedOut.includes('Dołóż brakujący nośnik przez `bfs provider add` (schemat zostaje)'), `expected \`bfs provider add\` as a way out of a short pool from \`${label}\`: ${blockedOut.slice(0, 400)}`);
+        assert(blockedOut.includes('dopasuj schemat do posiadanych nośników przez `bfs scheme set <N> <K>`.'), `expected \`bfs scheme set <N> <K>\` as the other way out of the mismatch from \`${label}\`: ${blockedOut.slice(0, 400)}`);
       }
 
       const rs = runBfs(['--lang', 'pl', 'scheme', 'set', '2', '1'], vaultDir, undefined, langEnv);
@@ -332,8 +337,10 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
       assert(steps.includes('bfs scheme set <N> <K>'), `expected the scheme command in: ${steps.slice(0, 600)}`);
       assert(steps.includes('N + K = 3'), `expected the sum the scheme has to reach in: ${steps.slice(0, 600)}`);
       assert(steps.includes('Zalecany kolejny krok'), `the Polish line must carry its own wording, not only the command: ${steps.slice(0, 600)}`);
-      for (const extra of ['bfs pull', 'bfs push', 'bfs prune', 'bfs repair', 'bfs provider add']) {
-        assert(!steps.includes(extra), `provider remove must name only the scheme command, found \`${extra}\` in: ${steps.slice(0, 600)}`);
+      assert(steps.includes('bfs provider add'), `expected the add command in: ${steps.slice(0, 600)}`);
+      assert(steps.includes('schemat zostaje 3/1'), `expected the scheme the add route keeps in: ${steps.slice(0, 600)}`);
+      for (const extra of ['bfs pull', 'bfs push', 'bfs prune', 'bfs repair']) {
+        assert(!steps.includes(extra), `provider remove must name only the add and scheme commands, found \`${extra}\` in: ${steps.slice(0, 600)}`);
       }
     }),
   );
@@ -383,15 +390,18 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
 
   // -- provider remove --strategy remove --force below three storages ---------
   // Two storages carry no valid scheme, so `bfs scheme set` would be refused by
-  // the very command it names. Both the line after the removal and the refusal
-  // of every command behind the scheme check name the state, with no command.
+  // the very command it names. A new storage takes the missing place and keeps
+  // the scheme, so both the line after the removal and the refusal of every
+  // command behind the scheme check name the minimum and `bfs provider add` -
+  // and that advice is executed: one add brings the pool back to its scheme and
+  // a backup can be made again.
 
   for (const { id, lang, minimum, marker } of [
     { id: 'B10i', lang: 'en' as const, minimum: 'at least 3 storage providers', marker: 'Provider "rmb-en-p3" removed.' },
     { id: 'B10j', lang: 'pl' as const, minimum: 'co najmniej 3 nośniki', marker: 'Nośnik "rmb-pl-p3" usunięty.' },
   ]) {
     tests.push(
-      await runTest(id, `provider remove --force below three storages - names the state, no scheme command (${lang.toUpperCase()})`, async () => {
+      await runTest(id, `provider remove --force below three storages - names provider add, no scheme command (${lang.toUpperCase()})`, async () => {
         const vaultDir = await initVaultForRemoval(ctx.sourceDir, `rmb-${lang}`, langEnv);
         _removeAndMatchScheme({ vaultDir, id: `rmb-${lang}-p4`, lang, env: langEnv });
 
@@ -400,15 +410,95 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
         assert(rr.stdout.includes(marker), `expected the removal to be reported in: ${rr.stdout.slice(0, 600)}`);
         const steps = rr.stdout.slice(rr.stdout.indexOf(marker) + marker.length);
         assert(steps.includes(minimum), `expected the line after the removal to name the minimum (\`${minimum}\`): ${steps.slice(0, 600)}`);
-        for (const command of ['bfs scheme set', 'bfs provider add']) {
-          assert(!steps.includes(command), `below three storages the line after the removal must name no command, found \`${command}\`: ${steps.slice(0, 600)}`);
-        }
+        assert(steps.includes('bfs provider add'), `below three storages the line after the removal must name \`bfs provider add\`: ${steps.slice(0, 600)}`);
+        assert(!steps.includes('bfs scheme set'), `below three storages the line after the removal must not name \`bfs scheme set\`: ${steps.slice(0, 600)}`);
 
         const rp = runBfs(['--lang', lang, 'pull', '--force', '--yes'], vaultDir, undefined, langEnv);
         const pullOut = rp.stdout + rp.stderr;
         assert(rp.status !== 0, `expected pull to be refused below three storages, got exit ${rp.status ?? 'null'}\n${pullOut.slice(0, 600)}`);
         assert(pullOut.includes(minimum), `expected the pull refusal to name the minimum (\`${minimum}\`): ${pullOut.slice(0, 600)}`);
+        assert(pullOut.includes('bfs provider add'), `expected the pull refusal below three storages to name \`bfs provider add\`: ${pullOut.slice(0, 600)}`);
         assert(!pullOut.includes('bfs scheme set'), `the pull refusal below three storages must not advise \`bfs scheme set\`: ${pullOut.slice(0, 600)}`);
+
+        // The advice, executed: one new storage fills the place, the 2/1 scheme
+        // stays, and a backup can be made again. `bfs push` is the proof rather
+        // than `bfs pull`: both pushed versions are 3/1 and kept only two parts.
+        const spare = path.join(ctx.sourceDir, `rmb-${lang}-spare`);
+        await fs.mkdir(spare, { recursive: true });
+        const ra = runBfs(['--lang', lang, 'provider', 'add', '--ci', '--name', `rmb-${lang}-spare`, '--type', 'local', '--path', spare], vaultDir, undefined, langEnv);
+        assert(ra.status === 0, `provider add exit ${ra.status ?? 'null'}\nstdout: ${ra.stdout}\nstderr: ${ra.stderr}`);
+        const config = await fs.readFile(path.join(vaultDir, '.bfs', 'config.json'), 'utf-8');
+        assert(config.includes('"parity_shards": 1'), `a storage filling a missing place must keep the 2/1 scheme: ${config.slice(0, 600)}`);
+        const rn = runBfs(['--lang', lang, 'push', '--new'], vaultDir, undefined, langEnv);
+        assert(rn.status === 0, `expected push to work once the place is filled, got exit ${rn.status ?? 'null'}\nstdout: ${rn.stdout}\nstderr: ${rn.stderr}`);
+      }),
+    );
+  }
+
+  // -- provider add on a pool short of its scheme -----------------------------
+  // After a removal the pool is one short of 3/1. A new storage takes the
+  // missing place: the scheme stays 3/1 and the message says so, instead of the
+  // full-pool wording that announces a new scheme and sends the operator to
+  // `bfs push`. Executed: the commands behind the scheme check work again.
+
+  for (const { id, lang, filled, stays, fullPool } of [
+    { id: 'B10k', lang: 'en' as const, filled: 'Provider "rma-en-new" added in place of a missing storage.', stays: 'Scheme stays 3/1.', fullPool: 'apply the new scheme' },
+    { id: 'B10l', lang: 'pl' as const, filled: 'Nośnik "rma-pl-new" dodany w miejsce brakującego.', stays: 'Schemat zostaje 3/1.', fullPool: 'zastosować nowy schemat' },
+  ]) {
+    tests.push(
+      await runTest(id, `provider add on a short pool - fills the place, scheme unchanged (${lang.toUpperCase()})`, async () => {
+        const vaultDir = await initVaultForRemoval(ctx.sourceDir, `rma-${lang}`, langEnv);
+        const rr = runBfs(['--lang', lang, 'provider', 'remove', `rma-${lang}-p4`, '--strategy', 'remove', '--yes'], vaultDir, undefined, langEnv);
+        assert(rr.status === 0, `remove exit ${rr.status ?? 'null'}\nstdout: ${rr.stdout}\nstderr: ${rr.stderr}`);
+
+        const spare = path.join(ctx.sourceDir, `rma-${lang}-new`);
+        await fs.mkdir(spare, { recursive: true });
+        const ra = runBfs(['--lang', lang, 'provider', 'add', '--ci', '--name', `rma-${lang}-new`, '--type', 'local', '--path', spare], vaultDir, undefined, langEnv);
+        const addOut = ra.stdout + ra.stderr;
+        assert(ra.status === 0, `provider add exit ${ra.status ?? 'null'}\n${addOut.slice(0, 600)}`);
+        assert(addOut.includes(filled), `expected the add to say it filled a missing place (\`${filled}\`): ${addOut.slice(0, 600)}`);
+        assert(addOut.includes(stays), `expected the add to name the scheme that stays (\`${stays}\`): ${addOut.slice(0, 600)}`);
+        assert(!addOut.includes(fullPool), `a filled place changes no scheme, so the full-pool wording must not appear: ${addOut.slice(0, 600)}`);
+
+        const config = await fs.readFile(path.join(vaultDir, '.bfs', 'config.json'), 'utf-8');
+        assert(config.includes('"data_shards": 3') && config.includes('"parity_shards": 1'), `expected the 3/1 scheme to stay: ${config.slice(0, 600)}`);
+        const rl = runBfs(['--lang', lang, 'pull', '--force', '--yes'], vaultDir, undefined, langEnv);
+        assert(rl.status === 0, `expected pull to work once the place is filled, got exit ${rl.status ?? 'null'}\nstdout: ${rl.stdout}\nstderr: ${rl.stderr}`);
+      }),
+    );
+  }
+
+  // -- a pool larger than its scheme ------------------------------------------
+  // A rebuild onto a new storage writes the new entry first and drops the old
+  // one last, so when it stops halfway the pool holds one entry more than the
+  // scheme. `bfs scheme set` with the larger sum would be accepted and count the
+  // free entry as a place holding a part, and `bfs provider add` grows the pool
+  // and the scheme together, leaving the surplus where it was - so the refusal
+  // names the state and the rebuild that finishes it, and neither command. The surplus entry is written by hand: the state is the
+  // same whichever command was interrupted.
+
+  for (const { id, lang, state, cause } of [
+    { id: 'B10m', lang: 'en' as const, state: 'more storages than the scheme uses', cause: 'did not finish' },
+    { id: 'B10n', lang: 'pl' as const, state: 'więcej nośników, niż używa schemat', cause: 'nie skończyła' },
+  ]) {
+    tests.push(
+      await runTest(id, `pool larger than the scheme - names an unfinished rebuild, no scheme or add command (${lang.toUpperCase()})`, async () => {
+        const vaultDir = await initVaultForRemoval(ctx.sourceDir, `rms-${lang}`, langEnv);
+        const configPath = path.join(vaultDir, '.bfs', 'config.json');
+        const config = JSON.parse(await fs.readFile(configPath, 'utf-8')) as { providers: Array<{ id: string; type: string; config: Record<string, unknown> }> };
+        const extra = path.join(ctx.sourceDir, `rms-${lang}-extra`);
+        await fs.mkdir(extra, { recursive: true });
+        config.providers.push({ id: `rms-${lang}-extra`, type: 'local', config: { path: extra } });
+        await fs.writeFile(configPath, JSON.stringify(config, null, 2));
+
+        const rp = runBfs(['--lang', lang, 'pull', '--force', '--yes'], vaultDir, undefined, langEnv);
+        const out = rp.stdout + rp.stderr;
+        assert(rp.status !== 0, `expected pull to be refused on a pool larger than its scheme, got exit ${rp.status ?? 'null'}\n${out.slice(0, 600)}`);
+        assert(out.includes(state), `expected the refusal to name the state (\`${state}\`): ${out.slice(0, 600)}`);
+        assert(out.includes(cause), `expected the refusal to name an unfinished rebuild (\`${cause}\`): ${out.slice(0, 600)}`);
+        for (const command of ['bfs scheme set', 'bfs provider add']) {
+          assert(!out.includes(command), `a pool larger than its scheme must not be advised \`${command}\`: ${out.slice(0, 600)}`);
+        }
       }),
     );
   }
@@ -417,24 +507,30 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
   // The strategy list is an Inquirer rawlist, but it is written to stdout before
   // the closed stdin cancels the prompt, so the wording is observable without a
   // terminal. Dropping a storage leaves the scheme untouched, so the [R]emove
-  // entry has to send the operator to `bfs scheme set` instead of claiming the
-  // N/K scheme follows along by itself. Inquirer hard-wraps a piped stdout at 80
+  // entry names both ways back - `bfs provider add` and `bfs scheme set` -
+  // instead of claiming the N/K scheme follows along by itself. Inquirer hard-wraps a piped stdout at 80
   // columns and the break lands mid-word, hence the whitespace-collapsed compare.
 
   tests.push(
-    await runTest('B10c', 'provider remove - [R]emove strategy sends the operator to `bfs scheme set` (EN)', () => {
+    await runTest('B10c', 'provider remove - [R]emove strategy names provider add and scheme set (EN)', () => {
       const r = runBfs(['--lang', 'en', 'provider', 'remove', 'cli-p1'], cliVaultDir, '', langEnv);
       const listed = collapseWhitespace(r.stdout + r.stderr);
-      assert(listed.includes('[R]emove-removeproviderwithoutreplacement(matchtheN/Kschemeafterwardswith`bfsschemeset`)'), `expected the [R]emove strategy to point at \`bfs scheme set\`: ${(r.stdout + r.stderr).slice(0, 800)}`);
+      assert(
+        listed.includes('[R]emove-removeproviderwithoutreplacement(afterwardsaddastoragewith`bfsprovideradd`ormatchtheN/Kschemewith`bfsschemeset`)'),
+        `expected the [R]emove strategy to name both ways back: ${(r.stdout + r.stderr).slice(0, 800)}`,
+      );
       assert(!listed.includes('withoutreplacement,updateN/Kscheme'), `removal leaves the scheme untouched, so [R]emove must not promise to update it: ${(r.stdout + r.stderr).slice(0, 800)}`);
     }),
   );
 
   tests.push(
-    await runTest('B10d', 'provider remove - [R]emove strategy sends the operator to `bfs scheme set` (PL)', () => {
+    await runTest('B10d', 'provider remove - [R]emove strategy names provider add and scheme set (PL)', () => {
       const r = runBfs(['--lang', 'pl', 'provider', 'remove', 'cli-p1'], cliVaultDir, '', langEnv);
       const listed = collapseWhitespace(r.stdout + r.stderr);
-      assert(listed.includes('[R]emove-usuńnośnikbezzastępstwa(schematN/Kdopasujpotemprzez`bfsschemeset`)'), `expected the [R]emove strategy to point at \`bfs scheme set\`: ${(r.stdout + r.stderr).slice(0, 800)}`);
+      assert(
+        listed.includes('[R]emove-usuńnośnikbezzastępstwa(potemdołóżnośnikprzez`bfsprovideradd`albodopasujschematN/Kprzez`bfsschemeset`)'),
+        `expected the [R]emove strategy to name both ways back: ${(r.stdout + r.stderr).slice(0, 800)}`,
+      );
       assert(!listed.includes('bezzastępstwa,zaktualizujschematN/K'), `removal leaves the scheme untouched, so [R]emove must not promise to update it: ${(r.stdout + r.stderr).slice(0, 800)}`);
     }),
   );
@@ -782,8 +878,8 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
 /**
  * Commands that go through the scheme check, so all of them are unreachable
  * while the scheme still counts the storage that was dropped. None of them is
- * named by `bfs provider remove --strategy remove` - the one command it names is
- * the one that unblocks them.
+ * named by `bfs provider remove --strategy remove` - the commands it names are
+ * the ones that unblock them.
  */
 const BLOCKED_UNTIL_SCHEME_MATCHES: Array<{ label: string; args: string[] }> = [
   { label: 'bfs pull', args: ['pull', '--force'] },

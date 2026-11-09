@@ -337,8 +337,10 @@ export const pl: Strings = {
   scheme_missing: 'Schemat kopii zapasowej brakuje lub jest uszkodzony w .bfs/config.json. Uruchom `bfs scheme set`, aby naprawić.',
   scheme_invalid_data_shards: 'Nieprawidłowy schemat: data_shards musi być liczbą całkowitą >= 2, podano "%s". Użyj `bfs scheme set <N> <K>`, aby naprawić.',
   scheme_invalid_parity_shards: 'Nieprawidłowy schemat: parity_shards musi być liczbą całkowitą >= 1, podano "%s". Użyj `bfs provider add` lub `bfs scheme set`, aby naprawić.',
-  scheme_providers_mismatch: 'Schemat wymaga %s nośników, skonfigurowano: %s. Dopasuj schemat do posiadanych nośników przez `bfs scheme set <N> <K>`.',
-  scheme_providers_below_minimum: 'Schemat wymaga %s nośników, skonfigurowano: %s. Do zrobienia i odtworzenia kopii potrzebne są co najmniej 3 nośniki.',
+  scheme_providers_short: 'Schemat wymaga %s nośników, skonfigurowano: %s. Dołóż brakujący nośnik przez `bfs provider add` (schemat zostaje) albo dopasuj schemat do posiadanych nośników przez `bfs scheme set <N> <K>`.',
+  scheme_providers_surplus:
+    'Schemat wymaga %s nośników, skonfigurowano: %s - więcej nośników, niż używa schemat. Zwykle to odbudowa na nowy nośnik, która się nie skończyła: ponowne uruchomienie tej odbudowy (`bfs repair ... --rebuild` albo `bfs provider remove ... --strategy rebuild`) ją dokończy, a nośnik z konfiguracji, który nie trzyma żadnej części kopii, usuniesz przez `bfs provider remove <nazwa> --strategy remove --yes`.',
+  scheme_providers_below_minimum: 'Schemat wymaga %s nośników, skonfigurowano: %s. Do zrobienia i odtworzenia kopii potrzebne są co najmniej 3 nośniki; dołóż nośnik przez `bfs provider add`.',
 
   // --- provider: local-fs --------------------------------------------------
   provider_local_path_not_exist_confirm: 'Ścieżka "%s" nie istnieje. Utworzyć ją?',
@@ -363,6 +365,9 @@ export const pl: Strings = {
   provider_add_type_prompt: 'Typ nośnika:',
   provider_add_dir_prompt: 'Ścieżka do katalogu:',
   provider_add_success: 'Nośnik "%s" dodany. Schemat: %s/%s. Uruchom `bfs push`, aby zastosować nowy schemat.',
+  provider_add_filled: 'Nośnik "%s" dodany w miejsce brakującego. Schemat zostaje %s/%s.',
+  provider_add_filled_short: 'Nośnik "%s" dodany w miejsce brakującego. Schemat zostaje %s/%s; brakuje jeszcze nośników: %s.',
+  provider_add_warn_fill: 'Pula ma %s z %s nośników, których używa schemat %s/%s: nowy nośnik zajmie brakujące miejsce, a schemat zostanie bez zmian.',
 
   // --- provider list --------------------------------------------------------
   provider_list_empty: 'Brak skonfigurowanych nośników.',
@@ -389,7 +394,7 @@ export const pl: Strings = {
   provider_remove_strategy_prompt: 'Wybierz strategię:',
   provider_remove_strategy_relocate: '[R]elocate - dane istnieją, nośnik zmienił adres (nowe IP/host/ścieżka)',
   provider_remove_strategy_rebuild: '[R]ebuild - dane utracone, odbuduj z nadmiarowości i prześlij na inny nośnik',
-  provider_remove_strategy_remove: '[R]emove - usuń nośnik bez zastępstwa (schemat N/K dopasuj potem przez `bfs scheme set`)',
+  provider_remove_strategy_remove: '[R]emove - usuń nośnik bez zastępstwa (potem dołóż nośnik przez `bfs provider add` albo dopasuj schemat N/K przez `bfs scheme set`)',
   provider_remove_strategy_cancel: '[A]nuluj',
   provider_remove_new_type_required: '--new-type jest wymagane (lub dodaj prefix "type:" do --new-path)',
   provider_remove_change_type_confirm: 'Zmienić typ nośnika? (aktualny: %s)',
@@ -412,7 +417,7 @@ export const pl: Strings = {
   provider_remove_target_required: '--target jest wymagane dla strategii rebuild w trybie CI',
   provider_remove_target_invalid: 'Nośnik "%s" nie istnieje lub jest tym samym co usuwany',
   provider_remove_success: 'Nośnik "%s" usunięty.',
-  provider_remove_next_step: 'Zalecany kolejny krok: `bfs scheme set <N> <K>` z N + K = %s, żeby dopasować schemat do pozostałych nośników.',
+  provider_remove_next_step: 'Zalecany kolejny krok: dołóż nośnik przez `bfs provider add` (schemat zostaje %s/%s) albo dopasuj schemat do pozostałych nośników przez `bfs scheme set <N> <K>` z N + K = %s.',
   provider_remove_target_reverted: 'Nośnik "%s" dodany na potrzeby odbudowy został usunięty - konfiguracja wróciła do stanu sprzed komendy.',
   provider_remove_target_kept: 'Nośnik "%s" zostaje w konfiguracji: część kopii mogła już zostać na nim odbudowana. Powtórz tę samą komendę, żeby dokończyć odbudowę.',
   provider_relocate_success: 'Nośnik "%s" przeniesiony.',
@@ -496,7 +501,7 @@ export const pl: Strings = {
   provider_remove_reason_pool: 'zostałoby mniej niż 3 nośniki, a do zrobienia i odtworzenia kopii potrzebne są co najmniej 3 nośniki',
   provider_remove_reason_version: 'wersja %s miałaby mniej części, niż potrzeba do jej odtworzenia',
   provider_remove_reason_versions: 'wersje %s miałyby mniej części, niż potrzeba do ich odtworzenia',
-  provider_remove_pool_below_minimum: 'Do zrobienia i odtworzenia kopii potrzebne są co najmniej 3 nośniki; ta konfiguracja ma %s.',
+  provider_remove_pool_below_minimum: 'Do zrobienia i odtworzenia kopii potrzebne są co najmniej 3 nośniki; ta konfiguracja ma %s. Dołóż nośnik przez `bfs provider add`.',
   vault_encoding_rs: 'Kodowanie Reed-Solomon...',
   vault_uploading_shards: 'Przesyłanie...',
   vault_upload_shard_progress: 'Przesyłanie %s/%s',

@@ -407,8 +407,10 @@ export interface Strings {
   scheme_invalid_data_shards: string;
   /** %s = current value */
   scheme_invalid_parity_shards: string;
-  /** %s = required, %s = current */
-  scheme_providers_mismatch: string;
+  /** %s = required, %s = current (pool shorter than the scheme) */
+  scheme_providers_short: string;
+  /** %s = required, %s = current (pool larger than the scheme) */
+  scheme_providers_surplus: string;
   /** %s = required, %s = current */
   scheme_providers_below_minimum: string;
 
@@ -445,6 +447,12 @@ export interface Strings {
   provider_add_dir_prompt: string;
   /** %s = id, %s = data, %s = parity */
   provider_add_success: string;
+  /** %s = id, %s = data, %s = parity (the new storage took a missing place) */
+  provider_add_filled: string;
+  /** %s = id, %s = data, %s = parity, %s = storages still missing */
+  provider_add_filled_short: string;
+  /** %s = storages now, %s = storages the scheme uses, %s = data, %s = parity */
+  provider_add_warn_fill: string;
 
   // --- provider list --------------------------------------------------------
   provider_list_empty: string;
@@ -504,7 +512,7 @@ export interface Strings {
   provider_remove_target_invalid: string;
   /** %s = id */
   provider_remove_success: string;
-  /** %s = number of storages left after the removal */
+  /** %s = data, %s = parity (the scheme that stays), %s = number of storages left after the removal */
   provider_remove_next_step: string;
   /** %s = id */
   provider_remove_target_reverted: string;

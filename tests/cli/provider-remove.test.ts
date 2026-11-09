@@ -184,6 +184,42 @@ describe('provider remove', () => {
     const out = [...capture.logs, ...capture.errors].join('\n');
     expect(out).toContain('bfs scheme set <N> <K>');
     expect(out).toContain('N + K = 5');
+    // The other way back: a new storage fills the gap and the scheme stays.
+    expect(out).toContain('bfs provider add');
+    expect(out).toContain('the scheme stays 4/2');
+  });
+
+  // The step after a removal depends on how the pool that is left relates to
+  // the scheme, not only on the floor of three. A pool one over its scheme (an
+  // unfinished rebuild onto a new storage) that loses an entry matches the
+  // scheme exactly: there is nothing to match, so no step is printed.
+  it('should print no next step when the pool left matches the scheme', async () => {
+    const providers = [1, 2, 3, 4, 5].map((n) => ({ id: `disk-${n}`, type: 'local', config: { path: `/tmp/d${n}` } }));
+    mockReadConfig.mockResolvedValue(makeConfig({ providers, scheme: { data_shards: 3, parity_shards: 1 } }) as never);
+
+    await runCmd(['provider', 'remove', 'disk-5', '--strategy', 'remove', '--yes']);
+
+    const out = [...capture.logs, ...capture.errors].join('\n');
+    expect(out).toContain('Provider "disk-5" removed.');
+    expect(out).not.toContain('Recommended next step');
+    expect(out).not.toContain('bfs scheme set');
+    expect(out).not.toContain('bfs provider add');
+  });
+
+  // Still over the scheme after the removal: the line says what that state
+  // usually is and what finishes it - the same words as the refusal of every
+  // backup command - with no scheme or add command.
+  it('should name an unfinished rebuild when the pool left is still larger than the scheme', async () => {
+    const providers = [1, 2, 3, 4, 5, 6].map((n) => ({ id: `disk-${n}`, type: 'local', config: { path: `/tmp/d${n}` } }));
+    mockReadConfig.mockResolvedValue(makeConfig({ providers, scheme: { data_shards: 3, parity_shards: 1 } }) as never);
+
+    await runCmd(['provider', 'remove', 'disk-6', '--strategy', 'remove', '--yes']);
+
+    const out = capture.logs.join('\n');
+    expect(out).toContain('more storages than the scheme uses');
+    expect(out).toContain('did not finish');
+    expect(out).not.toContain('bfs scheme set');
+    expect(out).not.toContain('bfs provider add');
   });
 
   // --- Strategy: relocate (pass-through) ----------------------------------
@@ -435,11 +471,11 @@ describe('provider remove', () => {
     expect(mockRemoveProvider).toHaveBeenCalledWith(expect.any(String), 'disk-1', expect.objectContaining({ strategy: 'remove', force: true }));
   });
 
-  // Below three storages no scheme is valid (N >= 2, K >= 1), so the usual step
+  // Below three storages no scheme is valid (N >= 2, K >= 1), so the scheme step
   // after a removal - `bfs scheme set` with N + K = 2 - would be refused by the
-  // very command it names, and `bfs provider add` alone raises the parity along
-  // with the pool. The state is named, with no command.
-  it('should not advise a scheme the remaining storages cannot carry', async () => {
+  // very command it names. A new storage fills the missing place and keeps the
+  // scheme, so `bfs provider add` is the one command named.
+  it('should advise bfs provider add and not a scheme the remaining storages cannot carry', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
 
     await runCmd(['provider', 'remove', 'disk-1', '--strategy', 'remove', '--yes', '--force']);
@@ -448,7 +484,7 @@ describe('provider remove', () => {
     expect(out).toContain('Provider "disk-1" removed.');
     expect(out).not.toContain('bfs scheme set');
     expect(out).not.toContain('N + K = 2');
-    expect(out).not.toContain('bfs provider add');
+    expect(out).toContain('bfs provider add');
     expect(out).toContain('at least 3 storage providers');
   });
 

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { fmt, t } from '../i18n/index.js';
 import { providerRegistry, validateProviderId } from '../providers/provider.js';
 import type { ProviderConfig, ProviderIO, RepairPair } from '../types/index.js';
@@ -131,30 +132,77 @@ interface RepairPairDraft {
  * type) is a migration whose target config is built and validated; a flag-only
  * or empty string is an in-place edit. Migration target ids are checked for
  * collisions (with existing ids and with each other) via
- * {@link validateProviderIdsUnique} before any adapter config is built.
+ * {@link validateProviderIdsUnique} before any adapter config is built - except
+ * an id in `pool.resumable`, which can only be judged against the config the
+ * adapter builds, so its check runs after that.
  *
- * @param positional        flat `[name1, params1, name2, params2, ...]` tail
- * @param existingConfigIds provider ids already present in `.bfs/config.json`
- * @param io                ProviderIO from `bfs repair`; carries `workDir` and
- *                          the resolved interactive mode (`--ci` honored)
+ * @param positional flat `[name1, params1, name2, params2, ...]` tail
+ * @param pool       what the backup's configuration and manifests hold - see {@link RepairSpecPool}
+ * @param io         ProviderIO from `bfs repair`; carries `workDir` and the
+ *                   resolved interactive mode (`--ci` honored)
  * @returns one {@link RepairPair} per `<name> "<params>"` pair, in input order
  * @throws Error on odd count, unknown/duplicate name, invalid params, or id conflict
  */
-export async function parseRepairSpec(positional: string[], existingConfigIds: string[], io: ProviderIO): Promise<RepairPair[]> {
+export async function parseRepairSpec(positional: string[], pool: RepairSpecPool, io: ProviderIO): Promise<RepairPair[]> {
   if (positional.length === 0 || positional.length % 2 !== 0) throw new Error(t('repair_spec_odd_args'));
 
-  const draft = classifyRepairPairs(positional, existingConfigIds);
+  const resumable = pool.resumable ?? [];
+  const draft = classifyRepairPairs(positional, pool.existingConfigIds);
   // Reject migration-target id collisions (with existing ids or between pairs)
   // before any adapter config is built - the cheap structural checks fail fast.
+  const resumableIds = new Set(resumable.map((p) => p.id));
   validateProviderIdsUnique(
     draft.flatMap((d) => (d.migration ? [d.migration.name] : [])),
-    existingConfigIds,
+    pool.existingConfigIds.filter((id) => !resumableIds.has(id)),
   );
-  return Promise.all(draft.map((d) => buildRepairPair(d, io)));
+  const pairs = await Promise.all(draft.map((d) => buildRepairPair(d, io)));
+  for (const pair of pairs) assertResumeTargetMatches(pair, resumable, pool.recordedNames ?? []);
+  return pairs;
+}
+
+/** What {@link parseRepairSpec} needs to know about the backup it repairs. */
+export interface RepairSpecPool {
+  /** Provider ids already present in `.bfs/config.json`. */
+  readonly existingConfigIds: readonly string[];
+  /**
+   * Configured providers a migration may name as its destination again. A
+   * rebuild onto a replacement writes the destination into the configuration
+   * before it rebuilds anything and keeps it once a version is committed, so a
+   * run that stops halfway leaves the pool one entry over its scheme with the
+   * destination already there - and the retry it advises names that same
+   * destination. The caller passes the pool only in that state; on any other
+   * pool a configured name stays a collision.
+   */
+  readonly resumable?: readonly ProviderConfig[];
+  /**
+   * Provider names each version records, one set per version. A retry never
+   * meets a version naming both the pair's source and its destination - the
+   * rebuild moves each version from one to the other - so such a version marks
+   * a destination that is a storage of its own, not the half-finished target.
+   */
+  readonly recordedNames?: readonly ReadonlySet<string>[];
+}
+
+/**
+ * A migration naming a resumable provider is a retry only when it carries the
+ * very settings that provider was configured with and no version records it
+ * next to the pair's source. Anything else would merge two storages under one
+ * name, which the id check exists to prevent.
+ *
+ * @throws Error (`provider_add_exists`) when type or settings differ, or a version records both names
+ */
+function assertResumeTargetMatches(pair: RepairPair, resumable: readonly ProviderConfig[], recordedNames: readonly ReadonlySet<string>[]): void {
+  if (pair.newConfig === null) return;
+  const target = pair.newConfig;
+  const configured = resumable.find((p) => p.id === target.id);
+  if (configured === undefined) return;
+  const sameSettings = configured.type === target.type && isDeepStrictEqual(configured.config, target.config);
+  const sharesAVersion = recordedNames.some((names) => names.has(pair.oldName) && names.has(target.id));
+  if (!sameSettings || sharesAVersion) throw new Error(fmt('provider_add_exists', target.id));
 }
 
 /** Pass 1: chunk the flat array into pairs, validate names, classify edit vs migration. */
-function classifyRepairPairs(positional: string[], existingConfigIds: string[]): RepairPairDraft[] {
+function classifyRepairPairs(positional: string[], existingConfigIds: readonly string[]): RepairPairDraft[] {
   const existing = new Set(existingConfigIds);
   const seen = new Set<string>();
   const draft: RepairPairDraft[] = [];

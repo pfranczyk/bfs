@@ -337,8 +337,10 @@ export const en: Strings = {
   scheme_missing: 'Backup scheme is missing or corrupted in .bfs/config.json. Run `bfs scheme set` to fix.',
   scheme_invalid_data_shards: 'Invalid scheme: data_shards must be an integer >= 2, got "%s". Use `bfs scheme set <N> <K>` to fix.',
   scheme_invalid_parity_shards: 'Invalid scheme: parity_shards must be an integer >= 1, got "%s". Use `bfs provider add` or `bfs scheme set` to fix.',
-  scheme_providers_mismatch: 'Scheme requires %s providers, configured: %s. Match the scheme to the storages you have with `bfs scheme set <N> <K>`.',
-  scheme_providers_below_minimum: 'Scheme requires %s providers, configured: %s. Making or restoring a backup needs at least 3 storage providers.',
+  scheme_providers_short: 'Scheme requires %s providers, configured: %s. Add the missing storage with `bfs provider add` (the scheme stays), or match the scheme to the storages you have with `bfs scheme set <N> <K>`.',
+  scheme_providers_surplus:
+    'Scheme requires %s providers, configured: %s - more storages than the scheme uses. This is usually a rebuild onto a new storage that did not finish: running that rebuild again (`bfs repair ... --rebuild` or `bfs provider remove ... --strategy rebuild`) finishes it, and a configured storage that holds no part of the backup can be dropped with `bfs provider remove <name> --strategy remove --yes`.',
+  scheme_providers_below_minimum: 'Scheme requires %s providers, configured: %s. Making or restoring a backup needs at least 3 storage providers; add one with `bfs provider add`.',
 
   // --- provider: local-fs --------------------------------------------------
   provider_local_path_not_exist_confirm: 'Path "%s" does not exist. Create it?',
@@ -363,6 +365,9 @@ export const en: Strings = {
   provider_add_type_prompt: 'Provider type:',
   provider_add_dir_prompt: 'Directory path:',
   provider_add_success: 'Provider "%s" added. Scheme: %s/%s. Run `bfs push` to apply the new scheme.',
+  provider_add_filled: 'Provider "%s" added in place of a missing storage. Scheme stays %s/%s.',
+  provider_add_filled_short: 'Provider "%s" added in place of a missing storage. Scheme stays %s/%s; storages still missing: %s.',
+  provider_add_warn_fill: 'The pool has %s of the %s storages the %s/%s scheme uses: the new storage takes a missing place and the scheme stays as it is.',
 
   // --- provider list --------------------------------------------------------
   provider_list_empty: 'No providers configured.',
@@ -389,7 +394,7 @@ export const en: Strings = {
   provider_remove_strategy_prompt: 'Choose a strategy:',
   provider_remove_strategy_relocate: '[R]elocate - data exists, provider changed address (new IP/host/path)',
   provider_remove_strategy_rebuild: '[R]ebuild - data lost, rebuild from redundancy and upload to another provider',
-  provider_remove_strategy_remove: '[R]emove - remove provider without replacement (match the N/K scheme afterwards with `bfs scheme set`)',
+  provider_remove_strategy_remove: '[R]emove - remove provider without replacement (afterwards add a storage with `bfs provider add` or match the N/K scheme with `bfs scheme set`)',
   provider_remove_strategy_cancel: '[C]ancel',
   provider_remove_new_type_required: '--new-type is required (or include "type:" prefix in --new-path)',
   provider_remove_change_type_confirm: 'Change provider type? (current: %s)',
@@ -412,7 +417,7 @@ export const en: Strings = {
   provider_remove_target_required: '--target is required for rebuild strategy in CI mode',
   provider_remove_target_invalid: 'Provider "%s" does not exist or is the same as the one being removed',
   provider_remove_success: 'Provider "%s" removed.',
-  provider_remove_next_step: 'Recommended next step: `bfs scheme set <N> <K>` with N + K = %s, to match the scheme to the remaining storages.',
+  provider_remove_next_step: 'Recommended next step: add a storage with `bfs provider add` (the scheme stays %s/%s), or match the scheme to the remaining storages with `bfs scheme set <N> <K>` with N + K = %s.',
   provider_remove_target_reverted: 'Provider "%s" was added for the rebuild and has been removed again - the configuration is back to where it started.',
   provider_remove_target_kept: 'Provider "%s" stays in the configuration: part of the backup may already have been rebuilt onto it. Re-run the same command to finish the rebuild.',
   provider_relocate_success: 'Provider "%s" relocated.',
@@ -496,7 +501,7 @@ export const en: Strings = {
   provider_remove_reason_pool: 'fewer than 3 storage providers would be left, and making or restoring a backup needs at least 3 storage providers',
   provider_remove_reason_version: 'version %s would be left with fewer parts than it needs to be restored',
   provider_remove_reason_versions: 'versions %s would be left with fewer parts than they need to be restored',
-  provider_remove_pool_below_minimum: 'Making or restoring a backup needs at least 3 storage providers; this configuration has %s.',
+  provider_remove_pool_below_minimum: 'Making or restoring a backup needs at least 3 storage providers; this configuration has %s. Add a storage with `bfs provider add`.',
   vault_encoding_rs: 'Encoding with Reed-Solomon...',
   vault_uploading_shards: 'Uploading...',
   vault_upload_shard_progress: 'Uploading %s/%s',

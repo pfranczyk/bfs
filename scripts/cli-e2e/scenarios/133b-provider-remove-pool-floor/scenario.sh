@@ -9,12 +9,13 @@
 # untouched; the forced removal goes through and leaves the part on the medium;
 # the step it prints afterwards and the refusal of every command behind the
 # scheme check name the state - a backup needs at least 3 storage providers -
-# and no command, because `bfs scheme set` with N + K = 2 is refused by that
-# very command. Control: the data was never touched, so a storage added back
-# and a matching scheme restore v1 byte-for-byte.
+# and `bfs provider add`, never `bfs scheme set`, because N + K = 2 is refused
+# by that very command. The named command is executed: one storage added back
+# takes the missing place, the 2/1 scheme stays, and v1 restores byte-for-byte
+# with no `bfs scheme set` at all.
 
 SCENARIO_NAME="provider remove: a removal that leaves fewer than three storages needs --force"
-SCENARIO_DESC="3L 2/1; remove -> refused naming --force; --force -> removed, state named without a command; storage added back -> v1 restores"
+SCENARIO_DESC="3L 2/1; remove -> refused naming --force; --force -> removed, provider add named; storage added back -> scheme stays, v1 restores"
 REQUIRES_LOCAL=3
 REQUIRES_FTP=0
 
@@ -54,10 +55,9 @@ scenario_run() {
     _fail "the step after a removal below three storages names an impossible scheme
 $epilogue"
   fi
-  if printf '%s' "$epilogue" | grep -qF -- 'bfs provider add'; then
-    _fail "the step after a removal below three storages must name the state, not a command
+  printf '%s' "$epilogue" | grep -qF -- 'bfs provider add' ||
+    _fail "the step after a removal below three storages must name \`bfs provider add\`
 $epilogue"
-  fi
   printf '%s' "$epilogue" | grep -qF -- 'at least 3 storage providers' ||
     _fail "the step after a removal below three storages must say a backup needs at least 3 storage providers
 $epilogue"
@@ -67,21 +67,22 @@ $epilogue"
   run_bfs "$vault" pull --force --yes
   assert_fail
   assert_out_contains 'at least 3 storage providers'
+  assert_out_contains 'bfs provider add'
   if printf '%s' "$BFS_OUT" | grep -qF -- 'bfs scheme set'; then
     _fail "pull below three storages advises a scheme the storages cannot carry
 $BFS_OUT"
   fi
 
-  # -- The data was never touched: a storage added back makes it whole ---------
-  # The way back is the operator's to find (the CLI names the state only), but
-  # it has to exist: a third storage, a scheme that fits it, and v1 comes back
-  # byte-for-byte from its two remaining parts.
+  # -- The named command, executed: a storage added back makes it whole --------
+  # The third storage takes the missing place and the 2/1 scheme stays, so v1
+  # comes back byte-for-byte from its two remaining parts with no scheme change.
   local spare="$SC_DIR/prov/spare"
   mkdir -p "$spare"
   run_bfs "$vault" provider add --ci --name spare --type local --path "$(winpath "$spare")"
   assert_ok
-  run_bfs "$vault" scheme set 2 1
-  assert_ok
+  grep -q '"parity_shards": 1' "$vault/.bfs/config.json" ||
+    _fail "a storage filling a missing place must keep the 2/1 scheme
+$(grep -E '"(data|parity)_shards"' "$vault/.bfs/config.json")"
   wipe_working_tree "$vault"
   run_bfs "$vault" pull --version 1 --force --yes
   assert_ok
