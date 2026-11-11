@@ -626,9 +626,14 @@ export interface StorageProvider {
 
   /**
    * Interactive configuration - provider prompts the user via ProviderIO.
-   * Called by CLI when the user runs `bfs provider add <type>` without flags.
+   * Called by CLI when the user runs `bfs provider add <type>` without flags,
+   * and for each storage of an interactive `bfs init`.
    * @returns config object to persist in VaultConfig.providers[].config
-   * @throws BfsError on invalid input or user cancellation
+   * @throws IdentityDeclinedError when the operator refuses the identity the
+   *   server presents - the CLI ends the command with this message
+   * @throws any other error (e.g. ProviderError for an unreachable server) - the
+   *   CLI offers the operator to retry, re-enter the settings or abort
+   * @throws a prompt cancellation, unchanged - it belongs to the runtime
    */
   configureInteractive(io: ProviderIO): Promise<Record<string, unknown>>;
 
@@ -657,9 +662,10 @@ export interface StorageProvider {
    * @throws any error to stop the edit - the CLI reports it in its own voice and
    *   leaves the stored config untouched, so the thrown message is what the
    *   operator reads and should name what stopped. No particular class is
-   *   required: built-in SSH raises HostKeyDeclinedError for a refused host key
-   *   and FTPS a plain ProviderError, both handled the same way. A cancelled
-   *   prompt is the exception - let it through, it belongs to the runtime.
+   *   required; an operator refusing the server identity is best reported as
+   *   IdentityDeclinedError, as the built-in FTPS and SSH adapters do. A
+   *   cancelled prompt is the exception - let it through, it belongs to the
+   *   runtime.
    */
   configureInteractiveForEdit?(io: ProviderIO, ctx: ConfigureEditContext): Promise<Record<string, unknown>>;
 
@@ -793,6 +799,24 @@ export interface StorageProvider {
    *         BFS treats it as a degraded skip of this provider
    */
   connectForRecovery?(io: ProviderIO, pool: readonly RecoverySecret[], options?: { trustLocation?: boolean }): Promise<Nullable<string>>;
+
+  /**
+   * Recovery-only return channel: hands back corrections to this provider's own
+   * connection config that it learned while connecting in the current command -
+   * typically the server identity the operator just confirmed, so the
+   * `config.json` that recovery creates pins it and the next command neither asks
+   * again nor refuses. BFS-core never interprets the fields; it merges the update
+   * into the `connection_config` of the location-map entry this instance was
+   * built from, and only for an instance that ended up connected. Fields named by
+   * `getSecretFields()` are dropped, every value must be plain JSON, and the
+   * merged config must pass `validateConfig` - otherwise the whole update is
+   * dropped. Return only what the operator decided in this command.
+   *
+   * Optional: a provider without it recovers exactly as before.
+   *
+   * @returns the fields to merge, or null when there is nothing to hand back
+   */
+  takeConfigUpdates?(): Nullable<Record<string, unknown>>;
 }
 
 /**

@@ -24,8 +24,9 @@
 # ends non-zero (PTY timeout = 124), and that is the outcome being ruled out.
 #
 # local: N/A - a local directory has no server identity to establish.
-# ftp: the FTPS counterpart (--accept-new-cert) already settles trust ahead of
-#   the mode, but it pins nothing, so there is no config content to assert.
+# ftp: the FTPS counterpart (--accept-new-cert) settles trust ahead of the mode
+#   and pins the certificate the same way - 106 pushes unattended on that pin,
+#   and unit tests on a real TLS server assert the pinned value.
 # Docker-managed: self-provisions both sshd boxes (no --ssh needed). SKIPs without Docker.
 
 SCENARIO_NAME="--accept-new-host-key settles the host key on a terminal too, and pins it"

@@ -24,7 +24,7 @@ async function tryReadHeader(provider: StorageProvider, ref: RemoteRef): Promise
  * vault sub-directory, so a location holding a differently-named backup never
  * collides.
  *
- * `expectedVaultId === null` (a fresh `init`, which has no vault_id yet): ANY
+ * `expectedVaultId === null` (`init`: no part of the backup being set up exists yet): ANY
  * shard present is foreign - abort on presence. Otherwise (`push` /
  * `provider add`): only a readable header whose `vault_id` differs from
  * `expectedVaultId` is a collision. A location holding our OWN shards (matching
@@ -62,8 +62,9 @@ export async function assertNoForeignVault(provider: StorageProvider, vaultName:
     // only enriches the debug diagnostic.
     const header = await tryReadHeader(provider, shardRefs[0]);
     io.debug(`vault collision at provider "${provider.id}": ${shardRefs.length} shard(s) present, foreign vault_id=${header?.vault_id ?? 'unreadable'}`);
-    // A fresh init has written no configuration here yet, so `bfs recovery` in
-    // this very directory is open to the operator whose backup that is.
+    // The message carries the advice that fits the first storage of a fresh
+    // init, with no configuration written yet; once one exists, the caller
+    // replaces it with the variant without advice.
     throw new VaultCollisionError(fmt('vault_collision_detected', provider.id), provider.id);
   }
 

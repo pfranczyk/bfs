@@ -363,6 +363,9 @@ describe('provider add', () => {
     // `accept_new_cert` is part of a usable FTPS config here: the run is
     // non-interactive, so without it - or a pinned fingerprint - there is no
     // way to trust the server and the adapter refuses (see the test below).
+    // The opt-in pins the certificate the server presents; stub that read.
+    const fp = 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99';
+    vi.spyOn(FtpProvider.prototype as unknown as { readServerCert: () => Promise<{ fingerprint: string; selfSigned: boolean }> }, 'readServerCert').mockResolvedValue({ fingerprint: fp, selfSigned: true });
     const cfg = await writeConfigFile({ host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true, accept_new_cert: true });
 
     await runCmd(['provider', 'add', '--ci', '--name', 'ftp-remote', '--type', 'ftp', '--config-file', cfg]);
@@ -370,7 +373,11 @@ describe('provider add', () => {
     expect(mockWriteConfig).toHaveBeenCalledOnce();
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
     const added = writtenConfig.providers.find((p: { id: string }) => p.id === 'ftp-remote');
-    expect(added).toMatchObject({ id: 'ftp-remote', type: 'ftp', config: { host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true, accept_new_cert: true } });
+    expect(added).toMatchObject({
+      id: 'ftp-remote',
+      type: 'ftp',
+      config: { host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true, accept_new_cert: true, cert_fingerprint: fp, cert_self_signed: true },
+    });
   });
 
   // An FTPS storage with no way to trust it is refused from the settings, before
@@ -514,6 +521,12 @@ interface AddProbeState {
   setVaultNames: string[];
   /** Message the thrown ProviderError carries on a 'fail' outcome. */
   failMessage?: string;
+  /**
+   * One outcome consumed per configureInteractive() call: 'fail' throws a
+   * ProviderError (a server that does not answer while the adapter reads its
+   * identity), anything else returns a config. Always succeeds when undefined.
+   */
+  configureAttempts?: string[];
 }
 
 /**
@@ -539,7 +552,9 @@ function registerAddProbeProvider(state: AddProbeState): void {
           state.setVaultNames.push(name);
         },
         async configureInteractive(_io: ProviderIO): Promise<Record<string, unknown>> {
+          const outcome = state.configureAttempts?.[state.configCalls] ?? 'ok';
           state.configCalls += 1;
+          if (outcome === 'fail') throw new ProviderError('SSH operation failed on nas.example.com:22: connect ECONNREFUSED');
           return { marker: state.configCalls };
         },
         validateConfig(): string[] {
@@ -658,6 +673,23 @@ describe('interactive provider add - connectivity probe + recovery', () => {
     // (cancelled), never an uncaught error type.
     expect(['abort', 'cancelled']).toContain(result);
     expect(mockWriteConfig).not.toHaveBeenCalled();
+  });
+
+  // The adapter's own questions can fail as well (an FTPS or SSH server that does
+  // not answer while its identity is read); that failure gets the same choices
+  // as a failed probe instead of ending the command.
+  it('RE-ENTER: should offer the recovery choice when the configuration questions themselves fail', async () => {
+    const state: AddProbeState = { attempts: [], probeCalls: 0, configCalls: 0, setVaultNames: [], configureAttempts: ['fail', 'ok'] };
+    registerAddProbeProvider(state);
+    const { chooseCalls } = installAddProbeIO(1); // pick RE-ENTER (index 1)
+    mockPrompt.mockResolvedValueOnce({ name: 'new-disk' } as never).mockResolvedValueOnce({ type: PROBE_TYPE } as never);
+
+    const result = await runCmd(['provider', 'add']);
+
+    expect(chooseCalls.length).toBe(1);
+    expect(state.configCalls).toBe(2);
+    expect(result).toBe('ok');
+    expect(mockWriteConfig).toHaveBeenCalledOnce();
   });
 
   // Message-agnosticism: the recovery loop must fire for ANY ProviderError,

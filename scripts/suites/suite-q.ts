@@ -78,6 +78,18 @@ export async function suiteQ(): Promise<SuiteResult> {
   const tmpBase = path.join(os.tmpdir(), `bfs-smoke-q-${Date.now()}`);
   const vaultDir = path.join(tmpBase, 'vault');
 
+  /**
+   * The host-key fingerprint `init --accept-new-host-key` pinned for ssh1 in Q1.
+   * Every provider here talks to the same sshd, so it stands for the out-of-band
+   * value an operator would pin by hand.
+   */
+  const pinnedHostKey = async (): Promise<string> => {
+    const cfg = await readJson<{ providers: Array<{ id: string; config: Record<string, unknown> }> }>(path.join(vaultDir, '.bfs', 'config.json'));
+    const fp = cfg.providers.find((p) => p.id === 'ssh1')?.config.host_key_fingerprint;
+    assert(typeof fp === 'string' && fp.startsWith('SHA256:'), `Q1 did not pin the host key of ssh1 (got ${String(fp)})`);
+    return fp as string;
+  };
+
   try {
     await fs.mkdir(vaultDir, { recursive: true });
 
@@ -153,11 +165,16 @@ export async function suiteQ(): Promise<SuiteResult> {
         const payload = Buffer.alloc(size);
         fillProbePattern(payload);
 
-        // interactive=false so the host-key decision takes the non-interactive
-        // branch and honours accept_new_host_key instead of prompting.
+        // interactive=false, trusting the host key on the fingerprint Q1 pinned:
+        // a saved accept_new_host_key without a pin is refused with nobody to ask.
         const { io } = createMockProviderIO({}, process.cwd(), false);
         const provider = new SshProvider(
-          { id: 'smoke-q4', type: 'ssh', adapterPackage: null, config: { host: SSH_HOST, port: SSH_PORT, user: SSH_USER, password: SSH_PASSWORD, path: REMOTE_PATHS[0], auth_method: 'password', accept_new_host_key: true } },
+          {
+            id: 'smoke-q4',
+            type: 'ssh',
+            adapterPackage: null,
+            config: { host: SSH_HOST, port: SSH_PORT, user: SSH_USER, password: SSH_PASSWORD, path: REMOTE_PATHS[0], auth_method: 'password', host_key_fingerprint: await pinnedHostKey() },
+          },
           io,
         );
         provider.setVaultName('ssh-integrity-smoke');
@@ -214,7 +231,12 @@ export async function suiteQ(): Promise<SuiteResult> {
 
           const { io } = createMockProviderIO({}, process.cwd(), false);
           const provider = new SshProvider(
-            { id: 'smoke-q7', type: 'ssh', adapterPackage: null, config: { host: SSH_HOST, port: SSH_PORT, user: SSH_USER, path: REMOTE_PATHS[0], auth_method: 'key', private_key_path: SSH_KEY_PATH, accept_new_host_key: true } },
+            {
+              id: 'smoke-q7',
+              type: 'ssh',
+              adapterPackage: null,
+              config: { host: SSH_HOST, port: SSH_PORT, user: SSH_USER, path: REMOTE_PATHS[0], auth_method: 'key', private_key_path: SSH_KEY_PATH, host_key_fingerprint: await pinnedHostKey() },
+            },
             io,
           );
           provider.setVaultName('ssh-key-smoke');

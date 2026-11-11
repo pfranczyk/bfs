@@ -75,7 +75,10 @@ describe('prune surfaces a best-effort delete failure', () => {
 
     // The pruned manifest is gone (prune completed) and the failure was surfaced.
     expect(await readManifest(root, 1)).toBeNull();
-    const warned = logs.some((l) => l.level === 'warn' && l.message.includes('p2'));
-    expect(warned).toBe(true);
+    const warned = logs.filter((l) => l.level === 'warn' && l.message.includes('p2'));
+    expect(warned).toHaveLength(1);
+    // The adapter's reason travels with the warning: without it a refused
+    // server identity and a full disk read the same.
+    expect(warned[0]?.message).toMatch(/Reason: \S/);
   });
 });

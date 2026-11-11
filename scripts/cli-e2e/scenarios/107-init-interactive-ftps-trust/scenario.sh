@@ -57,6 +57,8 @@ scenario_run() {
   answers='[
     {"anchor":"Number of data copies","value":"2"},
     {"anchor":"Number of redundancy copies","value":"1"},
+    {"anchor":"Push mode","value":"1"},
+    {"anchor":"RAM limit","value":"1024"},
     {"anchor":"Provider name","value":"q0"},
     {"anchor":"Provider type","value":"1"},
     {"anchor":"Base directory path","value":"'"$(winpath "${PV_LOCALDIR[0]}")"'"},
@@ -71,9 +73,7 @@ scenario_run() {
     {"anchor":"Password","value":"bfspass"},
     {"anchor":"Base path on server","value":"'"$remote"'"},
     {"anchor":"Use FTPS","value":"y"},
-    {"anchor":"What would you like to do?","value":"1"},
-    {"anchor":"Push mode","value":"1"},
-    {"anchor":"RAM limit","value":"1024"}
+    {"anchor":"What would you like to do?","value":"1"}
   ]'
 
   run_bfs_pty "$vault" "$answers" --lang en init "$name" --no-enc --no-compress

@@ -4,6 +4,8 @@ import { BfsError, VaultAlreadyInitializedError } from '../core/errors.js';
 import { isEnoent, writeJsonAtomic } from '../core/fs-utils.js';
 import { fmt, t } from '../i18n/index.js';
 import type { VaultConfig } from '../types/index.js';
+import { MANIFEST_FILENAME } from './manifest.js';
+import { readState } from './state.js';
 
 /**
  * Smallest pool any valid scheme fits: at least 2 data parts and 1 parity part.
@@ -40,8 +42,9 @@ export async function writeConfig(rootDir: string, config: VaultConfig): Promise
 
 /**
  * Extracts the backup name from raw config bytes, or null when the content does
- * not yield one. Used only to make a refusal concrete, so every way of failing
- * collapses to "name unavailable" rather than propagating a parser error.
+ * not yield one. Every way of failing collapses to "name unavailable" rather
+ * than propagating a parser error - the callers decide from it whether the file
+ * describes a backup at all.
  */
 function _vaultNameIn(content: string): Nullable<string> {
   try {
@@ -54,49 +57,110 @@ function _vaultNameIn(content: string): Nullable<string> {
   }
 }
 
+/** What `init` may do in a working directory (see {@link inspectInitTarget}). */
+export type InitTarget = { kind: 'new' } | { kind: 'resume'; config: VaultConfig };
+
 /**
- * Aborts when the working directory already describes a backup, so `init` never
- * replaces a live configuration. Overwriting one mints a fresh vault_id and
- * resets the version history while the shards on the media keep the old id - the
- * directory stops reaching data it holds versions for - and it discards the only
- * stored copy of the provider secrets.
- *
- * Keyed on the presence of the FILE, not on what parses out of it. Reading it
- * back through `readConfig` would split one state into two wrong answers: a file
- * whose whole content is `null` yields the same `null` as a file that is not
- * there, and a file that is merely truncated raises a parser error. The first
- * would overwrite a live backup's record, the second would reach the operator as
- * a bare `SyntaxError`. The name is read purely to make the refusal concrete;
- * when it is unavailable the message changes, the guard does not.
- *
- * `.bfs/` alone is deliberately not evidence. `init` creates it before
- * contacting any medium and writes the configuration only afterwards, so every
- * init that fails in between leaves the directory behind - and no command
- * removes it, so refusing on that would leave the operator no way back.
+ * Tells whether the working directory has any version file in
+ * `.bfs/manifests` - `v000.json` included, since a backup written as version 0
+ * exists all the same. A missing directory means no versions.
  *
  * @param rootDir - Vault root directory to inspect
- * @throws VaultAlreadyInitializedError when .bfs/config.json is present
- * @throws BfsError when the file cannot be read at all, so its presence is undecided
+ * @returns true when at least one `vNNN.json` is present
+ * @throws on a directory read error other than ENOENT
  */
-export async function assertNoExistingVault(rootDir: string): Promise<void> {
+async function hasManifestFiles(rootDir: string): Promise<boolean> {
+  try {
+    const entries = await fs.readdir(path.join(rootDir, '.bfs', 'manifests'));
+    return entries.some((e) => MANIFEST_FILENAME.test(e));
+  } catch (err: unknown) {
+    if (isEnoent(err)) return false;
+    throw err;
+  }
+}
+
+/**
+ * Tells whether the backup in the working directory has a version: a
+ * `latest_version` above 0 or any version file on disk. One definition for the
+ * `init` gate and for the refusal other commands give on a short pool, so the
+ * two never disagree about the same directory.
+ *
+ * @param rootDir - Vault root directory to inspect
+ * @returns true when a version is recorded
+ * @throws on a state or directory read error other than ENOENT
+ */
+export async function hasRecordedVersion(rootDir: string): Promise<boolean> {
+  if ((await readState(rootDir)).latest_version > 0) return true;
+  return hasManifestFiles(rootDir);
+}
+
+/**
+ * Parses config bytes into a configuration `init` can resume from, or null when
+ * the content does not describe one (truncated, `null`, no name, no pool or
+ * scheme). Every way of failing collapses to null - the caller reports the
+ * file as unreadable rather than a parser error.
+ */
+function _resumableConfigIn(content: string): Nullable<VaultConfig> {
+  if (_vaultNameIn(content) === null) return null;
+  const parsed = JSON.parse(content) as Partial<VaultConfig>;
+  const scheme = parsed.scheme;
+  if (!Array.isArray(parsed.providers) || scheme === null || typeof scheme !== 'object') return null;
+  if (!Number.isInteger(scheme.data_shards) || !Number.isInteger(scheme.parity_shards)) return null;
+  return parsed as VaultConfig;
+}
+
+/**
+ * Decides what `init` may do in the working directory, before any medium is
+ * touched. `init` writes `config.json` after the first storage passes its probe
+ * and rewrites it after each later one, so an interrupted run leaves a
+ * configuration short of its storages - which the next run resumes:
+ * - no configuration and no version files -> a new backup (`.bfs/` alone, or
+ *   `.bfs/manifests` alone, is left by every interrupted run and says nothing);
+ * - a readable configuration short of N+K storages, with no version -> resume;
+ * - a full pool, or a short one with a version (e.g. after
+ *   `provider remove --strategy remove` on a backup that was pushed) ->
+ *   refusal naming the backup;
+ * - version files without a configuration, or a configuration that cannot be
+ *   read -> refusal naming that state, without suggesting a command: whether
+ *   the operator wants that backup back or a new one here is not something BFS
+ *   can tell.
+ *
+ * A configuration is recognised by the FILE, not by what parses out of it: a file
+ * whose whole content is `null` must not pass for a missing one, or a live
+ * backup's record would be overwritten.
+ *
+ * @param rootDir - Vault root directory to inspect
+ * @returns `new`, or `resume` with the recorded configuration
+ * @throws VaultAlreadyInitializedError when the directory cannot take an init
+ * @throws BfsError when the file cannot be read at all, so its presence is undecided
+ * @throws the raw error of a state or manifest directory read that fails other than ENOENT
+ */
+export async function inspectInitTarget(rootDir: string): Promise<InitTarget> {
   const filePath = path.join(rootDir, '.bfs', 'config.json');
   let content: string;
   try {
     content = await fs.readFile(filePath, 'utf-8');
   } catch (err: unknown) {
-    if (isEnoent(err)) return;
-    // The read failed for some other reason - a permission wall, a directory in
-    // place of the file, a lock a concurrent run is holding. That says nothing
-    // about whether a backup is here, so the refusal must not claim the
-    // configuration is damaged: the advice that follows from damage is "delete
-    // it", and following that during a momentary lock would destroy a live one.
-    // Name the read error instead and leave the operator to settle it.
-    const reason = (err as NodeJS.ErrnoException).code ?? (err instanceof Error ? err.message : String(err));
-    throw new BfsError(fmt('init_vault_check_failed', reason));
+    if (!isEnoent(err)) {
+      // A permission wall, a directory in place of the file, a lock a concurrent
+      // run is holding: that says nothing about whether a backup is here, so the
+      // refusal names the read error and claims nothing about the file.
+      const reason = (err as NodeJS.ErrnoException).code ?? (err instanceof Error ? err.message : String(err));
+      throw new BfsError(fmt('init_vault_check_failed', reason));
+    }
+    if (await hasManifestFiles(rootDir)) throw new VaultAlreadyInitializedError(t('init_vault_versions_without_config'));
+    return { kind: 'new' };
   }
-  const name = _vaultNameIn(content);
-  if (name === null) throw new VaultAlreadyInitializedError(t('init_vault_exists_unreadable'));
-  throw new VaultAlreadyInitializedError(fmt('init_vault_exists', name));
+  const config = _resumableConfigIn(content);
+  if (config === null) {
+    const key = (await hasManifestFiles(rootDir)) ? 'init_vault_exists_unreadable_versions' : 'init_vault_exists_unreadable';
+    throw new VaultAlreadyInitializedError(t(key));
+  }
+  const required = config.scheme.data_shards + config.scheme.parity_shards;
+  if (config.providers.length >= required || (await hasRecordedVersion(rootDir))) {
+    throw new VaultAlreadyInitializedError(fmt('init_vault_exists', config.vault_name));
+  }
+  return { kind: 'resume', config };
 }
 
 /**
@@ -106,10 +170,10 @@ export async function assertNoExistingVault(rootDir: string): Promise<void> {
  * manifests behind as orphans, cutting the directory off from versions it still
  * lists - and it does so before the operator sees a single result.
  *
- * What counts as a backup is the same thing `assertNoExistingVault` names in its
- * refusal: a file yielding a backup name. The difference from that guard is
- * deliberate. `init` keys on the FILE, because a directory it cannot read is
- * still someone's; recovery is the command that rebuilds an unreadable one, so
+ * What counts as a backup is a file yielding a backup name. The difference from
+ * the `init` gate (`inspectInitTarget`) is deliberate. `init` keys on the FILE,
+ * because a directory it cannot read is still someone's; recovery is the
+ * command that rebuilds an unreadable one, so
  * an empty, truncated or nameless file has to let it through - that is what
  * keeps a failed recovery repeatable.
  *
@@ -139,10 +203,16 @@ export async function assertRecoveryTargetFree(rootDir: string): Promise<void> {
  * user-level message before any provider work starts, instead of letting
  * lower layers throw cryptic internal errors.
  *
+ * A pool short of its scheme with no version yet is an `init` that has not
+ * finished; `noVersionYet` adds that state to the refusal (the caller knows it,
+ * see `hasRecordedVersion`) without suggesting which way out to take.
+ *
+ * @param config - The loaded configuration
+ * @param opts   - `noVersionYet`: the backup has no version recorded
  * @throws BfsError if scheme is missing or corrupted, or providers count does
  *         not equal data_shards + parity_shards.
  */
-export function assertSchemeValid(config: VaultConfig): void {
+export function assertSchemeValid(config: VaultConfig, opts: { noVersionYet?: boolean } = {}): void {
   const scheme = config.scheme;
   if (scheme === null || scheme === undefined) {
     throw new BfsError(t('scheme_missing'));
@@ -156,8 +226,26 @@ export function assertSchemeValid(config: VaultConfig): void {
   }
   const required = data_shards + parity_shards;
   if (config.providers.length !== required) {
-    throw new BfsError(fmt(schemeMismatchKey(config.providers.length, required), String(required), String(config.providers.length)));
+    const mismatch = fmt(schemeMismatchKey(config.providers.length, required), String(required), String(config.providers.length));
+    const short = config.providers.length < required;
+    throw new BfsError(short && opts.noVersionYet === true ? `${mismatch} ${t('scheme_no_version_yet')}` : mismatch);
   }
+}
+
+/**
+ * `assertSchemeValid` for a command about to make or restore a backup: when the
+ * pool is short of its scheme, whether the backup has a version yet is read from
+ * disk and named in the refusal. A valid pool costs no extra read.
+ *
+ * @param rootDir - Vault root directory
+ * @param config  - The loaded configuration
+ * @throws BfsError as `assertSchemeValid` does
+ * @throws on a state or manifest directory read error while checking a short pool
+ */
+export async function assertSchemeReady(rootDir: string, config: VaultConfig): Promise<void> {
+  const scheme = config.scheme;
+  const short = scheme !== null && scheme !== undefined && config.providers.length < scheme.data_shards + scheme.parity_shards;
+  assertSchemeValid(config, { noVersionYet: short && !(await hasRecordedVersion(rootDir)) });
 }
 
 /**

@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import type { Ora } from 'ora';
+import { linkConsentScope } from '../providers/identity-consent.js';
 import type { ProviderIO } from '../types/index.js';
 
 /**
@@ -31,7 +32,7 @@ async function _pausedAround<T>(spinner: Ora, action: () => Promise<T>): Promise
  * @returns a ProviderIO mirroring `io` but routing output through `spinner`
  */
 export function createSpinnerIo(io: ProviderIO, spinner: Ora): ProviderIO {
-  return {
+  const wrapped: ProviderIO = {
     ...io,
     info(msg: string): void {
       spinner.text = chalk.dim(msg);
@@ -50,4 +51,8 @@ export function createSpinnerIo(io: ProviderIO, spinner: Ora): ProviderIO {
     confirm: (message: string): Promise<boolean> => _pausedAround(spinner, () => io.confirm(message)),
     choose: (message: string, options: string[]): Promise<string> => _pausedAround(spinner, () => io.choose(message, options)),
   };
+  // Same command, same operator: an answer about a server identity given through
+  // either io must be remembered for the other.
+  linkConsentScope(wrapped, io);
+  return wrapped;
 }

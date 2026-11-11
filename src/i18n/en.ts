@@ -85,6 +85,7 @@ export const en: Strings = {
   probe_failed: 'Could not connect to provider "%s": %s',
   probe_validate_failed: 'Invalid config for provider "%s": %s',
   probe_failed_prompt: 'Reconnection options - what would you like to do?',
+  probe_configure_failed: 'Could not set up provider "%s": %s',
   probe_choice_retry: 'Retry connection',
   probe_choice_reenter: "Re-enter this provider's settings",
   probe_choice_abort: 'Abort',
@@ -124,8 +125,22 @@ export const en: Strings = {
   init_success: 'Backup "%s" is ready. Use `bfs push` to back up.',
   init_vault_exists:
     'This directory already holds a backup named "%s". Setting one up here would replace its settings and cut this directory off from that data. Run `bfs init` in another directory, or delete the .bfs directory here if that backup is no longer needed.',
-  init_vault_exists_unreadable:
-    'This directory already holds a backup, but its settings in .bfs/config.json cannot be read. Setting one up here would replace them. Run `bfs recovery` to rebuild the settings from your storage, or delete .bfs/config.json if that backup is no longer needed.',
+  init_vault_exists_unreadable: 'This directory already holds a backup, but its settings in .bfs/config.json cannot be read. Setting one up here would replace them.',
+  init_vault_exists_unreadable_versions: 'This directory already holds a backup with versions, but its settings in .bfs/config.json cannot be read. Setting one up here would replace them.',
+  init_vault_versions_without_config: 'This directory holds versions of a backup, but no settings: .bfs/config.json is missing.',
+  init_resume_name_mismatch: 'This directory holds an unfinished setup of backup "%s"; the command asks for backup "%s".',
+  init_resume_scheme_mismatch: 'This directory holds an unfinished setup with scheme %s/%s; the command asks for %s/%s.',
+  init_resume_setting_mismatch: 'This directory holds an unfinished setup with %s: %s; the command asks for %s.',
+  init_resume_provider_mismatch: 'This directory holds an unfinished setup in which storage "%s" has other settings than the command gives.',
+  init_resume_provider_missing: 'This directory holds an unfinished setup with storage "%s", which the command does not list.',
+  init_resume_info: 'Resuming the unfinished setup of backup "%s": %s of %s storage providers recorded, %s missing.',
+  init_setting_encryption: 'encryption',
+  init_setting_compression: 'compression',
+  init_setting_push_mode: 'push mode',
+  init_setting_max_ram: 'memory limit',
+  init_setting_on: 'on',
+  init_setting_off: 'off',
+  init_setting_no_limit: 'no limit',
   init_vault_check_failed:
     'Cannot tell whether this directory already holds a backup: .bfs/config.json could not be read (%s). If one is here, setting up another would replace it. Clear the read error, or run `bfs init` in another directory.',
   init_ci_name_required: '--ci mode requires backup name as positional argument.',
@@ -281,7 +296,7 @@ export const en: Strings = {
   prune_ci_selection_required: 'This run asks no questions (--ci), so it cannot ask which versions to delete. Name them on the command line: `bfs prune <range>` or `bfs prune --keep-last <n>`.',
   prune_ci_yes_required: 'This run asks no questions (--ci), so the deletion cannot be confirmed. Add --yes to give consent up front.',
   prune_deleted: 'Deleted versions: %s',
-  prune_orphan_warn: 'Could not remove version %s data from storage "%s" - it may still occupy space there.',
+  prune_orphan_warn: 'Could not remove version %s data from storage "%s" - it may still occupy space there. Reason: %s',
 
   // --- verify ---------------------------------------------------------------
   verify_spinner: 'Verifying versions...',
@@ -341,6 +356,7 @@ export const en: Strings = {
   scheme_providers_surplus:
     'Scheme requires %s providers, configured: %s - more storages than the scheme uses. This is usually a rebuild onto a new storage that did not finish: running that rebuild again (`bfs repair ... --rebuild` or `bfs provider remove ... --strategy rebuild`) finishes it, and a configured storage that holds no part of the backup can be dropped with `bfs provider remove <name> --strategy remove --yes`.',
   scheme_providers_below_minimum: 'Scheme requires %s providers, configured: %s. Making or restoring a backup needs at least 3 storage providers; add one with `bfs provider add`.',
+  scheme_no_version_yet: 'The backup has no version yet.',
 
   // --- provider: local-fs --------------------------------------------------
   provider_local_path_not_exist_confirm: 'Path "%s" does not exist. Create it?',
@@ -566,7 +582,7 @@ export const en: Strings = {
   ftp_help_flag_path_desc: 'Absolute base path on the FTP server (must start with "/")',
   ftp_help_flag_secure_desc: 'Use FTPS (TLS). Accepts true|false|1|0|yes|no (default true)',
   ftp_help_flag_cert_fingerprint_desc: 'Pin the FTPS certificate to this SHA-256 fingerprint (colon-hex, e.g. AB:CD:...); a mismatch aborts as tampering',
-  ftp_help_flag_accept_new_cert_desc: 'Trust the certificate the server presents on first connect when no pin is set, without asking (pins nothing - see --cert-fingerprint)',
+  ftp_help_flag_accept_new_cert_desc: 'Read the certificate the server presents now and pin its fingerprint, without asking (an explicit --cert-fingerprint wins)',
   ftp_help_flag_config_file_desc: 'JSON with any of { host, port, user, password, path, secure, cert_fingerprint, accept_new_cert }. ' + 'Inline flags override fields loaded from JSON.',
 
   ftp_host_required: 'FTP adapter: "host" is required. Pass --host <hostname> or ' + '--config-file <path> inside the --provider spec, e.g. ' + '--provider "ftp:nas --host 192.168.1.1 --path /backup".',
@@ -655,7 +671,8 @@ export const en: Strings = {
   trust_choice_back: 'Go back and re-enter the connection settings',
   trust_choice_cancel: 'Cancel (end the command)',
   configure_reenter_notice: 'Going back to the connection settings.',
-  configure_restarts_exhausted: 'Went back to the connection settings too many times - nothing was saved. Run the command again once you have the settings at hand.',
+  configure_restarts_exhausted: 'Went back to the connection settings too many times.',
+  configure_restarts_exhausted_edit: 'Went back to the connection settings too many times - nothing was saved.',
   ftp_edit_pin_dropped: 'FTPS turned off for %s - the pinned certificate %s will be permanently removed, and later connections will not verify the server identity.',
   ftp_edit_connecting: 'Connecting to %s to confirm its certificate...',
   ftp_edit_offline_menu: 'Could not reach %s. Choose how to set the certificate pin:',
@@ -746,6 +763,12 @@ export const en: Strings = {
   ssh_auth_conflict: 'SSH adapter: pass either --password or --private-key, not both.',
   ssh_auth_missing: 'SSH adapter: no credentials - pass --password, --private-key <path>, ' + 'or place a key at ~/.ssh/id_ed25519 or ~/.ssh/id_rsa.',
   ssh_accept_new_offline: '--accept-new-host-key needs a connection to the server, and "bfs provider edit --ci" does not connect to it.',
+  ssh_stored_opt_in_unpinned: 'The SSH host key of %s is not pinned, and the saved consent to accept a new key does not count without an operator to confirm it.',
+  ssh_stored_opt_in_confirm: 'The SSH host key of %s is not pinned - the saved configuration only allows a new key.\n  fingerprint %s\nTrust this key?',
+  ftp_stored_opt_in_unpinned: 'The FTPS certificate of %s is not pinned, and the saved consent to accept a new certificate does not count without an operator to confirm it.',
+  ftp_stored_opt_in_confirm: 'The FTPS certificate of %s is not pinned - the saved configuration only allows a new certificate.\n  fingerprint %s\nTrust this certificate?',
+  ftp_accept_new_offline: '--accept-new-cert needs a connection to the server, and "bfs provider edit --ci" does not connect to it.',
+  ftp_accept_new_requires_secure: '--accept-new-cert needs FTPS (secure: true) - plaintext FTP presents no certificate to accept.',
   ssh_validate_host_required: 'SSH: host is required and must be a non-empty string',
   ssh_validate_port_invalid: 'SSH: port must be an integer between 1 and 65535',
   ssh_validate_path_required: 'SSH: path is required and must be a non-empty string',

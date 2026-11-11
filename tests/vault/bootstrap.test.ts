@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deriveKey, generateSalt } from '../../src/core/crypto.js';
 import { TamperDetectedError } from '../../src/core/errors.js';
 import { serializeShardHeader } from '../../src/core/shard-io.js';
+import { t } from '../../src/i18n/index.js';
 import { createMockProviderIO, providerRegistry } from '../../src/providers/provider.js';
 import type { ProviderConfig, ProviderIO, RemoteRef, ShardHeader, ShardLocation, StorageProvider } from '../../src/types/index.js';
 import { bootstrapFromProvider } from '../../src/vault/bootstrap.js';
@@ -236,6 +237,353 @@ describe('connectProvidersFromMap dispatch to connectForRecovery', () => {
     const spy = recoverySpies.get('p1');
     expect(spy).toBeDefined();
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// --- Config updates handed back by a provider during recovery -----------------
+//
+// A provider may learn something during recovery that belongs in its own saved
+// configuration - the server identity the operator confirmed, so that the next
+// command does not ask again and an unattended one does not refuse. The core is
+// blind to field semantics, so the provider hands the update back through the
+// optional `takeConfigUpdates()` and the core merges it into the location-map
+// entry the instance was built from (reconstructConfig writes config.json from
+// those entries). Only instances built from map entries count: the bootstrap
+// medium reaches config.json through its own entry, never through the bootstrap
+// instance, whose id is a temporary one and whose medium may be a copy of a part
+// on another server. Boundaries: the update lands in connection_config only,
+// secret fields are dropped, a merged config the provider itself rejects drops
+// the whole update, and an instance that did not end up connected hands back
+// nothing - nor does a consensus instance, which never takes a decision.
+
+/** Provider type whose instances implement connectForRecovery and takeConfigUpdates. */
+const TYPE_UPDATES_HOOK = 'mock-updates-hook';
+/** Provider type with takeConfigUpdates but no connectForRecovery (direct connect path). */
+const TYPE_UPDATES_DIRECT = 'mock-updates-direct';
+
+/** How an instance came to be asked for its updates. */
+type InstanceRole = 'recovery-hook' | 'authenticate';
+
+/** Per-test answer: what an instance of `id` reached through `role` hands back. */
+let updatesFor: (id: string, role: InstanceRole) => Nullable<Record<string, unknown>>;
+/** Ids whose connection fails (operator declined, server unreachable) on either path. */
+let failingIds: Set<string>;
+/** Secret a recovery-hook instance of `id` returns (what the operator typed). */
+let secretFor: Map<string, string>;
+/** When true, validateConfig also demands a non-empty `password`, as a real adapter does. */
+let requirePassword: boolean;
+/** Location map every updates-provider instance serves in its header (null = unreadable). */
+let servedMap: Nullable<ShardLocation[]>;
+
+/**
+ * Builds a provider whose `takeConfigUpdates` answers per instance role: an
+ * instance that went through connectForRecovery reports 'recovery-hook', one that
+ * was only authenticated (consensus, direct connect) reports 'authenticate'. The
+ * secret field is `password`; validateConfig rejects a `host_key_fingerprint`
+ * that does not start with `SHA256:` (and a missing password under
+ * `requirePassword`). With `servedMap` set the instance serves a parseable header
+ * of its own shard, so consensus really compares it.
+ */
+function updatesProvider(config: ProviderConfig, type: string, withHook: boolean): StorageProvider {
+  const p = baseProvider(config.id, type) as StorageProvider & {
+    connectForRecovery?: (io: ProviderIO, pool: readonly { value: string; origin: string }[]) => Promise<Nullable<string>>;
+    takeConfigUpdates?: () => Nullable<Record<string, unknown>>;
+  };
+  let role: InstanceRole = 'authenticate';
+  (p.getSecretFields as ReturnType<typeof vi.fn>).mockReturnValue(['password']);
+  (p.validateConfig as ReturnType<typeof vi.fn>).mockImplementation((c: Record<string, unknown>) => {
+    const errors: string[] = [];
+    const fp = c.host_key_fingerprint;
+    if (!(fp === undefined || fp === null || (typeof fp === 'string' && fp.startsWith('SHA256:')))) errors.push('host_key_fingerprint is not a fingerprint');
+    if (requirePassword && !(typeof c.password === 'string' && c.password.length > 0)) errors.push('password is required');
+    return errors;
+  });
+  (p.authenticate as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+    if (failingIds.has(config.id)) throw new Error('unreachable');
+  });
+  const shardIndex = Number(config.id.replace(/^p/, ''));
+  (p.downloadHeader as ReturnType<typeof vi.fn>).mockImplementation(async () => (servedMap === null ? Buffer.alloc(0) : buildHeaderBytes(servedMap, shardIndex)));
+  if (withHook) {
+    p.connectForRecovery = vi.fn(async () => {
+      role = 'recovery-hook';
+      if (failingIds.has(config.id)) throw new Error('declined');
+      return secretFor.get(config.id) ?? null;
+    });
+  }
+  p.takeConfigUpdates = () => updatesFor(config.id, role);
+  return p;
+}
+
+function registerUpdatesProviders(): void {
+  providerRegistry.register(TYPE_UPDATES_HOOK, {
+    lang: 'en',
+    displayName: 'Mock (updates, recovery hook)',
+    create: (config: ProviderConfig): StorageProvider => updatesProvider(config, TYPE_UPDATES_HOOK, true),
+    help: () => ({ usage: '', description: '', flags: [], examples: [] }),
+  });
+  providerRegistry.register(TYPE_UPDATES_DIRECT, {
+    lang: 'en',
+    displayName: 'Mock (updates, direct connect)',
+    create: (config: ProviderConfig): StorageProvider => updatesProvider(config, TYPE_UPDATES_DIRECT, false),
+    help: () => ({ usage: '', description: '', flags: [], examples: [] }),
+  });
+}
+
+function unregisterUpdatesProviders(): void {
+  const entries = (providerRegistry as unknown as { entries: Map<string, unknown> }).entries;
+  entries.delete(TYPE_UPDATES_HOOK);
+  entries.delete(TYPE_UPDATES_DIRECT);
+}
+
+/** The connection_config bootstrap left on the entry of `id`. */
+function entryConfig(map: readonly ShardLocation[], id: string): Record<string, unknown> {
+  const entry = map.find((l) => l.provider_id === id);
+  assert(entry !== undefined, `no location-map entry for ${id}`);
+  return entry.connection_config;
+}
+
+describe('connectProvidersFromMap merges config updates handed back by a provider', () => {
+  beforeEach(() => {
+    askSecretPrompts = [];
+    recoverySpies = new Map();
+    failingIds = new Set();
+    secretFor = new Map();
+    requirePassword = false;
+    servedMap = null;
+    updatesFor = () => null;
+    registerMockProviders();
+    registerUpdatesProviders();
+  });
+
+  afterEach(() => {
+    unregisterUpdatesProviders();
+    unregisterMockProviders();
+    vi.restoreAllMocks();
+  });
+
+  it('should write the update of a recovery-hook instance into its own location-map entry', async () => {
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_UPDATES_HOOK, ['password']), loc(2, TYPE_NO_HOOK, [])];
+    updatesFor = (id, role) => (id === 'p1' && role === 'recovery-hook' ? { host_key_fingerprint: 'SHA256:confirmed-p1' } : null);
+    const { io } = createMockProviderIO({});
+
+    const result = await bootstrapFromProvider(makeBootstrapProvider(0, map), { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(entryConfig(result.location_map, 'p1')).toEqual({ host: '127.0.0.1', port: 9999, path: '/p1', host_key_fingerprint: 'SHA256:confirmed-p1' });
+    expect(entryConfig(result.location_map, 'p2')).toEqual({ host: '127.0.0.1', port: 9999, path: '/p2' });
+  });
+
+  it('should write the update of a directly connected instance into its own location-map entry', async () => {
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_UPDATES_DIRECT, []), loc(2, TYPE_NO_HOOK, [])];
+    updatesFor = (id) => (id === 'p1' ? { host_key_fingerprint: 'SHA256:confirmed-p1' } : null);
+    const { io } = createMockProviderIO({});
+
+    const result = await bootstrapFromProvider(makeBootstrapProvider(0, map), { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(entryConfig(result.location_map, 'p1').host_key_fingerprint).toBe('SHA256:confirmed-p1');
+  });
+
+  // The bootstrap medium is also an entry of the map, connected under its real
+  // provider id - that is the instance whose update counts. The bootstrap
+  // instance itself (temporary id, possibly pointed at a copy of the part on
+  // another server) hands back a different key, which must not land anywhere.
+  it('should pin the bootstrap medium through its own map entry and ignore the bootstrap instance', async () => {
+    const map = [loc(0, TYPE_UPDATES_HOOK, []), loc(1, TYPE_NO_HOOK, []), loc(2, TYPE_NO_HOOK, [])];
+    updatesFor = (id, role) => (id === 'p0' && role === 'recovery-hook' ? { host_key_fingerprint: 'SHA256:map-entry-p0' } : null);
+    const bootstrap = makeBootstrapProvider(0, map) as StorageProvider & { takeConfigUpdates?: () => Nullable<Record<string, unknown>> };
+    (bootstrap as { id: string }).id = 'bootstrap-mock';
+    bootstrap.takeConfigUpdates = () => ({ host_key_fingerprint: 'SHA256:bootstrap-copy' });
+    const { io } = createMockProviderIO({});
+
+    const result = await bootstrapFromProvider(bootstrap, { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(entryConfig(result.location_map, 'p0').host_key_fingerprint).toBe('SHA256:map-entry-p0');
+    for (const entry of result.location_map) {
+      expect(JSON.stringify(entry)).not.toContain('SHA256:bootstrap-copy');
+    }
+  });
+
+  // The same layout with the map entry handing back nothing: an implementation
+  // that pastes the bootstrap instance's update onto the entry of the same part
+  // index would be overwritten by the entry's own update in the case above and
+  // pass it - here nothing covers it up.
+  it('should not pin the bootstrap medium from the bootstrap instance when its map entry hands back nothing', async () => {
+    const map = [loc(0, TYPE_UPDATES_HOOK, []), loc(1, TYPE_NO_HOOK, []), loc(2, TYPE_NO_HOOK, [])];
+    const bootstrap = makeBootstrapProvider(0, map) as StorageProvider & { takeConfigUpdates?: () => Nullable<Record<string, unknown>> };
+    (bootstrap as { id: string }).id = 'bootstrap-mock';
+    bootstrap.takeConfigUpdates = () => ({ host_key_fingerprint: 'SHA256:bootstrap-copy' });
+    const { io } = createMockProviderIO({});
+
+    const result = await bootstrapFromProvider(bootstrap, { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(result.providers.some((p) => p.id === 'p0')).toBe(true);
+    expect(entryConfig(result.location_map, 'p0')).not.toHaveProperty('host_key_fingerprint');
+  });
+
+  // The main path of an attended recovery: the operator types the password
+  // (handed back by the hook and persisted under the single required input) and
+  // confirms the server identity (handed back as an update). Both must land: the
+  // secret filter applies to the update alone, not to the merged config, and the
+  // validation runs on the config as it will be saved - with the secret in it.
+  it('should keep the typed secret and land the update when the provider requires the secret to validate', async () => {
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_UPDATES_HOOK, ['password']), loc(2, TYPE_NO_HOOK, [])];
+    secretFor = new Map([['p1', 'typed-by-operator']]);
+    requirePassword = true;
+    updatesFor = (id, role) => (id === 'p1' && role === 'recovery-hook' ? { host_key_fingerprint: 'SHA256:confirmed-p1', password: 'smuggled-secret' } : null);
+    const { io } = createMockProviderIO({});
+
+    const result = await bootstrapFromProvider(makeBootstrapProvider(0, map), { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(entryConfig(result.location_map, 'p1')).toEqual({ host: '127.0.0.1', port: 9999, path: '/p1', password: 'typed-by-operator', host_key_fingerprint: 'SHA256:confirmed-p1' });
+  });
+
+  // Twin of the case above without a smuggled password in the update - a real
+  // adapter never hands one back. Validating the bare update before the typed
+  // secret is written would drop the pin here, while the smuggled value above
+  // would mask that order.
+  it('should validate the update against the config as saved, with the typed secret in it', async () => {
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_UPDATES_HOOK, ['password']), loc(2, TYPE_NO_HOOK, [])];
+    secretFor = new Map([['p1', 'typed-by-operator']]);
+    requirePassword = true;
+    updatesFor = (id, role) => (id === 'p1' && role === 'recovery-hook' ? { host_key_fingerprint: 'SHA256:confirmed-p1' } : null);
+    const { io } = createMockProviderIO({});
+
+    const result = await bootstrapFromProvider(makeBootstrapProvider(0, map), { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(entryConfig(result.location_map, 'p1')).toEqual({ host: '127.0.0.1', port: 9999, path: '/p1', password: 'typed-by-operator', host_key_fingerprint: 'SHA256:confirmed-p1' });
+  });
+
+  // The secret fields come from getSecretFields(), not from the entry's
+  // required_inputs: an entry that declares none (nothing stripped, or a legacy
+  // map) must not become a way to smuggle a secret into config.json.
+  it('should drop secret fields from an update and keep the rest', async () => {
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_UPDATES_HOOK, []), loc(2, TYPE_NO_HOOK, [])];
+    updatesFor = (id, role) => (id === 'p1' && role === 'recovery-hook' ? { host_key_fingerprint: 'SHA256:confirmed-p1', password: 'smuggled-secret' } : null);
+    const { io } = createMockProviderIO({});
+
+    const result = await bootstrapFromProvider(makeBootstrapProvider(0, map), { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    const config = entryConfig(result.location_map, 'p1');
+    expect(config.host_key_fingerprint).toBe('SHA256:confirmed-p1');
+    expect(config).not.toHaveProperty('password');
+  });
+
+  it('should drop the whole update when the merged config fails the validation of the provider', async () => {
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_UPDATES_HOOK, []), loc(2, TYPE_NO_HOOK, [])];
+    updatesFor = (id, role) => (id === 'p1' && role === 'recovery-hook' ? { host_key_fingerprint: 'not-a-fingerprint', note: 'rides along' } : null);
+    const { io } = createMockProviderIO({});
+
+    const result = await bootstrapFromProvider(makeBootstrapProvider(0, map), { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(entryConfig(result.location_map, 'p1')).toEqual({ host: '127.0.0.1', port: 9999, path: '/p1' });
+  });
+
+  // Positive control for the validation case above: the same shape with a valid
+  // fingerprint lands, so the drop is decided by validateConfig, not by the field.
+  it('should keep an update whose merged config passes the validation of the provider', async () => {
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_UPDATES_HOOK, []), loc(2, TYPE_NO_HOOK, [])];
+    updatesFor = (id, role) => (id === 'p1' && role === 'recovery-hook' ? { host_key_fingerprint: 'SHA256:confirmed-p1', note: 'rides along' } : null);
+    const { io } = createMockProviderIO({});
+
+    const result = await bootstrapFromProvider(makeBootstrapProvider(0, map), { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(entryConfig(result.location_map, 'p1')).toEqual({ host: '127.0.0.1', port: 9999, path: '/p1', host_key_fingerprint: 'SHA256:confirmed-p1', note: 'rides along' });
+  });
+
+  // A value that does not survive a JSON round trip cannot be written to
+  // config.json as handed back, so the update is dropped in whole.
+  it('should drop the whole update when it carries a value that is not JSON', async () => {
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_UPDATES_HOOK, []), loc(2, TYPE_NO_HOOK, [])];
+    updatesFor = (id, role) => (id === 'p1' && role === 'recovery-hook' ? { host_key_fingerprint: 'SHA256:confirmed-p1', callback: () => 'not data' } : null);
+    const { io } = createMockProviderIO({});
+
+    const result = await bootstrapFromProvider(makeBootstrapProvider(0, map), { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(entryConfig(result.location_map, 'p1')).toEqual({ host: '127.0.0.1', port: 9999, path: '/p1' });
+  });
+
+  it('should land the update in connection_config only and leave the rest of the entry untouched', async () => {
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_UPDATES_HOOK, ['password']), loc(2, TYPE_NO_HOOK, [])];
+    secretFor = new Map([['p1', 'typed-by-operator']]);
+    updatesFor = (id, role) => (id === 'p1' && role === 'recovery-hook' ? { host_key_fingerprint: 'SHA256:confirmed-p1', remote_path: '/elsewhere', provider_id: 'hijacked', required_inputs: [] } : null);
+    const { io } = createMockProviderIO({});
+
+    const result = await bootstrapFromProvider(makeBootstrapProvider(0, map), { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    const entry = result.location_map.find((l) => l.shard_index === 1);
+    assert(entry !== undefined, 'entry for shard 1 missing');
+    expect(entry.connection_config.host_key_fingerprint).toBe('SHA256:confirmed-p1');
+    expect(entry.provider_id).toBe('p1');
+    expect(entry.remote_path).toBe('/p1/shard_1.bfs.1');
+    expect(entry.required_inputs).toEqual(['password']);
+  });
+
+  // The direct path builds a probe instance first and connects a second one; an
+  // update from either must not land when the connection failed.
+  it('should take nothing from a directly connected instance whose connection failed', async () => {
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_UPDATES_DIRECT, []), loc(2, TYPE_NO_HOOK, [])];
+    failingIds = new Set(['p1']);
+    updatesFor = (id) => (id === 'p1' ? { host_key_fingerprint: 'SHA256:never-confirmed' } : null);
+    const { io } = createMockProviderIO({});
+
+    const result = await bootstrapFromProvider(makeBootstrapProvider(0, map), { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(result.providers.some((p) => p.id === 'p1')).toBe(false);
+    expect(entryConfig(result.location_map, 'p1')).not.toHaveProperty('host_key_fingerprint');
+  });
+
+  // The direct path that prompts for a stripped secret (no recovery hook): the
+  // typed secret and the update both land.
+  it('should land the update of an instance connected after the operator typed its stripped secret', async () => {
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_UPDATES_DIRECT, ['password']), loc(2, TYPE_NO_HOOK, [])];
+    requirePassword = true;
+    updatesFor = (id) => (id === 'p1' ? { host_key_fingerprint: 'SHA256:confirmed-p1' } : null);
+    const { io } = createMockProviderIO({});
+    io.askSecret = async (): Promise<string> => 'typed-by-operator';
+
+    const result = await bootstrapFromProvider(makeBootstrapProvider(0, map), { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(entryConfig(result.location_map, 'p1')).toEqual({ host: '127.0.0.1', port: 9999, path: '/p1', password: 'typed-by-operator', host_key_fingerprint: 'SHA256:confirmed-p1' });
+  });
+
+  it('should take nothing from an instance whose recovery connection failed', async () => {
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_UPDATES_HOOK, []), loc(2, TYPE_NO_HOOK, [])];
+    failingIds = new Set(['p1']);
+    updatesFor = (id) => (id === 'p1' ? { host_key_fingerprint: 'SHA256:never-confirmed' } : null);
+    const { io } = createMockProviderIO({});
+
+    const result = await bootstrapFromProvider(makeBootstrapProvider(0, map), { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(result.providers.some((p) => p.id === 'p1')).toBe(false);
+    expect(entryConfig(result.location_map, 'p1')).not.toHaveProperty('host_key_fingerprint');
+  });
+
+  // Consensus reads siblings without a secret before any decision is taken; an
+  // update an instance built there might hold is not the operator's decision.
+  // The sibling serves a matching header, so consensus really compares it (no
+  // "single provider" warning) - an implementation collecting after a successful
+  // comparison would otherwise slip past.
+  it('should take nothing from a consensus instance', async () => {
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_UPDATES_HOOK, []), loc(2, TYPE_NO_HOOK, [])];
+    servedMap = map;
+    updatesFor = (id, role) => (id === 'p1' && role === 'authenticate' ? { host_key_fingerprint: 'SHA256:consensus-instance' } : null);
+    const { io, logs } = createMockProviderIO({});
+
+    const result = await bootstrapFromProvider(makeBootstrapProvider(0, map), { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(logs.some((l) => l.level === 'warn' && l.message === t('bootstrap_single_provider_warn'))).toBe(false);
+    expect(entryConfig(result.location_map, 'p1')).not.toHaveProperty('host_key_fingerprint');
+  });
+
+  // An adapter compiled against the contract without the hook keeps recovering
+  // exactly as before: its entry is not touched.
+  it('should leave the entry of a provider without takeConfigUpdates unchanged', async () => {
+    const map = [loc(0, TYPE_NO_HOOK, []), loc(1, TYPE_WITH_HOOK, ['password']), loc(2, TYPE_NO_HOOK, [])];
+    const { io } = createMockProviderIO({});
+
+    const result = await bootstrapFromProvider(makeBootstrapProvider(0, map), { vaultName: VAULT_NAME, io, targetVersion: 1 });
+
+    expect(result.providers.some((p) => p.id === 'p1')).toBe(true);
+    expect(entryConfig(result.location_map, 'p1')).toEqual({ host: '127.0.0.1', port: 9999, path: '/p1' });
   });
 });
 

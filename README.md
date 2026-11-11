@@ -171,7 +171,8 @@ FTPS is on by default, and a scripted run has nobody to ask about an unknown
 certificate - so it must say up front which certificate to trust: pin it with
 `"cert_fingerprint": "AA:BB:..."` (or `--cert-fingerprint`), or accept the one the
 server presents on first connection with `"accept_new_cert": true` (or
-`--accept-new-cert`). Without either, BFS refuses instead of trusting silently.
+`--accept-new-cert`) - BFS then pins its fingerprint. Without either, BFS refuses
+instead of trusting silently.
 A server that offers only plain FTP needs `"secure": false`.
 
 `ssh-vps1.json` (key auth - the private key stays a path, never inline):
@@ -244,7 +245,7 @@ bfs init --ci docs --data-shards 2 --parity-shards 1 \
 ```
 
 FTPS is on by default, so a scripted run has to say which certificate to trust -
-`--accept-new-cert` takes the one the server presents on first connection, and
+`--accept-new-cert` takes the one the server presents on first connection and pins it, and
 `--cert-fingerprint AA:BB:...` pins one you already know. Without either, `--ci`
 refuses rather than trusting silently.
 
@@ -280,7 +281,7 @@ FTP flag reference:
 | `--path </absolute/path>` | - | Absolute base path on server, must start with `/` (required) |
 | `--secure <bool>` | `true` | FTPS/TLS - on by default; pass `false` for a server that offers only plain FTP (accepts `true`/`false`/`yes`/`no`) |
 | `--cert-fingerprint <sha256>` | - | Pin the server's certificate up front (`AA:BB:...` form) |
-| `--accept-new-cert` | - | Trust the certificate presented on first connection without asking (pins nothing - see `--cert-fingerprint`) |
+| `--accept-new-cert` | - | Read the certificate the server presents now and pin its fingerprint, without asking (an explicit `--cert-fingerprint` wins) |
 | `--config-file <path>` | - | JSON file with any of the above fields; inline flags override file values |
 
 ### SSH/SFTP provider

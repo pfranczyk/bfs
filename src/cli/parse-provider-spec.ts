@@ -62,7 +62,7 @@ export async function parseInitProviderSpec(spec: string, io: ProviderIO): Promi
  * orphans the rest.
  *
  * @param newIds            ids being introduced (e.g. all `--provider` ids at init)
- * @param existingConfigIds ids already present in the backup config; empty at init
+ * @param existingConfigIds ids already in use (the backup config, or names taken earlier in an interactive init)
  * @throws Error when an id repeats within `newIds` or collides with an existing id
  */
 export function validateProviderIdsUnique(newIds: string[], existingConfigIds: string[] = []): void {

@@ -509,10 +509,15 @@ describe('init', () => {
   // before saying no.
 
   describe('a directory that already holds a backup', () => {
-    /** Writes .bfs/config.json into the working directory, as if a backup had been initialized here. */
+    /**
+     * Writes .bfs/config.json into the working directory, as if a backup had been
+     * initialized here - with its full pool: a pool short of the scheme is an
+     * interrupted init, which the next init resumes instead of refusing.
+     */
     async function existingBackup(vaultName: string): Promise<void> {
       await fs.mkdir(path.join(root, '.bfs'));
-      await fs.writeFile(path.join(root, '.bfs', 'config.json'), JSON.stringify({ vault_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', vault_name: vaultName, scheme: { data_shards: 2, parity_shards: 1 }, providers: [] }));
+      const pool = ['a', 'b', 'c'].map((id) => ({ id, type: 'local', adapterPackage: null, config: { path: `/m/${id}` } }));
+      await fs.writeFile(path.join(root, '.bfs', 'config.json'), JSON.stringify({ vault_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', vault_name: vaultName, scheme: { data_shards: 2, parity_shards: 1 }, providers: pool }));
     }
 
     it('should abort before delegating to the vault layer', async () => {

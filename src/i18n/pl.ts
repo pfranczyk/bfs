@@ -85,6 +85,7 @@ export const pl: Strings = {
   probe_failed: 'Nie udało się połączyć z nośnikiem "%s": %s',
   probe_validate_failed: 'Niepoprawna konfiguracja nośnika "%s": %s',
   probe_failed_prompt: 'Opcje ponownego połączenia - co zrobić?',
+  probe_configure_failed: 'Nie udało się skonfigurować nośnika "%s": %s',
   probe_choice_retry: 'Spróbuj ponownie',
   probe_choice_reenter: 'Wprowadź dane nośnika ponownie',
   probe_choice_abort: 'Przerwij',
@@ -124,8 +125,22 @@ export const pl: Strings = {
   init_success: 'Kopia zapasowa "%s" gotowa. Użyj `bfs push`, aby wykonać pierwszą kopię.',
   init_vault_exists:
     'W tym katalogu jest już kopia zapasowa "%s". Założenie nowej zastąpiłoby jej ustawienia i odcięło ten katalog od tych danych. Uruchom `bfs init` w innym katalogu albo usuń stąd katalog .bfs, jeśli tamta kopia nie jest już potrzebna.',
-  init_vault_exists_unreadable:
-    'W tym katalogu jest już kopia zapasowa, ale nie można odczytać jej ustawień z .bfs/config.json. Założenie nowej zastąpiłoby je. Uruchom `bfs recovery`, aby odtworzyć ustawienia z nośników, albo usuń plik .bfs/config.json, jeśli tamta kopia nie jest już potrzebna.',
+  init_vault_exists_unreadable: 'W tym katalogu jest już kopia zapasowa, ale nie można odczytać jej ustawień z .bfs/config.json. Założenie nowej zastąpiłoby je.',
+  init_vault_exists_unreadable_versions: 'W tym katalogu jest już kopia zapasowa z wersjami, ale nie można odczytać jej ustawień z .bfs/config.json. Założenie nowej zastąpiłoby je.',
+  init_vault_versions_without_config: 'W tym katalogu są wersje kopii zapasowej, ale brak jej ustawień: plik .bfs/config.json nie istnieje.',
+  init_resume_name_mismatch: 'W tym katalogu jest niedokończona konfiguracja kopii zapasowej "%s"; polecenie podaje kopię "%s".',
+  init_resume_scheme_mismatch: 'W tym katalogu jest niedokończona konfiguracja ze schematem %s/%s; polecenie podaje %s/%s.',
+  init_resume_setting_mismatch: 'W tym katalogu jest niedokończona konfiguracja z ustawieniem %s: %s; polecenie podaje %s.',
+  init_resume_provider_mismatch: 'W tym katalogu jest niedokończona konfiguracja, w której nośnik "%s" ma inne ustawienia, niż podaje polecenie.',
+  init_resume_provider_missing: 'W tym katalogu jest niedokończona konfiguracja z nośnikiem "%s", którego polecenie nie wymienia.',
+  init_resume_info: 'Wznawiam niedokończoną konfigurację kopii zapasowej "%s": zapisane nośniki %s z %s, brakuje %s.',
+  init_setting_encryption: 'szyfrowanie',
+  init_setting_compression: 'kompresja',
+  init_setting_push_mode: 'tryb push',
+  init_setting_max_ram: 'limit pamięci',
+  init_setting_on: 'włączone',
+  init_setting_off: 'wyłączone',
+  init_setting_no_limit: 'bez limitu',
   init_vault_check_failed:
     'Nie można ustalić, czy w tym katalogu jest już kopia zapasowa: nie udało się odczytać .bfs/config.json (%s). Jeśli kopia tu jest, założenie nowej zastąpiłoby ją. Usuń przyczynę błędu odczytu albo uruchom `bfs init` w innym katalogu.',
   init_ci_name_required: 'Tryb --ci wymaga podania nazwy kopii zapasowej jako argumentu.',
@@ -281,7 +296,7 @@ export const pl: Strings = {
   prune_ci_selection_required: 'Ten przebieg nie zadaje pytań (--ci), więc nie może zapytać, które wersje usunąć. Podaj je w wywołaniu: `bfs prune <zakres>` albo `bfs prune --keep-last <n>`.',
   prune_ci_yes_required: 'Ten przebieg nie zadaje pytań (--ci), więc nie ma jak potwierdzić usunięcia. Dodaj --yes, aby wyrazić zgodę z góry.',
   prune_deleted: 'Usunięto wersje: %s',
-  prune_orphan_warn: 'Nie udało się usunąć danych wersji %s z nośnika "%s" - mogą nadal zajmować tam miejsce.',
+  prune_orphan_warn: 'Nie udało się usunąć danych wersji %s z nośnika "%s" - mogą nadal zajmować tam miejsce. Przyczyna: %s',
 
   // --- verify ---------------------------------------------------------------
   verify_spinner: 'Weryfikacja wersji...',
@@ -341,6 +356,7 @@ export const pl: Strings = {
   scheme_providers_surplus:
     'Schemat wymaga %s nośników, skonfigurowano: %s - więcej nośników, niż używa schemat. Zwykle to odbudowa na nowy nośnik, która się nie skończyła: ponowne uruchomienie tej odbudowy (`bfs repair ... --rebuild` albo `bfs provider remove ... --strategy rebuild`) ją dokończy, a nośnik z konfiguracji, który nie trzyma żadnej części kopii, usuniesz przez `bfs provider remove <nazwa> --strategy remove --yes`.',
   scheme_providers_below_minimum: 'Schemat wymaga %s nośników, skonfigurowano: %s. Do zrobienia i odtworzenia kopii potrzebne są co najmniej 3 nośniki; dołóż nośnik przez `bfs provider add`.',
+  scheme_no_version_yet: 'Kopia nie ma jeszcze wersji.',
 
   // --- provider: local-fs --------------------------------------------------
   provider_local_path_not_exist_confirm: 'Ścieżka "%s" nie istnieje. Utworzyć ją?',
@@ -566,7 +582,7 @@ export const pl: Strings = {
   ftp_help_flag_path_desc: 'Absolutna ścieżka bazowa na serwerze FTP (musi zaczynać się od "/")',
   ftp_help_flag_secure_desc: 'Użyj FTPS (TLS). Przyjmuje true|false|1|0|yes|no (domyślnie true)',
   ftp_help_flag_cert_fingerprint_desc: 'Przypnij certyfikat FTPS do tego odcisku SHA-256 (colon-hex, np. AB:CD:...); niezgodność przerywa jako tampering',
-  ftp_help_flag_accept_new_cert_desc: 'Zaufaj certyfikatowi prezentowanemu przy pierwszym połączeniu, gdy brak pinu, bez pytania (niczego nie przypina - patrz --cert-fingerprint)',
+  ftp_help_flag_accept_new_cert_desc: 'Odczytaj certyfikat prezentowany teraz przez serwer i przypnij jego odcisk, bez pytania (jawny --cert-fingerprint ma pierwszeństwo)',
   ftp_help_flag_config_file_desc: 'JSON z dowolnymi polami { host, port, user, password, path, secure, cert_fingerprint, accept_new_cert }. ' + 'Flagi inline nadpisują pola wczytane z JSON-a.',
 
   ftp_host_required: 'Adapter FTP: pole "host" jest wymagane. Podaj --host <host> lub ' + '--config-file <ścieżka> wewnątrz spec --provider, np. ' + '--provider "ftp:nas --host 192.168.1.1 --path /backup".',
@@ -657,7 +673,8 @@ export const pl: Strings = {
   trust_choice_back: 'Wróć i wpisz dane połączenia jeszcze raz',
   trust_choice_cancel: 'Anuluj (zakończ komendę)',
   configure_reenter_notice: 'Wracam do wpisywania danych połączenia.',
-  configure_restarts_exhausted: 'Zbyt wiele powrotów do danych połączenia - nic nie zostało zapisane. Uruchom komendę ponownie, gdy będziesz mieć dane pod ręką.',
+  configure_restarts_exhausted: 'Zbyt wiele powrotów do danych połączenia.',
+  configure_restarts_exhausted_edit: 'Zbyt wiele powrotów do danych połączenia - nic nie zostało zapisane.',
   ftp_edit_pin_dropped: 'FTPS wyłączony dla %s - przypięty certyfikat %s zostanie trwale usunięty, a kolejne połączenia nie będą weryfikować tożsamości serwera.',
   ftp_edit_connecting: 'Łączę się z %s, aby potwierdzić jego certyfikat...',
   ftp_edit_offline_menu: 'Nie udało się połączyć z %s. Wybierz sposób ustawienia przypięcia certyfikatu:',
@@ -749,6 +766,12 @@ export const pl: Strings = {
   ssh_auth_conflict: 'Adapter SSH: podaj albo --password, albo --private-key, nie oba.',
   ssh_auth_missing: 'Adapter SSH: brak poświadczeń - podaj --password, --private-key <path>, ' + 'albo umieść klucz w ~/.ssh/id_ed25519 lub ~/.ssh/id_rsa.',
   ssh_accept_new_offline: '--accept-new-host-key wymaga połączenia z serwerem, a "bfs provider edit --ci" z serwerem się nie łączy.',
+  ssh_stored_opt_in_unpinned: 'Klucz hosta SSH dla %s nie jest przypięty, a zapisana zgoda na nowy klucz nie liczy się bez operatora, który by go potwierdził.',
+  ssh_stored_opt_in_confirm: 'Klucz hosta SSH dla %s nie jest przypięty - zapisana konfiguracja jedynie dopuszcza nowy klucz.\n  odcisk %s\nZaufać temu kluczowi?',
+  ftp_stored_opt_in_unpinned: 'Certyfikat FTPS dla %s nie jest przypięty, a zapisana zgoda na nowy certyfikat nie liczy się bez operatora, który by go potwierdził.',
+  ftp_stored_opt_in_confirm: 'Certyfikat FTPS dla %s nie jest przypięty - zapisana konfiguracja jedynie dopuszcza nowy certyfikat.\n  odcisk %s\nZaufać temu certyfikatowi?',
+  ftp_accept_new_offline: '--accept-new-cert wymaga połączenia z serwerem, a "bfs provider edit --ci" z serwerem się nie łączy.',
+  ftp_accept_new_requires_secure: '--accept-new-cert wymaga FTPS (secure: true) - zwykłe FTP nie przedstawia certyfikatu, któremu można by zaufać.',
   ssh_validate_host_required: 'SSH: host jest wymagany i musi być niepustym stringiem',
   ssh_validate_port_invalid: 'SSH: port musi być liczbą całkowitą z zakresu 1-65535',
   ssh_validate_path_required: 'SSH: ścieżka jest wymagana i musi być niepustym stringiem',

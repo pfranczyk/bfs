@@ -2,7 +2,7 @@ import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import type { DetailedPeerCertificate, TLSSocket } from 'node:tls';
 import * as ftp from 'basic-ftp';
-import { ProviderError, TamperDetectedError } from '../core/errors.js';
+import { IdentityDeclinedError, ProviderError, TamperDetectedError } from '../core/errors.js';
 import { assertSafeFilename, assertSafeVaultName, isSafeFilename } from '../core/fs-utils.js';
 import { hashBuffer, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
 import { buildShardHeaderFromBytes, computeShardHeaderSize, SHARD_HEADER_READ_BYTES, sidecarFilename } from '../core/shard-io.js';
@@ -10,8 +10,16 @@ import { fmtFor, t, tFor } from '../i18n/index.js';
 import type { CliProviderInput, ConfigureEditContext, ProviderConfig, ProviderHelp, ProviderIO, RecoverySecret, RemoteRef, ShardHeader, ShardIdentity, StorageProvider, VerifyShardResult } from '../types/index.js';
 import { findStringFlag, readJsonObjectFile } from './flags.js';
 import { finishVerifyShard } from './header-verify.js';
+import { recallIdentityConsent, rememberIdentityConsent } from './identity-consent.js';
 import { askIdentityTrust, requestConfigureRestart, withConfigureRestarts } from './identity-trust.js';
 import { type ProviderFactory, providerRegistry } from './provider.js';
+
+/**
+ * The certificate was not trusted - no pin and nobody to confirm, or the operator
+ * declined. A decision, not a wrong password: the recovery password loop must
+ * stop on it instead of asking for another secret.
+ */
+class CertTrustRefusedError extends ProviderError {}
 
 const CHECKSUM_SIZE = SHA256_BYTES;
 const FTP_TIMEOUT_MS = 10_000;
@@ -100,9 +108,14 @@ export class FtpProvider implements StorageProvider {
   // is configured. Non-secret - travels in the location map like the SSH host-key
   // pin, so recovery can show the operator which server identity it will trust.
   private readonly certFingerprint: Nullable<string>;
-  // TOFU opt-in, consent given up front: trust whatever certificate the server
-  // presents on first connect when no pin is set (mirrors SSH --accept-new-host-key).
+  // "Trust a new certificate" opt-in read back from the saved config. Without a
+  // pin it is not consent - consent is spent once, when the config is written
+  // (configureFromFlags captures and pins) - so the ladder asks the operator, or
+  // refuses when nobody is there (mirrors SSH accept_new_host_key).
   private readonly acceptNewCert: boolean;
+  // Certificate the operator accepted in this command for this instance's target.
+  // Handed back by takeConfigUpdates so a recovery can pin it in its config.
+  private confirmedCert: Nullable<{ fingerprint: string; selfSigned: boolean }> = null;
   private readonly io: ProviderIO;
   private vaultName: Nullable<string> = null;
   // One-shot guard so the plaintext-FTP warning fires once per provider instance
@@ -173,8 +186,8 @@ export class FtpProvider implements StorageProvider {
    * the pinned fingerprint (or TOFU), not the CA chain.
    *
    * @throws TamperDetectedError when a configured pin does not match the presented
-   *   certificate; ProviderError when trust cannot be established (no pin, no TOFU
-   *   opt-in, non-interactive) or the operator declines.
+   *   certificate; ProviderError when trust cannot be established with nobody
+   *   to ask (no pin, or a saved opt-in without one) or the operator declines.
    */
   private async accessWithCertTrust(client: ftp.Client, quiet = false): Promise<void> {
     if (!this.secure) {
@@ -215,28 +228,54 @@ export class FtpProvider implements StorageProvider {
    * Decides whether to trust the presented FTPS certificate, mirroring the SSH
    * host-key trust ladder:
    *   - pin set -> trust only when the fingerprint matches; mismatch is tamper.
-   *   - no pin + `accept_new_cert` -> trust on first use (consent given up front,
-   *     so it settles the question in every mode).
+   *   - no pin + saved `accept_new_cert` -> not consent on its own (it would be
+   *     spent again on every run): ask the operator once per command, refuse
+   *     without one - naming the storage and its state, never the fingerprint.
    *   - no pin + interactive -> show the operator the fingerprint and kind, confirm.
    *   - no pin + non-interactive -> fail closed (cannot establish trust).
    *
-   * @throws TamperDetectedError on a pin mismatch; ProviderError when trust cannot
-   *   be established or the operator declines.
+   * @throws TamperDetectedError on a pin mismatch; CertTrustRefusedError when
+   *   trust cannot be established or the operator declines.
    */
   private async decideCertTrust(cert: DetailedPeerCertificate): Promise<void> {
     const presented = cert.fingerprint256;
+    const target = `${this.host}:${this.port}`;
     if (this.certFingerprint !== null) {
       if (presented.toUpperCase() === this.certFingerprint.toUpperCase()) return;
-      throw new TamperDetectedError(fmtFor(this.io.lang, 'ftp_cert_pin_mismatch', `${this.host}:${this.port}`, this.certFingerprint, presented));
+      throw new TamperDetectedError(fmtFor(this.io.lang, 'ftp_cert_pin_mismatch', target, this.certFingerprint, presented));
     }
-    if (this.acceptNewCert) return;
+    if (this.acceptNewCert) return this.decideStoredOptIn(cert, target);
     if (this.io.interactive === false) {
-      throw new ProviderError(fmtFor(this.io.lang, 'ftp_cert_untrusted', `${this.host}:${this.port}`, presented));
+      throw new CertTrustRefusedError(fmtFor(this.io.lang, 'ftp_cert_untrusted', target, presented));
     }
-    const approved = await this.io.confirm(fmtFor(this.io.lang, 'ftp_cert_confirm', `${this.host}:${this.port}`, this.certKindLabel(cert), presented));
+    const approved = await this.io.confirm(fmtFor(this.io.lang, 'ftp_cert_confirm', target, this.certKindLabel(cert), presented));
     if (!approved) {
-      throw new ProviderError(fmtFor(this.io.lang, 'ftp_cert_declined', `${this.host}:${this.port}`));
+      throw new CertTrustRefusedError(fmtFor(this.io.lang, 'ftp_cert_declined', target));
     }
+    this.confirmedCert = { fingerprint: presented, selfSigned: this.isSelfSigned(cert) };
+  }
+
+  /**
+   * The opt-in rung for a saved `accept_new_cert` with no pin: refuses with
+   * nobody to ask; otherwise asks, unless the operator already answered for this
+   * target and this certificate in the same command.
+   *
+   * @throws CertTrustRefusedError when there is no operator or they decline
+   */
+  private async decideStoredOptIn(cert: DetailedPeerCertificate, target: string): Promise<void> {
+    const presented = cert.fingerprint256;
+    let accepted = recallIdentityConsent(this.io, target, presented);
+    if (accepted === null) {
+      if (this.io.interactive === false) {
+        throw new CertTrustRefusedError(fmtFor(this.io.lang, 'ftp_stored_opt_in_unpinned', target));
+      }
+      accepted = await this.io.confirm(fmtFor(this.io.lang, 'ftp_stored_opt_in_confirm', target, presented));
+      rememberIdentityConsent(this.io, target, presented, accepted);
+    }
+    if (!accepted) {
+      throw new CertTrustRefusedError(fmtFor(this.io.lang, 'ftp_cert_declined', target));
+    }
+    this.confirmedCert = { fingerprint: presented, selfSigned: this.isSelfSigned(cert) };
   }
 
   /** True when the certificate is self-signed (its issuer certificate is itself). */
@@ -288,7 +327,7 @@ export class FtpProvider implements StorageProvider {
    * @param port      - control port
    * @param presented - the fingerprint/kind read off the wire
    * @returns the accepted certificate identity, to persist as the pin
-   * @throws ProviderError when the operator declines
+   * @throws IdentityDeclinedError when the operator declines
    */
   private async confirmCert(io: ProviderIO, host: string, port: number, presented: { fingerprint: string; selfSigned: boolean }): Promise<{ fingerprint: string; selfSigned: boolean }> {
     const target = `${host}:${port}`;
@@ -296,7 +335,9 @@ export class FtpProvider implements StorageProvider {
     const choice = await askIdentityTrust(io, fmtFor(io.lang, 'ftp_cert_trust_menu', target, kind, presented.fingerprint), fmtFor(io.lang, 'ftp_cert_confirm', target, kind, presented.fingerprint));
     if (choice === 'back') requestConfigureRestart(`certificate decision for ${target}`);
     if (choice === 'cancel') {
-      throw new ProviderError(fmtFor(io.lang, 'ftp_cert_declined', target));
+      // A decision, not a connection failure: the command ends here, whoever
+      // runs the configuration (the menu promises "end the command").
+      throw new IdentityDeclinedError(fmtFor(io.lang, 'ftp_cert_declined', target));
     }
     return presented;
   }
@@ -545,7 +586,8 @@ export class FtpProvider implements StorageProvider {
       try {
         await this.authenticate();
         return this.password;
-      } catch {
+      } catch (err) {
+        this.stopOnServerIdentity(io, err);
         // pooled secret did not authenticate here - fall through to prompting
       }
     }
@@ -558,10 +600,37 @@ export class FtpProvider implements StorageProvider {
       try {
         await this.authenticate();
         return secret;
-      } catch {
+      } catch (err) {
+        this.stopOnServerIdentity(io, err);
         // wrong password - re-prompt
       }
     }
+  }
+
+  /**
+   * Rethrows a refusal of the server's identity out of the recovery password
+   * loops: no password changes it, so trying the next one - or asking for one -
+   * would hide the reason. Bootstrap turns any throw from a sibling into a silent
+   * skip, so the reason is spoken through warn() first. Anything else (a rejected
+   * password, a transport hiccup) returns and the loop goes on.
+   */
+  private stopOnServerIdentity(io: ProviderIO, err: unknown): void {
+    if (err instanceof CertTrustRefusedError || err instanceof TamperDetectedError) {
+      io.warn(err.message);
+      throw err;
+    }
+  }
+
+  /**
+   * Hands back the certificate the operator accepted in this command for this
+   * instance's target, so a recovery can pin it in the config it creates. A
+   * pinned certificate involved no decision and yields nothing.
+   *
+   * @returns `{ cert_fingerprint, cert_self_signed }` after consent, otherwise null
+   */
+  takeConfigUpdates(): Nullable<Record<string, unknown>> {
+    if (this.confirmedCert === null) return null;
+    return { cert_fingerprint: this.confirmedCert.fingerprint, cert_self_signed: this.confirmedCert.selfSigned };
   }
 
   /**
@@ -838,7 +907,12 @@ export class FtpProvider implements StorageProvider {
   async healthCheck(): Promise<boolean> {
     try {
       return await this.withClient(async () => true);
-    } catch {
+    } catch (err) {
+      // A refused certificate is a decision about the server, not an outage:
+      // the caller only learns "not reachable", so the reason is spoken here -
+      // the same way the SSH ladder warns before ssh2 turns its refusal into a
+      // generic transport error.
+      if (err instanceof CertTrustRefusedError) this.io.warn(err.message);
       return false;
     }
   }
@@ -975,8 +1049,9 @@ export class FtpProvider implements StorageProvider {
    * operator accepts. Does not mutate this instance - the caller persists the
    * result into VaultConfig.
    *
-   * @throws ProviderError when the operator declines the certificate, when TLS
-   *         does not establish, or when the operator uses up the restarts
+   * @throws IdentityDeclinedError when the operator declines the certificate
+   * @throws ProviderError when TLS does not establish, or when the operator uses
+   *         up the restarts
    * @throws whatever the supplied ProviderIO throws (e.g. on cancellation)
    */
   async configureInteractive(io: ProviderIO): Promise<Record<string, unknown>> {
@@ -1049,7 +1124,7 @@ export class FtpProvider implements StorageProvider {
     return withConfigureRestarts(
       io,
       () => this.collectEditConfig(io, ctx),
-      () => new ProviderError(tFor(io.lang, 'configure_restarts_exhausted')),
+      () => new ProviderError(tFor(io.lang, 'configure_restarts_exhausted_edit')),
     );
   }
 
@@ -1123,13 +1198,17 @@ export class FtpProvider implements StorageProvider {
    * `validateConfig`. `user` and `password` have no defaults and no default
    * value is invented for them - an anonymous server needs neither. The JSON file
    * accepts the same fields, `cert_fingerprint` / `accept_new_cert` included -
-   * they carry the basis of trust for a secure connection.
+   * they carry the basis of trust for a secure connection. The opt-in, from
+   * either source, connects once to read the presented certificate and pins its
+   * fingerprint (`pinOptInCertificate`), unless a pin is already given.
    *
    * @throws ProviderError when `--config-file` is unreadable / malformed,
-   *         port/secure flags are invalid, final config fails validation, or the
-   *         run declares itself unattended while the assembled config gives no
-   *         basis to trust a secure server (no pin, no opt-in) - an `offline`
-   *         input is exempt, since it never reaches the medium
+   *         port/secure flags are invalid, final config fails validation, the
+   *         opt-in meets plaintext FTP or an offline edit without a pin, the
+   *         certificate cannot be read for the opt-in, or the run declares
+   *         itself unattended while the assembled config gives no basis to
+   *         trust a secure server (no pin, no opt-in) - an `offline` input is
+   *         exempt from that last check, since it never reaches the medium
    */
   async configureFromFlags(input: CliProviderInput): Promise<Record<string, unknown>> {
     // Secure by default (an explicit `--secure false` / `"secure": false` opts out).
@@ -1204,6 +1283,7 @@ export class FtpProvider implements StorageProvider {
 
     // Presence-only flag (no value): checked directly, not via findStringFlag,
     // which would consume the following token (e.g. `--host`) as its value.
+    // The opt-in is turned into a pin below, once the target is known.
     if (input.rawArgs.includes('--accept-new-cert')) {
       config.accept_new_cert = true;
     }
@@ -1218,6 +1298,8 @@ export class FtpProvider implements StorageProvider {
       throw new ProviderError(tFor(this.io.lang, 'ftp_path_must_be_absolute'));
     }
 
+    if (config.accept_new_cert === true) await this.pinOptInCertificate(config, input);
+
     // Two instructions that cannot both hold, decided from the assembled config
     // rather than the raw flags - a fingerprint or an opt-in may equally have
     // come from --config-file. `offline` is exempt: `bfs provider edit` never
@@ -1229,6 +1311,36 @@ export class FtpProvider implements StorageProvider {
     }
 
     return config;
+  }
+
+  /**
+   * Turns the opt-in of the assembled config (flag or `--config-file`) into a
+   * pin: it is consent given in this invocation, so the certificate the server
+   * presents now is read and pinned without asking - an operator who passes the
+   * opt-in "blind" accepts whatever stands at that address. Without this the
+   * config would carry a bare opt-in, which the runtime ladder refuses with
+   * nobody to confirm. An explicit pin wins and is left untouched - with it
+   * there is nothing to read, so an offline edit is not refused either.
+   *
+   * @throws ProviderError when the opt-in meets plaintext FTP (no certificate to
+   *   read), or an offline edit with no pin (it does not connect), or when TLS
+   *   does not establish
+   */
+  private async pinOptInCertificate(config: Record<string, unknown>, input: CliProviderInput): Promise<void> {
+    if (config.secure !== true) throw new ProviderError(tFor(this.io.lang, 'ftp_accept_new_requires_secure'));
+    if (typeof config.cert_fingerprint === 'string') return;
+    if (input.offline === true) throw new ProviderError(tFor(this.io.lang, 'ftp_accept_new_offline'));
+    const host = config.host as string;
+    const port = config.port as number;
+    let presented: { fingerprint: string; selfSigned: boolean };
+    try {
+      presented = await this.readServerCert(host, port);
+    } catch (err) {
+      if (err instanceof ProviderError) throw err;
+      throw new ProviderError(fmtFor(this.io.lang, 'ftp_operation_failed', host, String(port), err instanceof Error ? err.message : String(err)));
+    }
+    config.cert_fingerprint = presented.fingerprint;
+    config.cert_self_signed = presented.selfSigned;
   }
 
   /**

@@ -64,6 +64,8 @@ scenario_run() {
   answers='[
     {"anchor":"Number of data copies","value":"2"},
     {"anchor":"Number of redundancy copies","value":"1"},
+    {"anchor":"Push mode","value":"1"},
+    {"anchor":"RAM limit","value":"1024"},
     {"anchor":"Provider name","value":"p0"},
     {"anchor":"Provider type","value":"2"},
     {"anchor":"FTP host","value":"'"$host"'"},
@@ -94,9 +96,7 @@ scenario_run() {
     {"anchor":"Username","value":"'"$user"'"},
     {"anchor":"Password","value":"'"$pass"'"},
     {"anchor":"Base path on server","value":"'"$r2"'"},
-    {"anchor":"Use FTPS","value":"'"$secure_ans"'"},
-    {"anchor":"Push mode","value":"1"},
-    {"anchor":"RAM limit","value":"1024"}
+    {"anchor":"Use FTPS","value":"'"$secure_ans"'"}
   ]'
 
   run_bfs_pty "$vault" "$answers" --lang en init "$name" --no-enc --no-compress

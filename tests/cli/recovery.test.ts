@@ -40,6 +40,7 @@ vi.mock('inquirer', () => ({
 vi.mock('ora', () => ({ default: () => ({ start: vi.fn().mockReturnThis(), stop: vi.fn().mockReturnThis(), fail: vi.fn().mockReturnThis(), text: '' }) }));
 
 import inquirer from 'inquirer';
+import { FtpProvider } from '../../src/providers/ftp.js';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { providerRegistry } from '../../src/providers/provider.js';
 import { recover } from '../../src/vault/recovery.js';
@@ -59,6 +60,18 @@ const recoveryReport = {
 
 /** The same run, having met one version whose password nobody supplied. */
 const partialRecoveryReport = { ...recoveryReport, unrecovered_versions: [4] };
+
+/** Fingerprint the stubbed FTPS server read returns. */
+const STUB_CERT_FP = 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99';
+
+/**
+ * Stubs the certificate read `--accept-new-cert` performs in configureFromFlags
+ * (it pins what the server presents), so a bootstrap spec carrying the opt-in
+ * does not dial a real server. The read is private, hence the cast.
+ */
+function stubFtpServerCert(): void {
+  vi.spyOn(FtpProvider.prototype as unknown as { readServerCert: () => Promise<{ fingerprint: string; selfSigned: boolean }> }, 'readServerCert').mockResolvedValue({ fingerprint: STUB_CERT_FP, selfSigned: true });
+}
 
 describe('recovery', () => {
   let capture: ReturnType<typeof captureConsole>;
@@ -257,11 +270,13 @@ describe('recovery', () => {
   it('should parse ftp adapter flags from bootstrap spec into provider config', async () => {
     // `--accept-new-cert` belongs to a usable FTPS bootstrap: nobody can be asked
     // here, so without it - or a pinned fingerprint - there is no way to trust
-    // the server and the adapter refuses (see the test below).
+    // the server and the adapter refuses (see the test below). The opt-in pins
+    // the certificate the server presents, so the read is stubbed here.
+    stubFtpServerCert();
     await runCmd(['recovery', '--provider', 'ftp', '--name', 'my-vault', '--bootstrap', '--host nas.local --port 21 --user bob --password secret --path /storage --accept-new-cert']);
 
     expect(mockCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ config: expect.objectContaining({ host: 'nas.local', port: 21, user: 'bob', password: 'secret', path: '/storage', secure: true, accept_new_cert: true }) }),
+      expect.objectContaining({ config: expect.objectContaining({ host: 'nas.local', port: 21, user: 'bob', password: 'secret', path: '/storage', secure: true, accept_new_cert: true, cert_fingerprint: STUB_CERT_FP }) }),
       expect.anything(),
     );
   });
@@ -411,6 +426,7 @@ describe('recovery', () => {
   // never sees as a top-level token.
 
   it('should keep vault --password and bootstrap --password independent', async () => {
+    stubFtpServerCert();
     await runCmd(['recovery', '--provider', 'ftp', '--name', 'my-vault', '--bootstrap', '--host nas --user bob --password ftp-secret --path /a --accept-new-cert', '--password', 'vault-secret']);
 
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ password: 'ftp-secret' }) }), expect.anything());

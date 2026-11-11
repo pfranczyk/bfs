@@ -38,6 +38,7 @@ import {
   providerRegistry,
   BFS_PROVIDER_API_VERSION,
   ProviderError,
+  IdentityDeclinedError,
 } from 'bfs-vault/provider';
 ```
 
@@ -82,6 +83,23 @@ The interface splits into two groups of methods:
   (`ConfigureEditContext`, `RecoverySecret`) are exported from
   `bfs-vault/provider`, as is `CliProviderInput.offline`, which marks a flow
   that must not touch the network.
+  `takeConfigUpdates()` is the recovery return channel: after an instance built
+  from a location-map entry connects, BFS asks it for corrections to its own
+  connection config - typically the server identity the operator just confirmed -
+  and merges them into that entry, so the `config.json` recovery writes carries
+  them and the next command neither asks again nor refuses. BFS never reads the
+  fields; it drops those `getSecretFields()` names, accepts plain JSON only, and
+  drops the whole update when the merged config fails your `validateConfig`.
+  Return only what the operator decided in the current command.
+- **The operator refusing a server identity** - when your configure flow shows
+  the operator the identity a server presents (a certificate, a host key) and
+  they refuse it, throw `IdentityDeclinedError` from `configureInteractive` /
+  `configureInteractiveForEdit`. The interactive `bfs init` and
+  `bfs provider add` then end the command with your message. Any other error
+  from those methods is treated as a failure to recover from: the operator is
+  offered to retry, re-enter the settings or abort. The CLI recognises the class
+  by name too, so a subclass of your own and the copy your package resolves both
+  count.
 
 The configuration-lifecycle methods let the CLI stay blind to provider
 type. The CLI calls them polymorphically from `bfs init`, `bfs provider

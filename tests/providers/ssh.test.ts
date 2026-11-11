@@ -3,8 +3,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
+import type { Ora } from 'ora';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HostKeyDeclinedError, ProviderError, TamperDetectedError, UnsafePathError } from '../../src/core/errors.js';
+import { createSpinnerIo } from '../../src/cli/spinner-io.js';
+import { HostKeyDeclinedError, IdentityDeclinedError, ProviderError, TamperDetectedError, UnsafePathError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
 import { buildShard, parseShardHeaderFromStream } from '../../src/core/shard-io.js';
 import { fmtFor } from '../../src/i18n/index.js';
@@ -338,7 +340,11 @@ vi.mock('ssh2', () => {
         if (typeof cfg.hostVerifier === 'function') {
           cfg.hostVerifier(mockState.hostKey, (ok: boolean) => {
             if (!ok) {
-              this.emit('error', Object.assign(new Error('Host key verification failed'), { level: 'client-authentication' }));
+              // Real ssh2 reports a refused host key as a fatal KEX error with
+              // level 'handshake' (protocol/kex.js), not as an authentication
+              // failure - a mock saying 'client-authentication' here would make a
+              // refused identity look like a rejected password.
+              this.emit('error', Object.assign(new Error('Host denied (verification failed)'), { level: 'handshake' }));
               return;
             }
             proceed();
@@ -399,6 +405,16 @@ async function writeJsonConfig(content: string): Promise<string> {
 
 function cliInput(overrides: Partial<CliProviderInput> = {}): CliProviderInput {
   return { name: overrides.name ?? 'test', rawArgs: overrides.rawArgs ?? [] };
+}
+
+/**
+ * Calls the optional `takeConfigUpdates` of a provider; a provider that does not
+ * implement it answers with a marker string, so an assertion on the update
+ * fails naming the missing hook instead of passing on `undefined`.
+ */
+function takeUpdates(provider: object): unknown {
+  const hook = (provider as { takeConfigUpdates?: () => unknown }).takeConfigUpdates;
+  return typeof hook === 'function' ? hook.call(provider) : 'takeConfigUpdates is not implemented';
 }
 
 function makeConfig(overrides: Partial<Record<string, unknown>> = {}, id = 'test-ssh'): ProviderConfig {
@@ -1105,6 +1121,44 @@ describe('SshProvider', () => {
       const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
       await expect(p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }))).rejects.toThrow(ProviderError);
     });
+
+    // The opt-in counts from the assembled config, not from the raw flag: an
+    // `accept_new_host_key: true` in --config-file is consent from this very
+    // invocation, so it captures and pins the presented key exactly like the
+    // flag. A command that writes the config therefore never leaves a bare
+    // opt-in in config.json.
+    it('should pin the presented fingerprint for accept_new_host_key read from --config-file', async () => {
+      const file = await writeJsonConfig(JSON.stringify({ host: 'sshhost', user: 'sshuser', password: 'p', path: '/backup', accept_new_host_key: true }));
+      const { io, calls } = scriptIo({ interactive: false });
+      const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }));
+
+      expect(config.host_key_fingerprint).toBe(SERVER_FP);
+      expect(calls.some((c) => c.kind === 'confirm')).toBe(false);
+    });
+
+    // The offline edit refuses the opt-in however it arrived - from the flag or
+    // from --config-file - since the capture needs a connection it does not make.
+    it('should refuse accept_new_host_key read from --config-file on an offline edit', async () => {
+      const file = await writeJsonConfig(JSON.stringify({ host: 'sshhost', user: 'sshuser', password: 'p', path: '/backup', accept_new_host_key: true }));
+      const { io } = scriptIo({ interactive: false });
+      const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+      await expect(p.configureFromFlags({ ...cliInput({ rawArgs: ['--config-file', file] }), offline: true })).rejects.toThrow(ProviderError);
+    });
+
+    // A config copied out of BFS's own config.json carries the opt-in next to the
+    // pin. With the pin there is nothing to capture, so the offline edit goes on.
+    it('should accept accept_new_host_key with a pin beside it on an offline edit', async () => {
+      const file = await writeJsonConfig(JSON.stringify({ host: 'sshhost', user: 'sshuser', password: 'p', path: '/backup', accept_new_host_key: true, host_key_fingerprint: SERVER_FP }));
+      const { io } = scriptIo({ interactive: false });
+      const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+      const config = await p.configureFromFlags({ ...cliInput({ rawArgs: ['--config-file', file] }), offline: true });
+
+      expect(config.host_key_fingerprint).toBe(SERVER_FP);
+    });
   });
 
   // --- validateConfig -------------------------------------------------------
@@ -1382,13 +1436,48 @@ describe('SshProvider', () => {
       expect(warning?.text).toContain('--known-host');
     });
 
-    it('should accept a new host in non-interactive mode when accept_new_host_key is set', async () => {
-      const { io, calls } = scriptIo({ interactive: false });
+    // A stored `accept_new_host_key: true` without a pin is consent read back from
+    // disk, so it would be spent again on every run - any key at that address
+    // would be trusted forever. Without an operator it must refuse. The warning
+    // names the storage target and the state only: no flag (the runtime adapter
+    // cannot see the command's flags, and naming the opt-in would send the
+    // operator in a circle), no command, and never the fingerprint the server
+    // presented - pasting that without out-of-band verification would pin an
+    // active MITM for good.
+    it('should refuse a stored accept_new_host_key without a pin when nobody can confirm', async () => {
+      const { io, calls } = scriptIo({ confirm: () => true, interactive: false });
       const p = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), io);
       p.setVaultName('testvault');
 
-      await expect(p.authenticate()).resolves.toBeUndefined();
+      await expect(p.authenticate()).rejects.toThrow(ProviderError);
       expect(calls.some((c) => c.kind === 'confirm')).toBe(false);
+      const warnings = calls.filter((c) => c.kind === 'warn').map((c) => c.text);
+      // Target AND state in one warning: a generic decline or transport message
+      // naming the target alone must not satisfy this.
+      expect(warnings.some((w) => w.includes('sshuser@sshhost:22') && w.includes('not pinned'))).toBe(true);
+      for (const w of warnings) {
+        expect(w).not.toContain('--accept-new-host-key');
+        expect(w).not.toContain('--known-host');
+        expect(w).not.toContain('provider edit');
+        expect(w).not.toContain(SERVER_FP);
+      }
+    });
+
+    // Same refusal in Polish - the opt-in is not named and no fix is suggested.
+    it('should refuse a stored accept_new_host_key without a pin for a Polish operator without suggesting a fix', async () => {
+      const { io, calls } = scriptIo({ interactive: false });
+      const p = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), { ...io, lang: 'pl' });
+      p.setVaultName('testvault');
+
+      await expect(p.authenticate()).rejects.toThrow(ProviderError);
+      const warnings = calls.filter((c) => c.kind === 'warn').map((c) => c.text);
+      expect(warnings.some((w) => w.includes('sshuser@sshhost:22') && w.includes('nie jest przypięt'))).toBe(true);
+      for (const w of warnings) {
+        expect(w).not.toContain('--accept-new-host-key');
+        expect(w).not.toContain('--known-host');
+        expect(w).not.toContain('provider edit');
+        expect(w).not.toContain(SERVER_FP);
+      }
     });
 
     it('should accept in non-interactive mode when the fingerprint was pinned via --known-host', async () => {
@@ -1399,20 +1488,151 @@ describe('SshProvider', () => {
       await expect(p.authenticate()).resolves.toBeUndefined();
     });
 
-    // The opt-in is consent given up front, not a mode. An operator who passed
-    // `--accept-new-host-key` has already answered the identity question; asking
-    // it again adds no decision, only a repetition (a new server has a new key by
-    // definition). So the opt-in settles the question whether or not anyone is at
-    // the keyboard - the same order FTPS uses (decideCertTrust checks
-    // accept_new_cert before the mode). `confirm` is scripted to REFUSE, so a run
-    // that still asks fails here rather than passing on a friendly answer.
-    it('should accept a new host without prompting when accept_new_host_key is set, even with an operator present', async () => {
+    // With an operator present a stored opt-in without a pin is not consent
+    // either: the operator is asked. A refusal ends in a refusal.
+    it('should ask the operator about a stored accept_new_host_key without a pin and refuse when declined', async () => {
       const { io, calls } = scriptIo({ confirm: () => false, interactive: true });
       const p = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), io);
       p.setVaultName('testvault');
 
+      await expect(p.authenticate()).rejects.toThrow(ProviderError);
+      expect(calls.filter((c) => c.kind === 'confirm')).toHaveLength(1);
+    });
+
+    it('should ask the operator about a stored accept_new_host_key without a pin and connect after consent', async () => {
+      const { io, calls } = scriptIo({ confirm: () => true, interactive: true });
+      const p = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), io);
+      p.setVaultName('testvault');
+
       await expect(p.authenticate()).resolves.toBeUndefined();
-      expect(calls.some((c) => c.kind === 'confirm')).toBe(false);
+      expect(calls.filter((c) => c.kind === 'confirm')).toHaveLength(1);
+    });
+
+    // The answer lasts one command: `providerRegistry.create` builds a new
+    // instance per part and `bfs verify` connects once per part and version, so a
+    // per-instance field would ask again and again. It is keyed by the command's
+    // io - a new command (new io) asks again, since in the REPL the process lives
+    // for days and a consent from one push must not carry over to the next.
+    it('should ask once per command for the same target across instances sharing one io', async () => {
+      const { io, calls } = scriptIo({ confirm: () => true, interactive: true });
+      const first = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), io);
+      const second = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), io);
+      first.setVaultName('testvault');
+      second.setVaultName('testvault');
+
+      await first.authenticate();
+      await second.authenticate();
+
+      expect(calls.filter((c) => c.kind === 'confirm')).toHaveLength(1);
+    });
+
+    // A refusal is remembered for the command as well: on push the collision
+    // guard connects first and swallows its error, then openProviders connects
+    // again - without this the operator would be asked the same question twice.
+    it('should remember a refusal for the command and not ask again for the same target', async () => {
+      const { io, calls } = scriptIo({ confirm: () => false, interactive: true });
+      const first = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), io);
+      const second = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), io);
+      first.setVaultName('testvault');
+      second.setVaultName('testvault');
+
+      await expect(first.authenticate()).rejects.toThrow(ProviderError);
+      await expect(second.authenticate()).rejects.toThrow(ProviderError);
+
+      expect(calls.filter((c) => c.kind === 'confirm')).toHaveLength(1);
+    });
+
+    // The remembered consent is for the fingerprint the operator was shown, not
+    // for whatever the target presents later in the same command: a key that
+    // changes between connections (an active MITM, servers behind a balancer)
+    // must not ride on the earlier answer.
+    it('should not let a consent for one key cover a different key at the same target in the same command', async () => {
+      const { io, calls } = scriptIo({ confirm: () => true, interactive: true });
+      const first = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), io);
+      const second = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), io);
+      first.setVaultName('testvault');
+      second.setVaultName('testvault');
+
+      await first.authenticate();
+      mockState.hostKey = Buffer.from('another-ssh-host-key');
+      await second.authenticate();
+
+      expect(calls.filter((c) => c.kind === 'confirm')).toHaveLength(2);
+    });
+
+    // One command can hand adapters two io objects: recovery wraps the command's
+    // io in a spinner io (a spread copy with the prompts re-routed). Both belong
+    // to the same command, so an answer given through one is remembered for the
+    // other - otherwise an attended recovery asks the same question twice.
+    it('should remember the answer across the command io and its spinner wrapper', async () => {
+      const { io, calls } = scriptIo({ confirm: () => true, interactive: true });
+      const spinner = { isSpinning: false, text: '', stop() {}, start() {} } as unknown as Ora;
+      const wrapped = createSpinnerIo(io, spinner);
+      const first = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), io);
+      const second = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), wrapped);
+      first.setVaultName('testvault');
+      second.setVaultName('testvault');
+
+      await first.authenticate();
+      await second.authenticate();
+
+      expect(calls.filter((c) => c.kind === 'confirm')).toHaveLength(1);
+    });
+
+    it('should ask again in the next command (a new io) for the same target', async () => {
+      const { io: io1, calls: calls1 } = scriptIo({ confirm: () => true, interactive: true });
+      const { io: io2, calls: calls2 } = scriptIo({ confirm: () => true, interactive: true });
+      const first = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), io1);
+      const second = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), io2);
+      first.setVaultName('testvault');
+      second.setVaultName('testvault');
+
+      await first.authenticate();
+      await second.authenticate();
+
+      expect(calls1.filter((c) => c.kind === 'confirm')).toHaveLength(1);
+      expect(calls2.filter((c) => c.kind === 'confirm')).toHaveLength(1);
+    });
+
+    // The remembered answer is keyed by the target as well: consent for host A
+    // must not let an unknown key on host B through within the same command.
+    it('should not let a consent for one target cover another target in the same command', async () => {
+      const answers = [true, false];
+      const { io, calls } = scriptIo({ confirm: () => answers.shift() ?? false, interactive: true });
+      const hostA = new SshProvider(makeConfig({ host: 'sshhost', host_key_fingerprint: null, accept_new_host_key: true }), io);
+      const hostB = new SshProvider(makeConfig({ host: 'otherhost', host_key_fingerprint: null, accept_new_host_key: true }), io);
+      hostA.setVaultName('testvault');
+      hostB.setVaultName('testvault');
+
+      await expect(hostA.authenticate()).resolves.toBeUndefined();
+      await expect(hostB.authenticate()).rejects.toThrow(ProviderError);
+
+      expect(calls.filter((c) => c.kind === 'confirm')).toHaveLength(2);
+    });
+
+    // Positive controls: known_hosts and a matching pin are consulted before the
+    // opt-in rung, so a config carrying the pair still connects silently when
+    // either vouches for the key. Without these an implementation refusing on the
+    // config alone - before the socket - would pass the whole block.
+    it('should connect silently despite a stored accept_new_host_key when the host is in ~/.ssh/known_hosts', async () => {
+      const home = await makeTempHome();
+      await fs.writeFile(path.join(home, '.ssh', 'known_hosts'), `sshhost ssh-ed25519 ${SERVER_KEY.toString('base64')}\n`, 'utf8');
+      mockState.homeDir = home;
+      const { io, calls } = scriptIo({ confirm: () => false, interactive: false });
+      const p = new SshProvider(makeConfig({ host_key_fingerprint: null, accept_new_host_key: true }), io);
+      p.setVaultName('testvault');
+
+      await expect(p.authenticate()).resolves.toBeUndefined();
+      expect(calls.some((c) => c.kind === 'confirm' || c.kind === 'warn')).toBe(false);
+    });
+
+    it('should connect silently despite a stored accept_new_host_key when the pin matches', async () => {
+      const { io, calls } = scriptIo({ confirm: () => false, interactive: false });
+      const p = new SshProvider(makeConfig({ host_key_fingerprint: SERVER_FP, accept_new_host_key: true }), io);
+      p.setVaultName('testvault');
+
+      await expect(p.authenticate()).resolves.toBeUndefined();
+      expect(calls.some((c) => c.kind === 'confirm' || c.kind === 'warn')).toBe(false);
     });
 
     // Guard for the order above: revocation is checked FIRST and beats every
@@ -1974,6 +2194,123 @@ describe('SshProvider', () => {
 
       expect(calls.some((c) => c.kind === 'askSecret')).toBe(true);
     });
+
+    // Unattended recovery (--trust-locations) of a storage whose location map
+    // carries a bare `accept_new_host_key: true`: the host-key ladder refuses,
+    // and the refusal must reach the operator as what it is - an unpinned server
+    // identity named by its target. Bootstrap turns the throw into a silent skip,
+    // so the reason has to be spoken through warn() first.
+    it('should refuse a stored accept_new_host_key without a pin in unattended recovery as an identity refusal, not a wrong secret', async () => {
+      const { io, calls } = scriptIo({ interactive: false });
+      const sshProvider = new SshProvider(makeConfig({ host: 'sshhost', port: 2222, user: 'victim', host_key_fingerprint: null, accept_new_host_key: true }), io) as WithRecovery;
+      sshProvider.setVaultName('testvault');
+      const pool: RecoverySecret[] = [{ value: 'sshpass', origin: 'bootstrap' }];
+
+      const outcome = sshProvider.connectForRecovery(io, pool, { trustLocation: true });
+
+      await expect(outcome).rejects.toThrow(ProviderError);
+      expect(calls.some((c) => c.kind === 'askSecret' || c.kind === 'confirm')).toBe(false);
+      const warnings = calls.filter((c) => c.kind === 'warn').map((c) => c.text);
+      expect(warnings.some((w) => w.includes('victim@sshhost:2222') && w.includes('not pinned'))).toBe(true);
+      for (const w of warnings) {
+        expect(w).not.toContain('--accept-new-host-key');
+        expect(w).not.toContain('--known-host');
+        expect(w).not.toContain(SERVER_FP);
+      }
+    });
+
+    // An attended recovery that confirmed the host key hands its fingerprint
+    // back through takeConfigUpdates, so the core writes it into the config.json
+    // it creates - that run is the one producing the configuration, so the
+    // operator's decision is consent from this invocation, not a stored opt-in.
+    // The next unattended command then connects on the pin without asking.
+    it('should hand the confirmed fingerprint back after an attended recovery, so the next unattended command connects on it', async () => {
+      const { io } = scriptIo({ confirm: () => true, askSecret: () => 'victim-pw', interactive: true });
+      const stored = { host: 'sshhost', port: 2222, user: 'victim', host_key_fingerprint: null, accept_new_host_key: true };
+      const sshProvider = new SshProvider(makeConfig(stored), io) as WithRecovery;
+      sshProvider.setVaultName('testvault');
+
+      await sshProvider.connectForRecovery(io, []);
+      const updates = takeUpdates(sshProvider);
+
+      expect(updates).toEqual({ host_key_fingerprint: SERVER_FP });
+      const { io: unattendedIo, calls } = scriptIo({ confirm: () => false, interactive: false });
+      const next = new SshProvider(makeConfig({ ...stored, ...(updates as Record<string, unknown>) }), unattendedIo);
+      next.setVaultName('testvault');
+      await expect(next.authenticate()).resolves.toBeUndefined();
+      expect(calls.some((c) => c.kind === 'confirm' || c.kind === 'warn')).toBe(false);
+    });
+
+    // A/B against the password case above: a key without a passphrase makes
+    // connectForRecovery return no secret at all, and the fingerprint must still
+    // go back - the update is about the server, not about the credential.
+    it('should hand the confirmed fingerprint back when the recovery needed no secret (key without a passphrase)', async () => {
+      const home = await makeTempHome();
+      const keyPath = path.join(home, '.ssh', 'id_ed25519');
+      await fs.writeFile(keyPath, 'PRIVATE-KEY', 'utf8');
+      const { io } = scriptIo({ confirm: () => true, askSecret: () => 'never', interactive: true });
+      const sshProvider = new SshProvider(makeConfig({ auth_method: 'key', private_key_path: keyPath, host: 'sshhost', port: 2222, user: 'victim', host_key_fingerprint: null, accept_new_host_key: true }), io) as WithRecovery;
+      sshProvider.setVaultName('testvault');
+
+      const returned = await sshProvider.connectForRecovery(io, []);
+
+      expect(returned).toBeNull();
+      expect(takeUpdates(sshProvider)).toEqual({ host_key_fingerprint: SERVER_FP });
+    });
+
+    // The question may have been answered earlier in the same command, on another
+    // instance; the instance that then hits the remembered answer must still hand
+    // the fingerprint back - the decision is the operator's from this command
+    // either way. This is why the remembered answer holds the fingerprint.
+    // The question count proves the instance really hit the remembered answer:
+    // a recovery alone asks `alone` questions (the host gate plus the key), the
+    // same recovery after an earlier consent must ask exactly one fewer.
+    it('should hand the fingerprint back from an instance that hit an answer given earlier in the same command', async () => {
+      const stored = { host: 'sshhost', port: 2222, user: 'victim', host_key_fingerprint: null, accept_new_host_key: true };
+      const solo = scriptIo({ confirm: () => true, askSecret: () => 'victim-pw', interactive: true });
+      const soloProvider = new SshProvider(makeConfig(stored), solo.io) as WithRecovery;
+      soloProvider.setVaultName('testvault');
+      await soloProvider.connectForRecovery(solo.io, []);
+      const alone = solo.calls.filter((c) => c.kind === 'confirm').length;
+      const { io, calls } = scriptIo({ confirm: () => true, askSecret: () => 'victim-pw', interactive: true });
+      const earlier = new SshProvider(makeConfig(stored), io);
+      const recovering = new SshProvider(makeConfig(stored), io) as WithRecovery;
+      earlier.setVaultName('testvault');
+      recovering.setVaultName('testvault');
+      await earlier.authenticate();
+      const askedBefore = calls.filter((c) => c.kind === 'confirm').length;
+
+      await recovering.connectForRecovery(io, []);
+
+      expect(askedBefore).toBe(1);
+      expect(calls.filter((c) => c.kind === 'confirm').length - askedBefore).toBe(alone - 1);
+      expect(takeUpdates(recovering)).toEqual({ host_key_fingerprint: SERVER_FP });
+    });
+
+    // Nothing was decided for a pinned host or one vouched for by known_hosts,
+    // so nothing goes back.
+    it('should hand nothing back when the host key was already pinned', async () => {
+      const { io } = scriptIo({ confirm: () => true, askSecret: () => 'victim-pw', interactive: true });
+      const sshProvider = new SshProvider(makeConfig({ host: 'sshhost', port: 2222, user: 'victim', host_key_fingerprint: SERVER_FP, accept_new_host_key: true }), io) as WithRecovery;
+      sshProvider.setVaultName('testvault');
+
+      await sshProvider.connectForRecovery(io, []);
+
+      expect(takeUpdates(sshProvider)).toBeNull();
+    });
+
+    it('should hand nothing back when the host is in ~/.ssh/known_hosts', async () => {
+      const home = await makeTempHome();
+      await fs.writeFile(path.join(home, '.ssh', 'known_hosts'), `[sshhost]:2222 ssh-ed25519 ${SERVER_KEY.toString('base64')}\n`, 'utf8');
+      mockState.homeDir = home;
+      const { io } = scriptIo({ confirm: () => true, askSecret: () => 'victim-pw', interactive: true });
+      const sshProvider = new SshProvider(makeConfig({ host: 'sshhost', port: 2222, user: 'victim', host_key_fingerprint: null, accept_new_host_key: true }), io) as WithRecovery;
+      sshProvider.setVaultName('testvault');
+
+      await sshProvider.connectForRecovery(io, []);
+
+      expect(takeUpdates(sshProvider)).toBeNull();
+    });
   });
 
   // --- configureInteractiveForEdit (offline-first host-key handling) ---------
@@ -2128,6 +2465,13 @@ describe('SshProvider', () => {
       const ctx: ConfigureEditContext = { existingConfig: existingConfig({ host: EXIST_HOST }) };
 
       await expect(p.configureInteractiveForEdit(io, ctx)).rejects.toThrow(HostKeyDeclinedError);
+    });
+
+    // The interactive init / provider add recovery loop lets an operator's refusal
+    // of a server identity end the command by recognising IdentityDeclinedError;
+    // a declined host key must stay one, or "no" would land in the retry menu.
+    it('reports a declined host key as a refusal of the server identity', () => {
+      expect(new HostKeyDeclinedError('declined')).toBeInstanceOf(IdentityDeclinedError);
     });
 
     it('surfaces the sole known_hosts key as a recommended proposal showing its fingerprint and pins it', async () => {

@@ -64,7 +64,12 @@ scenario_run() {
   assert_exit 1
   assert_out_contains "--accept-new-host-key"
   assert_out_contains "--known-host"
-  assert_no_file "$vault/.bfs/config.json"
+  # The refused storage is not recorded; the two local ones are - init writes
+  # each storage as it passes its probe, so the run below resumes from them.
+  assert_file "$vault/.bfs/config.json"
+  local ids
+  ids="$(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(j.providers.map((p)=>p.id).join(","))' "$(winpath "$vault/.bfs/config.json")")"
+  [ "$ids" = "p0,p1" ] || _fail "only the two local storages must be recorded, got: '${ids}'"
 
   # Positive control: the same command with one of the named flags completes,
   # so the refusal is about the missing trust decision and not about the server.

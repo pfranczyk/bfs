@@ -12,6 +12,7 @@ import { fmtFor, t, tFor } from '../i18n/index.js';
 import type { CliProviderInput, ConfigureEditContext, ProviderConfig, ProviderHelp, ProviderIO, RecoverySecret, RemoteRef, ShardHeader, ShardIdentity, StorageProvider, VerifyShardResult } from '../types/index.js';
 import { findStringFlag, readJsonObjectFile } from './flags.js';
 import { finishVerifyShard } from './header-verify.js';
+import { recallIdentityConsent, rememberIdentityConsent } from './identity-consent.js';
 import { type ProviderFactory, providerRegistry } from './provider.js';
 
 const CHECKSUM_SIZE = SHA256_BYTES;
@@ -100,6 +101,13 @@ function sftpErrorCode(err: unknown): Nullable<number> {
   }
   return null;
 }
+
+/**
+ * Where a "trust a new host key" opt-in comes from: the current invocation
+ * (consent given now, settles the question), the saved config (not consent
+ * without a pin - the operator is asked), or nowhere.
+ */
+type OptInSource = 'invocation' | 'stored' | 'none';
 
 /** True when an ssh2 error carries the authentication failure level. */
 function isAuthError(err: unknown): boolean {
@@ -273,9 +281,14 @@ export class SshProvider implements StorageProvider {
   // Pinned host-key fingerprint (config.json + shard headers). Authoritative for
   // trust, but a ~/.ssh/known_hosts @revoked entry still hard-refuses it (fail-closed).
   private readonly hostKeyFingerprint: Nullable<string>;
-  // "Trust a new host key" opt-in (`--accept-new-host-key`) - consent given up
-  // front, so it settles the question in every mode.
+  // "Trust a new host key" opt-in read back from the saved config. Without a pin
+  // it is not consent - consent is spent once, when the config is written - so
+  // the ladder asks the operator, or refuses when nobody is there.
   private readonly acceptNewHostKey: boolean;
+  // Fingerprint the operator accepted in this command for this instance's target
+  // (asked now, or an answer remembered from earlier in the command). Handed back
+  // by takeConfigUpdates so a recovery can pin it in the config it creates.
+  private confirmedFingerprint: Nullable<string> = null;
   // Set by decideHostKeyTrust when a pinned host key does NOT match the key the
   // server presented (and it is not @revoked): a changed identity is tampering.
   // withClient reads it to surface TamperDetectedError instead of a generic error.
@@ -323,17 +336,18 @@ export class SshProvider implements StorageProvider {
    * and wins over everything (fail-closed): an `@revoked` entry in
    * ~/.ssh/known_hosts hard-refuses the key - surfacing the reason - even when its
    * fingerprint is pinned. Otherwise the pinned fingerprint is authoritative; then
-   * a `known_hosts` trust line; then the `acceptNew` opt-in; and only with none
-   * of those, interactive TOFU (or a refusal when there is nobody to ask). The
-   * opt-in sits above the mode because it is consent given up front, not a mode:
-   * an operator who passed `--accept-new-host-key` has already answered this
-   * question, so asking again repeats it rather than deciding anything - the same
-   * order `decideCertTrust` uses for FTPS. `acceptNew` is passed in rather than
-   * read from the instance so the configure-time capture can honor
-   * `--accept-new-host-key` from the current invocation (the placeholder instance
-   * built for `provider add` has no such flag on it yet).
+   * a `known_hosts` trust line; then the opt-in; and only with none of those,
+   * interactive TOFU (or a refusal when there is nobody to ask).
+   *
+   * The opt-in counts by its source. Given in this invocation (`--accept-new-host-key`
+   * or `accept_new_host_key` in `--config-file`, reaching the configure-time
+   * capture) it is consent given up front and settles the question in every mode,
+   * the same order `decideCertTrust` uses for FTPS. Read back from the saved
+   * config without a pin it is not consent - it would be spent again on every
+   * run, trusting any key at that address - so the operator is asked, once per
+   * command, and without an operator the connection is refused.
    */
-  private async decideHostKeyTrust(io: ProviderIO, host: string, port: number, user: string, pin: Nullable<string>, key: Buffer, acceptNew: boolean): Promise<boolean> {
+  private async decideHostKeyTrust(io: ProviderIO, host: string, port: number, user: string, pin: Nullable<string>, key: Buffer, optIn: OptInSource): Promise<boolean> {
     const fp = sshFingerprint(key);
     const known = await this.knownHostsLookup(host, port, key);
     if (known === 'revoked') {
@@ -352,15 +366,43 @@ export class SshProvider implements StorageProvider {
       return false;
     }
     if (known === 'trusted') return true;
-    if (acceptNew) return true;
+    const target = `${user}@${host}:${port}`;
+    if (optIn === 'invocation') return true;
+    if (optIn === 'stored') return this.decideStoredOptIn(io, target, fp);
     if (io.interactive === false) {
       // Nobody is here to confirm TOFU, and ssh2's verifier turns the false
       // into a generic transport error - name the way out here, the same way
       // the @revoked branch above already does.
-      io.warn(fmtFor(io.lang, 'ssh_host_key_tofu_refused', `${user}@${host}:${port}`));
+      io.warn(fmtFor(io.lang, 'ssh_host_key_tofu_refused', target));
       return false;
     }
-    return io.confirm(fmtFor(io.lang, 'ssh_host_key_confirm', `${user}@${host}:${port}`, fp));
+    const accepted = await io.confirm(fmtFor(io.lang, 'ssh_host_key_confirm', target, fp));
+    if (accepted) this.confirmedFingerprint = fp;
+    return accepted;
+  }
+
+  /**
+   * The opt-in rung for a saved `accept_new_host_key` with no pin. With nobody
+   * to ask it refuses, naming the storage and its state through warn() - ssh2
+   * turns the refusal into a generic transport error - and never the presented
+   * fingerprint, which an operator could paste without checking it out of band
+   * (pinning an active MITM for good). With an operator it asks, unless the
+   * operator already answered for this target and this key in the same command.
+   */
+  private async decideStoredOptIn(io: ProviderIO, target: string, fp: string): Promise<boolean> {
+    const remembered = recallIdentityConsent(io, target, fp);
+    if (remembered !== null) {
+      if (remembered) this.confirmedFingerprint = fp;
+      return remembered;
+    }
+    if (io.interactive === false) {
+      io.warn(fmtFor(io.lang, 'ssh_stored_opt_in_unpinned', target));
+      return false;
+    }
+    const accepted = await io.confirm(fmtFor(io.lang, 'ssh_stored_opt_in_confirm', target, fp));
+    rememberIdentityConsent(io, target, fp, accepted);
+    if (accepted) this.confirmedFingerprint = fp;
+    return accepted;
   }
 
   /**
@@ -454,7 +496,7 @@ export class SshProvider implements StorageProvider {
         hostVerifier: (key: Buffer, cb: (valid: boolean) => void) => {
           // ssh2's hostVerifier is synchronous; bridge the async trust decision to
           // its callback (the result is delivered via cb, so the promise is voided).
-          void this.decideHostKeyTrust(this.io, this.host, this.port, this.user, this.hostKeyFingerprint, key, this.acceptNewHostKey)
+          void this.decideHostKeyTrust(this.io, this.host, this.port, this.user, this.hostKeyFingerprint, key, this.acceptNewHostKey ? 'stored' : 'none')
             .then(cb)
             .catch(() => cb(false));
         },
@@ -542,7 +584,7 @@ export class SshProvider implements StorageProvider {
             const fp = sshFingerprint(key);
             // Bridge the async trust decision to ssh2's synchronous hostVerifier
             // callback; the promise settles the outer capture Promise, so void it.
-            void this.decideHostKeyTrust(io, host, port, user, null, key, acceptNew)
+            void this.decideHostKeyTrust(io, host, port, user, null, key, acceptNew ? 'invocation' : 'none')
               .then((ok) => {
                 if (!ok) declined = true;
                 cb(ok);
@@ -714,6 +756,18 @@ export class SshProvider implements StorageProvider {
     } finally {
       conn.end();
     }
+  }
+
+  /**
+   * Hands back the host-key fingerprint the operator accepted in this command for
+   * this instance's target, so a recovery can pin it in the config it creates.
+   * A key already pinned or vouched for by ~/.ssh/known_hosts involved no
+   * decision and yields nothing.
+   *
+   * @returns `{ host_key_fingerprint }` after an operator's consent, otherwise null
+   */
+  takeConfigUpdates(): Nullable<Record<string, unknown>> {
+    return this.confirmedFingerprint === null ? null : { host_key_fingerprint: this.confirmedFingerprint };
   }
 
   /**
@@ -1246,15 +1300,17 @@ export class SshProvider implements StorageProvider {
    * with neither, a default key is discovered under `~/.ssh` (id_ed25519, then
    * id_rsa). The remote path must start with `/`.
    *
-   * `--accept-new-host-key` without an explicit `--known-host` pin realizes true
-   * TOFU: it connects once to capture the host key and pins its fingerprint, so
-   * every later connection is verified against it. Without the capture the opt-in
-   * would trust any key presented on every connection with no prompt - a standing
-   * MITM window - so it runs whether or not the caller has a terminal.
+   * The opt-in (`--accept-new-host-key`, or `accept_new_host_key` in the
+   * config file) without an explicit `--known-host` pin realizes true TOFU: it
+   * connects once to capture the host key and pins its fingerprint, so every
+   * later connection is verified against it. The capture runs whether or not the
+   * caller has a terminal - a bare opt-in left in the config would be refused by
+   * every unattended run.
    *
    * @throws ProviderError on unreadable/malformed config-file, invalid port,
-   *   conflicting auth, missing host/path/auth, a non-absolute path, or a
-   *   declined/unreachable host key when capturing for `--accept-new-host-key`
+   *   conflicting auth, missing host/path/auth, a non-absolute path, the opt-in
+   *   without a pin on an offline edit, or a declined/unreachable host key when
+   *   capturing for the opt-in
    */
   async configureFromFlags(input: CliProviderInput): Promise<Record<string, unknown>> {
     const config: Record<string, unknown> = { port: DEFAULT_SSH_PORT };
@@ -1277,6 +1333,7 @@ export class SshProvider implements StorageProvider {
       if (typeof obj.private_key_path === 'string') config.private_key_path = obj.private_key_path;
       if (typeof obj.path === 'string') config.path = obj.path;
       if (typeof obj.host_key_fingerprint === 'string') config.host_key_fingerprint = obj.host_key_fingerprint;
+      if (obj.accept_new_host_key === true) config.accept_new_host_key = true;
     }
 
     const inlineHost = findStringFlag(input.rawArgs, '--host');
@@ -1309,15 +1366,15 @@ export class SshProvider implements StorageProvider {
     const inlineKnownHost = findStringFlag(input.rawArgs, '--known-host');
     if (inlineKnownHost !== null) config.host_key_fingerprint = inlineKnownHost;
 
-    if (input.rawArgs.includes('--accept-new-host-key')) {
-      // Accepting a new host key means dialing the server to capture and pin it
-      // (TOFU). An offline edit never contacts the medium, so it cannot complete
-      // this - refuse, naming that conflict, rather than persist a null pin with
-      // accept-new armed (which would trust any key on the next connection).
-      if (input.offline === true) {
-        throw new ProviderError(tFor(this.io.lang, 'ssh_accept_new_offline'));
-      }
-      config.accept_new_host_key = true;
+    if (input.rawArgs.includes('--accept-new-host-key')) config.accept_new_host_key = true;
+    // Accepting a new host key means dialing the server to capture and pin it
+    // (TOFU). An offline edit never contacts the medium, so it cannot complete
+    // this - refuse, naming that conflict, rather than persist a bare opt-in that
+    // every unattended run would then refuse. The opt-in counts however it
+    // arrived, from the flag or from --config-file; with a pin beside it there is
+    // nothing to capture, so nothing to refuse.
+    if (config.accept_new_host_key === true && input.offline === true && typeof config.host_key_fingerprint !== 'string') {
+      throw new ProviderError(tFor(this.io.lang, 'ssh_accept_new_offline'));
     }
 
     const hasPassword = typeof config.password === 'string' && (config.password as string).length > 0;
@@ -1349,15 +1406,15 @@ export class SshProvider implements StorageProvider {
       config.auth_method = 'key';
     }
 
-    // --accept-new-host-key is a first-contact opt-in: capture the presented key
-    // now and pin it, so the pinned-fingerprint path (fp === pin) guards every
-    // later connection. An explicit --known-host pin is authoritative and left
-    // untouched. The capture does not depend on whether anyone is watching:
-    // `repair` and `provider remove --strategy` forward these flags with an
-    // interactive io and persist what comes back, so skipping the capture there
-    // would store the opt-in with a null pin - a config trusting ANY host key at
-    // that address on every later connection.
-    if (input.rawArgs.includes('--accept-new-host-key') && typeof config.host_key_fingerprint !== 'string') {
+    // The opt-in (flag or --config-file) is a first-contact consent given in this
+    // invocation: capture the presented key now and pin it, so the
+    // pinned-fingerprint path (fp === pin) guards every later connection. An
+    // explicit --known-host pin is authoritative and left untouched. The capture
+    // does not depend on whether anyone is watching - an operator who passes the
+    // opt-in "blind" accepts whatever stands at that address - and skipping it
+    // would store the opt-in with a null pin, which the runtime ladder refuses
+    // without an operator.
+    if (config.accept_new_host_key === true && typeof config.host_key_fingerprint !== 'string') {
       const host = config.host as string;
       const port = config.port as number;
       const user = typeof config.user === 'string' ? config.user : '';

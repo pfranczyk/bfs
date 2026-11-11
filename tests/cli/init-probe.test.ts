@@ -6,7 +6,7 @@
 // too weak a gate: a provider can authenticate (e.g. FTP with a valid
 // host/port/login) yet have an unusable base path. probeConnection() exercises
 // the medium end to end, so it is the acceptance gate for the chosen medium. On
-// a ProviderError it warns via io.warn and asks io.choose with three options in
+// a ProviderError it warns on the CLI's warning channel and asks io.choose with three options in
 // a fixed order:
 //   [0] RETRY    - re-probe the same config
 //   [1] RE-ENTER - re-run configureInteractive for that provider
@@ -21,15 +21,19 @@
 // i18n wording (keys probe_connection, probe_failed_prompt,
 // probe_choice_retry / _reenter / _abort in src/i18n/en.ts + pl.ts).
 
+import { ExitPromptError } from '@inquirer/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ProviderError } from '../../src/core/errors.js';
+import { IdentityDeclinedError, ProviderError } from '../../src/core/errors.js';
 import * as providerMod from '../../src/providers/provider.js';
 import { providerRegistry } from '../../src/providers/provider.js';
 import type { ProviderIO, StorageProvider } from '../../src/types/index.js';
 import { PushMode } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
-vi.mock('../../src/vault/vault-manager.js', () => ({ init: vi.fn() }));
+// The interactive path records every storage but the last through
+// admitInitProvider; these tests are about the probe loop, so both vault calls
+// are stubs.
+vi.mock('../../src/vault/vault-manager.js', () => ({ init: vi.fn(), admitInitProvider: vi.fn() }));
 vi.mock('inquirer', () => ({
   default: {
     prompt: vi.fn(),
@@ -52,6 +56,17 @@ const mockInit = vi.mocked(init);
 const mockPrompt = vi.mocked(inquirer.prompt);
 
 const PROBE_TYPE = 'mockprobe';
+
+/**
+ * Stand-in for the contract's IdentityDeclinedError as an adapter shipped in its
+ * own package sees it: the same class name, but a different copy of the class
+ * (the adapter imports `bfs-vault/provider` from its own dependency tree), so
+ * `instanceof` against the CLI's copy fails. A subclass of it, as an adapter
+ * would write one, keeps the name further up the prototype chain.
+ */
+class IdentityDeclinedErrorCopy extends Error {}
+Object.defineProperty(IdentityDeclinedErrorCopy, 'name', { value: 'IdentityDeclinedError' });
+class ForeignCopyDecline extends IdentityDeclinedErrorCopy {}
 
 interface ProbeState {
   /** One outcome consumed per probeConnection() call: 'fail' throws, 'ok' resolves. */
@@ -91,14 +106,24 @@ interface ProbeState {
   validateAttempts?: string[];
   /** Count of validateConfig() invocations - never the probe gate. */
   validateCalls: number;
+  /**
+   * One outcome consumed per configureInteractive() call: 'fail' throws a
+   * ProviderError (an FTPS/SSH server that does not answer while the adapter
+   * reads its identity, or the adapter's own limit on going back), 'cancel'
+   * throws ExitPromptError (Ctrl+C), 'decline' throws IdentityDeclinedError (the
+   * operator refused the server identity), anything else returns a config.
+   * Defaults to always-succeeding when undefined.
+   */
+  configureAttempts?: string[];
 }
 
 /**
  * Registers a mock provider type on the global singleton registry. Its
  * probeConnection() follows the scripted `attempts` (extra calls past the array
  * succeed) and is the acceptance gate; authenticate() is a no-op that never
- * gates. configureInteractive() needs no inquirer prompt (it just returns a
- * config), so the per-provider prompt budget is only id + type.
+ * gates. configureInteractive() needs no inquirer prompt (it returns a config
+ * or throws as `configureAttempts` scripts), so the per-provider prompt budget
+ * is only id + type.
  */
 function registerProbeProvider(state: ProbeState): void {
   providerRegistry.register(PROBE_TYPE, {
@@ -122,7 +147,12 @@ function registerProbeProvider(state: ProbeState): void {
           state.setVaultNames.push(name);
         },
         async configureInteractive(_io: ProviderIO): Promise<Record<string, unknown>> {
+          const outcome = state.configureAttempts?.[state.configCalls] ?? 'ok';
           state.configCalls += 1;
+          if (outcome === 'fail') throw new ProviderError('FTP operation failed on nas.example.com:21: connect ECONNREFUSED');
+          if (outcome === 'cancel') throw new ExitPromptError('User force closed the prompt with SIGINT');
+          if (outcome === 'decline') throw new IdentityDeclinedError('FTPS certificate for nas.example.com:21 was not trusted - refusing to connect.');
+          if (outcome === 'decline-foreign') throw new ForeignCopyDecline('Server identity of nas.example.com was not trusted - refusing to connect.');
           return { marker: state.configCalls };
         },
         // Config-shape gate run BEFORE the round-trip probe. One scripted
@@ -176,24 +206,24 @@ function installProbeIO(pickIndex: number): { warns: string[]; chooseCalls: Arra
 
 /**
  * Scripts an interactive `bfs init myvault` for a 2/1 scheme with three mock
- * providers. The prompt order is: encryption, compression, scheme, then per
- * provider (id, type), then push mode, RAM. Encryption + compression are
- * answered "no" via inquirer (NOT via flags - the action detects --no-compress
- * from process.argv, which is not set under vitest, so it always prompts).
+ * providers. The prompt order is: encryption, compression, scheme, push mode,
+ * RAM, then per provider (id, type) - push mode and RAM come before the storages
+ * because the first storage that passes is written to config.json with them.
+ * Encryption + compression are answered "no" via inquirer, not via flags.
  */
 function scriptInteractivePrompts(): void {
   mockPrompt
     .mockResolvedValueOnce({ encEnabled: false } as never) // encryption
     .mockResolvedValueOnce({ compressEnabled: false } as never) // compression
     .mockResolvedValueOnce({ dataShardsStr: '2', parityShardsStr: '1' } as never) // scheme
+    .mockResolvedValueOnce({ pushMode: PushMode.NewVersion } as never) // push mode
+    .mockResolvedValueOnce({ maxRamStr: '1024' } as never) // RAM
     .mockResolvedValueOnce({ id: 'p1' } as never) // provider 1 id
     .mockResolvedValueOnce({ type: PROBE_TYPE } as never) // provider 1 type
     .mockResolvedValueOnce({ id: 'p2' } as never)
     .mockResolvedValueOnce({ type: PROBE_TYPE } as never)
     .mockResolvedValueOnce({ id: 'p3' } as never)
-    .mockResolvedValueOnce({ type: PROBE_TYPE } as never)
-    .mockResolvedValueOnce({ pushMode: PushMode.NewVersion } as never) // push mode
-    .mockResolvedValueOnce({ maxRamStr: '1024' } as never); // RAM
+    .mockResolvedValueOnce({ type: PROBE_TYPE } as never);
 }
 
 describe('interactive init - provider connectivity probe + retry', () => {
@@ -376,5 +406,104 @@ describe('interactive init - provider connectivity probe + retry', () => {
     // init completed once validation passed after re-entry.
     expect(result).toBe('ok');
     expect(mockInit).toHaveBeenCalledTimes(1);
+  });
+
+  // The adapter's own questions can fail too: an FTPS or SSH server that does
+  // not answer while configureInteractive reads its identity, or the adapter's
+  // limit on going back to the connection prompts. Ending the whole init there
+  // would cost the backup name, the scheme and every storage already set up, so
+  // the error gets the same three choices as a failed probe.
+  it('should offer the recovery choice when the configuration questions themselves fail, and finish after re-entry', async () => {
+    const state: ProbeState = { attempts: [], probeCalls: 0, authCalls: 0, configCalls: 0, validateCalls: 0, setVaultNames: [], configureAttempts: ['fail', 'ok'] };
+    registerProbeProvider(state);
+    const { chooseCalls } = installProbeIO(1); // pick RE-ENTER (index 1)
+    scriptInteractivePrompts();
+
+    const result = await runInRoot(['init', 'myvault']);
+
+    expect(chooseCalls.length).toBe(1);
+    // The failure is reported on the CLI's own warning channel, as a failed probe is.
+    expect(capture.errors.some((w) => w.includes('ECONNREFUSED'))).toBe(true);
+    expect(state.configCalls).toBe(4); // the failed round, its re-entry, two more storages
+    expect(result).toBe('ok');
+    expect(mockInit).toHaveBeenCalledTimes(1);
+  });
+
+  // The questions asked again after RE-ENTER can fail just the same - e.g. the
+  // operator re-enters a host that does not answer. That second failure gets the
+  // menu too, instead of ending the session.
+  it('should offer the recovery choice when the re-entered configuration questions fail', async () => {
+    const state: ProbeState = { attempts: ['fail'], probeCalls: 0, authCalls: 0, configCalls: 0, validateCalls: 0, setVaultNames: [], configureAttempts: ['ok', 'fail', 'ok'] };
+    registerProbeProvider(state);
+    const { chooseCalls } = installProbeIO(1); // RE-ENTER every time
+    scriptInteractivePrompts();
+
+    const result = await runInRoot(['init', 'myvault']);
+
+    expect(chooseCalls.length).toBe(2); // the failed probe, then the failed re-entry
+    expect(state.configCalls).toBe(5); // three rounds for the first storage, one each for two more
+    expect(result).toBe('ok');
+    expect(mockInit).toHaveBeenCalledTimes(1);
+  });
+
+  // Ctrl+C inside the adapter's questions is the operator leaving, not a failure
+  // to recover from - the menu must not catch it.
+  it('should pass a Ctrl+C inside the configuration questions through, without the recovery choice', async () => {
+    const state: ProbeState = { attempts: [], probeCalls: 0, authCalls: 0, configCalls: 0, validateCalls: 0, setVaultNames: [], configureAttempts: ['cancel'] };
+    registerProbeProvider(state);
+    const { chooseCalls } = installProbeIO(2);
+    scriptInteractivePrompts();
+
+    const result = await runInRoot(['init', 'myvault']);
+
+    expect(result).toBe('cancelled');
+    expect(chooseCalls.length).toBe(0);
+    expect(mockInit).not.toHaveBeenCalled();
+  });
+
+  // Refusing the server identity is a decision ("Cancel (end the command)" in the
+  // trust menu), not a failure: it ends the command with its own message and
+  // never reaches the retry / re-enter / abort menu.
+  it('should end the command without the recovery choice when the operator refuses the server identity', async () => {
+    const state: ProbeState = { attempts: [], probeCalls: 0, authCalls: 0, configCalls: 0, validateCalls: 0, setVaultNames: [], configureAttempts: ['decline'] };
+    registerProbeProvider(state);
+    const { chooseCalls } = installProbeIO(1);
+    scriptInteractivePrompts();
+
+    const result = await runInRoot(['init', 'myvault']);
+
+    expect(result).toBe('abort');
+    expect(chooseCalls.length).toBe(0);
+    expect(capture.errors.join('\n')).toContain('was not trusted');
+    expect(state.configCalls).toBe(1);
+    expect(mockInit).not.toHaveBeenCalled();
+  });
+
+  // An adapter from another package throws its own copy of the class (and may
+  // subclass it); the refusal must still end the command.
+  it('should end the command when an adapter from another package signals the refusal with its own copy of the class', async () => {
+    const state: ProbeState = { attempts: [], probeCalls: 0, authCalls: 0, configCalls: 0, validateCalls: 0, setVaultNames: [], configureAttempts: ['decline-foreign'] };
+    registerProbeProvider(state);
+    const { chooseCalls } = installProbeIO(1);
+    scriptInteractivePrompts();
+
+    const result = await runInRoot(['init', 'myvault']);
+
+    expect(result).toBe('abort');
+    expect(chooseCalls.length).toBe(0);
+    expect(capture.errors.join('\n')).toContain('was not trusted');
+  });
+
+  it('should end cleanly when the operator aborts after the configuration questions failed', async () => {
+    const state: ProbeState = { attempts: [], probeCalls: 0, authCalls: 0, configCalls: 0, validateCalls: 0, setVaultNames: [], configureAttempts: ['fail'] };
+    registerProbeProvider(state);
+    const { chooseCalls } = installProbeIO(2); // pick ABORT (index 2)
+    scriptInteractivePrompts();
+
+    const result = await runInRoot(['init', 'myvault']);
+
+    expect(chooseCalls.length).toBe(1);
+    expect(result).toBe('abort');
+    expect(mockInit).not.toHaveBeenCalled();
   });
 });

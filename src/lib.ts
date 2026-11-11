@@ -24,6 +24,7 @@
 export {
   BfsError,
   DecryptionError,
+  IdentityDeclinedError,
   ProviderError,
   ShardCorruptedError,
   TamperDetectedError,

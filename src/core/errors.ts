@@ -81,14 +81,48 @@ export class ProviderError extends BfsError {
 }
 
 /**
- * Thrown when the operator deliberately refuses a presented host key (declines
- * the interactive confirm, or the key is `@revoked` in known_hosts). Distinct
- * from a connection failure: a decline is a conscious "do not trust this server"
- * and must abort the flow, whereas an unreachable server may fall back to an
- * offline path. Extends ProviderError so existing `instanceof ProviderError`
- * catches still match.
+ * Part of the provider contract (`bfs-vault/provider`). An adapter throws it
+ * when the operator deliberately refuses the identity a server presents (an SSH
+ * host key, an FTPS certificate, any equivalent of the medium). Distinct from a
+ * connection failure: a refusal is a conscious "do not trust this server", so
+ * the CLI ends the command with the adapter's message instead of offering a
+ * retry, whereas an unreachable server is worth one. Extends ProviderError so
+ * existing `instanceof ProviderError` catches still match.
  */
-export class HostKeyDeclinedError extends ProviderError {
+export class IdentityDeclinedError extends ProviderError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'IdentityDeclinedError';
+  }
+}
+
+/**
+ * Tells whether an error is an IdentityDeclinedError - including one thrown
+ * through another copy of the class. An adapter shipped in its own package
+ * imports `bfs-vault/provider` from its own dependency tree, so its class is
+ * not the one the CLI holds and `instanceof` alone fails; the check walks the
+ * prototype chain by constructor name as well, so an adapter's own subclass is
+ * recognised too.
+ *
+ * @param err - The caught value
+ * @returns true when the operator refused the server identity
+ */
+export function isIdentityDeclined(err: unknown): boolean {
+  if (err instanceof IdentityDeclinedError) return true;
+  if (!(err instanceof Error)) return false;
+  for (let proto: unknown = Object.getPrototypeOf(err); proto !== null && proto !== Error.prototype; proto = Object.getPrototypeOf(proto)) {
+    if ((proto as { constructor?: { name?: unknown } }).constructor?.name === 'IdentityDeclinedError') return true;
+  }
+  return false;
+}
+
+/**
+ * Thrown when the operator deliberately refuses a presented host key (declines
+ * the interactive confirm, or the key is `@revoked` in known_hosts). A decline
+ * must abort the flow, whereas an unreachable server may fall back to an
+ * offline path.
+ */
+export class HostKeyDeclinedError extends IdentityDeclinedError {
   constructor(message: string) {
     super(message);
     this.name = 'HostKeyDeclinedError';

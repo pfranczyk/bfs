@@ -709,6 +709,39 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
+  // B16d/B16e: --accept-new-cert pins the certificate the server presents, and
+  // plain FTP presents none - the opt-in with --secure false is refused from the
+  // settings, before the dead port is contacted.
+  tests.push(
+    await runTest('B16d', 'bfs init --ci ftp --secure false --accept-new-cert -> refused, no connection (EN)', () => {
+      const r = runBfs(
+        ['--lang', 'en', 'init', 'cli-ftp-optin-plain', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'ftp:nas --host 127.0.0.1 --port 2199 --user u --password p --path /backup --secure false --accept-new-cert'],
+        argVaultDir,
+        undefined,
+        langEnv,
+      );
+      assert(r.status === 1, `expected exit 1, got ${r.status}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('--accept-new-cert needs FTPS (secure: true)'), `expected the opt-in refusal in: ${out.slice(0, 400)}`);
+      assert(!out.includes('FTP operation failed'), `expected no transport error in: ${out.slice(0, 400)}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('B16e', 'bfs init --ci ftp --secure false --accept-new-cert -> refused, no connection (PL)', () => {
+      const r = runBfs(
+        ['--lang', 'pl', 'init', 'cli-ftp-optin-plain-pl', '--ci', '--data-shards', '2', '--parity-shards', '1', '--provider', 'ftp:nas --host 127.0.0.1 --port 2199 --user u --password p --path /backup --secure false --accept-new-cert'],
+        argVaultDir,
+        undefined,
+        langEnv,
+      );
+      assert(r.status === 1, `expected exit 1, got ${r.status}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('--accept-new-cert wymaga FTPS (secure: true)'), `expected the Polish opt-in refusal in: ${out.slice(0, 400)}`);
+      assert(!out.includes('Operacja FTP nieudana'), `expected no transport error in: ${out.slice(0, 400)}`);
+    }),
+  );
+
   // -- provider edit --ci (RED: command not implemented yet) ------------------
   // Offline, local-only edit of an existing provider's connection-config.
   // Same id, same type; no medium contact. These assertions are RED until

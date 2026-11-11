@@ -6,10 +6,10 @@ import type { Command } from 'commander';
 import { estimateCompressibility } from '../../core/compression.js';
 import { fmt, t } from '../../i18n/index.js';
 import { createCliProviderIO, providerRegistry, validateProviderId, validateVaultName } from '../../providers/provider.js';
-import type { ProviderConfig, ProviderIO } from '../../types/index.js';
+import type { ProviderConfig, ProviderIO, VaultConfig } from '../../types/index.js';
 import { PushMode } from '../../types/index.js';
-import { assertNoExistingVault } from '../../vault/config.js';
-import { init } from '../../vault/vault-manager.js';
+import { type InitTarget, inspectInitTarget } from '../../vault/config.js';
+import { admitInitProvider, type InitOptions, type InitSettings, init } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { isCiRun } from '../interactive-mode.js';
 import { parseInitProviderSpec, validateProviderIdsUnique } from '../parse-provider-spec.js';
@@ -19,19 +19,32 @@ import { CommandAbort, error, formatBytes, info, success, warn } from '../ui.js'
 
 // --- Provider config prompts ---------------------------------------------------
 
+/** Inputs for {@link promptProvider}. */
+interface PromptProviderOptions {
+  /** Provider index (for display purposes). */
+  index: number;
+  /**
+   * BFS working directory exposed to the adapter through `io.workDir` so its
+   * prompts / path resolution respect `bfs --cwd`.
+   */
+  workDir: string;
+  /** Vault name the connectivity probe resolves its path against. */
+  vaultName: string;
+  /** Storage names already in use - recorded or typed earlier in this run. */
+  taken: string[];
+}
+
 /**
  * Interactively prompts the user to configure a single provider.
  * The type list comes from providerRegistry; each provider owns its own
- * configuration flow via StorageProvider.configureInteractive().
+ * configuration flow via StorageProvider.configureInteractive(). A name already
+ * in use is refused at the prompt: storages are written to config.json as they
+ * pass, so a later check would come after the duplicate is on disk.
  *
- * @param index     - Provider index (for display purposes)
- * @param workDir   - BFS working directory exposed to the adapter through
- *                    `io.workDir` so its prompts / path resolution respect
- *                    `bfs --cwd`
- * @param vaultName - Vault name the connectivity probe resolves its path against
- * @returns           A ProviderConfig ready for use in VaultConfig.providers
+ * @param options - Index, working directory, vault name and taken names
+ * @returns         A ProviderConfig ready for use in VaultConfig.providers
  */
-async function promptProvider(index: number, workDir: string, vaultName: string): Promise<ProviderConfig> {
+async function promptProvider({ index, workDir, vaultName, taken }: PromptProviderOptions): Promise<ProviderConfig> {
   console.log(chalk.bold(fmt('init_provider_header', String(index + 1))));
 
   const { id } = await promptWithRawMode<{ id: string }>([
@@ -44,6 +57,7 @@ async function promptProvider(index: number, workDir: string, vaultName: string)
         if (!trimmed) return t('init_provider_name_required');
         try {
           validateProviderId(trimmed);
+          validateProviderIdsUnique([trimmed], taken);
         } catch (err) {
           return err instanceof Error ? err.message : String(err);
         }
@@ -102,8 +116,8 @@ interface InitCiOpts {
   ci?: boolean;
   enc?: boolean;
   /**
-   * Tri-state: true = --compress, false = --no-compress, undefined = neither.
-   * Detection: process.argv check before Commander defaults kick in.
+   * Tri-state: true = --compress, false = --no-compress, undefined = neither
+   * (--compress is registered before --no-compress, so Commander sets no default).
    */
   compress?: boolean;
   dataShards?: string;
@@ -148,8 +162,9 @@ export function registerInit(program: Command): void {
       // creates the target sub-directory. Refusing later would mean taking the
       // operator through the whole questionnaire - passwords included - and
       // leaving a directory for the new name on each medium, only to say no.
+      let target: InitTarget;
       try {
-        await assertNoExistingVault(rootDir);
+        target = await inspectInitTarget(rootDir);
       } catch (err) {
         error(err instanceof Error ? err.message : String(err));
         throw new CommandAbort();
@@ -160,24 +175,25 @@ export function registerInit(program: Command): void {
       // CI mode validates ALL flags up front so we abort before scanning the
       // directory; interactive mode only parses the optional --provider specs
       // here and defers scheme / push-mode / RAM to prompts further down.
-      let ciDataShards: Nullable<number> = null;
-      let ciParityShards: Nullable<number> = null;
-      let ciProviders: ProviderConfig[] = [];
+      let ciInputs: Nullable<CiInputs> = null;
       if (isCi) {
-        const ci = await _resolveCiInputs(argName, ciOpts, rootDir);
-        ciDataShards = ci.dataShards;
-        ciParityShards = ci.parityShards;
-        ciProviders = ci.providers;
+        ciInputs = await _resolveCiInputs(argName, ciOpts, rootDir);
       } else {
         // No second argument: leave the answer to the TTY check inside
         // createCliProviderIO. This branch only runs when --ci is absent, so a
         // literal `!isCi` would claim a terminal for every run - including one
         // whose stdin is a pipe, where an adapter reading the field would ask a
         // question nobody can answer instead of refusing outright.
-        ciProviders = await _parseProviderSpecs(ciOpts.provider ?? [], createCliProviderIO(rootDir));
+        await _parseProviderSpecs(ciOpts.provider ?? [], createCliProviderIO(rootDir));
+      }
+
+      if (!isCi && target.kind === 'resume') {
+        await _resumeInteractive(rootDir, target.config, { argName, ciOpts });
+        return;
       }
 
       const vaultName = await _resolveVaultName(argName);
+      const recorded = target.kind === 'resume' ? target.config : null;
 
       console.log(chalk.bold(t('init_header')));
       info(t('init_scanning'));
@@ -189,15 +205,30 @@ export function registerInit(program: Command): void {
         warn(t('vault_unencrypted_warning'));
       }
 
-      const compressEnabled = await _resolveCompression(ciOpts, isCi, rootDir);
+      const compressEnabled = await _resolveCompression(ciOpts, rootDir, { isCi, recorded });
 
-      const { dataShardsN, parityK } = await _resolveScheme(isCi, ciDataShards, ciParityShards);
+      const { dataShardsN, parityK } = await _resolveScheme(isCi, ciInputs?.dataShards ?? null, ciInputs?.parityShards ?? null);
       const total = dataShardsN + parityK;
+
+      // Asked before the storages: each storage is written to config.json as it
+      // passes, so the file carries the operator's choice from its first write.
+      const pushMode = await _resolvePushMode(ciOpts, isCi);
+      const maxRamMb = await _resolveMaxRam(ciOpts, isCi);
+
       console.log(chalk.dim(fmt('init_providers_needed', String(total), String(dataShardsN), String(parityK))));
 
-      const providers = isCi ? ciProviders : await _promptProviders(total, rootDir, vaultName);
+      const settings: InitSettings = {
+        vault_name: vaultName,
+        scheme: { data_shards: dataShardsN, parity_shards: parityK },
+        encryption: { enabled: encEnabled, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+        compression: { enabled: compressEnabled, algorithm: 'deflate' },
+        push_mode: pushMode,
+        max_ram_mb: maxRamMb,
+      };
+      const providers = ciInputs !== null ? ciInputs.providers : await _promptProviders({ count: total, rootDir, settings, recorded: [] });
       // Provider ids must be unique - a duplicate would silently orphan shards
-      // (lookup by id resolves to the first match). Covers CI and interactive.
+      // (lookup by id resolves to the first match). The interactive prompt
+      // refuses one as it is typed; this covers the --provider list.
       try {
         validateProviderIdsUnique(providers.map((p) => p.id));
       } catch (err) {
@@ -205,35 +236,69 @@ export function registerInit(program: Command): void {
         throw new CommandAbort();
       }
 
-      const pushMode = await _resolvePushMode(ciOpts, isCi);
-      const maxRamMb = await _resolveMaxRam(ciOpts, isCi);
-
-      // Execute. `init` in src/vault/vault-manager.ts probes every storage under
-      // this IO, and that is where a server identity gets settled - so `--ci`
-      // has to state outright that nobody is at the keyboard, or FTPS and SSH
-      // reach the rung of their trust ladder that asks instead of the one that
-      // refuses. Anything other than `--ci` leaves the answer to the TTY check
-      // inside createCliProviderIO, the other half of the contract at
-      // `ProviderIO.interactive`.
-      const io = createCliProviderIO(rootDir, isCi ? false : undefined);
-      try {
-        await init(rootDir, {
-          vault_name: vaultName,
-          scheme: { data_shards: dataShardsN, parity_shards: parityK },
-          encryption: { enabled: encEnabled, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
-          compression: { enabled: compressEnabled, algorithm: 'deflate' },
-          providers,
-          push_mode: pushMode,
-          max_ram_mb: maxRamMb,
-          io,
-        });
-        success(fmt('init_success', vaultName));
-      } catch (err) {
-        if (isPromptCancellation(err)) throw err;
-        error(err instanceof Error ? err.message : String(err));
-        throw new CommandAbort();
-      }
+      await _runInit(rootDir, { ...settings, providers }, isCi);
     });
+}
+
+/**
+ * Interactive `bfs init` in a directory an interrupted init left behind: the
+ * settings come from the file and only the missing storages are asked for. A
+ * backup name or an explicit --enc/--no-enc/--compress/--no-compress that
+ * differs from the file is refused before any question, naming the difference.
+ */
+async function _resumeInteractive(rootDir: string, recorded: VaultConfig, { argName, ciOpts }: { argName: string | undefined; ciOpts: InitCiOpts }): Promise<void> {
+  const mismatch = _interactiveResumeMismatch(recorded, argName, ciOpts);
+  if (mismatch !== null) {
+    error(mismatch);
+    throw new CommandAbort();
+  }
+  const { data_shards: N, parity_shards: K } = recorded.scheme;
+  const missing = N + K - recorded.providers.length;
+  console.log(chalk.bold(t('init_header')));
+  info(fmt('init_resume_info', recorded.vault_name, String(recorded.providers.length), String(N + K), String(missing)));
+  if (!recorded.encryption.enabled) warn(t('vault_unencrypted_warning'));
+
+  const { vault_id: _id, version: _v, providers: _p, ...rest } = recorded;
+  const settings: InitSettings = { ...rest, max_ram_mb: recorded.max_ram_mb ?? null };
+  const added = await _promptProviders({ count: missing, rootDir, settings, recorded: recorded.providers });
+  await _runInit(rootDir, { ...settings, providers: [...recorded.providers, ...added] }, false);
+}
+
+/** The refusal for an interactive resume asked to change what is recorded, or null. */
+function _interactiveResumeMismatch(recorded: VaultConfig, argName: string | undefined, ciOpts: InitCiOpts): Nullable<string> {
+  const asked = argName?.trim();
+  if (asked && asked !== recorded.vault_name) return fmt('init_resume_name_mismatch', recorded.vault_name, asked);
+  const onOff = (v: boolean): string => t(v ? 'init_setting_on' : 'init_setting_off');
+  if (ciOpts.enc !== undefined && ciOpts.enc !== recorded.encryption.enabled) {
+    return fmt('init_resume_setting_mismatch', t('init_setting_encryption'), onOff(recorded.encryption.enabled), onOff(ciOpts.enc));
+  }
+  if (ciOpts.compress !== undefined && ciOpts.compress !== recorded.compression.enabled) {
+    return fmt('init_resume_setting_mismatch', t('init_setting_compression'), onOff(recorded.compression.enabled), onOff(ciOpts.compress));
+  }
+  return null;
+}
+
+/**
+ * Runs the vault-level init (which probes and records the storages not yet in
+ * config.json) and reports the outcome.
+ *
+ * `init` in src/vault/vault-manager.ts probes every storage under this IO, and
+ * that is where a server identity gets settled - so `--ci` has to state outright
+ * that nobody is at the keyboard, or FTPS and SSH reach the rung of their trust
+ * ladder that asks instead of the one that refuses. Anything other than `--ci`
+ * leaves the answer to the TTY check inside createCliProviderIO, the other half
+ * of the contract at `ProviderIO.interactive`.
+ */
+async function _runInit(rootDir: string, options: Omit<InitOptions, 'io'>, isCi: boolean): Promise<void> {
+  const io = createCliProviderIO(rootDir, isCi ? false : undefined);
+  try {
+    await init(rootDir, { ...options, io });
+    success(fmt('init_success', options.vault_name));
+  } catch (err) {
+    if (isPromptCancellation(err)) throw err;
+    error(err instanceof Error ? err.message : String(err));
+    throw new CommandAbort();
+  }
 }
 
 // --- Section resolvers (private) -------------------------------------------------
@@ -327,16 +392,16 @@ async function _resolveEncryption(ciOpts: InitCiOpts, isCi: boolean): Promise<bo
 
 /**
  * Resolves whether compression is enabled. An explicit --compress/--no-compress
- * flag wins; otherwise a compressibility analysis picks a smart default (and in
- * interactive mode pre-fills the prompt with it).
+ * flag wins. Compression has no fixed default, so without a flag a resume keeps
+ * the recorded value, and a new backup gets a compressibility analysis that picks
+ * a smart default (pre-filling the prompt with it in interactive mode).
  */
-async function _resolveCompression(ciOpts: InitCiOpts, isCi: boolean, rootDir: string): Promise<boolean> {
-  // Commander defaults compress=true via --no-compress registration, so we check
-  // argv directly to distinguish "explicit flag" from "no flag given".
-  const hasExplicitCompress = process.argv.some((a) => a === '--compress' || a === '--no-compress');
-  if (hasExplicitCompress) {
-    return ciOpts.compress !== false;
-  }
+async function _resolveCompression(ciOpts: InitCiOpts, rootDir: string, { isCi, recorded }: { isCi: boolean; recorded: Nullable<VaultConfig> }): Promise<boolean> {
+  // Read from the parsed options, not process.argv: --compress is registered
+  // before --no-compress, so Commander leaves the value undefined unless one of
+  // them was given - whoever ran the parser (the CLI, the REPL, a test).
+  if (ciOpts.compress !== undefined) return ciOpts.compress;
+  if (recorded !== null) return recorded.compression.enabled;
 
   info(t('init_compress_scanning'));
   const cr = await estimateCompressibility(rootDir);
@@ -389,14 +454,41 @@ async function _resolveScheme(isCi: boolean, ciDataShards: Nullable<number>, ciP
   return { dataShardsN: parseInt(ans.dataShardsStr, 10), parityK: parseInt(ans.parityShardsStr, 10) };
 }
 
-/** Prompts interactively for `total` providers, one at a time. */
-async function _promptProviders(total: number, rootDir: string, vaultName: string): Promise<ProviderConfig[]> {
-  const providers: ProviderConfig[] = [];
-  for (let i = 0; i < total; i++) {
-    const prov = await promptProvider(i, rootDir, vaultName);
-    providers.push(prov);
+/** Inputs for {@link _promptProviders}. */
+interface PromptProvidersOptions {
+  /** How many storages to ask for. */
+  count: number;
+  /** BFS working directory (respects `bfs --cwd`). */
+  rootDir: string;
+  /** Settings written with the first storage. */
+  settings: InitSettings;
+  /** Storages already in config.json (a resume) - their names are taken. */
+  recorded: ProviderConfig[];
+}
+
+/**
+ * Prompts interactively for `count` storages, one at a time. Each one except the
+ * last is written to config.json as soon as it passes its probe, so an init cut
+ * short keeps it; the last is written by the vault-level init, which probes it
+ * once more and completes the configuration. A storage whose location already
+ * holds another backup ends the command - no prompt, no way past it.
+ */
+async function _promptProviders({ count, rootDir, settings, recorded }: PromptProvidersOptions): Promise<ProviderConfig[]> {
+  const added: ProviderConfig[] = [];
+  for (let i = 0; i < count; i++) {
+    const taken = [...recorded, ...added].map((p) => p.id);
+    const prov = await promptProvider({ index: recorded.length + i, workDir: rootDir, vaultName: settings.vault_name, taken });
+    added.push(prov);
+    if (i === count - 1) break;
+    try {
+      await admitInitProvider(rootDir, { settings, provider: prov, io: createCliProviderIO(rootDir) });
+    } catch (err) {
+      if (isPromptCancellation(err)) throw err;
+      error(err instanceof Error ? err.message : String(err));
+      throw new CommandAbort();
+    }
   }
-  return providers;
+  return added;
 }
 
 /** Resolves the push mode - validated CI flag or interactive choice. */

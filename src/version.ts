@@ -109,5 +109,19 @@ export const BFS_VERSION = '0.14.7';
  *           the existing connection-config (ConfigureEditContext). SSH uses it for
  *           online-first host-key pinning with an offline fallback; adapters that
  *           omit it fall back to configureInteractive for `bfs provider edit`.
+ *         * StorageProvider.takeConfigUpdates?() - OPTIONAL, added without a
+ *           bump: recovery return channel. After an instance built from a
+ *           location-map entry connects, BFS merges what it hands back into that
+ *           entry's connection_config (secret fields dropped, plain JSON only,
+ *           validateConfig must pass), so the config.json recovery creates pins
+ *           the server identity the operator confirmed. Adapters that omit it
+ *           recover exactly as before.
+ *         * IdentityDeclinedError (error class) - OPTIONAL, added without a
+ *           bump: thrown from configureInteractive / configureInteractiveForEdit
+ *           when the operator refuses the identity a server presents; the CLI
+ *           ends the command instead of offering a retry. Recognised by class
+ *           name too, so an adapter's own copy or subclass counts. Adapters
+ *           that never throw it get the retry / re-enter / abort menu for any
+ *           error.
  */
 export const BFS_PROVIDER_API_VERSION = 2;

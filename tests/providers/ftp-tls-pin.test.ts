@@ -1,13 +1,15 @@
 import { X509Certificate } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import fs from 'node:fs/promises';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import type { Duplex } from 'node:stream';
 import tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import * as ftp from 'basic-ftp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ProviderError, TamperDetectedError } from '../../src/core/errors.js';
+import { IdentityDeclinedError, ProviderError, TamperDetectedError } from '../../src/core/errors.js';
 import { tFor } from '../../src/i18n/index.js';
 import { FtpProvider } from '../../src/providers/ftp.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
@@ -705,16 +707,36 @@ describe('FtpProvider - FTPS certificate pinning verifies BEFORE login (real TLS
     expect(server.state.passReceived).toBe(false);
   }, 20000);
 
-  // TOFU opt-in - no pin but accept_new_cert is set (the `--accept-new-cert`
-  // flag): the provider trusts the presented certificate and completes login, so
-  // PASS is sent.
-  it('accepts a new cert under the accept_new_cert opt-in and completes login', async () => {
-    const { io } = createMockProviderIO({}, process.cwd(), false);
+  // A stored `accept_new_cert: true` without a pin is consent read back from
+  // disk, spent again on every run - any certificate at that address would be
+  // trusted forever. Without an operator the provider refuses, and PASS is never
+  // sent. What the operator reads names the target and the state only: no flag
+  // (the runtime adapter cannot see the command's flags), no command, and never
+  // the fingerprint the server presented - pasting that without out-of-band
+  // verification would pin an active MITM for good.
+  it('refuses a stored accept_new_cert without a pin when nobody can confirm, before sending PASS', async () => {
+    const { io: base } = createMockProviderIO({}, process.cwd(), false);
+    const warnings: string[] = [];
+    const io: ProviderIO = { ...base, confirm: async () => true, warn: (m: string) => warnings.push(m) };
     const provider = new FtpProvider(makeFtpConfig(server.port, { accept_new_cert: true }), io);
     provider.setVaultName('vault');
 
-    await expect(provider.getSize(SHARD_REF)).resolves.toBe(1024);
-    expect(server.state.passReceived).toBe(true);
+    const message = await provider.getSize(SHARD_REF).then(
+      () => '',
+      (e: unknown) => (e instanceof ProviderError ? e.message : `not a ProviderError: ${String(e)}`),
+    );
+
+    // Target AND state: a transport failure ("FTP operation failed on host:port")
+    // or a generic decline naming the target alone must not satisfy this.
+    expect(message).toContain(`127.0.0.1:${server.port}`);
+    expect(message).toContain('not pinned');
+    expect(server.state.passReceived).toBe(false);
+    for (const text of [message, ...warnings]) {
+      expect(text).not.toContain(KNOWN_PIN);
+      expect(text).not.toContain('--accept-new-cert');
+      expect(text).not.toContain('--cert-fingerprint');
+      expect(text).not.toContain('provider edit');
+    }
   }, 20000);
 
   // THIRD RUNG - no pin, but an operator is present: the decision is theirs, and
@@ -778,7 +800,9 @@ describe('FtpProvider - FTPS certificate pinning verifies BEFORE login (real TLS
     const { io: ctorIo } = createMockProviderIO();
     const provider = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, ctorIo);
 
-    await expect(provider.configureInteractive(captureIo(server.port, false))).rejects.toThrow(ProviderError);
+    // IdentityDeclinedError, not a bare ProviderError: the interactive init /
+    // provider add loop ends the command on it instead of offering a retry.
+    await expect(provider.configureInteractive(captureIo(server.port, false))).rejects.toThrow(IdentityDeclinedError);
   }, 20000);
 
   // Adding a provider gets the same way back as editing one: the mistake it
@@ -808,5 +832,254 @@ describe('FtpProvider - FTPS certificate pinning verifies BEFORE login (real TLS
 
     expect(hostPrompts).toBe(2);
     expect(config.cert_fingerprint).toBe(KNOWN_PIN);
+  }, 20000);
+});
+
+// --- A stored opt-in without a pin, with an operator present ------------------
+//
+// The opt-in read back from config.json is no consent, so an attended run asks.
+// The answer lasts one command: it is keyed by the command's io (a new command
+// asks again - in the REPL the process lives for days) and by the target
+// (consent for one server must not let another one through in the same command).
+describe('FtpProvider - stored accept_new_cert without a pin asks the operator once per command and target', () => {
+  let server: TlsFtpServerHandle;
+
+  beforeEach(async () => {
+    server = await startTlsFtpServer();
+  });
+
+  afterEach(async () => {
+    await server.close();
+  });
+
+  /** An attended io answering identity questions from `answers`, counting them. */
+  function countingIo(answers: boolean[]): { io: ProviderIO; asked: () => number } {
+    const { io: base } = createMockProviderIO({}, process.cwd(), true);
+    let asked = 0;
+    const answer = async (): Promise<boolean> => {
+      asked += 1;
+      return answers.shift() ?? false;
+    };
+    const io: ProviderIO = {
+      ...base,
+      confirm: answer,
+      async choose(_message: string, options: string[]): Promise<string> {
+        const yes = await answer();
+        const wanted = yes ? TRUST_KEYWORD.accept : TRUST_KEYWORD.cancel;
+        return options.find((o) => wanted.test(o)) ?? options[0] ?? '';
+      },
+    };
+    return { io, asked: () => asked };
+  }
+
+  it('refuses when the operator declines, before sending PASS', async () => {
+    const { io, asked } = countingIo([false]);
+    const provider = new FtpProvider(makeFtpConfig(server.port, { accept_new_cert: true }), io);
+    provider.setVaultName('vault');
+
+    await expect(provider.getSize(SHARD_REF)).rejects.toThrow(ProviderError);
+    expect(asked()).toBe(1);
+    expect(server.state.passReceived).toBe(false);
+  }, 20000);
+
+  it('connects after the operator consents', async () => {
+    const { io, asked } = countingIo([true]);
+    const provider = new FtpProvider(makeFtpConfig(server.port, { accept_new_cert: true }), io);
+    provider.setVaultName('vault');
+
+    await expect(provider.getSize(SHARD_REF)).resolves.toBe(1024);
+    expect(asked()).toBe(1);
+  }, 20000);
+
+  it('asks once for the same target across instances sharing one io', async () => {
+    const { io, asked } = countingIo([true, true]);
+    const first = new FtpProvider(makeFtpConfig(server.port, { accept_new_cert: true }), io);
+    const second = new FtpProvider(makeFtpConfig(server.port, { accept_new_cert: true }), io);
+    first.setVaultName('vault');
+    second.setVaultName('vault');
+
+    await first.getSize(SHARD_REF);
+    await second.getSize(SHARD_REF);
+
+    expect(asked()).toBe(1);
+  }, 20000);
+
+  // A refusal is remembered for the command too, so the collision guard and
+  // openProviders on push do not ask the same question twice.
+  it('remembers a refusal for the command and does not ask again for the same target', async () => {
+    const { io, asked } = countingIo([false, false]);
+    const first = new FtpProvider(makeFtpConfig(server.port, { accept_new_cert: true }), io);
+    const second = new FtpProvider(makeFtpConfig(server.port, { accept_new_cert: true }), io);
+    first.setVaultName('vault');
+    second.setVaultName('vault');
+
+    await expect(first.getSize(SHARD_REF)).rejects.toThrow(ProviderError);
+    await expect(second.getSize(SHARD_REF)).rejects.toThrow(ProviderError);
+
+    expect(asked()).toBe(1);
+    expect(server.state.passReceived).toBe(false);
+  }, 20000);
+
+  it('asks again in the next command (a new io)', async () => {
+    const one = countingIo([true]);
+    const two = countingIo([true]);
+    const first = new FtpProvider(makeFtpConfig(server.port, { accept_new_cert: true }), one.io);
+    const second = new FtpProvider(makeFtpConfig(server.port, { accept_new_cert: true }), two.io);
+    first.setVaultName('vault');
+    second.setVaultName('vault');
+
+    await first.getSize(SHARD_REF);
+    await second.getSize(SHARD_REF);
+
+    expect(one.asked()).toBe(1);
+    expect(two.asked()).toBe(1);
+  }, 20000);
+
+  it('does not let a consent for one target cover another target in the same command', async () => {
+    const other = await startTlsFtpServer();
+    try {
+      const { io, asked } = countingIo([true, false]);
+      const hostA = new FtpProvider(makeFtpConfig(server.port, { accept_new_cert: true }), io);
+      const hostB = new FtpProvider(makeFtpConfig(other.port, { accept_new_cert: true }), io);
+      hostA.setVaultName('vault');
+      hostB.setVaultName('vault');
+
+      await expect(hostA.getSize(SHARD_REF)).resolves.toBe(1024);
+      await expect(hostB.getSize(SHARD_REF)).rejects.toThrow(ProviderError);
+
+      expect(asked()).toBe(2);
+      expect(other.state.passReceived).toBe(false);
+    } finally {
+      await other.close();
+    }
+  }, 20000);
+
+  // Unattended recovery (--trust-locations) of a storage whose location map
+  // carries a bare `accept_new_cert: true`. connectForRecovery tries the pooled
+  // secrets in a loop that swallows every error, so a refused certificate would
+  // fall through to askSecret and end as "no secret" - and bootstrap turns any
+  // throw into a silent skip. The refusal has to be spoken through warn(),
+  // naming the target and the state, before the throw, and no secret may be
+  // asked for or sent.
+  it('refuses in unattended recovery as an identity refusal, warning before the throw and asking for no secret', async () => {
+    const { io: base } = createMockProviderIO({}, process.cwd(), false);
+    const warnings: string[] = [];
+    let askedSecret = false;
+    const io: ProviderIO = {
+      ...base,
+      warn: (m: string) => warnings.push(m),
+      async askSecret(): Promise<string> {
+        askedSecret = true;
+        return '';
+      },
+    };
+    const provider = new FtpProvider(makeFtpConfig(server.port, { accept_new_cert: true }), io) as FtpProvider & Required<Pick<StorageProvider, 'connectForRecovery'>>;
+    provider.setVaultName('vault');
+
+    await expect(provider.connectForRecovery(io, [{ value: 'super-secret-pw', origin: 'bootstrap' }], { trustLocation: true })).rejects.toThrow(ProviderError);
+
+    expect(askedSecret).toBe(false);
+    expect(server.state.passReceived).toBe(false);
+    expect(warnings.some((w) => w.includes(`127.0.0.1:${server.port}`) && w.includes('not pinned'))).toBe(true);
+  }, 20000);
+
+  // Positive control: a matching pin wins before the opt-in rung, so the pair
+  // still connects silently.
+  it('connects silently despite a stored accept_new_cert when the pin matches', async () => {
+    const { io, asked } = countingIo([]);
+    const provider = new FtpProvider(makeFtpConfig(server.port, { accept_new_cert: true, cert_fingerprint: KNOWN_PIN }), io);
+    provider.setVaultName('vault');
+
+    await expect(provider.getSize(SHARD_REF)).resolves.toBe(1024);
+    expect(asked()).toBe(0);
+  }, 20000);
+});
+
+// --- --accept-new-cert captures and pins (consent from this invocation) -------
+//
+// The opt-in present in the assembled config - from the flag or from
+// --config-file - is consent given in this very invocation: it reads the
+// presented certificate and pins its fingerprint, without asking, whether or not
+// anyone is at the keyboard (an operator who passes the flag "blind" accepts
+// whatever stands on the other side). It must not route through the interactive
+// capture, which asks. A command that writes the config therefore never leaves a
+// bare opt-in behind.
+describe('FtpProvider - configureFromFlags pins the certificate for --accept-new-cert', () => {
+  let server: TlsFtpServerHandle;
+
+  beforeEach(async () => {
+    server = await startTlsFtpServer();
+  });
+
+  afterEach(async () => {
+    await server.close();
+  });
+
+  const argsFor = (port: number): string[] => ['--host', '127.0.0.1', '--port', String(port), '--user', 'victim', '--password', 'super-secret-pw', '--path', '/backup'];
+
+  /** An io that fails the test the moment anything asks. */
+  function silentIo(interactive: boolean): { io: ProviderIO; asked: () => number } {
+    const { io: base } = createMockProviderIO({}, process.cwd(), interactive);
+    let asked = 0;
+    const io: ProviderIO = {
+      ...base,
+      async confirm(): Promise<boolean> {
+        asked += 1;
+        return false;
+      },
+      async choose(_m: string, options: string[]): Promise<string> {
+        asked += 1;
+        return options.find((o) => TRUST_KEYWORD.cancel.test(o)) ?? options[0] ?? '';
+      },
+    };
+    return { io, asked: () => asked };
+  }
+
+  it('pins the presented fingerprint without asking in an unattended run', async () => {
+    const { io, asked } = silentIo(false);
+    const provider = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+    const config = await provider.configureFromFlags({ name: 'stub', rawArgs: [...argsFor(server.port), '--accept-new-cert'] });
+
+    expect(config.cert_fingerprint).toBe(KNOWN_PIN);
+    expect(asked()).toBe(0);
+    expect(server.state.passReceived).toBe(false);
+  }, 20000);
+
+  it('pins the presented fingerprint without asking on a terminal too', async () => {
+    const { io, asked } = silentIo(true);
+    const provider = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+    const config = await provider.configureFromFlags({ name: 'stub', rawArgs: [...argsFor(server.port), '--accept-new-cert'] });
+
+    expect(config.cert_fingerprint).toBe(KNOWN_PIN);
+    expect(asked()).toBe(0);
+  }, 20000);
+
+  it('pins the presented fingerprint for accept_new_cert read from --config-file', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-ftps-cfg-'));
+    try {
+      const file = path.join(dir, 'ftp.json');
+      await fs.writeFile(file, JSON.stringify({ host: '127.0.0.1', port: server.port, user: 'victim', password: 'super-secret-pw', path: '/backup', secure: true, accept_new_cert: true }), 'utf8');
+      const { io, asked } = silentIo(false);
+      const provider = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+      const config = await provider.configureFromFlags({ name: 'stub', rawArgs: ['--config-file', file] });
+
+      expect(config.cert_fingerprint).toBe(KNOWN_PIN);
+      expect(asked()).toBe(0);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  }, 20000);
+
+  // An explicit pin is authoritative: the opt-in does not recapture over it.
+  it('keeps an explicit --cert-fingerprint when --accept-new-cert is also given', async () => {
+    const { io } = silentIo(false);
+    const provider = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+    const config = await provider.configureFromFlags({ name: 'stub', rawArgs: [...argsFor(server.port), '--cert-fingerprint', WRONG_PIN, '--accept-new-cert'] });
+
+    expect(config.cert_fingerprint).toBe(WRONG_PIN);
   }, 20000);
 });

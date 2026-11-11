@@ -93,11 +93,11 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 // Capture the persisted config instead of touching a real `.bfs/config.json`.
-// assertNoExistingVault is a no-op here: these runs are about how a provider spec
-// is parsed, and the working directory is a fresh mkdtemp with no backup in it.
+// inspectInitTarget stays real: these runs are about how a provider spec is
+// parsed, and the working directory is a fresh mkdtemp with no backup in it.
 vi.mock('../../src/vault/config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/vault/config.js')>();
-  return { ...actual, readConfig: vi.fn(), writeConfig: vi.fn(), assertNoExistingVault: vi.fn() };
+  return { ...actual, readConfig: vi.fn(), writeConfig: vi.fn() };
 });
 // Capture the InitOptions (incl. the built provider configs) handed to init().
 vi.mock('../../src/vault/vault-manager.js', () => ({ init: vi.fn() }));

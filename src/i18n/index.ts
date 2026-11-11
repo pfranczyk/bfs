@@ -98,6 +98,8 @@ export interface Strings {
   /** %s = provider id, %s = validation errors */
   probe_validate_failed: string;
   probe_failed_prompt: string;
+  /** %s = provider name, %s = why the adapter questions failed */
+  probe_configure_failed: string;
   probe_choice_retry: string;
   probe_choice_reenter: string;
   probe_choice_abort: string;
@@ -146,6 +148,27 @@ export interface Strings {
   /** %s = name of the backup already in this directory */
   init_vault_exists: string;
   init_vault_exists_unreadable: string;
+  init_vault_exists_unreadable_versions: string;
+  init_vault_versions_without_config: string;
+  /** %s = recorded backup name, %s = name the command asks for */
+  init_resume_name_mismatch: string;
+  /** %s/%s = recorded N/K, %s/%s = N/K the command asks for */
+  init_resume_scheme_mismatch: string;
+  /** %s = setting name, %s = recorded value, %s = value the command asks for */
+  init_resume_setting_mismatch: string;
+  /** %s = storage name */
+  init_resume_provider_mismatch: string;
+  /** %s = storage name */
+  init_resume_provider_missing: string;
+  /** %s = backup name, %s = recorded storages, %s = scheme total, %s = missing */
+  init_resume_info: string;
+  init_setting_encryption: string;
+  init_setting_compression: string;
+  init_setting_push_mode: string;
+  init_setting_max_ram: string;
+  init_setting_on: string;
+  init_setting_off: string;
+  init_setting_no_limit: string;
   /** %s = why the read failed (errno or message) */
   init_vault_check_failed: string;
   init_ci_name_required: string;
@@ -342,7 +365,7 @@ export interface Strings {
   prune_ci_yes_required: string;
   /** %s = versions list */
   prune_deleted: string;
-  /** %s = version number, %s = provider/storage name */
+  /** %s = version number, %s = provider/storage name, %s = the adapter's reason */
   prune_orphan_warn: string;
 
   // --- verify ---------------------------------------------------------------
@@ -413,6 +436,7 @@ export interface Strings {
   scheme_providers_surplus: string;
   /** %s = required, %s = current */
   scheme_providers_below_minimum: string;
+  scheme_no_version_yet: string;
 
   // --- provider: local-fs --------------------------------------------------
   /** %s = basePath */
@@ -853,6 +877,7 @@ export interface Strings {
   trust_choice_cancel: string;
   configure_reenter_notice: string;
   configure_restarts_exhausted: string;
+  configure_restarts_exhausted_edit: string;
   /** %s = host:port, %s = fingerprint being removed */
   ftp_edit_pin_dropped: string;
   /** %s = host:port */
@@ -947,6 +972,16 @@ export interface Strings {
   ssh_auth_conflict: string;
   ssh_auth_missing: string;
   ssh_accept_new_offline: string;
+  /** %s = user@host:port */
+  ssh_stored_opt_in_unpinned: string;
+  /** %s = user@host:port, %s = presented fingerprint */
+  ssh_stored_opt_in_confirm: string;
+  /** %s = host:port */
+  ftp_stored_opt_in_unpinned: string;
+  /** %s = host:port, %s = presented fingerprint */
+  ftp_stored_opt_in_confirm: string;
+  ftp_accept_new_offline: string;
+  ftp_accept_new_requires_secure: string;
   ssh_validate_host_required: string;
   ssh_validate_port_invalid: string;
   ssh_validate_path_required: string;
