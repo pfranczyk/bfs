@@ -710,6 +710,8 @@ export const en: Strings = {
   ssh_host_key_declined: 'Host key for %s was not trusted - connection refused.',
   ssh_host_key_revoked: 'Host key for %s is revoked in ~/.ssh/known_hosts - refusing to connect (the key is marked compromised).',
   ssh_host_key_mismatch: 'Host key for %s has CHANGED - this is a possible man-in-the-middle attack (tampering). Expected %s, but the server presented %s. Refusing to connect.',
+  ssh_host_key_trust_conflict:
+    'Conflicting instructions for %s: this run states that nothing may be asked, yet nothing says how to trust the server. Its host key has to be trusted before signing in, and ~/.ssh/known_hosts holds no trusted entry for it. Pass --accept-new-host-key to trust the key presented on first connect, or --known-host <SHA256:...> if you already know the fingerprint.',
   ssh_host_key_tofu_refused: 'Host key for %s is not yet trusted and there is nobody here to confirm it. Rerun with `--accept-new-host-key` to trust it now, or `--known-host <SHA256:...>` if you already know its fingerprint.',
 
   // --- SSH - edit (online-first host key, offline fallback) -------------------

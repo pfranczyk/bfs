@@ -431,7 +431,8 @@ export class SshProvider implements StorageProvider {
    * `{ keyType, keyB64, revoked }`. Unsupported markers (e.g. `@cert-authority`)
    * are skipped (fail-closed). Never throws - a missing/unreadable file yields an
    * empty list. Shared by `knownHostsLookup` (classify a presented key) and
-   * `knownHostsCandidates` (enumerate keys for the offline edit menu).
+   * `knownHostsCandidates` (enumerate trusted keys for the offline edit menu
+   * and the unattended trust-basis guard).
    */
   private async matchingKnownHostsEntries(host: string, port: number): Promise<Array<{ keyType: string; keyB64: string; revoked: boolean }>> {
     let content: string;
@@ -1309,8 +1310,9 @@ export class SshProvider implements StorageProvider {
    *
    * @throws ProviderError on unreadable/malformed config-file, invalid port,
    *   conflicting auth, missing host/path/auth, a non-absolute path, the opt-in
-   *   without a pin on an offline edit, or a declined/unreachable host key when
-   *   capturing for the opt-in
+   *   without a pin on an offline edit, an unattended run with no basis for
+   *   trusting the host key, or a declined/unreachable host key when capturing
+   *   for the opt-in
    */
   async configureFromFlags(input: CliProviderInput): Promise<Record<string, unknown>> {
     const config: Record<string, unknown> = { port: DEFAULT_SSH_PORT };
@@ -1406,6 +1408,8 @@ export class SshProvider implements StorageProvider {
       config.auth_method = 'key';
     }
 
+    await this.assertUnattendedTrustBasis(config, input);
+
     // The opt-in (flag or --config-file) is a first-contact consent given in this
     // invocation: capture the presented key now and pin it, so the
     // pinned-fingerprint path (fp === pin) guards every later connection. An
@@ -1422,6 +1426,26 @@ export class SshProvider implements StorageProvider {
     }
 
     return config;
+  }
+
+  /**
+   * Refuses an unattended run whose assembled configuration names no basis for
+   * trusting the host key: no pin (an empty one counts as none, as it does on
+   * connect), no opt-in, and no non-revoked `~/.ssh/known_hosts` entry for
+   * host:port. Nobody can answer the first-contact question there, so the first
+   * connection could only refuse - deciding it from the settings refuses before
+   * a socket opens and names both ways out. An entry for another key still
+   * counts: whether the server presents it is the handshake's question. An
+   * offline edit never connects, so it is exempt.
+   */
+  private async assertUnattendedTrustBasis(config: Record<string, unknown>, input: CliProviderInput): Promise<void> {
+    if (input.offline === true || this.io.interactive !== false) return;
+    if (typeof config.host_key_fingerprint === 'string' && config.host_key_fingerprint.length > 0) return;
+    if (config.accept_new_host_key === true) return;
+    const host = config.host as string;
+    const port = config.port as number;
+    if ((await this.knownHostsCandidates(host, port)).length > 0) return;
+    throw new ProviderError(fmtFor(this.io.lang, 'ssh_host_key_trust_conflict', `${host}:${port}`));
   }
 
   /** Discovers a default private key under ~/.ssh (id_ed25519 preferred, then id_rsa). */

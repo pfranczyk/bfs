@@ -921,6 +921,8 @@ export interface Strings {
   ssh_host_key_revoked: string;
   /** %s = user@host:port, %s = expected pin, %s = presented fingerprint */
   ssh_host_key_mismatch: string;
+  /** %s = host:port */
+  ssh_host_key_trust_conflict: string;
   /** %s = user@host:port */
   ssh_host_key_tofu_refused: string;
   /** %s = user@host:port */

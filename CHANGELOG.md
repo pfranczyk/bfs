@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An unattended SSH setup with no way to trust the server is refused before
+  connecting.** `bfs init --ci` and `bfs provider add --ci` with an SSH storage
+  that has no `--known-host`, no `--accept-new-host-key` and no entry for its
+  host and port in `~/.ssh/known_hosts` now stop while reading the settings,
+  naming both flags, instead of connecting and failing on the unknown host key.
+  Nothing is written. The same applies wherever SSH settings are given on the
+  command line with nobody to answer - `bfs repair`, `bfs provider remove
+  --strategy`, `bfs recovery --bootstrap`, or any run without a terminal -
+  which refused at the connection before. A pin or opt-in given in
+  `--config-file` counts the same as the flag, and `bfs provider edit --ci` is
+  unaffected. This matches the refusal FTPS already gives in the same
+  situation.
 - **`bfs provider add` fills the place a removed storage left.** After
   `bfs provider remove --strategy remove` the pool is one storage short of the
   N+K scheme. Adding a storage now takes that place and keeps the scheme, so

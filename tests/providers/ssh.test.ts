@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -1158,6 +1158,201 @@ describe('SshProvider', () => {
       const config = await p.configureFromFlags({ ...cliInput({ rawArgs: ['--config-file', file] }), offline: true });
 
       expect(config.host_key_fingerprint).toBe(SERVER_FP);
+    });
+
+    // An unattended run that names no basis for trusting the server - no pin,
+    // no opt-in, no known_hosts entry for host:port - cannot end anywhere but in
+    // a refusal at the first connection. The adapter refuses while it parses the
+    // flags instead, naming both ways out, so no connection is attempted. The
+    // pin, the opt-in and the port all arrive through --config-file too, so the
+    // guard reads the assembled configuration, not the raw flags.
+    describe('host-key trust basis in an unattended run', () => {
+      const flags = ['--host', 'sshhost', '--user', 'sshuser', '--password', 'p', '--path', '/backup'];
+      const otherKey = Buffer.from('some-other-host-key').toString('base64');
+
+      /** A known_hosts line in OpenSSH's hashed form (`HashKnownHosts yes`). */
+      function hashedKnownHostsLine(hostPattern: string, keyB64: string): string {
+        const salt = Buffer.from('0123456789abcdef0123');
+        const digest = createHmac('sha1', salt).update(hostPattern).digest();
+        return `|1|${salt.toString('base64')}|${digest.toString('base64')} ssh-ed25519 ${keyB64}\n`;
+      }
+
+      it('should refuse before connecting when nothing says how to trust the host key', async () => {
+        mockState.connectShouldFail = true;
+        const { io, calls } = scriptIo({ interactive: false });
+        const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+        const err = await p.configureFromFlags(cliInput({ rawArgs: flags })).catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(ProviderError);
+        const message = (err as Error).message;
+        expect(message).toContain('Conflicting instructions');
+        expect(message).toContain('sshhost:22');
+        expect(message).toContain('--accept-new-host-key');
+        expect(message).toContain('--known-host');
+        expect(calls.some((c) => c.kind === 'confirm' || c.kind === 'choose')).toBe(false);
+      });
+
+      // An empty pin is what an offline edit saves when the operator chose not
+      // to pin; the connection treats it as no pin, so the guard must as well.
+      it('should refuse an empty pin read from --config-file', async () => {
+        const file = await writeJsonConfig(JSON.stringify({ host: 'sshhost', user: 'sshuser', password: 'p', path: '/backup', host_key_fingerprint: '' }));
+        const { io } = scriptIo({ interactive: false });
+        const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+        const err = await p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] })).catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(ProviderError);
+        expect((err as Error).message).toContain('--accept-new-host-key');
+      });
+
+      it('should word the refusal in Polish for a Polish operator', async () => {
+        const { io } = scriptIo({ interactive: false });
+        const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, { ...io, lang: 'pl' });
+
+        const err = await p.configureFromFlags(cliInput({ rawArgs: flags })).catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(ProviderError);
+        const message = (err as Error).message;
+        expect(message).toContain('sshhost:22');
+        expect(message).toContain('--accept-new-host-key');
+        expect(message).toContain('--known-host');
+        expect(message).toContain('Sprzeczne polecenia');
+      });
+
+      it('should still refuse when the only known_hosts entry for the host is @revoked', async () => {
+        const home = await makeTempHome();
+        await fs.writeFile(path.join(home, '.ssh', 'known_hosts'), `@revoked sshhost ssh-ed25519 ${SERVER_KEY.toString('base64')}\n`, 'utf8');
+        mockState.homeDir = home;
+        const { io } = scriptIo({ interactive: false });
+        const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+        const err = await p.configureFromFlags(cliInput({ rawArgs: flags })).catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(ProviderError);
+        expect((err as Error).message).toContain('--accept-new-host-key');
+      });
+
+      // A rotated key leaves the old line marked @revoked next to the new one;
+      // the trusted line is still a basis.
+      it('should pass when a trusted entry stands next to an @revoked one', async () => {
+        const home = await makeTempHome();
+        await fs.writeFile(path.join(home, '.ssh', 'known_hosts'), `@revoked sshhost ssh-ed25519 ${otherKey}\nsshhost ssh-ed25519 ${SERVER_KEY.toString('base64')}\n`, 'utf8');
+        mockState.homeDir = home;
+        const { io } = scriptIo({ interactive: false });
+        const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+        const config = await p.configureFromFlags(cliInput({ rawArgs: flags }));
+
+        expect(config.host).toBe('sshhost');
+      });
+
+      it('should still refuse when known_hosts names the host only on another port', async () => {
+        const home = await makeTempHome();
+        await fs.writeFile(path.join(home, '.ssh', 'known_hosts'), `sshhost ssh-ed25519 ${SERVER_KEY.toString('base64')}\n`, 'utf8');
+        mockState.homeDir = home;
+        const { io } = scriptIo({ interactive: false });
+        const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+        const err = await p.configureFromFlags(cliInput({ rawArgs: [...flags, '--port', '2222'] })).catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(ProviderError);
+        expect((err as Error).message).toContain('sshhost:2222');
+        expect((err as Error).message).toContain('--known-host');
+      });
+
+      // The entry is a trust basis; whether the server still presents that key
+      // is the handshake's question, answered there, not while parsing flags.
+      it('should pass when known_hosts holds an entry for host:port, even for a different key', async () => {
+        const home = await makeTempHome();
+        await fs.writeFile(path.join(home, '.ssh', 'known_hosts'), `sshhost ssh-ed25519 ${otherKey}\n`, 'utf8');
+        mockState.homeDir = home;
+        const { io } = scriptIo({ interactive: false });
+        const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+        const config = await p.configureFromFlags(cliInput({ rawArgs: flags }));
+
+        expect(config.host).toBe('sshhost');
+      });
+
+      it('should pass with a pinned fingerprint from --known-host', async () => {
+        mockState.connectShouldFail = true;
+        const { io } = scriptIo({ interactive: false });
+        const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+        const config = await p.configureFromFlags(cliInput({ rawArgs: [...flags, '--known-host', SERVER_FP] }));
+
+        expect(config.host_key_fingerprint).toBe(SERVER_FP);
+      });
+
+      // The shape the adapter's own help documents for --config-file; a guard
+      // that inspected the raw flags would refuse it.
+      it('should pass with a fingerprint pinned in --config-file', async () => {
+        mockState.connectShouldFail = true;
+        const file = await writeJsonConfig(JSON.stringify({ host: 'sshhost', user: 'sshuser', password: 'p', path: '/backup', host_key_fingerprint: SERVER_FP }));
+        const { io } = scriptIo({ interactive: false });
+        const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+        const config = await p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }));
+
+        expect(config.host_key_fingerprint).toBe(SERVER_FP);
+      });
+
+      // The port comes from --config-file, so known_hosts is asked about the
+      // assembled host:port - here in its bracketed `[host]:port` form.
+      it('should pass when known_hosts holds a [host]:port entry for the port read from --config-file', async () => {
+        const home = await makeTempHome();
+        await fs.writeFile(path.join(home, '.ssh', 'known_hosts'), `[sshhost]:2222 ssh-ed25519 ${SERVER_KEY.toString('base64')}\n`, 'utf8');
+        mockState.homeDir = home;
+        const file = await writeJsonConfig(JSON.stringify({ host: 'sshhost', port: 2222, user: 'sshuser', password: 'p', path: '/backup' }));
+        const { io } = scriptIo({ interactive: false });
+        const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+        const config = await p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }));
+
+        expect(config.port).toBe(2222);
+      });
+
+      it('should pass when known_hosts holds the host in hashed form', async () => {
+        const home = await makeTempHome();
+        await fs.writeFile(path.join(home, '.ssh', 'known_hosts'), hashedKnownHostsLine('sshhost', SERVER_KEY.toString('base64')), 'utf8');
+        mockState.homeDir = home;
+        const { io } = scriptIo({ interactive: false });
+        const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+        const config = await p.configureFromFlags(cliInput({ rawArgs: flags }));
+
+        expect(config.host).toBe('sshhost');
+      });
+
+      it('should pass with --accept-new-host-key and pin the presented key', async () => {
+        const { io } = scriptIo({ interactive: false });
+        const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+        const config = await p.configureFromFlags(cliInput({ rawArgs: [...flags, '--accept-new-host-key'] }));
+
+        expect(config.host_key_fingerprint).toBe(SERVER_FP);
+      });
+
+      // An offline edit never connects, so the guard has nothing to protect there.
+      it('should not refuse an offline edit', async () => {
+        const { io } = scriptIo({ interactive: false });
+        const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+        const config = await p.configureFromFlags({ ...cliInput({ rawArgs: flags }), offline: true });
+
+        expect(config.host).toBe('sshhost');
+      });
+
+      // At a terminal the first connection asks the operator about the key.
+      it('should not refuse when someone is at the terminal to confirm the key', async () => {
+        const { io } = scriptIo({ interactive: true });
+        const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+        const config = await p.configureFromFlags(cliInput({ rawArgs: flags }));
+
+        expect(config.host).toBe('sshhost');
+      });
     });
   });
 

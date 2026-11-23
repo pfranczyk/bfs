@@ -200,9 +200,11 @@ describe('init --ci with an ssh provider spec on a TTY - --accept-new-host-key m
       '--provider',
       'ssh:nas --host sshhost --user sshuser --password pw --path /backup --accept-new-host-key',
       '--provider',
-      'ssh:s1 --host sshhost --user sshuser --password pw --path /backup1',
+      // The siblings carry a pin: an unattended spec with no basis for trusting
+      // the host key is refused while the flags are read.
+      `ssh:s1 --host sshhost --user sshuser --password pw --path /backup1 --known-host ${SERVER_FP}`,
       '--provider',
-      'ssh:s2 --host sshhost --user sshuser --password pw --path /backup2',
+      `ssh:s2 --host sshhost --user sshuser --password pw --path /backup2 --known-host ${SERVER_FP}`,
       '--cwd',
       root,
     ]);

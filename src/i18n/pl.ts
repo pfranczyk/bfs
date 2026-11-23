@@ -712,6 +712,8 @@ export const pl: Strings = {
   ssh_host_key_declined: 'Klucz hosta dla %s nie został zaufany - połączenie odrzucone.',
   ssh_host_key_revoked: 'Klucz hosta dla %s jest unieważniony (@revoked) w ~/.ssh/known_hosts - odmawiam połączenia (klucz oznaczony jako skompromitowany).',
   ssh_host_key_mismatch: 'Klucz hosta dla %s ZMIENIŁ SIĘ - to możliwy atak man-in-the-middle (tampering). Oczekiwano %s, a serwer przedstawił %s. Odmawiam połączenia.',
+  ssh_host_key_trust_conflict:
+    'Sprzeczne polecenia dla %s: ten przebieg zastrzega, że nie wolno o nic pytać, a jednocześnie nie mówi, na jakiej podstawie zaufać serwerowi. Jego klucz hosta musi zostać uznany za zaufany przed logowaniem, a ~/.ssh/known_hosts nie ma dla niego zaufanego wpisu. Podaj --accept-new-host-key, aby zaufać kluczowi z pierwszego połączenia, albo --known-host <SHA256:...>, jeśli już znasz odcisk.',
   ssh_host_key_tofu_refused:
     'Klucz hosta dla %s nie jest jeszcze zaufany, a nie ma tu nikogo, kto mógłby to potwierdzić. Uruchom ponownie z `--accept-new-host-key`, żeby zaufać mu teraz, albo z `--known-host <SHA256:...>`, jeśli znasz już jego odcisk.',
 

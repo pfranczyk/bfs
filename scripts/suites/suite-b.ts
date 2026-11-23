@@ -709,6 +709,60 @@ export async function suiteB(ctx: SmokeContext): Promise<SuiteResult> {
     }),
   );
 
+  // B16f/B16g: the SSH twin of B16b/B16c. An SSH host key is also trusted
+  // through an entry in ~/.ssh/known_hosts, so the run gets an empty home -
+  // otherwise the machine's own file could supply that entry by accident. The
+  // spec is a full 2/1 pool (two local storages before the SSH one), so a run
+  // without the guard gets past the storage count to the probe of the dead
+  // port - which is what makes the no-transport assertion able to fail. Each
+  // language runs in its own directory: that probe would record the locals.
+  const emptyHome = path.join(ctx.sourceDir, 'ssh-empty-home');
+  await fs.mkdir(path.join(emptyHome, '.ssh'), { recursive: true });
+  const sshEnv: NodeJS.ProcessEnv = { ...langEnv, HOME: emptyHome, USERPROFILE: emptyHome };
+  const sshNoTrustArgs = (lang: string, name: string): string[] => [
+    '--lang',
+    lang,
+    'init',
+    name,
+    '--ci',
+    '--data-shards',
+    '2',
+    '--parity-shards',
+    '1',
+    '--provider',
+    'local:l0 --path ./l0',
+    '--provider',
+    'local:l1 --path ./l1',
+    '--provider',
+    'ssh:nas --host 127.0.0.1 --port 2353 --user u --password p --path /backup',
+  ];
+  const sshNoTrustDirEn = path.join(ctx.sourceDir, 'cli-ssh-notrust-en');
+  const sshNoTrustDirPl = path.join(ctx.sourceDir, 'cli-ssh-notrust-pl');
+  await fs.mkdir(sshNoTrustDirEn, { recursive: true });
+  await fs.mkdir(sshNoTrustDirPl, { recursive: true });
+  tests.push(
+    await runTest('B16f', 'bfs init --ci ssh without a way to trust the host key -> refused, names both flags (EN)', () => {
+      const r = runBfs(sshNoTrustArgs('en', 'cli-ssh-notrust'), sshNoTrustDirEn, undefined, sshEnv);
+      assert(r.status !== 0, `expected non-zero exit for a storage with no basis of trust, got ${r.status}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('Conflicting instructions'), `expected the conflict to be named in: ${out.slice(0, 400)}`);
+      assert(out.includes('--accept-new-host-key') && out.includes('--known-host'), `expected both ways out in: ${out.slice(0, 400)}`);
+      // Decided from the settings - the dead port is never contacted.
+      assert(!out.includes('SSH operation failed'), `expected no transport error in: ${out.slice(0, 400)}`);
+    }),
+  );
+
+  tests.push(
+    await runTest('B16g', 'bfs init --ci ssh without a way to trust the host key -> refused (PL)', () => {
+      const r = runBfs(sshNoTrustArgs('pl', 'cli-ssh-notrust-pl'), sshNoTrustDirPl, undefined, sshEnv);
+      assert(r.status !== 0, `expected non-zero exit for a storage with no basis of trust, got ${r.status}`);
+      const out = r.stdout + r.stderr;
+      assert(out.includes('Sprzeczne polecenia'), `expected the Polish conflict message in: ${out.slice(0, 400)}`);
+      assert(out.includes('--accept-new-host-key') && out.includes('--known-host'), `expected both ways out in: ${out.slice(0, 400)}`);
+      assert(!out.includes('Operacja SSH'), `expected no transport error in: ${out.slice(0, 400)}`);
+    }),
+  );
+
   // B16d/B16e: --accept-new-cert pins the certificate the server presents, and
   // plain FTP presents none - the opt-in with --secure false is refused from the
   // settings, before the dead port is contacted.
