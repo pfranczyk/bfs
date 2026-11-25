@@ -174,6 +174,9 @@ export interface Strings {
   init_ci_name_required: string;
   init_ci_scheme_required: string;
   /** %s = supplied value */
+  max_ram_invalid: string;
+  max_ram_prompt_invalid: string;
+  /** %s = supplied value */
   init_ci_data_shards_invalid: string;
   /** %s = supplied value */
   init_ci_parity_shards_invalid: string;
@@ -190,7 +193,6 @@ export interface Strings {
   cmd_config_desc: string;
   config_current_settings: string;
   config_updated: string;
-  config_reset: string;
   config_reset_no_field: string;
   /** %s = flag name (twice) */
   config_dir_hint: string;
@@ -201,13 +203,12 @@ export interface Strings {
   config_opt_cache_dir: string;
   config_opt_temp_dir: string;
   config_opt_max_ram: string;
+  config_opt_push_mode: string;
   config_opt_reset: string;
   config_opt_on: string;
   config_opt_off: string;
-  /** %s = feature display name */
-  config_feature_on: string;
-  /** %s = feature display name */
-  config_feature_off: string;
+  /** %s = feature named by both --on and --off */
+  config_feature_conflict: string;
   /** %s = unknown feature name */
   config_feature_unknown: string;
   config_next_push: string;
@@ -448,6 +449,12 @@ export interface Strings {
   local_path_prompt: string;
   /** %s = basePath */
   local_edit_path_missing_confirm: string;
+  /** %s = basePath */
+  local_edit_path_missing_menu: string;
+  local_edit_choice_save: string;
+  local_edit_choice_back: string;
+  local_edit_choice_cancel: string;
+  local_edit_cancelled: string;
 
   // --- provider add ---------------------------------------------------------
   provider_add_opt_ci: string;
@@ -916,6 +923,8 @@ export interface Strings {
   ssh_passphrase_prompt: string;
   ssh_path_prompt: string;
   ssh_host_key_confirm: string;
+  /** %s = user@host:port, %s = fingerprint */
+  ssh_host_key_trust_menu: string;
   ssh_host_key_declined: string;
   /** %s = user@host:port */
   ssh_host_key_revoked: string;

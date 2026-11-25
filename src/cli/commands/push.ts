@@ -9,6 +9,7 @@ import { _formatDriftList, _formatExcludedList } from '../../vault/push-pipeline
 import { push } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { isCiRun } from '../interactive-mode.js';
+import { parseMaxRamFlag } from '../parse-max-ram.js';
 import { resolvePassword } from '../password-input.js';
 import { isReplMode } from '../repl-context.js';
 import { createSpinnerIo } from '../spinner-io.js';
@@ -86,6 +87,7 @@ export function registerPush(program: Command): void {
         // compressOverride is set only when the user explicitly passed one of the flags
         const compressSource = cmd.getOptionValueSource('compress');
         const compressOverride: boolean | undefined = compressSource === 'cli' ? opts.compress : undefined;
+        const maxRamMb = opts.maxRam !== undefined ? parseMaxRamFlag(opts.maxRam) : undefined;
 
         // Resolved before the spinner starts: a bad password file is the
         // operator's own typo, and its message should not surface from under a
@@ -110,7 +112,7 @@ export function registerPush(program: Command): void {
             ...(password !== undefined ? { password } : {}),
             ...(opts.tempDir !== undefined ? { tempDir: opts.tempDir } : {}),
             ...(opts.cacheDir !== undefined ? { cacheDir: opts.cacheDir } : {}),
-            ...(opts.maxRam !== undefined ? { maxRamMb: parseInt(opts.maxRam, 10) } : {}),
+            ...(maxRamMb !== undefined ? { maxRamMb } : {}),
             ...(compressOverride !== undefined ? { compressOverride } : {}),
             ...(opts.allowDrift !== undefined ? { allowDrift: opts.allowDrift } : {}),
             ...(opts.allowExcluded !== undefined ? { allowExcluded: opts.allowExcluded } : {}),

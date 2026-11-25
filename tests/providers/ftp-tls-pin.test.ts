@@ -43,9 +43,14 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_DIR = path.resolve(HERE, '..', 'fixtures', 'ftp-tls');
 const CERT_PEM = readFileSync(path.join(FIXTURE_DIR, 'cert.pem'));
 const KEY_PEM = readFileSync(path.join(FIXTURE_DIR, 'key.pem'));
+// A second, unrelated self-signed certificate: the server an operator reaches
+// after going back from the first one.
+const CERT_B_PEM = readFileSync(path.join(FIXTURE_DIR, 'cert-b.pem'));
+const KEY_B_PEM = readFileSync(path.join(FIXTURE_DIR, 'key-b.pem'));
 
 /** Uppercase colon-hex SHA-256 of the fixture cert's DER - the "known pin". */
 const KNOWN_PIN = new X509Certificate(CERT_PEM).fingerprint256;
+const KNOWN_PIN_B = new X509Certificate(CERT_B_PEM).fingerprint256;
 
 /**
  * Returns a well-formed but different colon-hex fingerprint by flipping the
@@ -141,10 +146,11 @@ function respondPhase2(stream: Duplex, line: string, state: ServerState): void {
 /**
  * Starts a minimal in-process FTP server on a random loopback port that speaks
  * plaintext until AUTH TLS, then upgrades the very same socket to a real
- * `tls.TLSSocket` presenting the fixture certificate. Tracks whether PASS was
- * received. Cross-platform (loopback, port 0) and self-tearing-down.
+ * `tls.TLSSocket` presenting the fixture certificate (or `identity`, when
+ * given). Tracks whether PASS was received. Cross-platform (loopback, port 0)
+ * and self-tearing-down.
  */
-function startTlsFtpServer(): Promise<TlsFtpServerHandle> {
+function startTlsFtpServer(identity: { key: Buffer; cert: Buffer } = { key: KEY_PEM, cert: CERT_PEM }): Promise<TlsFtpServerHandle> {
   const state: ServerState = { passReceived: false, connections: 0 };
   const sockets = new Set<net.Socket>();
 
@@ -163,7 +169,7 @@ function startTlsFtpServer(): Promise<TlsFtpServerHandle> {
         // consumes the raw bytes (the ClientHello arrives after the client
         // reads our 234, i.e. after this synchronous handler returns).
         detachPlain();
-        const tlsSocket = new tls.TLSSocket(socket, { isServer: true, key: KEY_PEM, cert: CERT_PEM });
+        const tlsSocket = new tls.TLSSocket(socket, { isServer: true, key: identity.key, cert: identity.cert });
         tlsSocket.on('error', () => {});
         attachLineReader(tlsSocket, (l) => respondPhase2(tlsSocket, l, state));
       } else {
@@ -593,6 +599,83 @@ describe('FtpProvider - configureInteractiveForEdit keeps the stored pin and com
     // this iteration exists to close, reappearing through the back door.
     expect(result?.port).toBe(deadPort);
     expect(result?.cert_fingerprint).toBeUndefined();
+  }, 20000);
+
+  // The mirror direction: back from a live server A, then a live server B that
+  // presents a different certificate. B has to be decided on, and pinned with,
+  // ITS OWN fingerprint - a decision carried over from round 1 would pin A's.
+  it('pins the certificate of the second live server after going back from the first', async () => {
+    const serverB = await startTlsFtpServer({ key: KEY_B_PEM, cert: CERT_B_PEM });
+    try {
+      const oldPort = await reservedFreePort();
+      let trustMenus = 0;
+      const { io, calls } = editIo({ host: '127.0.0.1', port: server.port, password: 'pw', rounds: [{ port: server.port }, { port: serverB.port }] });
+      const backThenAccept: ProviderIO = {
+        ...io,
+        async choose(message: string, options: string[]): Promise<string> {
+          await io.choose(message, options);
+          if (!isTrustMenu(message, options)) return options[0] ?? '';
+          trustMenus += 1;
+          const wanted = trustMenus === 1 ? TRUST_KEYWORD.back : TRUST_KEYWORD.accept;
+          return options.find((o) => wanted.test(o)) ?? options[0] ?? '';
+        },
+      };
+      const provider: StorageProvider = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, backThenAccept);
+
+      const result = await provider.configureInteractiveForEdit?.(backThenAccept, { existingConfig: existingFtpsConfig(oldPort) });
+
+      expect(KNOWN_PIN_B).not.toBe(KNOWN_PIN);
+      expect(result?.port).toBe(serverB.port);
+      expect(result?.cert_fingerprint).toBe(KNOWN_PIN_B);
+      // Each round was decided on what that round's server presented.
+      const decisions = calls.filter((c) => c.kind === 'choose' && isTrustMenu(c.text, c.options ?? []));
+      expect(decisions.map((c) => [c.text.includes(KNOWN_PIN), c.text.includes(KNOWN_PIN_B)])).toEqual([
+        [true, false],
+        [false, true],
+      ]);
+    } finally {
+      await serverB.close();
+    }
+  }, 20000);
+
+  it('does not carry the self-signed flag of an abandoned round into a config with a pasted fingerprint', async () => {
+    const [deadPort, oldPort] = await reservedFreePorts(2);
+    // Round 1 reaches the live, self-signed server; the operator goes back.
+    // Round 2 aims somewhere unreachable and pastes a fingerprint read elsewhere.
+    // Nothing is known there about how that certificate is signed.
+    const { io, calls } = editIo({ host: '127.0.0.1', port: server.port, password: 'pw', trust: 'back', pick: /paste|wklej/i, rounds: [{ port: server.port }, { port: deadPort }] });
+    const provider: StorageProvider = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+    const result = await provider.configureInteractiveForEdit?.(io, { existingConfig: existingFtpsConfig(oldPort, { cert_self_signed: undefined }) });
+
+    // Round 1 really did read the self-signed certificate - otherwise there would
+    // be no flag to leak and the assertions below would pass for nothing.
+    expect(calls.filter((c) => c.kind === 'choose' && isTrustMenu(c.text, c.options ?? []) && c.text.includes(KNOWN_PIN))).toHaveLength(1);
+    expect(result?.port).toBe(deadPort);
+    expect(result?.cert_fingerprint).toBe(PASTED_PIN);
+    expect(result?.cert_self_signed).toBeUndefined();
+  }, 20000);
+
+  it('shares one restart budget between the certificate decision and the offline menu', async () => {
+    const [deadPort, oldPort] = await reservedFreePorts(2);
+    // Rounds alternate between the live server (certificate decision) and an
+    // unreachable one (offline menu), and every answer is "back". The budget is
+    // per edit, not per menu: the fourth pass is the last one.
+    const { io, calls } = editIo({
+      host: '127.0.0.1',
+      port: server.port,
+      password: 'pw',
+      trust: 'back',
+      pick: TRUST_KEYWORD.back,
+      rounds: [{ port: server.port }, { port: deadPort }, { port: server.port }, { port: deadPort }, { port: server.port }],
+    });
+    const provider: StorageProvider = new FtpProvider({ id: 'stub', type: 'ftp', adapterPackage: null, config: {} }, io);
+
+    await expect(provider.configureInteractiveForEdit?.(io, { existingConfig: existingFtpsConfig(oldPort) })).rejects.toThrow(ProviderError);
+    const menus = calls.filter((c) => c.kind === 'choose');
+    expect(menus.filter((c) => isTrustMenu(c.text, c.options ?? []))).toHaveLength(2);
+    expect(menus.filter((c) => !isTrustMenu(c.text, c.options ?? []))).toHaveLength(2);
+    expect(calls.filter((c) => c.kind === 'ask' && c.text === 'FTP host:')).toHaveLength(4);
   }, 20000);
 
   it('says that the pinned certificate will be removed when the operator turns FTPS off', async () => {

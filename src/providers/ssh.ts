@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable, type Writable } from 'node:stream';
 import { Client, type ConnectConfig, type FileEntry, type SFTPWrapper } from 'ssh2';
-import { HostKeyDeclinedError, ProviderError, TamperDetectedError } from '../core/errors.js';
+import { ConfigureRestartRequested, HostKeyDeclinedError, ProviderError, TamperDetectedError } from '../core/errors.js';
 import { assertSafeFilename, assertSafeVaultName, isSafeFilename } from '../core/fs-utils.js';
 import { hashBuffer, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
 import { buildShardHeaderFromBytes, computeShardHeaderSize, SHARD_HEADER_READ_BYTES, sidecarFilename } from '../core/shard-io.js';
@@ -13,6 +13,7 @@ import type { CliProviderInput, ConfigureEditContext, ProviderConfig, ProviderHe
 import { findStringFlag, readJsonObjectFile } from './flags.js';
 import { finishVerifyShard } from './header-verify.js';
 import { recallIdentityConsent, rememberIdentityConsent } from './identity-consent.js';
+import { askIdentityTrust, requestConfigureRestart, withConfigureRestarts } from './identity-trust.js';
 import { type ProviderFactory, providerRegistry } from './provider.js';
 
 const CHECKSUM_SIZE = SHA256_BYTES;
@@ -103,11 +104,12 @@ function sftpErrorCode(err: unknown): Nullable<number> {
 }
 
 /**
- * Where a "trust a new host key" opt-in comes from: the current invocation
- * (consent given now, settles the question), the saved config (not consent
- * without a pin - the operator is asked), or nowhere.
+ * Where a connection's "trust a new host key" opt-in comes from: the saved
+ * config (not consent without a pin - the operator is asked), or nowhere. The
+ * opt-in given in the current invocation never reaches a connection: it is
+ * spent while the settings are collected, where it pins the key.
  */
-type OptInSource = 'invocation' | 'stored' | 'none';
+type OptInSource = 'stored' | 'none';
 
 /** True when an ssh2 error carries the authentication failure level. */
 function isAuthError(err: unknown): boolean {
@@ -337,15 +339,14 @@ export class SshProvider implements StorageProvider {
    * ~/.ssh/known_hosts hard-refuses the key - surfacing the reason - even when its
    * fingerprint is pinned. Otherwise the pinned fingerprint is authoritative; then
    * a `known_hosts` trust line; then the opt-in; and only with none of those,
-   * interactive TOFU (or a refusal when there is nobody to ask).
+   * interactive TOFU (or a refusal when there is nobody to ask). Used by the
+   * runtime connection, where the answer is yes or no: there are no settings
+   * prompts to go back to. The configure-time decision is `captureHostKey`.
    *
-   * The opt-in counts by its source. Given in this invocation (`--accept-new-host-key`
-   * or `accept_new_host_key` in `--config-file`, reaching the configure-time
-   * capture) it is consent given up front and settles the question in every mode,
-   * the same order `decideCertTrust` uses for FTPS. Read back from the saved
-   * config without a pin it is not consent - it would be spent again on every
-   * run, trusting any key at that address - so the operator is asked, once per
-   * command, and without an operator the connection is refused.
+   * The opt-in read back from the saved config without a pin is not consent -
+   * it would be spent again on every run, trusting any key at that address - so
+   * the operator is asked, once per command, and without an operator the
+   * connection is refused.
    */
   private async decideHostKeyTrust(io: ProviderIO, host: string, port: number, user: string, pin: Nullable<string>, key: Buffer, optIn: OptInSource): Promise<boolean> {
     const fp = sshFingerprint(key);
@@ -353,7 +354,7 @@ export class SshProvider implements StorageProvider {
     if (known === 'revoked') {
       // @revoked = compromised key: hard refuse, beating a pinned fingerprint. The
       // ssh2 verifier turns the false into a generic transport error, so surface
-      // the real reason here where both callers (runtime + capture) pass through.
+      // the real reason here, before the connection reports it.
       io.warn(fmtFor(io.lang, 'ssh_host_key_revoked', `${user}@${host}:${port}`));
       return false;
     }
@@ -367,7 +368,6 @@ export class SshProvider implements StorageProvider {
     }
     if (known === 'trusted') return true;
     const target = `${user}@${host}:${port}`;
-    if (optIn === 'invocation') return true;
     if (optIn === 'stored') return this.decideStoredOptIn(io, target, fp);
     if (io.interactive === false) {
       // Nobody is here to confirm TOFU, and ssh2's verifier turns the false
@@ -543,70 +543,85 @@ export class SshProvider implements StorageProvider {
   }
 
   /**
-   * Connects far enough to read the host key (presented during key exchange,
-   * before authentication), applies the TOFU trust decision, and returns the
-   * accepted fingerprint. Used by `configureInteractive`, by
-   * `configureInteractiveForEdit`, and by the `--accept-new-host-key` branch of
-   * `configureFromFlags`, so the pin lands in the config `bfs init` /
-   * `bfs provider add` / `bfs provider edit` persists. `acceptNew` carries the
-   * current invocation's `--accept-new-host-key` opt-in, which settles the trust
-   * decision without a prompt. Does not require the private key file to be readable: the
-   * fingerprint is resolved in the host-key verifier, before any credential is
-   * needed. ssh2 still proceeds to a username-only auth attempt after the key is
-   * accepted - it fails on the server (a harmless failed-login entry) and we
-   * never await it. Throws HostKeyDeclinedError when the operator declines or the
-   * key is `@revoked` - the edit flow relies on that type to tell a deliberate
-   * refusal from an unreachable server - and ProviderError for any other failure.
+   * Reads the server's host key and decides, while the connection settings are
+   * being collected, whether to pin it. Returns the accepted fingerprint. Used by
+   * `configureInteractive`, by `configureInteractiveForEdit`, and by the
+   * `--accept-new-host-key` branch of `configureFromFlags`, so the pin lands in
+   * the config `bfs init` / `bfs provider add` / `bfs provider edit` persists.
+   * `acceptNew` carries the current invocation's `--accept-new-host-key`
+   * opt-in, which settles the decision without a question.
+   *
+   * The key is read first and the connection closed before anyone is asked, so
+   * the operator's time to decide does not run against the connection's
+   * handshake timeout. The decision then follows the trust ladder: `@revoked`
+   * refuses, a `known_hosts` line or the opt-in accepts silently, nobody to ask
+   * refuses, and otherwise the operator gets three exits - trust, go back to the
+   * prompts, or cancel.
+   *
+   * @throws HostKeyDeclinedError when the operator cancels, nobody can answer,
+   *   or the key is `@revoked` - the edit flow relies on that type to tell a
+   *   deliberate refusal from an unreachable server; ConfigureRestartRequested
+   *   when the operator goes back; ProviderError when the key cannot be read
    */
   private async captureHostKey(io: ProviderIO, host: string, port: number, user: string, acceptNew: boolean): Promise<string> {
+    const key = await this.readHostKey(io, { host, port, user });
+    const fp = sshFingerprint(key);
+    const target = `${user}@${host}:${port}`;
+    const declined = (): HostKeyDeclinedError => new HostKeyDeclinedError(fmtFor(io.lang, 'ssh_host_key_declined', target));
+    const known = await this.knownHostsLookup(host, port, key);
+    if (known === 'revoked') {
+      io.warn(fmtFor(io.lang, 'ssh_host_key_revoked', target));
+      throw declined();
+    }
+    if (known === 'trusted' || acceptNew) return fp;
+    if (io.interactive === false) {
+      io.warn(fmtFor(io.lang, 'ssh_host_key_tofu_refused', target));
+      throw declined();
+    }
+    const choice = await askIdentityTrust(io, fmtFor(io.lang, 'ssh_host_key_trust_menu', target, fp), fmtFor(io.lang, 'ssh_host_key_confirm', target, fp));
+    if (choice === 'back') requestConfigureRestart(`host-key decision for ${target}`);
+    if (choice === 'cancel') throw declined();
+    this.confirmedFingerprint = fp;
+    return fp;
+  }
+
+  /**
+   * Connects far enough to read the host key - presented during key exchange,
+   * before authentication - and closes the connection without trusting it. Does
+   * not require the private key file to be readable: no credential is sent.
+   *
+   * @param io     - ProviderIO for the language of the error message
+   * @param target - server to read the key from
+   * @throws ProviderError when the server cannot be reached or presents no key
+   */
+  private async readHostKey(io: ProviderIO, target: { host: string; port: number; user: string }): Promise<Buffer> {
+    const { host, port, user } = target;
     const conn = new Client();
     try {
-      return await new Promise<string>((resolve, reject) => {
+      return await new Promise<Buffer>((resolve, reject) => {
         let settled = false;
-        // A refused key (declined / @revoked) and ssh2's follow-up 'error' event
-        // race to settle: cb(false) makes ssh2 emit a raw "verification failed"
-        // transport error. Mark the refusal BEFORE cb() so whichever path settles
-        // first reports HostKeyDeclinedError - the edit flow must tell a deliberate
-        // refusal (abort) apart from an unreachable server (offline fallback).
-        let declined = false;
-        const declinedError = (): HostKeyDeclinedError => new HostKeyDeclinedError(fmtFor(io.lang, 'ssh_host_key_declined', `${user}@${host}:${port}`));
+        // Refusing the key makes ssh2 emit "verification failed" right after; the
+        // key is in hand by then, so that error is this connection's expected end.
         conn.on('error', (err) => {
-          if (!settled) {
-            settled = true;
-            reject(declined ? declinedError() : err);
-          }
+          if (settled) return;
+          settled = true;
+          reject(err);
         });
-        const cfg: ConnectConfig = {
+        conn.connect({
           host,
           port,
           username: user,
           readyTimeout: SSH_TIMEOUT_MS,
           hostVerifier: (key: Buffer, cb: (valid: boolean) => void) => {
-            const fp = sshFingerprint(key);
-            // Bridge the async trust decision to ssh2's synchronous hostVerifier
-            // callback; the promise settles the outer capture Promise, so void it.
-            void this.decideHostKeyTrust(io, host, port, user, null, key, acceptNew ? 'invocation' : 'none')
-              .then((ok) => {
-                if (!ok) declined = true;
-                cb(ok);
-                if (settled) return;
-                settled = true;
-                if (ok) resolve(fp);
-                else reject(declinedError());
-              })
-              .catch((err) => {
-                cb(false);
-                if (!settled) {
-                  settled = true;
-                  reject(err);
-                }
-              });
+            if (!settled) {
+              settled = true;
+              resolve(key);
+            }
+            cb(false);
           },
-        };
-        conn.connect(cfg);
+        });
       });
     } catch (err) {
-      if (err instanceof ProviderError) throw err;
       throw new ProviderError(fmtFor(io.lang, 'ssh_operation_failed', host, String(port), err instanceof Error ? err.message : String(err)));
     } finally {
       conn.end();
@@ -1172,11 +1187,29 @@ export class SshProvider implements StorageProvider {
    * host-key trust step (pinning the fingerprint), and returns a config object.
    * TOFU lives here - not in probeConnection - because `bfs init` persists only
    * this result, so the pin must be captured at configure time to travel with
-   * the backup.
+   * the backup. Going back at the host-key decision collects every field again,
+   * from scratch, up to MAX_CONFIGURE_RESTARTS times.
    *
-   * @throws HostKeyDeclinedError when the operator declines the host key
+   * @throws HostKeyDeclinedError when the operator cancels at the host key;
+   *   ProviderError when the restarts run out
    */
   async configureInteractive(io: ProviderIO): Promise<Record<string, unknown>> {
+    return withConfigureRestarts(
+      io,
+      () => this.collectAddConfig(io),
+      () => new ProviderError(tFor(io.lang, 'configure_restarts_exhausted')),
+    );
+  }
+
+  /**
+   * One pass over the add-time settings, host-key decision included. Re-run
+   * from scratch on every restart, so a key read during an abandoned pass never
+   * reaches the config.
+   *
+   * @param io - ProviderIO carrying the prompts
+   * @returns the connection-config to persist
+   */
+  private async collectAddConfig(io: ProviderIO): Promise<Record<string, unknown>> {
     const { host, port, user, authFields, path: remotePath } = await this.collectSshFields(io);
     const fingerprint = await this.captureHostKey(io, host, port, user, false);
     return { host, port, user, ...authFields, path: remotePath, host_key_fingerprint: fingerprint };
@@ -1187,17 +1220,37 @@ export class SshProvider implements StorageProvider {
    * host-key pin online-first with an offline fallback:
    *   - host AND port unchanged and already pinned -> reuse the pin without
    *     contacting the server (a credential/path edit stays fully local);
-   *   - otherwise dial the server for a live TOFU confirmation. A deliberate
-   *     refusal (declined key or @revoked) aborts; an unreachable server drops to
-   *     an offline menu (paste a fingerprint / use ~/.ssh/known_hosts / leave
-   *     unset / cancel) so the edit still completes.
+   *   - otherwise dial the server for a live host-key decision (trust / back /
+   *     cancel). Cancelling or an @revoked key aborts; an unreachable server
+   *     drops to an offline menu (use ~/.ssh/known_hosts / paste a fingerprint /
+   *     back / leave unset / cancel) so the edit still completes.
+   * Both menus lead back to the prompts; one budget of MAX_CONFIGURE_RESTARTS
+   * covers the whole edit, whichever menu the operator goes back from.
    *
    * @param io  - ProviderIO for prompts and diagnostics
    * @param ctx - carries the existing connection-config (old host/port/pin)
-   * @throws HostKeyDeclinedError when the operator refuses the host key, the
-   *   presented key is @revoked, or the offline menu is cancelled
+   * @throws HostKeyDeclinedError when the operator cancels at the host key, the
+   *   presented key is @revoked, or the offline menu is cancelled; ProviderError
+   *   when the restarts run out
    */
   async configureInteractiveForEdit(io: ProviderIO, ctx: ConfigureEditContext): Promise<Record<string, unknown>> {
+    return withConfigureRestarts(
+      io,
+      () => this.collectEditConfig(io, ctx),
+      () => new ProviderError(tFor(io.lang, 'configure_restarts_exhausted_edit')),
+    );
+  }
+
+  /**
+   * One pass over the edit-time settings, including whichever host-key decision
+   * the target calls for. Re-run from scratch on every restart, so a key read
+   * during a pass the operator walked away from cannot end up pinned.
+   *
+   * @param io  - ProviderIO for prompts and diagnostics
+   * @param ctx - carries the existing connection-config (old host/port/pin)
+   * @returns the connection-config to persist
+   */
+  private async collectEditConfig(io: ProviderIO, ctx: ConfigureEditContext): Promise<Record<string, unknown>> {
     const { host, port, user, authFields, path: remotePath } = await this.collectSshFields(io);
     const build = (fingerprint: string): Record<string, unknown> => ({ host, port, user, ...authFields, path: remotePath, host_key_fingerprint: fingerprint });
 
@@ -1216,9 +1269,9 @@ export class SshProvider implements StorageProvider {
       const fingerprint = await this.captureHostKey(io, host, port, user, false);
       return build(fingerprint);
     } catch (err) {
-      // A deliberate refusal (declined key / @revoked) aborts the edit; only an
-      // unreachable server falls through to the offline menu.
-      if (err instanceof HostKeyDeclinedError) throw err;
+      // A deliberate refusal (cancelled / @revoked) aborts the edit and a request
+      // to go back restarts it; only an unreachable server reaches the offline menu.
+      if (err instanceof HostKeyDeclinedError || err instanceof ConfigureRestartRequested) throw err;
       return build(await this.offlineHostKeyMenu(io, host, port));
     }
   }
@@ -1228,9 +1281,12 @@ export class SshProvider implements StorageProvider {
    * Each non-revoked `~/.ssh/known_hosts` key for the host is offered as a concrete
    * proposal showing its fingerprint, ordered by ssh2 negotiation preference with
    * the top (the type ssh2 will present) flagged recommended - so the operator does
-   * not pin a type that will not match. Returns the fingerprint to pin - an empty
-   * string means "save without a pin".
-   * @throws HostKeyDeclinedError when the operator cancels
+   * not pin a type that will not match. Going back to the connection prompts sits
+   * right after pasting, which stays first among the fixed options because
+   * operators answer the menu by position. Returns the fingerprint to pin - an
+   * empty string means "save without a pin".
+   * @throws HostKeyDeclinedError when the operator cancels; ConfigureRestartRequested
+   *   when they ask for the connection prompts again
    */
   private async offlineHostKeyMenu(io: ProviderIO, host: string, port: number): Promise<string> {
     // Copy before sorting so a future caller/cache that shares the array
@@ -1238,9 +1294,10 @@ export class SshProvider implements StorageProvider {
     const candidates = (await this.knownHostsCandidates(host, port)).slice().sort((a, b) => hostKeyTypeRank(a.keyType) - hostKeyTypeRank(b.keyType));
     const proposals = candidates.map((c, i) => ({ fingerprint: c.fingerprint, label: fmtFor(io.lang, i === 0 ? 'ssh_edit_offline_known_hosts_entry_recommended' : 'ssh_edit_offline_known_hosts_entry', c.keyType, c.fingerprint) }));
     const optPaste = tFor(io.lang, 'ssh_edit_offline_paste');
+    const optBack = tFor(io.lang, 'trust_choice_back');
     const optLeave = tFor(io.lang, 'ssh_edit_offline_no_pin');
     const optExit = tFor(io.lang, 'ssh_edit_offline_exit');
-    const options = [...proposals.map((p) => p.label), optPaste, optLeave, optExit];
+    const options = [...proposals.map((p) => p.label), optPaste, optBack, optLeave, optExit];
 
     const choice = await io.choose(fmtFor(io.lang, 'ssh_edit_offline_menu', `${host}:${port}`), options);
     const chosen = proposals.find((p) => p.label === choice);
@@ -1248,6 +1305,8 @@ export class SshProvider implements StorageProvider {
     switch (choice) {
       case optPaste:
         return this.promptFingerprint(io);
+      case optBack:
+        return requestConfigureRestart(`unreachable target ${host}:${port}`);
       case optLeave:
         io.warn(tFor(io.lang, 'ssh_edit_no_pin_warn'));
         return '';

@@ -1,6 +1,20 @@
+import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { decryptBlob, decryptLocationMap, decryptStream, deriveKey, deriveShardNonce, encryptBlob, encryptLocationMap, encryptStream, exceedsGcmPlaintextLimit, GCM_MAX_PLAINTEXT_BYTES, generateSalt } from '../../src/core/crypto.js';
+import {
+  ARGON2_PARAMS,
+  decryptBlob,
+  decryptLocationMap,
+  decryptStream,
+  deriveKey,
+  deriveShardNonce,
+  encryptBlob,
+  encryptLocationMap,
+  encryptStream,
+  exceedsGcmPlaintextLimit,
+  GCM_MAX_PLAINTEXT_BYTES,
+  generateSalt,
+} from '../../src/core/crypto.js';
 import { DecryptionError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
 import type { ShardLocation } from '../../src/types/index.js';
@@ -44,6 +58,36 @@ describe('crypto', () => {
       const key1 = await deriveKey('sekret', generateSalt());
       const key2 = await deriveKey('sekret', generateSalt());
       expect(key1.equals(key2)).toBe(false);
+    });
+
+    // An encrypted backup opens only if today's build derives the very key the
+    // build that wrote it derived. Length and repeatability hold for any key,
+    // so only fixed bytes catch a dependency update that moves a default (the
+    // Argon2 version, the encoding of the password) and locks every older
+    // encrypted backup out. The vector comes from an independent Argon2id.
+    const KAT_PASSWORD = 'correct horse battery staple';
+    const KAT_SALT = Buffer.from('000102030405060708090a0b0c0d0e0f', 'hex');
+    const KAT_KEY = '0d1a3c6523c8f06e4e0af9c515aa5b5448cfebd6838f2d52c3d8b6ef8ddc3c2e';
+
+    it('should derive the known Argon2id key for a fixed password and salt', async () => {
+      const key = await deriveKey(KAT_PASSWORD, KAT_SALT);
+
+      expect(key.toString('hex')).toBe(KAT_KEY);
+    });
+
+    it.skipIf(typeof crypto.argon2Sync !== 'function')('should match the Argon2id key derived by node:crypto with the same parameters', async () => {
+      const independent = crypto.argon2Sync('argon2id', {
+        message: Buffer.from(KAT_PASSWORD, 'utf8'),
+        nonce: KAT_SALT,
+        parallelism: ARGON2_PARAMS.parallelism,
+        tagLength: 32,
+        memory: ARGON2_PARAMS.memoryCost,
+        passes: ARGON2_PARAMS.timeCost,
+      });
+
+      const key = await deriveKey(KAT_PASSWORD, KAT_SALT);
+
+      expect(key.toString('hex')).toBe(independent.toString('hex'));
     });
   });
 

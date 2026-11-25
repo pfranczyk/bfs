@@ -59,7 +59,7 @@ scenario_run() {
   # of the first answer, so the second answer waits for the label AFTER the
   # warning - that is the re-asked prompt, already started. Typed any earlier,
   # it reaches a prompt that does not exist yet and is dropped (Windows does).
-  # There is no answer for "Save this path anyway?": a flow that asks it, or
+  # There is no answer for "Save this path anyway": a flow that offers it, or
   # never prints the warning, hangs - and the assertions below name what it
   # printed instead before the exit code reports 124.
   # winpath converts the blocker itself: cygpath refuses a path that runs
@@ -76,7 +76,7 @@ scenario_run() {
   ]'
   PTY_TIMEOUT=25000 run_bfs_pty "$vault" "$edit_answers" --lang en provider edit p2
 
-  if printf '%s' "$BFS_OUT" | grep -qF 'Save this path anyway?'; then
+  if printf '%s' "$BFS_OUT" | grep -qF 'Save this path anyway'; then
     _fail "a path running through a file was offered for confirmation instead of being re-asked"
   fi
   if printf '%s' "$BFS_OUT" | grep -qF 'does not exist'; then

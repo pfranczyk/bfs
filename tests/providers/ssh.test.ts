@@ -68,6 +68,12 @@ const mockState: {
   /** Raw host-key bytes handed to the client's hostVerifier during handshake. */
   hostKey: Buffer;
   /**
+   * Connection lifecycle, in order: 'verifier-answered' when the provider
+   * answers hostVerifier, 'end' when it closes the client. Tests append their
+   * own markers to place a question relative to the connection.
+   */
+  events: string[];
+  /**
    * Home directory the provider's `os.homedir()` resolves to (mocked). Points
    * at a non-existent path by default so `~/.ssh/known_hosts` reads ENOENT and
    * no real dev-machine known_hosts leaks into a test.
@@ -121,6 +127,7 @@ const mockState: {
   connectShouldFail: false,
   authShouldFail: false,
   hostKey: SERVER_KEY,
+  events: [],
   homeDir: path.join(os.tmpdir(), 'bfs-ssh-no-home-DOES-NOT-EXIST'),
   corruptOnUpload: null,
   uploadByteLossPlan: [],
@@ -339,6 +346,7 @@ vi.mock('ssh2', () => {
         };
         if (typeof cfg.hostVerifier === 'function') {
           cfg.hostVerifier(mockState.hostKey, (ok: boolean) => {
+            mockState.events.push('verifier-answered');
             if (!ok) {
               // Real ssh2 reports a refused host key as a fatal KEX error with
               // level 'handshake' (protocol/kex.js), not as an authentication
@@ -361,7 +369,7 @@ vi.mock('ssh2', () => {
     }
 
     end(): void {
-      // no-op
+      mockState.events.push('end');
     }
 
     private emit(event: string, arg?: unknown): void {
@@ -516,6 +524,45 @@ function interactiveAsk(prompt: string): string {
   return '';
 }
 
+/** The three exits of the host-key decision asked while settings are collected. */
+const TRUST_OPTIONS = [fmtFor('en', 'trust_choice_accept'), fmtFor('en', 'trust_choice_back'), fmtFor('en', 'trust_choice_cancel')];
+
+type TrustPick = 'accept' | 'back' | 'cancel';
+
+/** True when a choose() call is the host-key decision menu. */
+function isTrustMenu(options: readonly string[]): boolean {
+  return options.length === TRUST_OPTIONS.length && options.every((o, i) => o === TRUST_OPTIONS[i]);
+}
+
+/**
+ * choose() handler: picks the auth method by position on the auth menu and
+ * answers the n-th host-key decision menu with `picks[n]`. `onTrust(n)` runs
+ * before the n-th answer, so a test can change what the "next server" presents.
+ * Running out of picks throws, so a flow that keeps going back fails with a
+ * reason instead of looping.
+ */
+function chooseAuthAndTrust(auth: 0 | 1, picks: readonly TrustPick[], onTrust?: (pass: number) => void): (message: string, options: string[]) => string {
+  let pass = 0;
+  return (_message: string, options: string[]): string => {
+    if (!isTrustMenu(options)) return options[auth] ?? '';
+    const pick = picks[pass];
+    if (pick === undefined) throw new Error(`host-key menu shown ${pass + 1} times, only ${picks.length} answers scripted`);
+    onTrust?.(pass);
+    pass += 1;
+    return TRUST_OPTIONS[{ accept: 0, back: 1, cancel: 2 }[pick]] ?? '';
+  };
+}
+
+/** True when a choose() call is the offline host-key menu of an edit. */
+function isOfflineMenu(options: readonly string[]): boolean {
+  return options.includes(fmtFor('en', 'ssh_edit_offline_exit'));
+}
+
+/** How many times the SSH host prompt was asked (the private-key prompt excluded). */
+function hostPrompts(calls: readonly RecordedCall[]): number {
+  return calls.filter((c) => c.kind === 'ask' && /host/i.test(c.text) && !/key/i.test(c.text)).length;
+}
+
 const createdHomes: string[] = [];
 
 /** Creates a real temp home directory (with an empty `.ssh`) and tracks it for cleanup. */
@@ -532,6 +579,7 @@ function resetMockState(): void {
   mockState.connectShouldFail = false;
   mockState.authShouldFail = false;
   mockState.hostKey = SERVER_KEY;
+  mockState.events = [];
   mockState.homeDir = path.join(os.tmpdir(), 'bfs-ssh-no-home-DOES-NOT-EXIST');
   mockState.corruptOnUpload = null;
   mockState.uploadByteLossPlan = [];
@@ -925,9 +973,9 @@ describe('SshProvider', () => {
 
   describe('configureInteractive', () => {
     it('should prompt for all fields and return a password-method config', async () => {
-      // choose returns the first option = password auth (option order [password, key]).
-      // confirm -> true accepts the TOFU host-key prompt so a fingerprint is pinned.
-      const { io } = scriptIo({ ask: interactiveAsk, askSecret: () => 'supersecret', choose: (_m, o) => o[0] ?? '', confirm: () => true });
+      // Auth menu: first option = password auth (option order [password, key]).
+      // Host-key menu: "trust" pins the fingerprint.
+      const { io } = scriptIo({ ask: interactiveAsk, askSecret: () => 'supersecret', choose: chooseAuthAndTrust(0, ['accept']) });
       const { io: ctorIO } = createMockProviderIO();
       const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, ctorIO);
 
@@ -938,8 +986,8 @@ describe('SshProvider', () => {
     });
 
     it('should collect a private key by PATH only (never prompt to paste the key body)', async () => {
-      // choose returns the second option = key auth. No passphrase (askSecret -> '').
-      const { io, calls } = scriptIo({ ask: interactiveAsk, askSecret: () => '', choose: (_m, o) => o[1] ?? '', confirm: () => true });
+      // Auth menu: second option = key auth. No passphrase (askSecret -> '').
+      const { io, calls } = scriptIo({ ask: interactiveAsk, askSecret: () => '', choose: chooseAuthAndTrust(1, ['accept']) });
       const { io: ctorIO } = createMockProviderIO();
       const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, ctorIO);
 
@@ -955,7 +1003,7 @@ describe('SshProvider', () => {
     });
 
     it('should collect a key passphrase via askSecret when one is entered', async () => {
-      const { io } = scriptIo({ ask: interactiveAsk, askSecret: (p) => (/phrase/i.test(p) ? 'keypass' : ''), choose: (_m, o) => o[1] ?? '', confirm: () => true });
+      const { io } = scriptIo({ ask: interactiveAsk, askSecret: (p) => (/phrase/i.test(p) ? 'keypass' : ''), choose: chooseAuthAndTrust(1, ['accept']) });
       const { io: ctorIO } = createMockProviderIO();
       const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, ctorIO);
 
@@ -966,7 +1014,7 @@ describe('SshProvider', () => {
 
     it('should default the port to 22 when the user leaves it empty', async () => {
       const ask = (prompt: string): string => (/port/i.test(prompt) ? '' : interactiveAsk(prompt));
-      const { io } = scriptIo({ ask, askSecret: () => 'secret', choose: (_m, o) => o[0] ?? '', confirm: () => true });
+      const { io } = scriptIo({ ask, askSecret: () => 'secret', choose: chooseAuthAndTrust(0, ['accept']) });
       const { io: ctorIO } = createMockProviderIO();
       const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, ctorIO);
 
@@ -978,29 +1026,103 @@ describe('SshProvider', () => {
 
     // configureInteractive owns TOFU: after collecting parameters it connects,
     // reads the host key, consults ~/.ssh/known_hosts (entry -> trust silently),
-    // else prompts io.confirm and pins host_key_fingerprint on acceptance -
-    // because `bfs init` persists ONLY configureInteractive's result, not the
-    // probeConnection connect. The TOFU host-key scan captures the key during the
-    // handshake and does not require the private key file to be readable.
-    it('should pin the fingerprint after the operator accepts the TOFU prompt', async () => {
-      const { io, calls } = scriptIo({ ask: interactiveAsk, askSecret: () => 'supersecret', choose: (_m, o) => o[0] ?? '', confirm: () => true });
+    // else puts the key to the operator and pins host_key_fingerprint on
+    // acceptance - because `bfs init` persists ONLY configureInteractive's result,
+    // not the probeConnection connect. The TOFU host-key scan captures the key
+    // during the handshake and does not require the private key file to be
+    // readable. The decision has three exits, like the FTPS certificate menu:
+    // refusing a key usually means "wrong server", and a yes/no would cost the
+    // operator every field already typed.
+    it('should put the host key to the operator as a menu with trust, back and cancel, and pin it on trust', async () => {
+      const { io, calls } = scriptIo({ ask: interactiveAsk, askSecret: () => 'supersecret', choose: chooseAuthAndTrust(0, ['accept']) });
       const { io: ctorIO } = createMockProviderIO();
       const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, ctorIO);
 
       const config = await p.configureInteractive(io);
 
-      const confirmCall = calls.find((c) => c.kind === 'confirm');
-      expect(confirmCall).toBeDefined();
-      expect(confirmCall?.text).toContain(SERVER_FP);
+      const menus = calls.filter((c) => c.kind === 'choose' && isTrustMenu(c.options ?? []));
+      expect(menus).toHaveLength(1);
+      expect(menus[0]?.text).toBe(fmtFor('en', 'ssh_host_key_trust_menu', 'alice@ssh.example.com:2222', SERVER_FP));
+      expect(menus[0]?.options).toEqual(TRUST_OPTIONS);
+      expect(calls.some((c) => c.kind === 'confirm')).toBe(false);
       expect(config.host_key_fingerprint).toBe(SERVER_FP);
     });
 
-    it('should throw ProviderError when the operator declines the TOFU prompt', async () => {
-      const { io } = scriptIo({ ask: interactiveAsk, askSecret: () => 'supersecret', choose: (_m, o) => o[0] ?? '', confirm: () => false });
+    // The question waits for the operator, and a decision taken inside the
+    // handshake would run against the connection's readyTimeout: an operator who
+    // checks the fingerprint for longer than that gets a connection error while
+    // the question is still on screen. So the key is read and the connection
+    // closed first, and only then is anyone asked.
+    it('should ask about the host key only after the connection that read it is closed', async () => {
+      const { io } = scriptIo({
+        ask: interactiveAsk,
+        askSecret: () => 'supersecret',
+        choose: chooseAuthAndTrust(0, ['accept'], () => {
+          mockState.events.push('menu');
+        }),
+      });
       const { io: ctorIO } = createMockProviderIO();
       const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, ctorIO);
 
-      await expect(p.configureInteractive(io)).rejects.toThrow(ProviderError);
+      await p.configureInteractive(io);
+
+      expect(mockState.events).toEqual(['verifier-answered', 'end', 'menu']);
+    });
+
+    it('should end the configuration with HostKeyDeclinedError when the operator cancels at the host key', async () => {
+      const { io, calls } = scriptIo({ ask: interactiveAsk, askSecret: () => 'supersecret', choose: chooseAuthAndTrust(0, ['cancel']) });
+      const { io: ctorIO } = createMockProviderIO();
+      const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, ctorIO);
+
+      await expect(p.configureInteractive(io)).rejects.toThrow(HostKeyDeclinedError);
+      expect(calls.filter((c) => c.kind === 'choose' && isTrustMenu(c.options ?? []))).toHaveLength(1);
+      // Cancelling ends the command; it does not lead back to the prompts.
+      expect(hostPrompts(calls)).toBe(1);
+    });
+
+    // With nobody to work a menu, an unknown key is refused before any question,
+    // naming the way out - the menu must not replace that refusal.
+    it('should refuse an unknown key without asking when nobody can answer', async () => {
+      const { io, calls } = scriptIo({ ask: interactiveAsk, askSecret: () => 'supersecret', choose: chooseAuthAndTrust(0, ['accept']), confirm: () => true, interactive: false });
+      const { io: ctorIO } = createMockProviderIO();
+      const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, ctorIO);
+
+      await expect(p.configureInteractive(io)).rejects.toThrow(HostKeyDeclinedError);
+      expect(calls.some((c) => c.kind === 'confirm')).toBe(false);
+      expect(calls.some((c) => c.kind === 'choose' && isTrustMenu(c.options ?? []))).toBe(false);
+      expect(calls.some((c) => c.kind === 'warn' && c.text === fmtFor('en', 'ssh_host_key_tofu_refused', 'alice@ssh.example.com:2222'))).toBe(true);
+    });
+
+    // The mirror direction: the operator goes back from a live server A and
+    // aims at a live server B. B must be pinned with ITS OWN key - nothing read
+    // during the abandoned pass may survive into the config.
+    it('should collect the fields again after "back" and pin the key the second server presents', async () => {
+      const otherKey = Buffer.from('mock-ssh-ed25519-host-key-of-server-b');
+      const { io, calls } = scriptIo({
+        ask: interactiveAsk,
+        askSecret: () => 'supersecret',
+        choose: chooseAuthAndTrust(0, ['back', 'accept'], (pass) => {
+          if (pass === 0) mockState.hostKey = otherKey;
+        }),
+      });
+      const { io: ctorIO } = createMockProviderIO();
+      const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, ctorIO);
+
+      const config = await p.configureInteractive(io);
+
+      expect(config.host_key_fingerprint).toBe(sshFingerprint(otherKey));
+      expect(hostPrompts(calls)).toBe(2);
+      expect(calls.some((c) => c.kind === 'info' && c.text === fmtFor('en', 'configure_reenter_notice'))).toBe(true);
+    });
+
+    it('should stop going back after the restart budget and say so', async () => {
+      const { io, calls } = scriptIo({ ask: interactiveAsk, askSecret: () => 'supersecret', choose: chooseAuthAndTrust(0, ['back', 'back', 'back', 'back', 'back']) });
+      const { io: ctorIO } = createMockProviderIO();
+      const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, ctorIO);
+
+      await expect(p.configureInteractive(io)).rejects.toThrow(fmtFor('en', 'configure_restarts_exhausted'));
+      // One first pass plus MAX_CONFIGURE_RESTARTS (3) returns to the prompts.
+      expect(calls.filter((c) => c.kind === 'choose' && isTrustMenu(c.options ?? []))).toHaveLength(4);
     });
 
     it('should pin silently (no prompt) when the host is already in ~/.ssh/known_hosts', async () => {
@@ -1011,7 +1133,7 @@ describe('SshProvider', () => {
       mockState.homeDir = home;
 
       const ask = (prompt: string): string => (/port/i.test(prompt) ? '' : interactiveAsk(prompt));
-      const { io, calls } = scriptIo({ ask, askSecret: () => 'supersecret', choose: (_m, o) => o[0] ?? '', confirm: () => false });
+      const { io, calls } = scriptIo({ ask, askSecret: () => 'supersecret', choose: chooseAuthAndTrust(0, ['cancel']), confirm: () => false });
       const { io: ctorIO } = createMockProviderIO();
       const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, ctorIO);
 
@@ -1019,6 +1141,7 @@ describe('SshProvider', () => {
 
       expect(config.host_key_fingerprint).toBe(SERVER_FP);
       expect(calls.some((c) => c.kind === 'confirm')).toBe(false);
+      expect(calls.some((c) => c.kind === 'choose' && isTrustMenu(c.options ?? []))).toBe(false);
     });
   });
 
@@ -1928,7 +2051,9 @@ describe('SshProvider', () => {
     // `accept_new_host_key: true` with a null pin - the standing "trust any key at
     // this address, every connection" window this block exists to close.
     it('should pin the presented fingerprint on a terminal too when --accept-new-host-key is given', async () => {
-      const { io, calls } = scriptIo({ interactive: true, confirm: () => false });
+      // Both forms of the question answer "no": a yes/no refuses and a menu
+      // cancels, so a flow that asks either way fails instead of pinning.
+      const { io, calls } = scriptIo({ interactive: true, confirm: () => false, choose: (_m, o) => (isTrustMenu(o) ? fmtFor('en', 'trust_choice_cancel') : (o[0] ?? '')) });
       const p = new SshProvider({ id: 'p2', type: 'ssh', adapterPackage: null, config: {} }, io);
 
       const config = await p.configureFromFlags(cliInput({ rawArgs: ['--host', 'sshhost', '--user', 'sshuser', '--password', 'p', '--path', '/backup', '--accept-new-host-key'] }));
@@ -1936,6 +2061,7 @@ describe('SshProvider', () => {
       expect(config.host_key_fingerprint).toBe(SERVER_FP);
       // Silently: the flag already carries the operator's answer.
       expect(calls.some((c) => c.kind === 'confirm')).toBe(false);
+      expect(calls.some((c) => c.kind === 'choose')).toBe(false);
     });
 
     // Counterpart of the non-interactive guard above. Worth knowing when reading
@@ -2515,10 +2641,11 @@ describe('SshProvider', () => {
   //   (1) host AND port unchanged with a fingerprint already pinned -> reuse the
   //       pin WITHOUT contacting the server;
   //   (2) identity changed (host/port) or no old pin AND the server unreachable ->
-  //       drop into an OFFLINE MENU (io.choose: paste / use known_hosts / leave
-  //       unset / exit) instead of failing;
-  //   (3) identity changed AND the server reachable but the operator refuses the
-  //       shown key (or the key is @revoked) -> abort with HostKeyDeclinedError.
+  //       drop into an OFFLINE MENU (io.choose: use known_hosts / paste / back /
+  //       leave unset / exit) instead of failing;
+  //   (3) identity changed AND the server reachable -> the host-key menu (trust /
+  //       back / cancel); cancel (or an @revoked key) aborts with
+  //       HostKeyDeclinedError, back collects the fields again.
   describe('configureInteractiveForEdit', () => {
     const EXIST_HOST = 'sshhost';
     const NEW_HOST = 'newsshhost';
@@ -2542,8 +2669,9 @@ describe('SshProvider', () => {
     }
 
     /**
-     * choose() handler. The offline host-key menu carries >= 3 options
-     * (paste / [known_hosts] / leave / exit); the 2-option menus (auth-method
+     * choose() handler for tests whose server is unreachable, so the only menu
+     * with >= 3 options is the offline host-key menu (the 3-option host-key
+     * decision menu needs a reachable server); the 2-option menus (auth-method
      * selection, known_hosts key picker) fall through. `target` selects the
      * offline-menu option by a language-agnostic keyword; `keyPick` selects a
      * specific entry in the (2-option) known_hosts key picker. Matching by keyword
@@ -2755,16 +2883,110 @@ describe('SshProvider', () => {
 
     // -- Scenario 3: identity changed, server reachable, operator declines -----
 
-    it('throws HostKeyDeclinedError when the host changed, the server is reachable, and the operator declines the key', async () => {
+    it('throws HostKeyDeclinedError when the host changed, the server is reachable, and the operator cancels at the key', async () => {
       // Reachable server, no known_hosts, no reusable pin (host changed): the
-      // provider shows the fingerprint and the operator refuses -> abort. It must
+      // provider shows the fingerprint and the operator cancels -> abort. It must
       // NOT fall into the offline menu (the server IS reachable).
-      const { io, calls } = scriptIo({ ask: fieldAsk({ host: NEW_HOST, port: '22', user: EDIT_USER, path: '/backup' }), askSecret: () => 'pw', confirm: () => false });
+      const { io, calls } = scriptIo({ ask: fieldAsk({ host: NEW_HOST, port: '22', user: EDIT_USER, path: '/backup' }), askSecret: () => 'pw', choose: chooseAuthAndTrust(0, ['cancel']) });
       const p = editProvider(io);
       const ctx: ConfigureEditContext = { existingConfig: existingConfig({ host: EXIST_HOST }) };
 
       await expect(p.configureInteractiveForEdit(io, ctx)).rejects.toThrow(HostKeyDeclinedError);
-      expect(calls.some((c) => c.kind === 'choose' && (c.options?.length ?? 0) >= 3)).toBe(false);
+      expect(calls.filter((c) => c.kind === 'choose' && isTrustMenu(c.options ?? []))).toHaveLength(1);
+      expect(calls.some((c) => c.kind === 'choose' && isOfflineMenu(c.options ?? []))).toBe(false);
+    });
+
+    // -- Going back to the prompts -------------------------------------------
+    // Refusing a server identity during an edit usually means "I typed the wrong
+    // address". Both identity decisions - the live host-key menu and the offline
+    // menu - lead back to the prompts, and the second pass is judged afresh.
+
+    it('collects the fields again after "back" at the host-key menu, and the second pass reuses the pin', async () => {
+      // First pass aims at NEW_HOST (reachable, unknown key); the second pass types
+      // the stored address again, so the pin is reused without contact.
+      let pass = 0;
+      const ask = (prompt: string): string => {
+        const p = prompt.toLowerCase();
+        if (p.includes('host') && !p.includes('key')) pass += 1;
+        return fieldAsk({ host: pass === 1 ? NEW_HOST : EXIST_HOST, port: '22', user: EDIT_USER, path: '/backup' })(prompt);
+      };
+      const { io, calls } = scriptIo({ ask, askSecret: () => 'pw', choose: chooseAuthAndTrust(0, ['back']) });
+      const p = editProvider(io);
+      const ctx: ConfigureEditContext = { existingConfig: existingConfig() };
+
+      await expect(p.configureInteractiveForEdit(io, ctx)).resolves.toMatchObject({ host: EXIST_HOST, host_key_fingerprint: OLD_PIN });
+      expect(hostPrompts(calls)).toBe(2);
+      expect(calls.filter((c) => c.kind === 'choose' && isTrustMenu(c.options ?? []))).toHaveLength(1);
+      expect(calls.some((c) => c.kind === 'choose' && isOfflineMenu(c.options ?? []))).toBe(false);
+    });
+
+    // The mirror direction in an edit: back from a live server A, then a live
+    // server B that is not the stored address. B must be pinned with ITS OWN key.
+    it('pins the key of the second live server after "back" from the first one', async () => {
+      const otherKey = Buffer.from('mock-ssh-ed25519-host-key-of-edit-server-b');
+      let pass = 0;
+      const ask = (prompt: string): string => {
+        const p = prompt.toLowerCase();
+        if (p.includes('host') && !p.includes('key')) pass += 1;
+        return fieldAsk({ host: pass === 1 ? NEW_HOST : 'third-host', port: '22', user: EDIT_USER, path: '/backup' })(prompt);
+      };
+      const { io, calls } = scriptIo({
+        ask,
+        askSecret: () => 'pw',
+        choose: chooseAuthAndTrust(0, ['back', 'accept'], (n) => {
+          if (n === 0) mockState.hostKey = otherKey;
+        }),
+      });
+      const p = editProvider(io);
+      const ctx: ConfigureEditContext = { existingConfig: existingConfig() };
+
+      await expect(p.configureInteractiveForEdit(io, ctx)).resolves.toMatchObject({ host: 'third-host', host_key_fingerprint: sshFingerprint(otherKey) });
+      expect(calls.filter((c) => c.kind === 'choose' && isTrustMenu(c.options ?? []))).toHaveLength(2);
+    });
+
+    it('offers "back" in the offline menu, after the paste option, and collects the fields again', async () => {
+      mockState.connectShouldFail = true;
+      let pass = 0;
+      const ask = (prompt: string): string => {
+        const p = prompt.toLowerCase();
+        if (p.includes('host') && !p.includes('key')) pass += 1;
+        return fieldAsk({ host: pass === 1 ? NEW_HOST : EXIST_HOST, port: '22', user: EDIT_USER, path: '/backup' })(prompt);
+      };
+      const { io, calls } = scriptIo({ ask, askSecret: () => 'pw', choose: (_m, o) => (isOfflineMenu(o) ? (o.find((x) => x === fmtFor('en', 'trust_choice_back')) ?? '') : (o[0] ?? '')) });
+      const p = editProvider(io);
+      const ctx: ConfigureEditContext = { existingConfig: existingConfig() };
+
+      await expect(p.configureInteractiveForEdit(io, ctx)).resolves.toMatchObject({ host: EXIST_HOST, host_key_fingerprint: OLD_PIN });
+      const offline = calls.filter((c) => c.kind === 'choose' && isOfflineMenu(c.options ?? []));
+      expect(offline).toHaveLength(1);
+      // No known_hosts entry for NEW_HOST, so the menu is exactly these four, in
+      // this order: pasting stays first (operators answer it by position).
+      expect(offline[0]?.options).toEqual([fmtFor('en', 'ssh_edit_offline_paste'), fmtFor('en', 'trust_choice_back'), fmtFor('en', 'ssh_edit_offline_no_pin'), fmtFor('en', 'ssh_edit_offline_exit')]);
+      expect(hostPrompts(calls)).toBe(2);
+    });
+
+    it('shares one restart budget between the host-key menu and the offline menu', async () => {
+      // Passes alternate between a reachable new server (host-key menu) and an
+      // unreachable one (offline menu); every answer is "back". The budget is per
+      // configure call, not per menu, so the fourth return ends the edit.
+      const { io, calls } = scriptIo({
+        ask: fieldAsk({ host: NEW_HOST, port: '22', user: EDIT_USER, path: '/backup' }),
+        askSecret: () => 'pw',
+        choose: (_m, o) => {
+          if (isTrustMenu(o) || isOfflineMenu(o)) {
+            // The next pass reaches the other menu.
+            mockState.connectShouldFail = !mockState.connectShouldFail;
+            return fmtFor('en', 'trust_choice_back');
+          }
+          return o[0] ?? '';
+        },
+      });
+      const p = editProvider(io);
+      const ctx: ConfigureEditContext = { existingConfig: existingConfig({ host: EXIST_HOST }) };
+
+      await expect(p.configureInteractiveForEdit(io, ctx)).rejects.toThrow(fmtFor('en', 'configure_restarts_exhausted_edit'));
+      expect(calls.filter((c) => c.kind === 'choose' && isTrustMenu(c.options ?? []))).toHaveLength(2);
+      expect(calls.filter((c) => c.kind === 'choose' && isOfflineMenu(c.options ?? []))).toHaveLength(2);
     });
 
     // -- Scenario 4: identity changed, server reachable, key @revoked ----------
@@ -2781,13 +3003,14 @@ describe('SshProvider', () => {
       await expect(p.configureInteractiveForEdit(io, ctx)).rejects.toThrow(HostKeyDeclinedError);
       // The revoke reason is surfaced (fail-closed), not a generic error.
       expect(calls.some((c) => c.kind === 'warn' && c.text === fmtFor('en', 'ssh_host_key_revoked', `${EDIT_USER}@${NEW_HOST}:22`))).toBe(true);
+      // A revoked key is refused outright: no menu, so no way to trust it anyway.
+      expect(calls.some((c) => c.kind === 'choose' && isTrustMenu(c.options ?? []))).toBe(false);
     });
 
-    // -- Scenario 5 (GUARD, already green): identity changed, reachable, accept -
-    // Not RED - documents that the online accept path pins the LIVE server
-    // fingerprint, so the offline-first refactor must preserve it.
+    // -- Scenario 5: identity changed, reachable, accept -------------------------
+    // The online accept path pins the LIVE server fingerprint.
     it('pins the live server fingerprint when the host changed, the server is reachable, and the operator accepts', async () => {
-      const { io } = scriptIo({ ask: fieldAsk({ host: NEW_HOST, port: '22', user: EDIT_USER, path: '/backup' }), askSecret: () => 'pw', confirm: () => true });
+      const { io } = scriptIo({ ask: fieldAsk({ host: NEW_HOST, port: '22', user: EDIT_USER, path: '/backup' }), askSecret: () => 'pw', choose: chooseAuthAndTrust(0, ['accept']) });
       const p = editProvider(io);
       const ctx: ConfigureEditContext = { existingConfig: existingConfig({ host: EXIST_HOST }) };
 

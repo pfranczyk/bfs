@@ -7,7 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-25
+
+### Added
+
+- **`bfs config --push-mode <mode>` changes the push mode of an existing
+  backup** - `new_version`, `overwrite` or `ask`, the same three values and the
+  same check as `bfs init --push-mode`. Until now the mode could only be chosen
+  at `bfs init`. A backup restored with `bfs recovery` comes back with
+  `new_version`, so this is also how to return it to the mode it had. An
+  unknown value, or one spelled in another case, is refused with exit code 1
+  and nothing is saved. `bfs config` with no arguments now shows the current
+  push mode as well.
+
 ### Changed
+
+- **`bfs config` lists what it set, and refuses an unknown feature with exit
+  code 1.**
+  After a change the command prints "Settings updated:" followed by one line
+  per setting it changed, in the same form as `bfs config` with no arguments,
+  so a setting that was not applied shows at once. `--on` and `--off` may be
+  repeated (`--on compress --on encryption`). An unknown feature, or one named
+  by both `--on` and `--off`, now ends the command with exit code 1 instead of
+  0, and nothing is saved - also when other settings stand next to it.
+
+- **Typing a directory that does not exist while editing a local storage
+  offers a way out.** `bfs provider edit` used to ask only whether to save the
+  path anyway, and "no" asked for the path again - Ctrl+C was the only way to
+  leave. It now offers three choices: save the path anyway, go back and enter it
+  again, or cancel the edit. Cancelling ends the command with exit code 1 and
+  saves nothing. The directory is still not created by the edit.
+
+- **An unknown SSH host key met while setting up a storage offers a way back.**
+  Typing SSH connection settings interactively (`bfs init`, `bfs provider
+  add`, `bfs provider edit`, and wherever another command asks for a storage)
+  used to end in a yes/no question about the host key, so a mistyped address
+  cost every field already entered. It now offers three choices, as for an FTPS
+  certificate: trust the key, go back and enter the connection settings again,
+  or cancel. The menu shown when an edited server cannot be reached gains the
+  same "go back" choice, right after pasting a fingerprint. Connecting to a
+  storage that is already set up still asks yes or no.
 
 - **An unattended SSH setup with no way to trust the server is refused before
   connecting.** `bfs init --ci` and `bfs provider add --ci` with an SSH storage
@@ -81,6 +120,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--max-ram` accepts only a whole number of MB above zero.** `bfs init
+  --ci`, `bfs config` and `bfs push` took any value: text given to `bfs init
+  --ci` or `bfs config` was saved as automatic, `512abc` was cut to 512, `1.5`
+  to 1, `1e3` read as 1, and zero - which the `bfs config` help offered as
+  "auto" - was used by push as a zero memory budget. Such a value is now
+  refused with exit code 1, naming it, before anything is saved or uploaded.
+  This includes an empty value, which `bfs init --ci --max-ram ""` used to
+  take as automatic - leave the flag out instead. The RAM question of an
+  interactive `bfs init` applies the same rule and words its refusal in your
+  language. `bfs config --max-ram` with no value still returns the limit to
+  automatic.
+- **Checking an SSH host key while setting up a storage no longer runs into the
+  connection timeout.** The question about an unknown host key was asked while
+  the connection was still open, so an operator who took longer than 15 seconds
+  to compare the fingerprint got a connection error with the question still on
+  screen. The key is now read and the connection closed before the question is
+  asked.
+
+- **`bfs config --on` / `--off` no longer drops the other settings typed with
+  it.** `bfs config --on compress --temp-dir <dir>` switched compression on,
+  reported success and never stored the temporary directory - the same for
+  `--cache-dir`, `--max-ram` and a second `--on` / `--off`. The
+  next push then ran with the settings the operator meant to change. Every
+  setting given is now applied in one write, and when one of them is refused
+  (an unusable directory, an unknown push mode or feature) none is saved. A
+  feature name such as `constructor` or `__proto__` is now refused as unknown;
+  before, `bfs config --off constructor` switched encryption off.
 - **An FTPS or SSH server that does not answer no longer ends an interactive
   `bfs init` or `bfs provider add`.** Reading the server identity while setting
   up the storage failed outside the retry / re-enter / abort menu, so the whole
@@ -1829,7 +1895,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.7...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/pfranczyk/bfs/compare/v0.14.7...v0.15.0
 [0.14.7]: https://github.com/pfranczyk/bfs/compare/v0.14.6...v0.14.7
 [0.14.6]: https://github.com/pfranczyk/bfs/compare/v0.14.5...v0.14.6
 [0.14.5]: https://github.com/pfranczyk/bfs/compare/v0.14.4...v0.14.5

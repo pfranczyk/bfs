@@ -79,7 +79,9 @@ scenario_run() {
     "ssh:s9 --config-file $(winpath "$sshjson") --accept-new-host-key" --rebuild
   # Checked BEFORE the exit code: an asked question is the precise diagnosis, and
   # the failure it causes downstream ("expected exit 0, got 1") is only its echo.
-  if printf '%s' "$BFS_OUT" | grep -qF "Trust the host key for"; then
+  # Both forms of the question: the yes/no asked while connecting, and the menu
+  # asked while the settings are collected.
+  if printf '%s' "$BFS_OUT" | grep -qF -e "Trust the host key for" -e "presented a host key"; then
     _fail "repair asked the operator to trust the host key despite --accept-new-host-key"
   fi
   assert_exit 0

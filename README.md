@@ -79,7 +79,7 @@ bfs pull
 | `bfs repair` | Fix a backup's storage locations without re-uploading - repoint a moved device, rebuild a lost part, or restore missing/damaged header files (`--restore-headers`) |
 | `bfs clear` | Delete pending cache and stale lock files from an interrupted push or pull |
 | `bfs scheme set <N> <K>` | Change the Reed-Solomon N/K scheme (minimum 2/1) |
-| `bfs config [--cache-dir <path>] [--temp-dir <path>] [--max-ram <MB>] [--on <feature>] [--off <feature>]` | View or change per-backup settings (cache dir, temp dir, RAM limit, toggle compression/encryption) |
+| `bfs config [--cache-dir <path>] [--temp-dir <path>] [--max-ram <MB>] [--push-mode <mode>] [--on <feature>] [--off <feature>]` | View or change per-backup settings (cache dir, temp dir, RAM limit, push mode `new_version`/`overwrite`/`ask`, toggle compression/encryption); several at once are applied together and listed |
 | `bfs provider add` | Add a new provider to the vault |
 | `bfs provider list` | List configured providers |
 | `bfs provider edit [name]` | Edit a provider's connection settings - writes only local config, never the backup |

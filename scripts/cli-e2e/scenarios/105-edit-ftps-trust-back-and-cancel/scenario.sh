@@ -12,8 +12,8 @@
 # Failure injected for real: the wrong target is a second ftpd container holding
 # its own self-signed certificate, not a faked answer.
 #
-# local: N/A - no server identity to decide about. ssh: GAP - the same three exits
-# for a host key are a separate iteration.
+# local: N/A - no server identity to decide about. ssh: the twin is
+# 151-edit-ssh-trust-back-and-cancel.
 # Docker-managed: self-provisions both ftpd (no --ftp needed). SKIPs without Docker.
 
 SCENARIO_NAME="edit ftps trust menu: cancel leaves the config alone, going back re-collects the fields"

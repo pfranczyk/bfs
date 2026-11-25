@@ -12,7 +12,9 @@ import { type InitTarget, inspectInitTarget } from '../../vault/config.js';
 import { admitInitProvider, type InitOptions, type InitSettings, init } from '../../vault/vault-manager.js';
 import { resolveCwd } from '../cwd.js';
 import { isCiRun } from '../interactive-mode.js';
+import { maxRamAnswerToMb, parseMaxRamFlag, validateMaxRamAnswer } from '../parse-max-ram.js';
 import { parseInitProviderSpec, validateProviderIdsUnique } from '../parse-provider-spec.js';
+import { parsePushModeFlag } from '../parse-push-mode.js';
 import { isPromptCancellation, promptWithRawMode } from '../prompt.js';
 import { probeProviderWithRecovery } from '../provider-probe.js';
 import { CommandAbort, error, formatBytes, info, success, warn } from '../ui.js';
@@ -347,12 +349,9 @@ async function _resolveCiInputs(argName: string | undefined, ciOpts: InitCiOpts,
     error(fmt('init_ci_providers_required', String(required), String(dataShards), String(parityShards)));
     throw new CommandAbort();
   }
-  // Push mode validated early so we abort before scanning the directory.
-  const m = ciOpts.pushMode ?? PushMode.NewVersion;
-  if (m !== PushMode.NewVersion && m !== PushMode.Overwrite && m !== PushMode.Ask) {
-    error(fmt('init_push_mode_invalid', m));
-    throw new CommandAbort();
-  }
+  // Push mode and RAM limit validated early so we abort before scanning the directory.
+  parsePushModeFlag(ciOpts.pushMode ?? PushMode.NewVersion);
+  if (ciOpts.maxRam !== undefined) parseMaxRamFlag(ciOpts.maxRam);
   return { dataShards, parityShards, providers };
 }
 
@@ -493,14 +492,7 @@ async function _promptProviders({ count, rootDir, settings, recorded }: PromptPr
 
 /** Resolves the push mode - validated CI flag or interactive choice. */
 async function _resolvePushMode(ciOpts: InitCiOpts, isCi: boolean): Promise<PushMode> {
-  if (isCi) {
-    const m = ciOpts.pushMode ?? PushMode.NewVersion;
-    if (m !== PushMode.NewVersion && m !== PushMode.Overwrite && m !== PushMode.Ask) {
-      error(fmt('init_push_mode_invalid', m));
-      throw new CommandAbort();
-    }
-    return m;
-  }
+  if (isCi) return parsePushModeFlag(ciOpts.pushMode ?? PushMode.NewVersion);
   const ans = await promptWithRawMode<{ pushMode: PushMode }>([
     {
       type: 'rawlist',
@@ -523,21 +515,10 @@ async function _resolvePushMode(ciOpts: InitCiOpts, isCi: boolean): Promise<Push
  */
 async function _resolveMaxRam(ciOpts: InitCiOpts, isCi: boolean): Promise<Nullable<number>> {
   if (isCi) {
-    return ciOpts.maxRam ? parseInt(ciOpts.maxRam, 10) : null;
+    return ciOpts.maxRam !== undefined ? parseMaxRamFlag(ciOpts.maxRam) : null;
   }
   const detectedRam = Math.round(os.totalmem() / (1024 * 1024));
   const suggested = Math.min(4096, Math.round(detectedRam * 0.25));
-  const ans = await promptWithRawMode<{ maxRamStr: string }>([
-    {
-      type: 'input',
-      name: 'maxRamStr',
-      message: fmt('init_max_ram_prompt', String(detectedRam)),
-      default: String(suggested),
-      validate: (v: string) => {
-        const n = parseInt(v, 10);
-        return n > 0 ? true : 'Must be a positive number';
-      },
-    },
-  ]);
-  return parseInt(ans.maxRamStr, 10);
+  const ans = await promptWithRawMode<{ maxRamStr: string }>([{ type: 'input', name: 'maxRamStr', message: fmt('init_max_ram_prompt', String(detectedRam)), default: String(suggested), validate: validateMaxRamAnswer }]);
+  return maxRamAnswerToMb(ans.maxRamStr);
 }

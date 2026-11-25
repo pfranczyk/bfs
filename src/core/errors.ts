@@ -117,10 +117,11 @@ export function isIdentityDeclined(err: unknown): boolean {
 }
 
 /**
- * Thrown when the operator deliberately refuses a presented host key (declines
- * the interactive confirm, or the key is `@revoked` in known_hosts). A decline
- * must abort the flow, whereas an unreachable server may fall back to an
- * offline path.
+ * Thrown when a presented host key is not trusted while connection settings
+ * are being collected: the operator cancels at the host-key decision or the
+ * offline menu, nobody is there to answer, or the key is `@revoked` in
+ * known_hosts. A refusal must abort the flow, whereas an unreachable server may
+ * fall back to an offline path.
  */
 export class HostKeyDeclinedError extends IdentityDeclinedError {
   constructor(message: string) {

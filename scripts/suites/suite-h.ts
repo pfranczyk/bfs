@@ -20,6 +20,12 @@ import { readJson } from '../smoke-vault.js';
  *   readers reject, with a non-zero exit and the hint (H11, H12)
  * - bfs push / bfs pull name the cache directory and `bfs config --cache-dir`
  *   when the blob cannot be written there, keeping the OS reason (H13, H14)
+ * - bfs config --push-mode stores the mode, bfs config shows it, an unknown
+ *   mode is refused with the init wording and a non-zero exit (H15)
+ * - bfs config --on/--off next to other settings applies every one of them and
+ *   lists what was set; one invalid value refuses the whole command (H16)
+ * - bfs config / bfs push --max-ram refuse anything but a whole number above
+ *   zero with exit 1, leaving config.json untouched (H17)
  */
 export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
   const tests: TestResult[] = [];
@@ -79,7 +85,7 @@ export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
       const r = runBfs(['config', '--cache-dir', '--reset'], ctx.vaultDir, undefined, hEnv);
       assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
       const out = r.stdout + r.stderr;
-      assert(/reset|default/i.test(out), `expected config_reset in: ${out.slice(0, 300)}`);
+      assert(/reset|default/i.test(out), `expected the default value in: ${out.slice(0, 300)}`);
 
       // Verify config.json cache_dir is null/absent
       const cfg = await readJson<{ cache_dir?: string | null }>(path.join(ctx.vaultDir, '.bfs', 'config.json'));
@@ -252,6 +258,104 @@ export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
         assert(!/^\s*at .+:\d+:\d+/m.test(out), `expected no stack trace in: ${out.slice(0, 400)}`);
       } finally {
         await fs.rm(path.join(blockedCache, 'pull.blob.pending'), { recursive: true, force: true });
+      }
+    }),
+  );
+
+  tests.push(
+    await runTest('H15', 'bfs config --push-mode <mode> stores it, bfs config shows it, an unknown mode is refused', async () => {
+      const configPath = path.join(ctx.vaultDir, '.bfs', 'config.json');
+      const original = await readJson<Record<string, unknown>>(configPath);
+      assert(original.push_mode !== 'overwrite', `fixture must not already record overwrite, got: ${JSON.stringify(original.push_mode)}`);
+      try {
+        const r = runBfs(['config', '--push-mode', 'overwrite'], ctx.vaultDir, undefined, hEnv);
+        assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+        const cfg = await readJson<{ push_mode?: string }>(configPath);
+        assert(cfg.push_mode === 'overwrite', `expected push_mode="overwrite", got: ${JSON.stringify(cfg.push_mode)}`);
+
+        const shown = runBfs(['config'], ctx.vaultDir, undefined, hEnv);
+        const shownOut = shown.stdout + shown.stderr;
+        assert(/push-mode:\s+overwrite/.test(shownOut), `expected push-mode line in bfs config output: ${shownOut.slice(0, 400)}`);
+
+        const bad = runBfs(['config', '--push-mode', 'sometimes'], ctx.vaultDir, undefined, hEnv);
+        const badOut = bad.stdout + bad.stderr;
+        assert(bad.status !== 0, `expected exit != 0 for an unknown mode, got: ${bad.status}`);
+        assert(/Invalid --push-mode: "sometimes"/.test(badOut), `expected the init wording in: ${badOut.slice(0, 400)}`);
+        const after = await readJson<{ push_mode?: string }>(configPath);
+        assert(after.push_mode === 'overwrite', `a refused mode must leave config.json alone, got: ${JSON.stringify(after.push_mode)}`);
+      } finally {
+        // The vault is shared by the suites: leave it as it was found.
+        await fs.writeFile(configPath, JSON.stringify(original, null, 2));
+      }
+    }),
+  );
+
+  tests.push(
+    await runTest('H16', 'bfs config --on/--off with other settings applies all of them and lists them; one bad value refuses all', async () => {
+      const configPath = path.join(ctx.vaultDir, '.bfs', 'config.json');
+      const original = await readJson<{ push_mode?: string; compression?: { enabled?: boolean } }>(configPath);
+      assert(original.push_mode !== 'overwrite', `fixture must not already record overwrite, got: ${JSON.stringify(original.push_mode)}`);
+      // Flip compression away from whatever the fixture holds, so the write is observable either way.
+      const wasCompressed = original.compression?.enabled === true;
+      const toggle = wasCompressed ? '--off' : '--on';
+      const tempDir = path.join(hLangDir, 'h16-temp');
+      try {
+        const r = runBfs(['config', toggle, 'compress', '--push-mode', 'overwrite', '--temp-dir', tempDir], ctx.vaultDir, undefined, hEnv);
+        const out = r.stdout + r.stderr;
+        assert(r.status === 0, `exit ${r.status ?? 'null'}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+        const cfg = await readJson<{ push_mode?: string; temp_dir?: string; compression?: { enabled?: boolean } }>(configPath);
+        assert(cfg.push_mode === 'overwrite', `push mode typed next to ${toggle} was dropped, got: ${JSON.stringify(cfg.push_mode)}`);
+        assert(cfg.temp_dir === tempDir, `temp dir typed next to ${toggle} was dropped, got: ${JSON.stringify(cfg.temp_dir)}`);
+        assert(cfg.compression?.enabled === !wasCompressed, `compression not switched, got: ${JSON.stringify(cfg.compression)}`);
+        assert(out.includes('Settings updated:'), `expected the list heading in: ${out.slice(0, 500)}`);
+        assert(/push-mode:\s+overwrite/.test(out), `expected the push-mode line in: ${out.slice(0, 500)}`);
+        assert(out.includes(`temp-dir:`) && out.includes(tempDir), `expected the temp-dir line in: ${out.slice(0, 500)}`);
+        assert(new RegExp(`compression:\\s+${wasCompressed ? 'disabled' : 'enabled'}`).test(out), `expected the compression line in: ${out.slice(0, 500)}`);
+
+        const before = await fs.readFile(configPath, 'utf8');
+        const bad = runBfs(['config', wasCompressed ? '--on' : '--off', 'compress', '--push-mode', 'OVERWRITE'], ctx.vaultDir, undefined, hEnv);
+        const badOut = bad.stdout + bad.stderr;
+        assert(bad.status !== 0, `expected exit != 0 when one value is invalid, got: ${bad.status}\n${badOut.slice(0, 400)}`);
+        assert(/Invalid --push-mode: "OVERWRITE"/.test(badOut), `expected the init wording in: ${badOut.slice(0, 400)}`);
+        const after = await fs.readFile(configPath, 'utf8');
+        assert(after === before, 'a refused command must leave config.json untouched - compression included');
+      } finally {
+        // The vault is shared by the suites: leave it as it was found.
+        await fs.writeFile(configPath, JSON.stringify(original, null, 2));
+      }
+    }),
+  );
+
+  tests.push(
+    await runTest('H17', 'bfs config / push --max-ram refuse anything but a whole number above zero and leave config.json alone', async () => {
+      const configPath = path.join(ctx.vaultDir, '.bfs', 'config.json');
+      const original = await fs.readFile(configPath, 'utf8');
+      try {
+        for (const value of ['abc', '512abc', '-5', '0']) {
+          const bad = runBfs(['config', '--max-ram', value], ctx.vaultDir, undefined, hEnv);
+          const badOut = bad.stdout + bad.stderr;
+          assert(bad.status === 1, `config --max-ram ${value}: expected exit 1, got: ${bad.status}\n${badOut.slice(0, 400)}`);
+          assert(badOut.includes(`--max-ram must be an integer >= 1 (MB), got "${value}".`), `config --max-ram ${value}: expected the refusal in: ${badOut.slice(0, 400)}`);
+          assert(!/NaN MB/.test(badOut), `config --max-ram ${value}: a refused value must not be listed: ${badOut.slice(0, 400)}`);
+          const after = await fs.readFile(configPath, 'utf8');
+          assert(after === original, `config --max-ram ${value}: a refused value must leave config.json untouched`);
+
+          const push = runBfs(['push', '--max-ram', value], ctx.vaultDir, undefined, hEnv);
+          const pushOut = push.stdout + push.stderr;
+          assert(push.status === 1, `push --max-ram ${value}: expected exit 1, got: ${push.status}\n${pushOut.slice(0, 400)}`);
+          assert(pushOut.includes(`--max-ram must be an integer >= 1 (MB), got "${value}".`), `push --max-ram ${value}: expected the refusal in: ${pushOut.slice(0, 400)}`);
+        }
+
+        // A/B control: a valid value is still stored and listed.
+        const ok = runBfs(['config', '--max-ram', '512'], ctx.vaultDir, undefined, hEnv);
+        const okOut = ok.stdout + ok.stderr;
+        assert(ok.status === 0, `config --max-ram 512: exit ${ok.status ?? 'null'}\n${okOut.slice(0, 400)}`);
+        const cfg = await readJson<{ max_ram_mb?: unknown }>(configPath);
+        assert(cfg.max_ram_mb === 512, `expected max_ram_mb=512, got: ${JSON.stringify(cfg.max_ram_mb)}`);
+        assert(/max-ram:\s+512 MB/.test(okOut), `expected the max-ram line in: ${okOut.slice(0, 400)}`);
+      } finally {
+        // The vault is shared by the suites: leave it as it was found.
+        await fs.writeFile(configPath, original);
       }
     }),
   );
