@@ -8,35 +8,24 @@
 # race against here. So this scenario proves the CONTENT of the refusal with
 # plain run_bfs, not run_bfs_pty.
 #
-# This closes only the message-content half of the SSH coverage gap - not the
-# "real terminal, never prompts" half, which stays open pending a PTY-driven
-# companion answering whether SSH trust can also be decided from settings
-# alone, the way FTPS's ftp_cert_trust_conflict already is.
+# SSH trust is decided from the settings: a pin (--known-host), an opt-in
+# (--accept-new-host-key) or an entry for host:port in ~/.ssh/known_hosts. The
+# adapter refuses while it parses the flags when none of them is there, so the
+# refusal comes before any storage is probed or recorded. The scenario points
+# HOME at an empty directory so the operator's own known_hosts cannot supply
+# that entry by accident.
 #
-# Unlike FTPS, SSH trust is not decidable from the flags alone:
-# `knownHostsLookup` reads ~/.ssh/known_hosts, so a missing --known-host does
-# not by itself mean "no trust source" - the refusal has to come from the
-# CONNECTION attempt, once decideHostKeyTrust reaches its non-interactive TOFU
-# branch with no pin, no --accept-new-host-key, and no known_hosts entry.
-#
-# That branch returns false and, ahead of it, warns naming both ways out
-# (mirroring the existing @revoked case) - it does NOT stop withClient from
-# also turning the declined key into a generic `ssh_operation_failed`, so this
-# scenario pins the presence of the named flags, not the absence of that
-# generic message.
-#
-# The server is up on purpose: the refusal is decided at connect time (unlike
-# FTPS's from-the-flags refusal in 108), so it has to actually reach the
-# medium to reproduce. It also carries the second half - the advice has to
-# complete a real backup through this same server, verified on the server
+# The server is up on purpose, unlike the dead-port twin 149: the refusal must
+# not come from the connection even when one would succeed, and the advice has
+# to complete a real backup through this same server, verified on the server
 # itself (not just via a roundtrip the other two, local shards could satisfy
 # alone under this 2/1 scheme).
 #
 # local/ftp: N/A - host-key TOFU is SSH-specific.
 # Docker-managed: self-provisions its sshd (no --ssh needed). SKIPs without Docker.
 
-SCENARIO_NAME="init --ci over SSH refuses first-contact TOFU naming the ways out"
-SCENARIO_DESC="init --ci against a real sshd with no pin, no --accept-new-host-key and no known_hosts entry must refuse naming both --accept-new-host-key and --known-host; the advice must then complete the same init and land shard_2 on the server"
+SCENARIO_NAME="init --ci over SSH refuses a missing host-key trust basis next to a live server"
+SCENARIO_DESC="init --ci against a real sshd with no pin, no --accept-new-host-key and no known_hosts entry must refuse from the settings, naming both --accept-new-host-key and --known-host, without reaching the transport or writing config; the advice must then complete the same init and land shard_2 on the server"
 REQUIRES_LOCAL=2
 REQUIRES_SSH=0
 REQUIRES_DOCKER=1
@@ -45,6 +34,8 @@ scenario_run() {
   local vault="$SC_DIR/vault" base="$SC_DIR/baseline.txt" name="bfs125"
   local ctr="bfs-e2e-${RUN_ID}-c125" vol="bfs-e2e-${RUN_ID}-v125"
   local port=2350
+  local home="$SC_DIR/home"
+  mkdir -p "$home/.ssh"
 
   docker_volume_reset "$vol"
   docker_sshd_up "$ctr" "$port" "$vol" || _fail "could not start sshd on port $port"
@@ -56,19 +47,24 @@ scenario_run() {
 
   # Manual --provider string (not build_pool_seq's ssh branch, which always
   # appends --accept-new-host-key): first contact, no pin, no opt-in, no
-  # known_hosts entry - the exact state decideHostKeyTrust's non-interactive
-  # TOFU branch refuses.
-  run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
+  # known_hosts entry - a run that names no basis for trusting the host key.
+  HOME="$home" USERPROFILE="$(winpath "$home")" run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 2 --parity-shards 1 "${PROVIDER_ARGS[@]}" \
     --provider "ssh:p2 --host 127.0.0.1 --port ${port} --user ${DOCKER_SSH_USER} --password ${DOCKER_SSH_PASS} --path ${DOCKER_SSH_BASE}"
   assert_exit 1
+  assert_out_contains "127.0.0.1:${port}"
   assert_out_contains "--accept-new-host-key"
   assert_out_contains "--known-host"
+  # Decided from the settings, so the live server was never asked and nothing
+  # was recorded - not even the two local storages listed before it.
+  if printf '%s' "$BFS_OUT" | grep -qF "SSH operation failed"; then
+    _fail "init --ci reached the SSH transport: the missing trust basis was decided at connect time, not from the settings"
+  fi
   assert_no_file "$vault/.bfs/config.json"
 
   # Positive control: the same command with one of the named flags completes,
   # so the refusal is about the missing trust decision and not about the server.
-  run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
+  HOME="$home" USERPROFILE="$(winpath "$home")" run_bfs "$vault" init "$name" --ci --no-enc --no-compress \
     --data-shards 2 --parity-shards 1 "${PROVIDER_ARGS[@]}" \
     --provider "ssh:p2 --host 127.0.0.1 --port ${port} --user ${DOCKER_SSH_USER} --password ${DOCKER_SSH_PASS} --path ${DOCKER_SSH_BASE} --accept-new-host-key"
   assert_ok

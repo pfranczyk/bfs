@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderError } from '../../src/core/errors.js';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { createMockProviderIO, providerRegistry } from '../../src/providers/provider.js';
@@ -24,10 +24,10 @@ const GATED_TYPE = 'hostkey-gated-test';
 
 /**
  * Local-disk provider that models SSH's host-key trust gate
- * (decideHostKeyTrust in src/providers/ssh.ts). With no pinned fingerprint a
- * non-interactive caller (io.interactive === false) falls back to
- * accept_new_host_key - true here, mirroring the `--accept-new-host-key` the SSH
- * pool passes at init - while an interactive caller is asked via confirm(). A
+ * (decideHostKeyTrust in src/providers/ssh.ts) in its two outcomes that matter
+ * here: a non-interactive caller (io.interactive === false) connects on a trust
+ * that needs nobody to answer - in the real adapter the fingerprint the SSH pool
+ * pins at init - while an interactive caller is asked via confirm(). A
  * silent IO that neither signals interactive:false nor confirms drives
  * authenticate() into rejection, exactly as a real sshd refuses the connection.
  * delete() stays the real local delete, so whether the shard actually leaves the
@@ -108,6 +108,36 @@ describe('prune - remote shard deletion through a host-key-gated provider', () =
 
     // The bug: prune's silent IO drives the host-key gate into rejection and the
     // best-effort catch swallows the failed delete, orphaning the shard.
+    expect(existsSync(gatedShardV1)).toBe(false);
+  });
+
+  // With the command's io, the trust decision belongs to whoever runs the
+  // command: an operator who is there is asked (a saved opt-in without a pin is
+  // not consent, so the real adapters ask here), and what they answer decides.
+  it('should hand the command io to the providers, so an operator at the terminal is asked', async () => {
+    const presentIo = createMockProviderIO({ 'trust host key?': 'true' }).io;
+    await fs.writeFile(path.join(root, 'data.txt'), 'backup payload', 'utf-8');
+    await init(root, {
+      vault_name: 'vault',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: [
+        { id: 'p0', type: 'local', adapterPackage: null, config: { path: pdirs[0] ?? '' } },
+        { id: 'p1', type: 'local', adapterPackage: null, config: { path: pdirs[1] ?? '' } },
+        { id: 'p2', type: GATED_TYPE, adapterPackage: null, config: { path: pdirs[2] ?? '' } },
+      ],
+      push_mode: PushMode.NewVersion,
+      io: presentIo,
+    });
+    await push(root, { io: presentIo }); // v1
+    await push(root, { io: presentIo }); // v2
+    const gatedShardV1 = path.join(pdirs[2] ?? '', 'vault', 'shard_2.bfs.1');
+    const operatorIo = createMockProviderIO({ 'trust host key?': 'true' }).io;
+    const asked = vi.spyOn(operatorIo, 'confirm');
+
+    await prune(root, { versions: [1], io: operatorIo });
+
+    expect(asked).toHaveBeenCalledWith('trust host key?');
     expect(existsSync(gatedShardV1)).toBe(false);
   });
 });

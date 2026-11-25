@@ -1,6 +1,6 @@
 {
   "name": "bfs-vault",
-  "version": "0.14.7",
+  "version": "0.15.0",
   "description": "Encrypted CLI backup split across local, FTP and SSH storages with Reed-Solomon parity - any N of N+K parts restore everything",
   "type": "module",
   "preferGlobal": true,
@@ -70,13 +70,13 @@
   },
   "license": "AGPL-3.0-or-later",
   "dependencies": {
-    "@node-rs/argon2": "^2.0.2",
+    "@node-rs/argon2": "^2.2.2",
     "@subspace/reed-solomon-erasure.wasm": "^0.2.5",
-    "basic-ftp": "^6.2.1",
+    "basic-ftp": "^6.2.6",
     "chalk": "^5.6.2",
     "commander": "^15.0.0",
     "ignore": "^7.0.13",
-    "inquirer": "^14.0.2",
+    "inquirer": "^14.3.1",
     "ora": "^9.4.1",
     "ssh2": "^1.17.0"
   },

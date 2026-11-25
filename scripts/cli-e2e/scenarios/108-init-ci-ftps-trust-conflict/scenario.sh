@@ -55,8 +55,8 @@ scenario_run() {
 
   # Positive control: the same command with one of the named flags completes,
   # so the refusal is about the missing instruction and not about the storage.
-  # The dead port still refuses - but now at the connection, which is the honest
-  # reason and a different message.
+  # The dead port still refuses - but now at the connection that reads the
+  # certificate to pin, which is the honest reason and a different message.
   run_bfs "$vault" --lang en init "$name" --ci --no-enc --no-compress \
     --data-shards 2 --parity-shards 1 "${PROVIDER_ARGS[@]}" \
     --provider "ftp:nas --host 127.0.0.1 --port ${deadport} --user u --password p --path /backup --accept-new-cert"

@@ -37,15 +37,24 @@ async function writeConfigFile(content: string): Promise<string> {
   return file;
 }
 
+/** One menu answer, named; `MENU_POSITION` maps it to the option it picks. */
+type MenuPick = 'save' | 'back' | 'cancel';
+
+const MENU_POSITION: Readonly<Record<MenuPick, number>> = { save: 0, back: 1, cancel: 2 };
+
 /**
- * ProviderIO answering the path prompt from `replies` in order, confirming
- * everything, and recording what reached the operator. A prompt beyond the last
- * reply throws, so a flow that keeps re-asking fails with a reason instead of
- * spinning until the test times out.
+ * ProviderIO answering the path prompt from `replies` in order and every menu
+ * from `picks` (default: the first option), recording what reached the
+ * operator. A prompt beyond the last reply throws, so a flow that keeps
+ * re-asking fails with a reason instead of spinning until the test times out.
+ * `confirms` counts every question that offers the path for saving - a yes/no
+ * and a menu alike - so a test asserting "never offered" fails whichever form
+ * the offer takes.
  */
-function scriptedIO(replies: readonly string[]): { io: ProviderIO; warns: string[]; asked: () => number; confirms: () => number } {
+function scriptedIO(replies: readonly string[], picks: readonly MenuPick[] = []): { io: ProviderIO; warns: string[]; asked: () => number; confirms: () => number; menus: Array<{ message: string; options: string[] }> } {
   const { io: base } = createMockProviderIO();
   const warns: string[] = [];
+  const menus: Array<{ message: string; options: string[] }> = [];
   let asked = 0;
   let confirms = 0;
   const io: ProviderIO = {
@@ -60,11 +69,19 @@ function scriptedIO(replies: readonly string[]): { io: ProviderIO; warns: string
       confirms += 1;
       return true;
     },
+    async choose(message: string, options: string[]): Promise<string> {
+      const pick = picks[menus.length] ?? 'save';
+      menus.push({ message, options });
+      confirms += 1;
+      const chosen = options[MENU_POSITION[pick]];
+      if (chosen === undefined) throw new Error(`menu offered ${options.length} options, cannot pick "${pick}"`);
+      return chosen;
+    },
     warn(message: string): void {
       warns.push(message);
     },
   };
-  return { io, warns, asked: () => asked, confirms: () => confirms };
+  return { io, warns, asked: () => asked, confirms: () => confirms, menus };
 }
 
 /**
@@ -489,25 +506,96 @@ describe('LocalFsProvider', () => {
   // the operator would have nothing to type. The edit-aware flow therefore lets
   // a path that is not there yet be stored, once the operator stands behind it.
   describe('configureInteractiveForEdit', () => {
-    it('should store a path that does not exist yet, once the operator confirms it', async () => {
+    it('should store a path that does not exist yet, once the operator picks "save anyway"', async () => {
       const missing = path.join(tmpDir, 'not-mounted-yet');
-      const { io: base } = createMockProviderIO({ 'Base directory path:': missing });
-      let confirms = 0;
-      const io: ProviderIO = {
-        ...base,
-        async confirm(): Promise<boolean> {
-          confirms += 1;
-          return true;
-        },
-      };
-      const { io: ctorIO } = createMockProviderIO();
-      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, ctorIO);
+      const script = scriptedIO([missing], ['save']);
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
       expect(typeof p.configureInteractiveForEdit).toBe('function');
 
-      const config = await p.configureInteractiveForEdit?.(io, { existingConfig: { path: tmpDir } });
+      const config = await p.configureInteractiveForEdit?.(script.io, { existingConfig: { path: tmpDir } });
 
       expect(config).toEqual({ path: missing });
-      expect(confirms).toBe(1);
+      expect(script.confirms()).toBe(1);
+      // The edit never touches the medium: a directory created at the mount point
+      // of an unplugged drive would send the next push to the disk underneath.
+      await expect(fs.stat(missing)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    // A missing directory is put to the operator with three exits, like the
+    // server-identity menu: save anyway / back to the path / cancel the edit.
+    // Without the third one, an operator who decides the whole edit was a
+    // mistake can only leave with Ctrl+C.
+    it('should offer save, back and cancel for a missing directory, naming the path', async () => {
+      const missing = path.join(tmpDir, 'not-mounted-yet');
+      const script = scriptedIO([missing], ['save']);
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      await p.configureInteractiveForEdit?.(script.io, { existingConfig: { path: tmpDir } });
+
+      expect(script.menus).toEqual([{ message: `Directory ${missing} does not exist.`, options: ['Save this path anyway', 'Go back and enter the path again', 'Cancel the edit (nothing is saved)'] }]);
+    });
+
+    it('should ask for the path again after "back" and store the second answer', async () => {
+      const first = path.join(tmpDir, 'typo-mount');
+      const second = path.join(tmpDir, 'real-mount');
+      const script = scriptedIO([first, second], ['back', 'save']);
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const config = await p.configureInteractiveForEdit?.(script.io, { existingConfig: { path: tmpDir } });
+
+      expect(config).toEqual({ path: second });
+      expect(script.asked()).toBe(2);
+      await expect(fs.stat(first)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.stat(second)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(script.menus.map((m) => m.message)).toEqual([`Directory ${first} does not exist.`, `Directory ${second} does not exist.`]);
+    });
+
+    it('should end the edit without a result when the operator cancels', async () => {
+      const missing = path.join(tmpDir, 'not-mounted-yet');
+      const script = scriptedIO([missing], ['cancel']);
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const edit = p.configureInteractiveForEdit?.(script.io, { existingConfig: { path: tmpDir } });
+
+      await expect(edit).rejects.toThrow(ProviderError);
+      await expect(edit).rejects.toThrow('Edit cancelled - nothing was saved.');
+      // Cancelling ends the edit; it does not lead back to the path prompt.
+      expect(script.asked()).toBe(1);
+    });
+
+    // With nobody to work a menu, the question keeps its yes/no form - and "no"
+    // ends the edit instead of re-asking a path that nobody is there to type.
+    it.each([
+      [true, 'store the path'],
+      [false, 'end the edit'],
+    ])('should fall back to yes/no without an operator (answer %s -> %s)', async (answer) => {
+      const missing = path.join(tmpDir, 'not-mounted-yet');
+      const { io: base } = createMockProviderIO(undefined, undefined, false);
+      const confirmed: string[] = [];
+      let asked = 0;
+      const io: ProviderIO = {
+        ...base,
+        async ask(): Promise<string> {
+          asked += 1;
+          if (asked > 1) throw new Error('the path prompt came back with nobody there to type it');
+          return missing;
+        },
+        async confirm(message: string): Promise<boolean> {
+          confirmed.push(message);
+          return answer;
+        },
+        async choose(): Promise<string> {
+          throw new Error('a menu was offered with nobody to work it');
+        },
+      };
+      const p: StorageProvider = new LocalFsProvider({ id: 'stub', type: 'local', adapterPackage: null, config: {} }, createMockProviderIO().io);
+
+      const edit = p.configureInteractiveForEdit?.(io, { existingConfig: { path: tmpDir } });
+
+      if (answer) await expect(edit).resolves.toEqual({ path: missing });
+      else await expect(edit).rejects.toThrow('Edit cancelled - nothing was saved.');
+      expect(confirmed).toEqual([`Directory ${missing} does not exist. Save this path anyway?`]);
+      expect(asked).toBe(1);
     });
 
     it('should keep re-asking when the path cannot be reached at all, rather than offering it for confirmation', async () => {
@@ -532,6 +620,10 @@ describe('LocalFsProvider', () => {
         async confirm(): Promise<boolean> {
           confirms += 1;
           return true;
+        },
+        async choose(_message: string, options: string[]): Promise<string> {
+          confirms += 1;
+          return options[0] ?? '';
         },
       };
       const { io: ctorIO } = createMockProviderIO();
@@ -563,6 +655,10 @@ describe('LocalFsProvider', () => {
         async confirm(): Promise<boolean> {
           confirms += 1;
           return true;
+        },
+        async choose(_message: string, options: string[]): Promise<string> {
+          confirms += 1;
+          return options[0] ?? '';
         },
       };
       const { io: ctorIO } = createMockProviderIO();

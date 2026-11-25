@@ -50,9 +50,6 @@ export function generateSalt(): Buffer {
  * @param salt     - 16-byte random salt (from generateSalt or shard header kdf_salt)
  */
 export async function deriveKey(password: string, salt: Buffer): Promise<Buffer> {
-  // hashRawSync avoids WASM worker-thread initialization, which fails on
-  // Windows Server 2025 + Node.js v25 when the native .node addon cannot load
-  // its DLL dependency and the WASM fallback tries to spawn pthreads.
   return hashRawSync(password, { salt, algorithm: Algorithm.Argon2id, outputLen: KEY_SIZE, memoryCost: ARGON2_PARAMS.memoryCost, timeCost: ARGON2_PARAMS.timeCost, parallelism: ARGON2_PARAMS.parallelism });
 }
 

@@ -27,7 +27,7 @@ import { providerRegistry } from '../providers/provider.js';
 import type { CatalogDrift, ExcludedEntry, ManifestShard, ProviderConfig, ProviderIO, PushOptions, PushResult, ShardHeader, ShardLocation, StorageProvider, VaultConfig, VaultState, VersionManifest } from '../types/index.js';
 import { PushMode, VersionHealth } from '../types/index.js';
 import { catalogHasDrift, diffCatalog, snapshotCatalog } from './catalog-verify.js';
-import { assertSchemeValid, readConfig } from './config.js';
+import { assertSchemeReady, readConfig } from './config.js';
 import { splitLocationSecrets } from './location-map.js';
 import type { PushLock, PushLockFailedReason } from './lockfile.js';
 import { acquireCachePushLock, acquirePushLock, pushLockPath, readLock, removeLock, writeLockAtomic } from './lockfile.js';
@@ -1231,7 +1231,7 @@ function _buildLocationMap(options: BuildLocationMapOptions): ShardLocation[] {
 export async function push(rootDir: string, options: PushOptions): Promise<PushResult> {
   const config = await readConfig(rootDir);
   if (!config) throw new BfsError(t('push_no_config'));
-  assertSchemeValid(config);
+  await assertSchemeReady(rootDir, config);
   const state = await readState(rootDir);
   // First write after recovery: the config came from an untrusted location map,
   // so show the operator where shards will go and require confirmation before

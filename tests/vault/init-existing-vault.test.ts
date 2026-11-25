@@ -206,13 +206,14 @@ describe('init - a directory that already holds a backup', () => {
 
   it('should still initialize after an init that failed before writing a configuration', async () => {
     // `.bfs/manifests` and `.bfsignore` are created before the media loop runs
-    // and the configuration is written after it, so every way that loop can fail
-    // - an unknown adapter, a refused probe, a foreign backup at the target -
-    // leaves the directory populated but without a config.json. Keying the
-    // refusal on `.bfs/` rather than on the configuration would lock that
-    // operator out for good: no command removes `.bfs/`, so a dead port would
-    // cost them the directory. This drives the failure through the unknown
-    // adapter, the cheapest of those routes to the same state.
+    // and the configuration only once the first storage passes, so every way the
+    // first storage can fail - an unknown adapter, a refused probe, a foreign
+    // backup at the target - leaves the directory populated but without a
+    // config.json. Keying the refusal on `.bfs/` rather than on the
+    // configuration would lock that operator out for good: no command removes
+    // `.bfs/`, so a dead port would cost them the directory. This drives the
+    // failure through the unknown adapter, the cheapest of those routes to the
+    // same state.
     const { io } = createMockProviderIO({}, root, false);
     const unknown: ProviderConfig = { id: 'bad', type: 'no-such-adapter', adapterPackage: null, config: {} };
     await expect(

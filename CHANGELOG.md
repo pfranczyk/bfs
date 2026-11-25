@@ -7,6 +7,185 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-25
+
+### Added
+
+- **`bfs config --push-mode <mode>` changes the push mode of an existing
+  backup** - `new_version`, `overwrite` or `ask`, the same three values and the
+  same check as `bfs init --push-mode`. Until now the mode could only be chosen
+  at `bfs init`. A backup restored with `bfs recovery` comes back with
+  `new_version`, so this is also how to return it to the mode it had. An
+  unknown value, or one spelled in another case, is refused with exit code 1
+  and nothing is saved. `bfs config` with no arguments now shows the current
+  push mode as well.
+
+### Changed
+
+- **`bfs config` lists what it set, and refuses an unknown feature with exit
+  code 1.**
+  After a change the command prints "Settings updated:" followed by one line
+  per setting it changed, in the same form as `bfs config` with no arguments,
+  so a setting that was not applied shows at once. `--on` and `--off` may be
+  repeated (`--on compress --on encryption`). An unknown feature, or one named
+  by both `--on` and `--off`, now ends the command with exit code 1 instead of
+  0, and nothing is saved - also when other settings stand next to it.
+
+- **Typing a directory that does not exist while editing a local storage
+  offers a way out.** `bfs provider edit` used to ask only whether to save the
+  path anyway, and "no" asked for the path again - Ctrl+C was the only way to
+  leave. It now offers three choices: save the path anyway, go back and enter it
+  again, or cancel the edit. Cancelling ends the command with exit code 1 and
+  saves nothing. The directory is still not created by the edit.
+
+- **An unknown SSH host key met while setting up a storage offers a way back.**
+  Typing SSH connection settings interactively (`bfs init`, `bfs provider
+  add`, `bfs provider edit`, and wherever another command asks for a storage)
+  used to end in a yes/no question about the host key, so a mistyped address
+  cost every field already entered. It now offers three choices, as for an FTPS
+  certificate: trust the key, go back and enter the connection settings again,
+  or cancel. The menu shown when an edited server cannot be reached gains the
+  same "go back" choice, right after pasting a fingerprint. Connecting to a
+  storage that is already set up still asks yes or no.
+
+- **An unattended SSH setup with no way to trust the server is refused before
+  connecting.** `bfs init --ci` and `bfs provider add --ci` with an SSH storage
+  that has no `--known-host`, no `--accept-new-host-key` and no entry for its
+  host and port in `~/.ssh/known_hosts` now stop while reading the settings,
+  naming both flags, instead of connecting and failing on the unknown host key.
+  Nothing is written. The same applies wherever SSH settings are given on the
+  command line with nobody to answer - `bfs repair`, `bfs provider remove
+  --strategy`, `bfs recovery --bootstrap`, or any run without a terminal -
+  which refused at the connection before. A pin or opt-in given in
+  `--config-file` counts the same as the flag, and `bfs provider edit --ci` is
+  unaffected. This matches the refusal FTPS already gives in the same
+  situation.
+- **`bfs provider add` fills the place a removed storage left.** After
+  `bfs provider remove --strategy remove` the pool is one storage short of the
+  N+K scheme. Adding a storage now takes that place and keeps the scheme, so
+  the original redundancy comes back without lowering the scheme with
+  `bfs scheme set` first and raising it again afterwards; the version that lost
+  its part is rebuilt onto the new storage with `bfs repair --rebuild`. On a
+  pool that already matches the scheme, `provider add` still adds one parity
+  part. The message after the add says which of the two happened.
+- **The step after `bfs provider remove --strategy remove` and the refusal of
+  `pull`, `push` and `prune` on a short pool name both ways back** - a new
+  storage with `bfs provider add` (the scheme stays) or a scheme matched to the
+  storages you have with `bfs scheme set`. Below three storages, where no
+  scheme fits, they name `bfs provider add`.
+- **`--accept-new-cert` pins the certificate.** Like `--accept-new-host-key`
+  for SSH, the opt-in - on the command line or as `accept_new_cert` in
+  `--config-file` - now reads the certificate the FTPS server presents and saves
+  its fingerprint, without asking, also under `--ci`. An explicit
+  `--cert-fingerprint` still wins. With `--secure false` the opt-in is refused,
+  since plain FTP has no certificate. `bfs provider edit --ci` refuses the opt-in
+  without a fingerprint beside it, because it does not connect to the server; for
+  SSH this now holds also for `accept_new_host_key` given in `--config-file`,
+  which the SSH adapter now reads.
+- **Adapter contract: optional `takeConfigUpdates()` on `StorageProvider`**
+  (`BFS_PROVIDER_API_VERSION` stays 2). After an instance built from a location
+  map entry connects during `bfs recovery`, BFS merges what it returns into that
+  entry's connection settings, so the recovered configuration keeps what the
+  operator confirmed (typically the server identity). Fields named by
+  `getSecretFields()` are dropped, values must be plain JSON, and the whole update
+  is dropped when the merged settings fail `validateConfig`. Adapters without it
+  recover as before.
+- **`bfs init` can be resumed.** Every storage that passes its connection test
+  is saved to the backup settings at once, so an init cut short - Ctrl+C, a
+  closed terminal, a storage that does not answer - keeps the storages already
+  set up. Running `bfs init` again in that directory finishes the same backup:
+  interactively it says how many storages are saved and asks only for the
+  missing ones; with `--ci` the same command line resumes, storages already
+  saved are not tested again (a saved SSH or FTPS storage given with
+  `--accept-new-host-key` / `--accept-new-cert` is still contacted while the
+  command line is read, to take its fingerprint), and a backup name, scheme, encryption,
+  compression, push mode, memory limit or storage settings that differ from the
+  saved ones are refused, naming the difference. The interactive init now asks
+  for the push mode and memory limit before the storages, and refuses a storage
+  name already in use as it is typed. `push`, `pull` and `prune` on such an
+  unfinished setup add that the backup has no version yet.
+- **Adapter contract: `IdentityDeclinedError` exported from `bfs-vault/provider`**
+  (`BFS_PROVIDER_API_VERSION` stays 2). Throw it from `configureInteractive` or
+  `configureInteractiveForEdit` when the operator refuses the identity a server
+  presents: the interactive `bfs init` and `bfs provider add` end the command
+  with your message. Any other error from those methods offers the operator to
+  retry, re-enter the settings or abort. The class is recognised by name too, so
+  a subclass of your own and the copy your package resolves both count.
+  Adapters that never throw it keep working; their refusal reaches the menu.
+- **`bfs init` names the state of a directory it cannot set up.** For
+  settings that cannot be read, the refusal no longer suggests running
+  `bfs recovery` or deleting `.bfs/config.json`, and it says whether versions of
+  the backup are next to them; a directory with versions but no settings is
+  refused with that explanation instead of starting a new backup over them.
+
+### Fixed
+
+- **`--max-ram` accepts only a whole number of MB above zero.** `bfs init
+  --ci`, `bfs config` and `bfs push` took any value: text given to `bfs init
+  --ci` or `bfs config` was saved as automatic, `512abc` was cut to 512, `1.5`
+  to 1, `1e3` read as 1, and zero - which the `bfs config` help offered as
+  "auto" - was used by push as a zero memory budget. Such a value is now
+  refused with exit code 1, naming it, before anything is saved or uploaded.
+  This includes an empty value, which `bfs init --ci --max-ram ""` used to
+  take as automatic - leave the flag out instead. The RAM question of an
+  interactive `bfs init` applies the same rule and words its refusal in your
+  language. `bfs config --max-ram` with no value still returns the limit to
+  automatic.
+- **Checking an SSH host key while setting up a storage no longer runs into the
+  connection timeout.** The question about an unknown host key was asked while
+  the connection was still open, so an operator who took longer than 15 seconds
+  to compare the fingerprint got a connection error with the question still on
+  screen. The key is now read and the connection closed before the question is
+  asked.
+
+- **`bfs config --on` / `--off` no longer drops the other settings typed with
+  it.** `bfs config --on compress --temp-dir <dir>` switched compression on,
+  reported success and never stored the temporary directory - the same for
+  `--cache-dir`, `--max-ram` and a second `--on` / `--off`. The
+  next push then ran with the settings the operator meant to change. Every
+  setting given is now applied in one write, and when one of them is refused
+  (an unusable directory, an unknown push mode or feature) none is saved. A
+  feature name such as `constructor` or `__proto__` is now refused as unknown;
+  before, `bfs config --off constructor` switched encryption off.
+- **An FTPS or SSH server that does not answer no longer ends an interactive
+  `bfs init` or `bfs provider add`.** Reading the server identity while setting
+  up the storage failed outside the retry / re-enter / abort menu, so the whole
+  command ended and everything typed so far was lost. That failure now gets the
+  same menu as a failed connection test, also after re-entering the settings.
+  Choosing "Cancel (end the command)" in the certificate menu still ends the
+  command.
+- **`init --compress` / `init --no-compress` typed in the interactive shell
+  (`bfs` without arguments) are honoured.** They were ignored there, and the
+  setting came from the prompt or, with `--ci`, from the scan of the directory.
+- **A saved consent to accept a new server identity no longer trusts any server
+  forever.** A configuration holding `accept_new_host_key` (SSH) or
+  `accept_new_cert` (FTPS) without a pinned fingerprint - what
+  `bfs provider add --accept-new-host-key` wrote on a terminal in 0.12/0.13 and
+  what `--accept-new-cert` wrote up to 0.14 - trusted whatever key or certificate
+  answered at that address on every run, without a word. Without an operator the
+  connection is now refused, naming the storage and that its identity is not
+  pinned (exit code 1); nothing is sent to the server. With an operator, BFS asks
+  once per command. Pin the fingerprint you know with `bfs provider edit`
+  (`--known-host` / `--cert-fingerprint`). An interactive `bfs recovery` pins the
+  identity the operator confirms in the configuration it creates; an unattended
+  one skips such a storage with a warning. `bfs prune` asks the same way at a
+  terminal and says why it could not remove a part when nobody is there.
+- **A refused FTPS certificate during `bfs recovery` is no longer taken for a
+  wrong password.** Recovery no longer asks for the password again; it names the
+  certificate problem and moves on without that storage.
+- **An interrupted `bfs repair --rebuild` onto a replacement can be finished.**
+  When the rebuild failed after rebuilding at least one version, running the
+  same command again was refused with "Provider ... already exists", while
+  every backup command was refused because the configuration held one storage
+  more than the scheme - a state with no named way out. The retry now accepts the
+  storage the first run configured with the same settings and rebuilds the
+  versions still missing their part.
+- **A configuration with more storages than the scheme uses is explained, not
+  sent to `bfs scheme set`.** That state is what a rebuild onto a new storage
+  leaves when it stops halfway; the advice to rescale would have been accepted
+  and counted a storage without data as holding a part. The refusal now says
+  what usually caused it and that running the rebuild again finishes it.
+
 ## [0.14.7] - 2026-11-07
 
 ### Changed
@@ -1716,7 +1895,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.14.7...HEAD
+[Unreleased]: https://github.com/pfranczyk/bfs/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/pfranczyk/bfs/compare/v0.14.7...v0.15.0
 [0.14.7]: https://github.com/pfranczyk/bfs/compare/v0.14.6...v0.14.7
 [0.14.6]: https://github.com/pfranczyk/bfs/compare/v0.14.5...v0.14.6
 [0.14.5]: https://github.com/pfranczyk/bfs/compare/v0.14.4...v0.14.5

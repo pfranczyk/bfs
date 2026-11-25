@@ -8,7 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { parseBlobFileTable, parseBlobFileTableFromFile, unpackBlob, unpackBlobFromFile } from '../core/blob-unpack.js';
 import { trackFile, untrackFile } from '../core/cleanup.js';
 import { decryptBlob, decryptStream, deriveKey, deriveShardNonce } from '../core/crypto.js';
-import { BfsError, CacheWriteError, ProviderError, ProviderRemoveRefusedError, PullSkippedError, ScratchWriteError, ShardCorruptedError, TamperDetectedError } from '../core/errors.js';
+import { BfsError, CacheWriteError, ProviderError, ProviderRemoveRefusedError, PullSkippedError, ScratchWriteError, ShardCorruptedError, TamperDetectedError, VaultCollisionError } from '../core/errors.js';
 import { hashBuffer, hashFileExcludingTail, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
 import { createIgnoreFilter } from '../core/ignore.js';
 import { DEFAULT_BFSIGNORE_CONTENT } from '../core/ignore-defaults.js';
@@ -21,7 +21,7 @@ import type { FileEntry, ManifestShard, ProviderConfig, ProviderIO, PullResult, 
 import { type PushMode, VersionHealth } from '../types/index.js';
 import { checkVersionMismatch, detectMissingAdapters, formatMissingAdaptersMessage } from './adapter-preflight.js';
 import { parseVersionFromFilename } from './bootstrap.js';
-import { assertNoExistingVault, assertSchemeValid, MIN_PROVIDERS, readConfig, writeConfig } from './config.js';
+import { assertSchemeReady, inspectInitTarget, MIN_PROVIDERS, readConfig, writeConfig } from './config.js';
 import type { HealReport } from './heal.js';
 import { applyHealthChange, deleteManifest, listManifests, listUnrecoveredVersions, readManifest, writeManifest } from './manifest.js';
 import { confirmRecoveredLocations } from './recovered-locations.js';
@@ -101,9 +101,12 @@ export interface PruneOptions {
    */
   force?: boolean;
   /**
-   * Optional IO for surfacing best-effort delete failures. Deleting a pruned
-   * version's data is best-effort, but a genuine failure would otherwise orphan
-   * it on the medium silently; when provided, such failures are warned through here.
+   * Optional command IO. The adapters connect through it, so an operator who is
+   * there answers their questions (a server identity to confirm), and it carries
+   * the warnings: deleting a pruned version's data is best-effort, but a genuine
+   * failure would otherwise orphan it on the medium silently, so each one is
+   * warned here with the adapter's reason. Without it the adapters get a silent,
+   * unattended io and failures go unreported.
    */
   io?: ProviderIO;
 }
@@ -1029,77 +1032,173 @@ async function decodeAndDecrypt(args: DecodeAndDecryptArgs): Promise<{ plainBlob
 // --- Public API ---------------------------------------------------------------
 
 /**
- * Initialises a new vault in rootDir. Refuses a directory that already describes
- * one, so an existing backup's configuration is never replaced.
- * Creates .bfs/, .bfs/manifests/, config.json, state.json.
- * Writes default .bfsignore if missing.
- * Probes each provider (probeConnection creates the base directory and
- * round-trips a probe file) and refuses a location that already holds a
- * different backup, so configuration errors surface before config.json is
- * written and before the first push.
+ * Initialises a vault in rootDir - a new one, or the one an interrupted init left
+ * behind (see `inspectInitTarget` in src/vault/config.ts for which directory takes
+ * which). Each storage still missing is probed (probeConnection creates the base
+ * directory and round-trips a probe file), checked for another backup of the same
+ * name, and written to config.json at once - so an init cut short in the middle
+ * (Ctrl+C, a closed terminal, a storage that does not answer) keeps every storage
+ * that passed. Storages already recorded are not probed again: the run that
+ * recorded them did. A resume whose options differ from what is recorded is
+ * refused before any medium is touched. state.json is written when the pool is
+ * complete. Creates .bfs/, .bfs/manifests/ and a default .bfsignore if missing.
  *
- * @throws VaultAlreadyInitializedError if rootDir already holds .bfs/config.json.
- * @throws BfsError if providers.length !== data_shards + parity_shards.
+ * @throws VaultAlreadyInitializedError if rootDir cannot take an init (a full or versioned backup, unreadable settings, versions without settings).
+ * @throws BfsError if providers.length !== data_shards + parity_shards, or a resume differs from what is recorded.
  * @throws ProviderError if a provider's location cannot be provisioned or reached.
  * @throws VaultCollisionError if a provider's location already holds a different backup.
  */
 export async function init(rootDir: string, options: InitOptions): Promise<void> {
-  // Before anything else, and before any medium is touched: a directory that
-  // already describes a backup is not a place to set one up. registerInit checks
-  // this too, early enough to spare the operator the questionnaire; this one
-  // covers every other caller of the vault API.
-  await assertNoExistingVault(rootDir);
+  // Before any medium is touched. registerInit checks this too, early enough to
+  // spare the operator the questionnaire; this one covers every other caller.
+  const target = await inspectInitTarget(rootDir);
 
   const { data_shards: N, parity_shards: K } = options.scheme;
   if (options.providers.length !== N + K) {
     throw new BfsError(fmt('scheme_provider_count_mismatch', String(N + K), String(options.providers.length)));
   }
+  if (target.kind === 'resume') assertInitResumeMatches(target.config, options);
 
+  await _prepareVaultDir(rootDir);
+
+  const recorded = new Set(target.kind === 'resume' ? target.config.providers.map((p) => p.id) : []);
+  const settings = _initSettingsOf(options);
+  for (const pc of options.providers) {
+    if (recorded.has(pc.id)) continue;
+    // setVaultName() must precede probeConnection(): it resolves the probe path
+    // under the vault sub-directory. Runs for --ci too, where the interactive
+    // pre-probe (probeProviderWithRecovery in init.ts) never ran.
+    const p = providerRegistry.create(pc, options.io);
+    p.setVaultName(options.vault_name);
+    await p.probeConnection();
+    await admitInitProvider(rootDir, { settings, provider: pc, io: options.io });
+  }
+  await writeState(rootDir, { ...DEFAULT_STATE });
+}
+
+/** The settings an init writes into config.json besides its storages. */
+export type InitSettings = Omit<InitOptions, 'providers' | 'io'>;
+
+/** Inputs for {@link admitInitProvider}. */
+export interface AdmitInitProviderOptions {
+  /** Settings for the first write; ignored once config.json exists. */
+  settings: InitSettings;
+  /** The storage that passed its probe. */
+  provider: ProviderConfig;
+  /** Provider IO for the collision guard's diagnostics. */
+  io: ProviderIO;
+}
+
+/**
+ * Records a storage that has just passed its probe: refuses it when its location
+ * already holds another backup of the same name, otherwise appends it to
+ * config.json - creating the file (with a fresh vault_id and `settings`, plus
+ * .bfs/manifests and a default .bfsignore) on the first storage. The storage must
+ * already have passed its probe; this records it, it does not probe.
+ *
+ * Once config.json exists, the collision refusal carries no advice: `bfs recovery`
+ * refuses a directory with a configuration, and another backup name refuses the
+ * resume, so neither could be carried out.
+ *
+ * @param rootDir - Vault root directory
+ * @param options - Settings, storage and IO (see {@link AdmitInitProviderOptions})
+ * @throws VaultCollisionError if the storage's location holds a different backup
+ */
+export async function admitInitProvider(rootDir: string, { settings, provider, io }: AdmitInitProviderOptions): Promise<void> {
+  const existing = await readConfig(rootDir);
+  if (existing === null) await _prepareVaultDir(rootDir);
+  const p = providerRegistry.create(provider, io);
+  try {
+    // A fresh setup has no part anywhere yet, so any part present is foreign.
+    await assertNoForeignVault(p, settings.vault_name, null, io);
+  } catch (err: unknown) {
+    if (err instanceof VaultCollisionError && existing !== null) throw new VaultCollisionError(fmt('vault_collision_detected_configured', provider.id), provider.id);
+    throw err;
+  }
+  const base: VaultConfig = existing ?? {
+    vault_id: randomUUID(),
+    vault_name: settings.vault_name,
+    version: 1,
+    scheme: settings.scheme,
+    encryption: settings.encryption,
+    compression: settings.compression ?? { enabled: true, algorithm: 'deflate' },
+    push_mode: settings.push_mode,
+    providers: [],
+    max_ram_mb: settings.max_ram_mb ?? null,
+  };
+  await writeConfig(rootDir, { ...base, providers: [...base.providers, provider] });
+}
+
+/**
+ * Refuses a resume whose options differ from the unfinished configuration it
+ * would continue: the backup name, the scheme, encryption, compression, push
+ * mode, memory limit, a recorded storage's settings, or a storage list that
+ * leaves a recorded storage out. Ignoring the difference would leave a
+ * configuration other than the one asked for; overwriting would turn `init` into
+ * an undocumented `provider edit`. The refusal names the difference, never a
+ * secret value.
+ *
+ * @param recorded - The configuration on disk
+ * @param options  - What the resuming run asks for
+ * @throws BfsError naming the first difference
+ */
+function assertInitResumeMatches(recorded: VaultConfig, options: InitOptions): void {
+  if (options.vault_name !== recorded.vault_name) throw new BfsError(fmt('init_resume_name_mismatch', recorded.vault_name, options.vault_name));
+  const rs = recorded.scheme;
+  const asks = options.scheme;
+  if (rs.data_shards !== asks.data_shards || rs.parity_shards !== asks.parity_shards) {
+    throw new BfsError(fmt('init_resume_scheme_mismatch', String(rs.data_shards), String(rs.parity_shards), String(asks.data_shards), String(asks.parity_shards)));
+  }
+  for (const [key, was, asked] of _resumeSettingPairs(recorded, options)) {
+    if (was !== asked) throw new BfsError(fmt('init_resume_setting_mismatch', t(key), was, asked));
+  }
+  const asked = new Map(options.providers.map((p) => [p.id, p]));
+  for (const pc of recorded.providers) {
+    const given = asked.get(pc.id);
+    if (given === undefined) throw new BfsError(fmt('init_resume_provider_missing', pc.id));
+    if (given.type !== pc.type || given.adapterPackage !== pc.adapterPackage || _stableJson(given.config) !== _stableJson(pc.config)) {
+      throw new BfsError(fmt('init_resume_provider_mismatch', pc.id));
+    }
+  }
+}
+
+/** Recorded vs asked value of every setting a resume must not change, rendered for the refusal. */
+function _resumeSettingPairs(recorded: VaultConfig, options: InitOptions): Array<[keyof Strings, string, string]> {
+  const onOff = (v: boolean): string => t(v ? 'init_setting_on' : 'init_setting_off');
+  const ram = (v: Nullable<number>): string => (v === null ? t('init_setting_no_limit') : String(v));
+  return [
+    ['init_setting_encryption', onOff(recorded.encryption.enabled), onOff(options.encryption.enabled)],
+    ['init_setting_compression', onOff(recorded.compression.enabled), onOff(options.compression?.enabled ?? true)],
+    ['init_setting_push_mode', recorded.push_mode, options.push_mode],
+    ['init_setting_max_ram', ram(recorded.max_ram_mb ?? null), ram(options.max_ram_mb ?? null)],
+  ];
+}
+
+/** JSON with object keys sorted, so two configs compare by content, not key order. */
+function _stableJson(value: unknown): string {
+  return JSON.stringify(value, (_k, v: unknown) => {
+    if (v === null || typeof v !== 'object' || Array.isArray(v)) return v;
+    return Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)));
+  });
+}
+
+/** The settings part of init options. */
+function _initSettingsOf(options: InitOptions): InitSettings {
+  const { providers: _providers, io: _io, ...settings } = options;
+  return settings;
+}
+
+/** Creates .bfs/manifests (owner-only) and a default .bfsignore when missing. */
+async function _prepareVaultDir(rootDir: string): Promise<void> {
   // 0700: .bfs/ holds config.json (provider secrets) and cached plaintext
   // blobs, so keep the whole tree owner-only on POSIX (no-op on Windows NTFS).
   await fs.mkdir(path.join(rootDir, '.bfs', 'manifests'), { recursive: true, mode: 0o700 });
-
   const bfsignorePath = path.join(rootDir, '.bfsignore');
   const bfsignoreExists = await fs
     .access(bfsignorePath)
     .then(() => true)
     .catch(() => false);
-  if (!bfsignoreExists) {
-    await fs.writeFile(bfsignorePath, DEFAULT_BFSIGNORE_CONTENT, 'utf-8');
-  }
-
-  // Set up and verify every provider BEFORE writing config: probeConnection()
-  // creates the target directory and round-trips a probe file, so a provider
-  // whose base path is missing/unwritable - or whose type is unknown - fails
-  // here instead of leaving a corrupted config on disk, and instead of only
-  // surfacing at the first push. Runs for --ci too, where the interactive
-  // pre-probe (probeProviderWithRecovery in init.ts) never ran. setVaultName()
-  // must precede probeConnection(): it resolves the probe path under the vault
-  // sub-directory.
-  for (const pc of options.providers) {
-    const p = providerRegistry.create(pc, options.io);
-    p.setVaultName(options.vault_name);
-    await p.probeConnection();
-    // Refuse a target that already holds a DIFFERENT backup of the same name: a
-    // fresh init has no vault_id yet, so any shard present is foreign. Stops a
-    // later push from silently overwriting another machine's shards.
-    await assertNoForeignVault(p, options.vault_name, null, options.io);
-  }
-
-  const config: VaultConfig = {
-    vault_id: randomUUID(),
-    vault_name: options.vault_name,
-    version: 1,
-    scheme: options.scheme,
-    encryption: options.encryption,
-    compression: options.compression ?? { enabled: true, algorithm: 'deflate' },
-    push_mode: options.push_mode,
-    providers: options.providers,
-    max_ram_mb: options.max_ram_mb ?? null,
-  };
-
-  await writeConfig(rootDir, config);
-  await writeState(rootDir, { ...DEFAULT_STATE });
+  if (!bfsignoreExists) await fs.writeFile(bfsignorePath, DEFAULT_BFSIGNORE_CONTENT, 'utf-8');
 }
 
 // --- pull() private helpers ---------------------------------------------------
@@ -1395,7 +1494,7 @@ async function _finalizePullState({ rootDir, cacheDir, state, targetVersion, man
 export async function pull(rootDir: string, options: PullOptions): Promise<PullResult> {
   const config = await readConfig(rootDir);
   if (!config) throw new BfsError(t('pull_no_config'));
-  assertSchemeValid(config);
+  await assertSchemeReady(rootDir, config);
   await _runPullPreflight(config, options);
 
   const state = await readState(rootDir);
@@ -1491,20 +1590,21 @@ export async function prune(rootDir: string, options: PruneOptions): Promise<voi
   const config = await readConfig(rootDir);
   if (!config) throw new BfsError(t('push_no_config'));
 
-  assertSchemeValid(config);
+  await assertSchemeReady(rootDir, config);
 
   const state = await readState(rootDir);
 
   await assertPruneKeepsARestorableVersion(rootDir, options);
 
+  // The command's io when the caller has one: the server-identity ladder then
+  // asks an operator who is there (a saved opt-in without a pin is not consent)
+  // and says why it refused when nobody is. A programmatic caller without an io
+  // gets a silent one that declares itself unattended - without that signal an
+  // SSH host-key decision would take the interactive path, be declined by the
+  // confirm() below, and the delete would fail, silently orphaning the shard.
   const silentIO: ProviderIO = {
     lang: 'en',
     workDir: rootDir,
-    // Prune runs unattended, so providers must apply their non-interactive
-    // trust policy (pinned fingerprint / accept_new_host_key for SSH) instead of
-    // prompting. Without this signal an SSH host-key decision takes the
-    // interactive path, is declined by the confirm() below, and the delete fails
-    // - silently orphaning the shard on the medium.
     interactive: false,
     ask: async () => '',
     askSecret: async () => '',
@@ -1515,6 +1615,7 @@ export async function prune(rootDir: string, options: PruneOptions): Promise<voi
     warn: () => {},
     progress: () => {},
   };
+  const providerIo = options.io ?? silentIO;
 
   for (const version of options.versions) {
     const manifest = await readManifest(rootDir, version);
@@ -1524,15 +1625,16 @@ export async function prune(rootDir: string, options: PruneOptions): Promise<voi
       const pc = config.providers.find((p) => p.id === ms.provider_id);
       if (!pc) continue;
       try {
-        const provider = providerRegistry.create(pc, silentIO);
+        const provider = providerRegistry.create(pc, providerIo);
         await provider.authenticate();
         provider.setVaultName(config.vault_name);
         await provider.delete({ provider_id: ms.provider_id, path: `shard_${ms.shard_index}.bfs.${version}` });
-      } catch {
+      } catch (err) {
         // Delete is best-effort - the shard may already be gone. But a genuine
-        // failure (permissions, unreachable medium) would otherwise orphan the
-        // data on the medium silently; surface it so the operator can reclaim it.
-        options.io?.warn(fmt('prune_orphan_warn', String(version), ms.provider_id));
+        // failure (permissions, unreachable medium, a server identity nobody
+        // could confirm) would otherwise orphan the data on the medium silently;
+        // surface it with the adapter's reason so the operator can reclaim it.
+        options.io?.warn(fmt('prune_orphan_warn', String(version), ms.provider_id, err instanceof Error ? err.message : String(err)));
       }
     }
     await deleteManifest(rootDir, version).catch(() => {});

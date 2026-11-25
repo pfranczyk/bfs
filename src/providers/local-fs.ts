@@ -495,13 +495,16 @@ export class LocalFsProvider implements StorageProvider {
    * absent directory is put to the operator instead of being re-asked: the
    * command exists for the case where the medium is NOT there - an unplugged
    * drive, a share that moved, a mount point that differs between machines - so
-   * re-prompting until the path exists would leave nothing to type. A path that
-   * is a file, or runs through one, is still refused outright; that is a typo,
-   * not an absent medium - no directory can ever appear under a file.
+   * re-prompting until the path exists would leave nothing to type. The
+   * operator saves it anyway, goes back to the path, or cancels the edit. A path
+   * that is a file, or runs through one, is still refused outright; that is a
+   * typo, not an absent medium - no directory can ever appear under a file.
+   * Nothing is created or written on the medium, whichever exit is taken.
    *
-   * @param io   - ProviderIO carrying the prompt and the confirmation
+   * @param io   - ProviderIO carrying the prompt and the decision
    * @param _ctx - existing connection-config (the prompt is not prefilled from it)
    * @returns config fragment `{ path }` to persist in VaultConfig
+   * @throws ProviderError when the operator cancels the edit
    */
   async configureInteractiveForEdit(io: ProviderIO, _ctx: ConfigureEditContext): Promise<Record<string, unknown>> {
     for (;;) {
@@ -515,7 +518,7 @@ export class LocalFsProvider implements StorageProvider {
         case 'dir':
           return { path: basePath };
         case 'missing':
-          if (await io.confirm(fmt('local_edit_path_missing_confirm', basePath))) return { path: basePath };
+          if (await _askSaveMissingPath(io, basePath)) return { path: basePath };
           break;
         default:
           // Only an absent path is offered for confirmation. A path through a
@@ -720,6 +723,31 @@ function _errorCode(err: unknown): string {
 function _errnoCode(err: unknown): Nullable<string> {
   if (typeof err !== 'object' || err === null || !('code' in err)) return null;
   return typeof err.code === 'string' ? err.code : null;
+}
+
+/**
+ * Puts a directory that does not exist to the operator during an edit. Returns
+ * true to save it, false to ask for the path again; throws to cancel the edit.
+ * With nobody to work a menu the question keeps its yes/no form, and "no" ends
+ * the edit - asking for the path again would wait on an answer nobody can give.
+ */
+async function _askSaveMissingPath(io: ProviderIO, basePath: string): Promise<boolean> {
+  if (io.interactive === false) {
+    if (await io.confirm(fmt('local_edit_path_missing_confirm', basePath))) return true;
+    throw new ProviderError(t('local_edit_cancelled'));
+  }
+  const save = t('local_edit_choice_save');
+  const back = t('local_edit_choice_back');
+  const chosen = await io.choose(fmt('local_edit_path_missing_menu', basePath), [save, back, t('local_edit_choice_cancel')]);
+  switch (chosen) {
+    case save:
+      return true;
+    case back:
+      return false;
+    default:
+      // cancel, or anything unexpected -> nothing is saved (fail-closed).
+      throw new ProviderError(t('local_edit_cancelled'));
+  }
 }
 
 /** The warning for a base path that cannot be used as it stands. */

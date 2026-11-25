@@ -98,6 +98,8 @@ export interface Strings {
   /** %s = provider id, %s = validation errors */
   probe_validate_failed: string;
   probe_failed_prompt: string;
+  /** %s = provider name, %s = why the adapter questions failed */
+  probe_configure_failed: string;
   probe_choice_retry: string;
   probe_choice_reenter: string;
   probe_choice_abort: string;
@@ -146,10 +148,34 @@ export interface Strings {
   /** %s = name of the backup already in this directory */
   init_vault_exists: string;
   init_vault_exists_unreadable: string;
+  init_vault_exists_unreadable_versions: string;
+  init_vault_versions_without_config: string;
+  /** %s = recorded backup name, %s = name the command asks for */
+  init_resume_name_mismatch: string;
+  /** %s/%s = recorded N/K, %s/%s = N/K the command asks for */
+  init_resume_scheme_mismatch: string;
+  /** %s = setting name, %s = recorded value, %s = value the command asks for */
+  init_resume_setting_mismatch: string;
+  /** %s = storage name */
+  init_resume_provider_mismatch: string;
+  /** %s = storage name */
+  init_resume_provider_missing: string;
+  /** %s = backup name, %s = recorded storages, %s = scheme total, %s = missing */
+  init_resume_info: string;
+  init_setting_encryption: string;
+  init_setting_compression: string;
+  init_setting_push_mode: string;
+  init_setting_max_ram: string;
+  init_setting_on: string;
+  init_setting_off: string;
+  init_setting_no_limit: string;
   /** %s = why the read failed (errno or message) */
   init_vault_check_failed: string;
   init_ci_name_required: string;
   init_ci_scheme_required: string;
+  /** %s = supplied value */
+  max_ram_invalid: string;
+  max_ram_prompt_invalid: string;
   /** %s = supplied value */
   init_ci_data_shards_invalid: string;
   /** %s = supplied value */
@@ -167,7 +193,6 @@ export interface Strings {
   cmd_config_desc: string;
   config_current_settings: string;
   config_updated: string;
-  config_reset: string;
   config_reset_no_field: string;
   /** %s = flag name (twice) */
   config_dir_hint: string;
@@ -178,13 +203,12 @@ export interface Strings {
   config_opt_cache_dir: string;
   config_opt_temp_dir: string;
   config_opt_max_ram: string;
+  config_opt_push_mode: string;
   config_opt_reset: string;
   config_opt_on: string;
   config_opt_off: string;
-  /** %s = feature display name */
-  config_feature_on: string;
-  /** %s = feature display name */
-  config_feature_off: string;
+  /** %s = feature named by both --on and --off */
+  config_feature_conflict: string;
   /** %s = unknown feature name */
   config_feature_unknown: string;
   config_next_push: string;
@@ -342,7 +366,7 @@ export interface Strings {
   prune_ci_yes_required: string;
   /** %s = versions list */
   prune_deleted: string;
-  /** %s = version number, %s = provider/storage name */
+  /** %s = version number, %s = provider/storage name, %s = the adapter's reason */
   prune_orphan_warn: string;
 
   // --- verify ---------------------------------------------------------------
@@ -407,10 +431,13 @@ export interface Strings {
   scheme_invalid_data_shards: string;
   /** %s = current value */
   scheme_invalid_parity_shards: string;
-  /** %s = required, %s = current */
-  scheme_providers_mismatch: string;
+  /** %s = required, %s = current (pool shorter than the scheme) */
+  scheme_providers_short: string;
+  /** %s = required, %s = current (pool larger than the scheme) */
+  scheme_providers_surplus: string;
   /** %s = required, %s = current */
   scheme_providers_below_minimum: string;
+  scheme_no_version_yet: string;
 
   // --- provider: local-fs --------------------------------------------------
   /** %s = basePath */
@@ -422,6 +449,12 @@ export interface Strings {
   local_path_prompt: string;
   /** %s = basePath */
   local_edit_path_missing_confirm: string;
+  /** %s = basePath */
+  local_edit_path_missing_menu: string;
+  local_edit_choice_save: string;
+  local_edit_choice_back: string;
+  local_edit_choice_cancel: string;
+  local_edit_cancelled: string;
 
   // --- provider add ---------------------------------------------------------
   provider_add_opt_ci: string;
@@ -445,6 +478,12 @@ export interface Strings {
   provider_add_dir_prompt: string;
   /** %s = id, %s = data, %s = parity */
   provider_add_success: string;
+  /** %s = id, %s = data, %s = parity (the new storage took a missing place) */
+  provider_add_filled: string;
+  /** %s = id, %s = data, %s = parity, %s = storages still missing */
+  provider_add_filled_short: string;
+  /** %s = storages now, %s = storages the scheme uses, %s = data, %s = parity */
+  provider_add_warn_fill: string;
 
   // --- provider list --------------------------------------------------------
   provider_list_empty: string;
@@ -504,7 +543,7 @@ export interface Strings {
   provider_remove_target_invalid: string;
   /** %s = id */
   provider_remove_success: string;
-  /** %s = number of storages left after the removal */
+  /** %s = data, %s = parity (the scheme that stays), %s = number of storages left after the removal */
   provider_remove_next_step: string;
   /** %s = id */
   provider_remove_target_reverted: string;
@@ -845,6 +884,7 @@ export interface Strings {
   trust_choice_cancel: string;
   configure_reenter_notice: string;
   configure_restarts_exhausted: string;
+  configure_restarts_exhausted_edit: string;
   /** %s = host:port, %s = fingerprint being removed */
   ftp_edit_pin_dropped: string;
   /** %s = host:port */
@@ -883,11 +923,15 @@ export interface Strings {
   ssh_passphrase_prompt: string;
   ssh_path_prompt: string;
   ssh_host_key_confirm: string;
+  /** %s = user@host:port, %s = fingerprint */
+  ssh_host_key_trust_menu: string;
   ssh_host_key_declined: string;
   /** %s = user@host:port */
   ssh_host_key_revoked: string;
   /** %s = user@host:port, %s = expected pin, %s = presented fingerprint */
   ssh_host_key_mismatch: string;
+  /** %s = host:port */
+  ssh_host_key_trust_conflict: string;
   /** %s = user@host:port */
   ssh_host_key_tofu_refused: string;
   /** %s = user@host:port */
@@ -939,6 +983,16 @@ export interface Strings {
   ssh_auth_conflict: string;
   ssh_auth_missing: string;
   ssh_accept_new_offline: string;
+  /** %s = user@host:port */
+  ssh_stored_opt_in_unpinned: string;
+  /** %s = user@host:port, %s = presented fingerprint */
+  ssh_stored_opt_in_confirm: string;
+  /** %s = host:port */
+  ftp_stored_opt_in_unpinned: string;
+  /** %s = host:port, %s = presented fingerprint */
+  ftp_stored_opt_in_confirm: string;
+  ftp_accept_new_offline: string;
+  ftp_accept_new_requires_secure: string;
   ssh_validate_host_required: string;
   ssh_validate_port_invalid: string;
   ssh_validate_path_required: string;

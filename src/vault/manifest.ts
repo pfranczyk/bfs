@@ -7,7 +7,7 @@ import { VersionHealth } from '../types/index.js';
 const KNOWN_HEALTH: ReadonlySet<string> = new Set<string>(Object.values(VersionHealth));
 
 /** Manifest filename, capturing the version number it stands for. */
-const MANIFEST_FILENAME = /^v(\d+)\.json$/;
+export const MANIFEST_FILENAME = /^v(\d+)\.json$/;
 
 /** Returns the filesystem path for a manifest file given the version number. */
 function manifestFilePath(rootDir: string, version: number): string {

@@ -112,6 +112,74 @@ describe('provider add', () => {
     expect(writtenConfig.scheme.data_shards).toBe(2); // unchanged
   });
 
+  // A pool short of its scheme (the state `provider remove --strategy remove`
+  // leaves) is closed by the new storage itself: it takes the missing place and
+  // the scheme stays. Raising parity there would grow the required count along
+  // with the pool and leave the gap exactly as wide as before.
+  it('CI: should keep the scheme when the new provider fills a pool short of it', async () => {
+    const providers = [1, 2, 3].map((n) => ({ id: `disk-${n}`, type: 'local', config: { path: `/tmp/d${n}` } }));
+    mockReadConfig.mockResolvedValue(makeConfig({ providers, scheme: { data_shards: 3, parity_shards: 1 } }) as never);
+    const cfg = await writeConfigFile({ path: '/mnt/d4' });
+
+    await runCmd(['provider', 'add', '--ci', '--name', 'disk-4', '--type', 'local', '--config-file', cfg]);
+
+    const [, writtenConfig] = mockWriteConfig.mock.calls[0];
+    expect(writtenConfig.providers).toHaveLength(4);
+    expect(writtenConfig.scheme).toEqual({ data_shards: 3, parity_shards: 1 });
+    const out = capture.logs.join('\n');
+    expect(out).toContain('Provider "disk-4" added in place of a missing storage.');
+    expect(out).toContain('Scheme stays 3/1.');
+    expect(out).not.toContain('apply the new scheme');
+    expect(out).not.toContain('still missing');
+  });
+
+  // Two places missing (a forced removal): one storage fills one of them, and
+  // the message says how many are still missing, so the operator knows the
+  // backup commands stay refused until the next one is added.
+  it('CI: should fill one place and name how many are still missing when two are', async () => {
+    const providers = [1, 2].map((n) => ({ id: `disk-${n}`, type: 'local', config: { path: `/tmp/d${n}` } }));
+    mockReadConfig.mockResolvedValue(makeConfig({ providers, scheme: { data_shards: 3, parity_shards: 1 } }) as never);
+    const cfg = await writeConfigFile({ path: '/mnt/d3' });
+
+    await runCmd(['provider', 'add', '--ci', '--name', 'disk-3', '--type', 'local', '--config-file', cfg]);
+
+    const [, writtenConfig] = mockWriteConfig.mock.calls[0];
+    expect(writtenConfig.providers).toHaveLength(3);
+    expect(writtenConfig.scheme).toEqual({ data_shards: 3, parity_shards: 1 });
+    const out = capture.logs.join('\n');
+    expect(out).toContain('Scheme stays 3/1');
+    expect(out).toContain('storages still missing: 1');
+  });
+
+  // Control for the two above: on a pool that already matches the scheme,
+  // `provider add` adds one more parity part and advises `bfs push`.
+  it('CI: should still raise parity and advise bfs push when the pool matches the scheme', async () => {
+    mockReadConfig.mockResolvedValue(makeConfig() as never);
+    const cfg = await writeConfigFile({ path: '/mnt/d4' });
+
+    await runCmd(['provider', 'add', '--ci', '--name', 'disk-4', '--type', 'local', '--config-file', cfg]);
+
+    const [, writtenConfig] = mockWriteConfig.mock.calls[0];
+    expect(writtenConfig.scheme).toEqual({ data_shards: 2, parity_shards: 2 });
+    const out = capture.logs.join('\n');
+    expect(out).toContain('Provider "disk-4" added. Scheme: 2/2.');
+    expect(out).not.toContain('in place of a missing storage');
+  });
+
+  // The warning before an interactive add promises a scheme change; on a short
+  // pool there is none, so the warning has to say what will happen instead.
+  it('interactive: should warn that the new provider takes a missing place on a short pool', async () => {
+    const providers = [1, 2, 3].map((n) => ({ id: `disk-${n}`, type: 'local', config: { path: `/tmp/d${n}` } }));
+    mockReadConfig.mockResolvedValue(makeConfig({ providers, scheme: { data_shards: 3, parity_shards: 1 } }) as never);
+    mockPrompt.mockResolvedValueOnce({ name: 'disk-4' } as never).mockResolvedValueOnce({ type: 'local' } as never);
+
+    await runCmd(['provider', 'add']);
+
+    const out = [...capture.logs, ...capture.errors].join('\n');
+    expect(out).toContain('takes a missing place');
+    expect(out).not.toContain('changes the N+K scheme');
+  });
+
   it('CI: should save new provider config with correct type and path', async () => {
     mockReadConfig.mockResolvedValue(makeConfig() as never);
     const cfg = await writeConfigFile({ path: '/mnt/nas' });
@@ -295,6 +363,9 @@ describe('provider add', () => {
     // `accept_new_cert` is part of a usable FTPS config here: the run is
     // non-interactive, so without it - or a pinned fingerprint - there is no
     // way to trust the server and the adapter refuses (see the test below).
+    // The opt-in pins the certificate the server presents; stub that read.
+    const fp = 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99';
+    vi.spyOn(FtpProvider.prototype as unknown as { readServerCert: () => Promise<{ fingerprint: string; selfSigned: boolean }> }, 'readServerCert').mockResolvedValue({ fingerprint: fp, selfSigned: true });
     const cfg = await writeConfigFile({ host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true, accept_new_cert: true });
 
     await runCmd(['provider', 'add', '--ci', '--name', 'ftp-remote', '--type', 'ftp', '--config-file', cfg]);
@@ -302,7 +373,11 @@ describe('provider add', () => {
     expect(mockWriteConfig).toHaveBeenCalledOnce();
     const [, writtenConfig] = mockWriteConfig.mock.calls[0];
     const added = writtenConfig.providers.find((p: { id: string }) => p.id === 'ftp-remote');
-    expect(added).toMatchObject({ id: 'ftp-remote', type: 'ftp', config: { host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true, accept_new_cert: true } });
+    expect(added).toMatchObject({
+      id: 'ftp-remote',
+      type: 'ftp',
+      config: { host: 'ftp.example.com', port: 2121, user: 'alice', password: 'secret', path: '/backup', secure: true, accept_new_cert: true, cert_fingerprint: fp, cert_self_signed: true },
+    });
   });
 
   // An FTPS storage with no way to trust it is refused from the settings, before
@@ -446,6 +521,12 @@ interface AddProbeState {
   setVaultNames: string[];
   /** Message the thrown ProviderError carries on a 'fail' outcome. */
   failMessage?: string;
+  /**
+   * One outcome consumed per configureInteractive() call: 'fail' throws a
+   * ProviderError (a server that does not answer while the adapter reads its
+   * identity), anything else returns a config. Always succeeds when undefined.
+   */
+  configureAttempts?: string[];
 }
 
 /**
@@ -471,7 +552,9 @@ function registerAddProbeProvider(state: AddProbeState): void {
           state.setVaultNames.push(name);
         },
         async configureInteractive(_io: ProviderIO): Promise<Record<string, unknown>> {
+          const outcome = state.configureAttempts?.[state.configCalls] ?? 'ok';
           state.configCalls += 1;
+          if (outcome === 'fail') throw new ProviderError('SSH operation failed on nas.example.com:22: connect ECONNREFUSED');
           return { marker: state.configCalls };
         },
         validateConfig(): string[] {
@@ -590,6 +673,23 @@ describe('interactive provider add - connectivity probe + recovery', () => {
     // (cancelled), never an uncaught error type.
     expect(['abort', 'cancelled']).toContain(result);
     expect(mockWriteConfig).not.toHaveBeenCalled();
+  });
+
+  // The adapter's own questions can fail as well (an FTPS or SSH server that does
+  // not answer while its identity is read); that failure gets the same choices
+  // as a failed probe instead of ending the command.
+  it('RE-ENTER: should offer the recovery choice when the configuration questions themselves fail', async () => {
+    const state: AddProbeState = { attempts: [], probeCalls: 0, configCalls: 0, setVaultNames: [], configureAttempts: ['fail', 'ok'] };
+    registerAddProbeProvider(state);
+    const { chooseCalls } = installAddProbeIO(1); // pick RE-ENTER (index 1)
+    mockPrompt.mockResolvedValueOnce({ name: 'new-disk' } as never).mockResolvedValueOnce({ type: PROBE_TYPE } as never);
+
+    const result = await runCmd(['provider', 'add']);
+
+    expect(chooseCalls.length).toBe(1);
+    expect(state.configCalls).toBe(2);
+    expect(result).toBe('ok');
+    expect(mockWriteConfig).toHaveBeenCalledOnce();
   });
 
   // Message-agnosticism: the recovery loop must fire for ANY ProviderError,

@@ -350,13 +350,11 @@ export function registerProviderRemove(providerCmd: Command): void {
         switch (strategy) {
           case 'remove':
             success(fmt('provider_remove_success', providerId));
-            // One step and nothing else: the removal leaves a pool short of its
-            // scheme, and matching the two is the way out of that state. What the
-            // operator does with the backup afterwards is their choice, not part
-            // of it. `config` is the pool before the removal, which took one entry.
-            // Below the smallest valid pool no scheme fits, so `bfs scheme set`
-            // would refuse every pair - the state is named, with no command.
-            info(config.providers.length - 1 < MIN_PROVIDERS ? fmt('provider_remove_pool_below_minimum', String(config.providers.length - 1)) : fmt('provider_remove_next_step', String(config.providers.length - 1)));
+            {
+              // `config` is the pool before the removal, which took one entry.
+              const step = removalNextStep(config.providers.length - 1, config.scheme);
+              if (step !== null) info(step);
+            }
             break;
           case 'relocate':
             success(fmt('provider_relocate_success', providerId));
@@ -505,6 +503,29 @@ async function revertAddedTarget(rootDir: string, options: RevertAddedTargetOpti
 
   await writeConfig(rootDir, { ...config, providers: config.providers.filter((p) => p.id !== targetId) });
   info(fmt('provider_remove_target_reverted', targetId));
+}
+
+/**
+ * Builds the line printed after `--strategy remove`, from how the pool that is
+ * left relates to its scheme. A short pool has two ways back - a new storage
+ * that takes the missing place and keeps the scheme, or a scheme matched to
+ * the storages left - except below the smallest valid pool, where no scheme
+ * fits and only a new storage helps. A pool that now matches its scheme has
+ * nothing left to match. A pool still larger than its scheme is the state an
+ * unfinished rebuild onto a new storage leaves, and gets the same words as the
+ * refusal of every backup command. What the operator does with the backup
+ * afterwards is their choice, not part of the line.
+ *
+ * @param remaining - Storages left after the removal
+ * @param scheme    - The scheme, which the removal does not change
+ * @returns The line to print, or null when there is nothing to match
+ */
+function removalNextStep(remaining: number, scheme: VaultConfig['scheme']): Nullable<string> {
+  const required = scheme.data_shards + scheme.parity_shards;
+  if (remaining < MIN_PROVIDERS) return fmt('provider_remove_pool_below_minimum', String(remaining));
+  if (remaining < required) return fmt('provider_remove_next_step', String(scheme.data_shards), String(scheme.parity_shards), String(remaining));
+  if (remaining === required) return null;
+  return fmt('scheme_providers_surplus', String(required), String(remaining));
 }
 
 /**

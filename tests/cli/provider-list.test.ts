@@ -98,8 +98,8 @@ describe('provider list', () => {
 
 // This suite's config.js mock only overrides readConfig/writeConfig, so
 // `init` (also registered by buildTestProgram()) reaches the real
-// assertNoExistingVault - the mock spreads `...actual` and does not stub it.
-describe('init reaches the real assertNoExistingVault through an unrelated mock', () => {
+// inspectInitTarget - the mock spreads `...actual` and does not stub it.
+describe('init reaches the real inspectInitTarget through an unrelated mock', () => {
   let capture: ReturnType<typeof captureConsole>;
   let tmpDir: string;
 
@@ -121,7 +121,7 @@ describe('init reaches the real assertNoExistingVault through an unrelated mock'
     expect(capture.errors.some((l) => l.includes('--ci mode requires backup name'))).toBe(true);
     // Negative check tied to Vitest's actual wording (not a substring nobody emits):
     // a mock missing this export throws '... export is defined on the "..." mock.
-    // Did you forget to return it from "vi.mock"?' - assertNoExistingVault would
+    // Did you forget to return it from "vi.mock"?' - inspectInitTarget would
     // surface that message instead of the real CLI validation above.
     expect(capture.errors.some((l) => l.includes('Did you forget to return it from'))).toBe(false);
   });

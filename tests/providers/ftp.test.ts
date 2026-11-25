@@ -296,6 +296,9 @@ vi.mock('basic-ftp', () => {
 
 // --- Helpers -----------------------------------------------------------------
 
+/** The fingerprint the basic-ftp mock's TLS control socket presents. */
+const MOCK_SERVER_CERT_FP = 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99';
+
 function makeConfig(overrides: Partial<Record<string, unknown>> = {}, id = 'test-ftp'): ProviderConfig {
   return { id, type: 'ftp', adapterPackage: null, config: { host: 'localhost', port: 21, user: 'testuser', password: 'testpass', path: '/backup', secure: false, ...overrides } };
 }
@@ -458,10 +461,9 @@ describe('FtpProvider', () => {
 
   it('should not warn about plaintext FTP when secure=true', async () => {
     const { io, logs } = createMockProviderIO();
-    // accept_new_cert makes the unpinned secure connection trust the presented
-    // (self-signed) cert without an interactive prompt, so the secure path
-    // completes and the plaintext-warning branch is never taken.
-    const secure = new FtpProvider(makeConfig({ secure: true, accept_new_cert: true }), io);
+    // A pin matching the mock's certificate lets the secure connection complete
+    // without a prompt, so the plaintext-warning branch is never taken.
+    const secure = new FtpProvider(makeConfig({ secure: true, cert_fingerprint: MOCK_SERVER_CERT_FP }), io);
     secure.setVaultName('testvault');
 
     await uploadBuf(secure, 'shard_0.bfs.1', Buffer.alloc(64, 1));
@@ -1089,6 +1091,59 @@ describe('FtpProvider', () => {
       expect(config.host).toBe('nas.example.com');
     });
 
+    // Capturing a certificate over a plaintext server would dial TLS at a server
+    // that does not speak it, and validateConfig rejects a pin without TLS
+    // anyway (ftp_cert_pin_requires_secure) - so the flag is refused up front,
+    // before any connection.
+    it('should refuse --accept-new-cert on a plain-FTP server', async () => {
+      const p = providerWith(false);
+
+      await expect(p.configureFromFlags(cliInput({ rawArgs: [...SECURE_ARGS, '--secure', 'false', '--accept-new-cert'] }))).rejects.toThrow(ProviderError);
+    });
+
+    it('should refuse accept_new_cert with secure:false declared in a --config-file', async () => {
+      const file = await writeJsonConfig(JSON.stringify({ host: 'nas.example.com', user: 'backup', password: 'pw', path: '/backup', secure: false, accept_new_cert: true }));
+      const p = providerWith(false);
+
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }))).rejects.toThrow(ProviderError);
+    });
+
+    // `bfs provider edit --ci` never reaches the server, so it cannot capture a
+    // certificate: the opt-in is refused there - from the flag or from
+    // --config-file alike - instead of writing a bare opt-in into config.json.
+    // The refusal names the conflict and stops; it suggests no way out.
+    it('should refuse --accept-new-cert on an offline edit, naming the conflict without suggesting a fix', async () => {
+      const p = providerWith(false);
+
+      const message = await p.configureFromFlags(cliInput({ rawArgs: [...SECURE_ARGS, '--accept-new-cert'], offline: true })).then(
+        () => '',
+        (e: unknown) => (e instanceof ProviderError ? e.message : `not a ProviderError: ${String(e)}`),
+      );
+
+      expect(message).toContain('--accept-new-cert');
+      expect(message).toContain('bfs provider edit --ci');
+      expect(message).not.toContain('--cert-fingerprint');
+      expect(message).not.toContain('provider add');
+    });
+
+    it('should refuse accept_new_cert from a --config-file on an offline edit', async () => {
+      const file = await writeJsonConfig(JSON.stringify({ host: 'nas.example.com', user: 'backup', password: 'pw', path: '/backup', secure: true, accept_new_cert: true }));
+      const p = providerWith(false);
+
+      await expect(p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file], offline: true }))).rejects.toThrow(ProviderError);
+    });
+
+    // A config copied out of BFS's own config.json carries the opt-in next to the
+    // pin. With the pin there is nothing to read, so the offline edit goes on.
+    it('should accept accept_new_cert with a pin beside it on an offline edit', async () => {
+      const file = await writeJsonConfig(JSON.stringify({ host: 'nas.example.com', user: 'backup', password: 'pw', path: '/backup', secure: true, accept_new_cert: true, cert_fingerprint: MOCK_SERVER_CERT_FP }));
+      const p = providerWith(false);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file], offline: true }));
+
+      expect(config.cert_fingerprint).toBe(MOCK_SERVER_CERT_FP);
+    });
+
     it('should leave an attended run alone, where the operator can be asked', async () => {
       const p = providerWith(true);
 
@@ -1406,6 +1461,118 @@ describe('FtpProvider', () => {
       const declinedAt = order.findIndex((e) => e.startsWith('confirm:') && e.includes('203.0.113.7'));
       expect(declinedAt).toBeGreaterThanOrEqual(0);
     });
+
+    const PRESENTED_FP = MOCK_SERVER_CERT_FP;
+
+    /**
+     * An attended io that accepts every question - the host, the certificate
+     * (confirm or the trust menu's accept exit) - and types `testpass`, counting
+     * every question it answered, the host gate included.
+     */
+    function consentingIo(): { io: ProviderIO; asked: () => number } {
+      let asked = 0;
+      const { io: base } = createMockProviderIO({}, process.cwd(), true);
+      const io: ProviderIO = {
+        ...base,
+        async askSecret(): Promise<string> {
+          return 'testpass';
+        },
+        async confirm(): Promise<boolean> {
+          asked += 1;
+          return true;
+        },
+        async choose(_m: string, options: string[]): Promise<string> {
+          asked += 1;
+          return options.find((o) => /trust|zaufaj/i.test(o)) ?? options[0] ?? '';
+        },
+      };
+      return { io, asked: () => asked };
+    }
+
+    /** Calls the optional takeConfigUpdates; a marker string when it is missing. */
+    function takeUpdates(provider: object): unknown {
+      const hook = (provider as { takeConfigUpdates?: () => unknown }).takeConfigUpdates;
+      return typeof hook === 'function' ? hook.call(provider) : 'takeConfigUpdates is not implemented';
+    }
+
+    // An attended recovery that confirmed the certificate hands its fingerprint
+    // back through takeConfigUpdates, so the core writes it into the config.json
+    // it creates - that run is the one producing the configuration, so the
+    // operator's decision is consent from this invocation, not a stored opt-in.
+    // The next unattended command then connects on the pin without asking.
+    it('should hand the confirmed certificate back after an attended recovery, so the next unattended command connects on it', async () => {
+      const { io } = consentingIo();
+      const stored = { host: '203.0.113.7', port: 2121, user: 'victim', secure: true, accept_new_cert: true };
+      const ftpProvider = new FtpProvider(makeConfig(stored), io) as WithRecovery;
+      ftpProvider.setVaultName('testvault');
+
+      await ftpProvider.connectForRecovery(io, []);
+      const updates = takeUpdates(ftpProvider);
+
+      expect(updates).toEqual({ cert_fingerprint: PRESENTED_FP, cert_self_signed: true });
+      const { io: unattendedIo, logs } = createMockProviderIO({}, process.cwd(), false);
+      const confirm = vi.spyOn(unattendedIo, 'confirm');
+      const next = new FtpProvider(makeConfig({ ...stored, ...(updates as Record<string, unknown>) }), unattendedIo);
+      next.setVaultName('testvault');
+      await expect(next.authenticate()).resolves.toBeUndefined();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(logs.filter((l) => l.level === 'warn')).toEqual([]);
+    });
+
+    // The question may have been answered earlier in the same command, on another
+    // instance; the instance that then hits the remembered answer must still hand
+    // the fingerprint back - the decision is the operator's from this command
+    // either way. This is why the remembered answer holds the fingerprint.
+    // The question count proves the instance really hit the remembered answer:
+    // a recovery alone asks `alone` questions (the host gate plus the
+    // certificate), the same recovery after an earlier consent one fewer.
+    it('should hand the certificate back from an instance that hit an answer given earlier in the same command', async () => {
+      const stored = { host: '203.0.113.7', port: 2121, user: 'victim', secure: true, accept_new_cert: true };
+      const solo = consentingIo();
+      const soloProvider = new FtpProvider(makeConfig(stored), solo.io) as WithRecovery;
+      soloProvider.setVaultName('testvault');
+      await soloProvider.connectForRecovery(solo.io, []);
+      const alone = solo.asked();
+      const { io, asked } = consentingIo();
+      const earlier = new FtpProvider(makeConfig(stored), io);
+      const recovering = new FtpProvider(makeConfig(stored), io) as WithRecovery;
+      earlier.setVaultName('testvault');
+      recovering.setVaultName('testvault');
+      await earlier.authenticate();
+      const askedBefore = asked();
+
+      await recovering.connectForRecovery(io, []);
+
+      expect(askedBefore).toBe(1);
+      expect(asked() - askedBefore).toBe(alone - 1);
+      expect(takeUpdates(recovering)).toEqual({ cert_fingerprint: PRESENTED_FP, cert_self_signed: true });
+    });
+
+    // verify and pull reach the storage through healthCheck, which reports only
+    // "not reachable" - the refused certificate has to be named on the way, or
+    // a reachable server reads as an outage with no reason given.
+    it('should name a refused saved opt-in when the reachability check fails without an operator', async () => {
+      const { io, logs } = createMockProviderIO({}, process.cwd(), false);
+      const ftpProvider = new FtpProvider(makeConfig({ host: '203.0.113.7', port: 2121, user: 'victim', secure: true, accept_new_cert: true }), io);
+      ftpProvider.setVaultName('testvault');
+
+      const reachable = await ftpProvider.healthCheck();
+
+      expect(reachable).toBe(false);
+      const warnings = logs.filter((l) => l.level === 'warn').map((l) => l.message);
+      expect(warnings.some((w) => w.includes('203.0.113.7:2121') && w.includes('not pinned'))).toBe(true);
+    });
+
+    // Nothing was decided for a pinned storage, so nothing goes back.
+    it('should hand nothing back when the certificate was already pinned', async () => {
+      const { io } = consentingIo();
+      const ftpProvider = new FtpProvider(makeConfig({ host: '203.0.113.7', port: 2121, user: 'victim', secure: true, accept_new_cert: true, cert_fingerprint: PRESENTED_FP }), io) as WithRecovery;
+      ftpProvider.setVaultName('testvault');
+
+      await ftpProvider.connectForRecovery(io, []);
+
+      expect(takeUpdates(ftpProvider)).toBeNull();
+    });
   });
 
   // --- FTPS cert pinning + TOFU + secure-by-default --------------------------
@@ -1506,10 +1673,10 @@ describe('FtpProvider', () => {
     it('should treat a config without the secure key as secure=true (no plaintext warning)', async () => {
       const { io, logs } = createMockProviderIO();
       // No `secure` key -> constructor defaults it to true (secure-by-default).
-      // accept_new_cert lets the unpinned secure connection trust the presented
-      // cert without a prompt, so the upload completes over the secure path and
-      // the plaintext-warning branch is never reached.
-      const p = new FtpProvider({ id: 'test-ftp', type: 'ftp', adapterPackage: null, config: { host: 'localhost', port: 21, user: 'testuser', password: 'testpass', path: '/backup', accept_new_cert: true } }, io);
+      // A pin matching the mock's certificate lets the secure connection complete
+      // without a prompt, so the upload goes over the secure path and the
+      // plaintext-warning branch is never reached.
+      const p = new FtpProvider({ id: 'test-ftp', type: 'ftp', adapterPackage: null, config: { host: 'localhost', port: 21, user: 'testuser', password: 'testpass', path: '/backup', cert_fingerprint: MOCK_SERVER_CERT_FP } }, io);
       p.setVaultName('testvault');
 
       await uploadBuf(p, 'shard_0.bfs.1', Buffer.alloc(64, 1));

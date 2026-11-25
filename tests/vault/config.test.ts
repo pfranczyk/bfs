@@ -80,21 +80,40 @@ describe('assertSchemeValid', () => {
   });
 
   // Below three storages no scheme is valid (N >= 2, K >= 1), so `bfs scheme set`
-  // cannot close the gap - the command would refuse every pair it is given. The
-  // refusal names the state instead, with no command.
-  it('should not advise bfs scheme set when fewer than three storages are configured', () => {
+  // cannot close the gap - the command would refuse every pair it is given. A new
+  // storage takes a missing place without touching the scheme, so that is the
+  // one command the refusal names.
+  it('should advise bfs provider add and not bfs scheme set when fewer than three storages are configured', () => {
     const cfg = makeConfig({ scheme: { data_shards: 2, parity_shards: 1 }, providers: [makeProvider('p1'), makeProvider('p2')] });
 
     expect(() => assertSchemeValid(cfg)).toThrow(BfsError);
     expect(() => assertSchemeValid(cfg)).toThrow(/at least 3 storage providers/);
+    expect(() => assertSchemeValid(cfg)).toThrow(/bfs provider add/);
     expect(() => assertSchemeValid(cfg)).not.toThrow(/bfs scheme set/);
   });
 
-  // Control: with three storages a matching scheme exists, so the step stays.
-  it('should keep advising bfs scheme set when three storages are configured', () => {
+  // A pool short of the scheme has two ways out: a new storage fills the missing
+  // place and keeps the scheme, a scheme matched to the storages lowers it.
+  it('should advise both bfs provider add and bfs scheme set when the pool is short of the scheme', () => {
     const cfg = makeConfig({ scheme: { data_shards: 3, parity_shards: 1 }, providers: [makeProvider('p1'), makeProvider('p2'), makeProvider('p3')] });
 
     expect(() => assertSchemeValid(cfg)).toThrow(/bfs scheme set/);
+    expect(() => assertSchemeValid(cfg)).toThrow(/bfs provider add/);
+  });
+
+  // A pool LARGER than the scheme is what a rebuild onto a new storage leaves
+  // when it stops halfway: the new entry is written first and the old one goes
+  // last. Adding a storage does not close that, and `bfs scheme set` with the
+  // larger sum is accepted - it would count the free entry as a place holding a
+  // part. So the refusal names the state and the rebuild that finishes it.
+  it('should name an unfinished rebuild and no scheme or add command when the pool is larger than the scheme', () => {
+    const cfg = makeConfig({ scheme: { data_shards: 2, parity_shards: 1 }, providers: [makeProvider('p1'), makeProvider('p2'), makeProvider('p3'), makeProvider('p4')] });
+
+    expect(() => assertSchemeValid(cfg)).toThrow(/requires 3 providers, configured: 4/);
+    expect(() => assertSchemeValid(cfg)).toThrow(/more storages than the scheme uses/);
+    expect(() => assertSchemeValid(cfg)).toThrow(/did not finish/);
+    expect(() => assertSchemeValid(cfg)).not.toThrow(/bfs scheme set/);
+    expect(() => assertSchemeValid(cfg)).not.toThrow(/bfs provider add/);
   });
 
   it('should check scheme first (before providers count)', () => {

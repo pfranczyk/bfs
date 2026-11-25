@@ -216,15 +216,66 @@ async function connectProvidersFromMap(locationMap: ShardLocation[], vaultName: 
 
     if (probe && typeof probe.connectForRecovery === 'function') {
       const connected = await connectViaRecoveryHook({ provider: probe, loc, vaultName, io, pool: recoveryPool, trustLocations });
-      if (connected) providers.push(connected);
+      if (connected) {
+        mergeConfigUpdates(connected, loc);
+        providers.push(connected);
+      }
       continue;
     }
 
     const required = loc.required_inputs;
     const provider = required && required.length > 0 ? await connectWithInputs(loc, required, vaultName, io, inputPool) : await connectOne(loc, loc.connection_config, vaultName, io);
-    if (provider) providers.push(provider);
+    if (provider) {
+      mergeConfigUpdates(provider, loc);
+      providers.push(provider);
+    }
   }
   return providers;
+}
+
+/** True for a value that survives a JSON round trip unchanged in kind. */
+function isPlainJson(value: unknown): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isPlainJson);
+  if (typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.values(value as Record<string, unknown>).every(isPlainJson);
+  }
+  return false;
+}
+
+/**
+ * Merges the corrections a connected provider hands back through the optional
+ * `takeConfigUpdates` into the `connection_config` of the location-map entry it
+ * was built from - reconstructConfig writes config.json from those entries. The
+ * core stays blind to the fields; it only enforces the boundaries: fields the
+ * provider declares secret are dropped (this is not a second way to persist a
+ * secret), a value that is not plain JSON drops the whole update, and so does a
+ * merged config the provider's own validateConfig rejects. The validation runs
+ * on the config as it will be saved - after the secret the operator typed has
+ * been written into the entry. Called only for instances that ended up
+ * connected, never for the bootstrap or consensus instances.
+ */
+function mergeConfigUpdates(provider: StorageProvider, loc: ShardLocation): void {
+  const take = provider.takeConfigUpdates;
+  if (typeof take !== 'function') return;
+  let update: Nullable<Record<string, unknown>>;
+  try {
+    update = take.call(provider);
+  } catch {
+    return; // a faulty hook costs the update, never the recovery
+  }
+  if (update === null || update === undefined) return;
+  const secretFields = new Set(provider.getSecretFields());
+  const accepted: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(update)) {
+    if (secretFields.has(field)) continue;
+    if (!isPlainJson(value)) return;
+    accepted[field] = value;
+  }
+  if (Object.keys(accepted).length === 0) return;
+  if (provider.validateConfig({ ...loc.connection_config, ...accepted }).length > 0) return;
+  Object.assign(loc.connection_config, accepted);
 }
 
 /** Arguments for {@link runConsensusCheck}. */

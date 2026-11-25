@@ -507,5 +507,125 @@ export async function suiteA(vaultDir: string): Promise<SuiteResult> {
     }),
   );
 
+  // -- An interrupted init resumes with the same command -----------------------
+  // init records each storage as it passes its probe, so a storage that is not
+  // usable yet costs only itself: the next run of the same command finds the
+  // storages already recorded, probes the rest and finishes the same backup
+  // (same vault_id). The unusable storage is a path running through a file - the
+  // probe cannot create a directory under it - and removing the file is the fix.
+
+  tests.push(
+    await runTest('A20', 'bfs init --ci interrupted at a storage -> the same command resumes it', async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-smoke-init-resume-'));
+      try {
+        const blocker = path.join(dir, 'm2');
+        await fs.writeFile(blocker, 'not a directory', 'utf-8');
+        const media = ['--provider', `local:p1 --path ${path.join(dir, 'm1')}`, '--provider', `local:p2 --path ${path.join(blocker, 'sub')}`, '--provider', `local:p3 --path ${path.join(dir, 'm3')}`];
+        const cmd = ['init', 'docs', '--ci', '--no-enc', '--no-compress', '--data-shards', '2', '--parity-shards', '1', ...media];
+        const cfgPath = path.join(dir, '.bfs', 'config.json');
+
+        const first = runBfs(cmd, dir);
+        const firstOut = first.stdout + first.stderr;
+        assert(first.status !== 0, `init must fail while p2 is unusable, got ${first.status ?? 'null'}: ${firstOut.slice(0, 300)}`);
+        const partialText = await fs.readFile(cfgPath, 'utf-8').catch(() => '');
+        assert(partialText !== '', `the interrupted init must leave a configuration behind: ${firstOut.slice(0, 300)}`);
+        const partial = JSON.parse(partialText) as { vault_id: string; providers: Array<{ id: string }> };
+        assert(partial.providers.map((p) => p.id).join(',') === 'p1', `the storage probed before the failure must be recorded, got: ${partial.providers.map((p) => p.id).join(',')}`);
+
+        await fs.rm(blocker);
+        const second = runBfs(cmd, dir);
+        const secondOut = second.stdout + second.stderr;
+        assert(second.status === 0, `the same command must resume and finish, got ${second.status ?? 'null'}: ${secondOut.slice(0, 300)}`);
+        const done = JSON.parse(await fs.readFile(cfgPath, 'utf-8')) as { vault_id: string; providers: Array<{ id: string }> };
+        assert(done.providers.map((p) => p.id).join(',') === 'p1,p2,p3', `all three storages expected, got: ${done.providers.map((p) => p.id).join(',')}`);
+        assert(done.vault_id === partial.vault_id, 'the resumed init must finish the same backup, not mint a new vault_id');
+
+        await fs.writeFile(path.join(dir, 'note.txt'), 'resumed init fixture', 'utf-8');
+        const push = runBfs(['push', '--new'], dir);
+        assert(push.status === 0, `push after the resumed init failed: ${(push.stdout + push.stderr).slice(0, 300)}`);
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+    }),
+  );
+
+  // -- An unfinished init: what the other commands and a mismatched resume say --
+  // A configuration short of its storages, with no version yet: a command needing
+  // the full pool says the backup has no version yet (the state - not which way
+  // out the operator wants), and a resume under another backup name is refused
+  // naming both names, since neither the recorded settings nor the command line
+  // may silently win. Both languages.
+
+  tests.push(
+    await runTest('A21', 'unfinished init: push says there is no version yet, a resume under another name names both (EN/PL)', async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-smoke-init-unfinished-'));
+      try {
+        const langEnv: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: path.join(dir, 'lang-config') };
+        const blocker = path.join(dir, 'm2');
+        await fs.writeFile(blocker, 'not a directory', 'utf-8');
+        const media = ['--provider', `local:p1 --path ${path.join(dir, 'm1')}`, '--provider', `local:p2 --path ${path.join(blocker, 'sub')}`, '--provider', `local:p3 --path ${path.join(dir, 'm3')}`];
+        runBfs(['init', 'docs', '--ci', '--no-enc', '--no-compress', '--data-shards', '2', '--parity-shards', '1', ...media], dir);
+        const cfgPath = path.join(dir, '.bfs', 'config.json');
+        const before = await fs.readFile(cfgPath, 'utf-8').catch(() => '');
+        assert(before !== '', 'setup: the interrupted init must leave a configuration behind');
+        await fs.writeFile(path.join(dir, 'note.txt'), 'unfinished init fixture', 'utf-8');
+
+        for (const lang of ['en', 'pl']) {
+          const push = runBfs(['--lang', lang, '--ci', 'push', '--new'], dir, undefined, langEnv);
+          const pushOut = push.stdout + push.stderr;
+          assert(push.status !== 0, `push on an unfinished init must abort (${lang}), got ${push.status ?? 'null'}`);
+          assert(/no version|nie ma jeszcze wersji|brak wersji/i.test(pushOut), `the refusal must say the backup has no version yet (${lang}): ${pushOut.slice(0, 300)}`);
+          assert(!pushOut.includes('bfs init'), `the refusal names the state, not a command (${lang}): ${pushOut.slice(0, 300)}`);
+
+          const resume = runBfs(['--lang', lang, 'init', 'photos', '--ci', '--no-enc', '--no-compress', '--data-shards', '2', '--parity-shards', '1', ...media], dir, undefined, langEnv);
+          const resumeOut = resume.stdout + resume.stderr;
+          assert(resume.status !== 0, `a resume under another name must abort (${lang}), got ${resume.status ?? 'null'}`);
+          assert(resumeOut.includes('docs') && resumeOut.includes('photos'), `the refusal must name the recorded and the requested backup (${lang}): ${resumeOut.slice(0, 300)}`);
+          // Names and commands read the same in both languages, so the Polish
+          // branch is checked for Polish words of its own.
+          if (lang === 'pl') {
+            assert(/kopi|nośnik/i.test(pushOut), `the Polish push refusal must actually be in Polish: ${pushOut.slice(0, 300)}`);
+            assert(/kopi|nośnik/i.test(resumeOut), `the Polish resume refusal must actually be in Polish: ${resumeOut.slice(0, 300)}`);
+          }
+        }
+        assert((await fs.readFile(cfgPath, 'utf-8')) === before, 'refused commands must leave the unfinished configuration byte-for-byte');
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+    }),
+  );
+
+  // -- Unreadable settings beside versions: the state, without a recipe --------
+  // The refusal names what cannot be read and that versions are there, and
+  // suggests no way out: deleting config.json alone leaves the manifests behind,
+  // and init refuses manifests without settings; whether the backup is wanted
+  // back is not something BFS can tell.
+
+  tests.push(
+    await runTest('A22', 'unreadable settings beside versions -> refusal names the state without a command (EN/PL)', async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-smoke-init-unreadable-'));
+      try {
+        const langEnv: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: path.join(dir, 'lang-config') };
+        await fs.mkdir(path.join(dir, '.bfs', 'manifests'), { recursive: true });
+        await fs.writeFile(path.join(dir, '.bfs', 'config.json'), '{"vault_id": "trunc', 'utf-8');
+        await fs.writeFile(path.join(dir, '.bfs', 'manifests', 'v001.json'), '{}', 'utf-8');
+        const media = ['--provider', `local:p1 --path ${path.join(dir, 'm1')}`, '--provider', `local:p2 --path ${path.join(dir, 'm2')}`, '--provider', `local:p3 --path ${path.join(dir, 'm3')}`];
+
+        for (const lang of ['en', 'pl']) {
+          const r = runBfs(['--lang', lang, 'init', 'docs', '--ci', '--no-enc', '--no-compress', '--data-shards', '2', '--parity-shards', '1', ...media], dir, undefined, langEnv);
+          const out = r.stdout + r.stderr;
+          assert(r.status !== 0, `init over unreadable settings must abort (${lang}), got ${r.status ?? 'null'}`);
+          assert(out.includes('config.json'), `the refusal must name what cannot be read (${lang}): ${out.slice(0, 300)}`);
+          assert(/version|wersj/i.test(out), `the refusal must say versions are there (${lang}): ${out.slice(0, 300)}`);
+          assert(!/`bfs [a-z]/.test(out), `the refusal names the state, not a command (${lang}): ${out.slice(0, 300)}`);
+          assert(!/delete|remove|usuń/i.test(out), `the refusal suggests nothing to delete (${lang}): ${out.slice(0, 300)}`);
+          if (lang === 'pl') assert(/ustawie|kopi/i.test(out), `the Polish refusal must actually be in Polish: ${out.slice(0, 300)}`);
+        }
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+    }),
+  );
+
   return { name: 'Suite A - CLI bootstrap', tests };
 }

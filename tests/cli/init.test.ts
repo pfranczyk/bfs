@@ -1,8 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setLang } from '../../src/i18n/index.js';
 import { PushMode } from '../../src/types/index.js';
 import { captureConsole, runCmd } from './_helpers.js';
 
-vi.mock('../../src/vault/vault-manager.js', () => ({ init: vi.fn() }));
+// Interactive init admits each storage through admitInitProvider as it is
+// configured; both vault calls are stubbed, since these tests are about the CLI.
+vi.mock('../../src/vault/vault-manager.js', () => ({ init: vi.fn(), admitInitProvider: vi.fn() }));
 vi.mock('inquirer', () => ({
   default: {
     prompt: vi.fn(),
@@ -231,52 +234,132 @@ describe('init', () => {
     expect(mockPrompt).not.toHaveBeenCalled();
   });
 
-  // --- Interactive mode - prompts ------------------------------------------
+  // --- --max-ram --------------------------------------------------------------
+  // The RAM limit is a whole number of MiB above zero, the same rule as
+  // `bfs config --max-ram` and `bfs push --max-ram`. Leaving the flag out is
+  // how a CI run asks for auto; 0 is refused rather than read as auto, so one
+  // value never means a zero budget in one command and auto in another.
 
-  it('interactive: should ask for vault name when not given as argument', async () => {
-    // When vault_name is not passed as CLI arg, inquirer is called for it
-    mockPrompt
-      .mockResolvedValueOnce({ name: 'interaktywny-vault' } as never) // vault_name
-      .mockResolvedValueOnce({ encEnabled: false } as never) // encryption
-      .mockResolvedValueOnce({ dataShardsStr: '2', parityShardsStr: '1' } as never) // scheme
-      .mockResolvedValueOnce({ id: 'p1' } as never) // provider 1 id
-      .mockResolvedValueOnce({ type: 'local' } as never) // provider 1 type
-      .mockResolvedValueOnce({ dirPath: '/mnt/d1' } as never) // provider 1 path
-      .mockResolvedValueOnce({ id: 'p2' } as never) // provider 2 id
-      .mockResolvedValueOnce({ type: 'local' } as never) // provider 2 type
-      .mockResolvedValueOnce({ dirPath: '/mnt/d2' } as never) // provider 2 path
-      .mockResolvedValueOnce({ id: 'p3' } as never) // provider 3 id
-      .mockResolvedValueOnce({ type: 'local' } as never) // provider 3 type
-      .mockResolvedValueOnce({ dirPath: '/mnt/d3' } as never) // provider 3 path
-      .mockResolvedValueOnce({ pushMode: PushMode.NewVersion } as never) // push_mode
-      .mockResolvedValueOnce({ maxRamStr: '1024' } as never); // max_ram_mb
+  it.each([
+    ['abc', 'not a number at all'],
+    ['512abc', 'a number with trailing text'],
+    ['-5', 'a negative number'],
+    ['0', 'zero, which push would take as a zero budget'],
+    ['1.5', 'a fraction'],
+    ['1e3', 'a number in exponent notation'],
+    ['', 'an empty value, as from an unset variable'],
+  ])('CI: should abort when --max-ram is "%s" (%s)', async (value) => {
+    const result = await runInRoot([...ciBaseArgs, '--max-ram', value]);
 
-    await runInRoot(['init']);
-
-    expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ vault_name: 'interaktywny-vault' }));
+    expect(result).toBe('abort');
+    expect(mockInit).not.toHaveBeenCalled();
+    expect(capture.errors.some((e) => e.includes(`--max-ram must be an integer >= 1 (MB), got "${value}".`))).toBe(true);
+    // CI checks every flag before touching the directory, so a typo costs no scan of a large tree.
+    expect(capture.logs.some((l) => l.includes('Scanning directory'))).toBe(false);
   });
 
-  it('interactive: should NOT prompt for vault name when argument given', async () => {
-    mockPrompt
-      .mockResolvedValueOnce({ encEnabled: false } as never) // encryption
-      .mockResolvedValueOnce({ dataShardsStr: '2', parityShardsStr: '1' } as never) // scheme
-      .mockResolvedValueOnce({ id: 'p1' } as never)
-      .mockResolvedValueOnce({ type: 'local' } as never)
-      .mockResolvedValueOnce({ dirPath: '/mnt/d1' } as never)
-      .mockResolvedValueOnce({ id: 'p2' } as never)
-      .mockResolvedValueOnce({ type: 'local' } as never)
-      .mockResolvedValueOnce({ dirPath: '/mnt/d2' } as never)
-      .mockResolvedValueOnce({ id: 'p3' } as never)
-      .mockResolvedValueOnce({ type: 'local' } as never)
-      .mockResolvedValueOnce({ dirPath: '/mnt/d3' } as never)
-      .mockResolvedValueOnce({ pushMode: PushMode.NewVersion } as never) // push_mode
-      .mockResolvedValueOnce({ maxRamStr: '1024' } as never); // max_ram_mb
+  it('CI: should record a whole --max-ram above zero (A/B control)', async () => {
+    await runInRoot([...ciBaseArgs, '--max-ram', '512']);
 
-    await runInRoot(['init', 'myvault']);
+    expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ max_ram_mb: 512 }));
+  });
 
-    // First prompt should be for encryption, not vault name
-    expect(mockPrompt).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ name: 'encEnabled' })]));
-    expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ vault_name: 'myvault' }));
+  it('CI: should record auto when --max-ram is left out', async () => {
+    await runInRoot(ciBaseArgs);
+
+    expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ max_ram_mb: null }));
+  });
+
+  describe('interactive: RAM limit prompt', () => {
+    /**
+     * Runs an interactive init past the RAM prompt and returns its validator.
+     * Every prompt is answered by the name of its question, so the answers do
+     * not depend on the order in which init asks them.
+     */
+    async function ramValidator(): Promise<(v: string) => unknown> {
+      const answers: Record<string, unknown> = { encEnabled: false, compressEnabled: false, dataShardsStr: '2', parityShardsStr: '1', pushMode: PushMode.NewVersion, maxRamStr: '1024', id: 'p1', type: 'local' };
+      mockPrompt.mockImplementation((async (questions: Array<{ name: string }>) => Object.fromEntries(questions.map((q) => [q.name, answers[q.name]]))) as never);
+      await runInRoot(['init', 'myvault']);
+      const questions = mockPrompt.mock.calls.flatMap((call) => call[0] as unknown as Array<{ name?: string; validate?: (v: string) => unknown }>);
+      const ram = questions.find((q) => q.name === 'maxRamStr');
+      assert(ram?.validate !== undefined, 'the RAM prompt must carry a validator');
+      return ram.validate;
+    }
+
+    afterEach(() => {
+      setLang('en');
+      // The answering implementation must not reach tests that queue their own answers.
+      mockPrompt.mockReset();
+    });
+
+    it.each(['abc', '512abc', '-5', '0', '1.5', '1e3', ''])('should refuse "%s" with the same rule as the flags', async (value) => {
+      const validate = await ramValidator();
+
+      const verdict = validate(value);
+
+      expect(verdict).toBe('RAM limit must be an integer >= 1 (MB).');
+    });
+
+    it('should word the refusal in the operator language, not in hardcoded English', async () => {
+      setLang('pl');
+      const validate = await ramValidator();
+
+      const verdict = validate('abc');
+
+      expect(verdict).toBe('Limit RAM musi być liczbą całkowitą >= 1 (MB).');
+    });
+
+    it('should accept a whole number above zero (A/B control)', async () => {
+      const validate = await ramValidator();
+
+      const verdict = validate('512');
+
+      expect(verdict).toBe(true);
+    });
+  });
+
+  // --- Interactive mode - prompts ------------------------------------------
+
+  describe('interactive: vault name prompt', () => {
+    /**
+     * Answers every interactive prompt by the name of its question, so a test
+     * does not depend on the order in which init asks them. Questions that
+     * repeat per storage take the next value from their list, and each local
+     * storage is configured to its own path without asking for one.
+     */
+    function answerInitByName(vaultName?: string): void {
+      const single: Record<string, unknown> = { name: vaultName, encEnabled: false, compressEnabled: false, dataShardsStr: '2', parityShardsStr: '1', pushMode: PushMode.NewVersion, maxRamStr: '1024' };
+      const perStorage: Record<string, unknown[]> = { id: ['p1', 'p2', 'p3'], type: ['local', 'local', 'local'] };
+      mockPrompt.mockImplementation((async (questions: Array<{ name: string }>) => Object.fromEntries(questions.map((q) => [q.name, q.name in perStorage ? perStorage[q.name]?.shift() : single[q.name]]))) as never);
+      const paths = ['d1', 'd2', 'd3'].map((d) => path.join(root, 'storage', d));
+      vi.spyOn(LocalFsProvider.prototype, 'configureInteractive').mockImplementation(async () => ({ path: paths.shift() }));
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      // The answering implementation must not reach tests that queue their own answers.
+      mockPrompt.mockReset();
+    });
+
+    it('should ask for vault name when not given as argument', async () => {
+      answerInitByName('interaktywny-vault');
+
+      await runInRoot(['init']);
+
+      expect(mockPrompt).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ name: 'name' })]));
+      expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ vault_name: 'interaktywny-vault', max_ram_mb: 1024 }));
+    });
+
+    it('should NOT prompt for vault name when argument given', async () => {
+      answerInitByName();
+
+      await runInRoot(['init', 'myvault']);
+
+      const asked = mockPrompt.mock.calls.flatMap((call) => (call[0] as unknown as Array<{ name: string }>).map((q) => q.name));
+      expect(asked).not.toContain('name');
+      expect(asked[0]).toBe('encEnabled');
+      expect(mockInit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ vault_name: 'myvault', max_ram_mb: 1024 }));
+    });
   });
 
   // --- Pass-through --provider (type:name [adapter-flags]) ------------------
@@ -509,10 +592,15 @@ describe('init', () => {
   // before saying no.
 
   describe('a directory that already holds a backup', () => {
-    /** Writes .bfs/config.json into the working directory, as if a backup had been initialized here. */
+    /**
+     * Writes .bfs/config.json into the working directory, as if a backup had been
+     * initialized here - with its full pool: a pool short of the scheme is an
+     * interrupted init, which the next init resumes instead of refusing.
+     */
     async function existingBackup(vaultName: string): Promise<void> {
       await fs.mkdir(path.join(root, '.bfs'));
-      await fs.writeFile(path.join(root, '.bfs', 'config.json'), JSON.stringify({ vault_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', vault_name: vaultName, scheme: { data_shards: 2, parity_shards: 1 }, providers: [] }));
+      const pool = ['a', 'b', 'c'].map((id) => ({ id, type: 'local', adapterPackage: null, config: { path: `/m/${id}` } }));
+      await fs.writeFile(path.join(root, '.bfs', 'config.json'), JSON.stringify({ vault_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', vault_name: vaultName, scheme: { data_shards: 2, parity_shards: 1 }, providers: pool }));
     }
 
     it('should abort before delegating to the vault layer', async () => {

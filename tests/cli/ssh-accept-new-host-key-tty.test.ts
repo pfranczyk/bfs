@@ -93,11 +93,11 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 // Capture the persisted config instead of touching a real `.bfs/config.json`.
-// assertNoExistingVault is a no-op here: these runs are about how a provider spec
-// is parsed, and the working directory is a fresh mkdtemp with no backup in it.
+// inspectInitTarget stays real: these runs are about how a provider spec is
+// parsed, and the working directory is a fresh mkdtemp with no backup in it.
 vi.mock('../../src/vault/config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/vault/config.js')>();
-  return { ...actual, readConfig: vi.fn(), writeConfig: vi.fn(), assertNoExistingVault: vi.fn() };
+  return { ...actual, readConfig: vi.fn(), writeConfig: vi.fn() };
 });
 // Capture the InitOptions (incl. the built provider configs) handed to init().
 vi.mock('../../src/vault/vault-manager.js', () => ({ init: vi.fn() }));
@@ -200,9 +200,11 @@ describe('init --ci with an ssh provider spec on a TTY - --accept-new-host-key m
       '--provider',
       'ssh:nas --host sshhost --user sshuser --password pw --path /backup --accept-new-host-key',
       '--provider',
-      'ssh:s1 --host sshhost --user sshuser --password pw --path /backup1',
+      // The siblings carry a pin: an unattended spec with no basis for trusting
+      // the host key is refused while the flags are read.
+      `ssh:s1 --host sshhost --user sshuser --password pw --path /backup1 --known-host ${SERVER_FP}`,
       '--provider',
-      'ssh:s2 --host sshhost --user sshuser --password pw --path /backup2',
+      `ssh:s2 --host sshhost --user sshuser --password pw --path /backup2 --known-host ${SERVER_FP}`,
       '--cwd',
       root,
     ]);

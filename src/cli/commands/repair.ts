@@ -88,14 +88,17 @@ export function registerRepair(program: Command): void {
           error(t('repair_restore_headers_no_pairs'));
           throw new CommandAbort();
         }
-        const pairs = restoreHeaders
-          ? []
-          : await parseRepairSpec(
-              cmd.args,
-              config.providers.map((p) => p.id),
-              io,
-            );
-        const allVersions = (await listManifests(rootDir)).map((m) => m.version);
+        // A pool over its scheme is what a rebuild onto a replacement leaves when
+        // it stops halfway, with the destination already configured; only then,
+        // and only for the rebuild retry, may a migration name a configured
+        // provider again. A plain migration swaps the entry in one write and
+        // never leaves that state behind.
+        const resumingRebuild = opts.rebuild === true && config.providers.length > config.scheme.data_shards + config.scheme.parity_shards;
+        const manifests = await listManifests(rootDir);
+        const existingConfigIds = config.providers.map((p) => p.id);
+        const pool = resumingRebuild ? { existingConfigIds, resumable: config.providers, recordedNames: manifests.map((m) => new Set(m.shards.map((s) => s.provider_id))) } : { existingConfigIds };
+        const pairs = restoreHeaders ? [] : await parseRepairSpec(cmd.args, pool, io);
+        const allVersions = manifests.map((m) => m.version);
         const versions = parseVersionRange(opts.version ?? (restoreHeaders ? 'all' : 'latest'), allVersions, { allowKeywords: true });
         const passwords = [...opts.password, ...(await readPasswordFiles(opts.passwordFile))];
 

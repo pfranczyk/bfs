@@ -2,20 +2,22 @@
 # Interactive `bfs provider edit <ssh>` - the OFFLINE MENU path through a real
 # inquirer TTY. Changing the SSH host to an UNREACHABLE address (host identity
 # changed) makes the edit try the server first, fail, and fall back to the
-# offline menu; the operator picks "paste a fingerprint" and the pasted pin is
-# persisted. This is the real-IO (rule #5) proof for the offline menu, which
-# unit tests exercise only through a mocked ProviderIO.
+# offline menu. The first address is a typo, so the operator goes back to the
+# prompts; the second pass names the intended host, the operator picks "paste a
+# fingerprint" and the pasted pin is persisted together with the second host.
+# This is the real-IO proof for the offline menu, which unit tests exercise only
+# through a mocked ProviderIO.
 #
-# Determinism: the new host is a RFC-reserved `.invalid` name - never in
+# Determinism: both hosts are RFC-reserved `.invalid` names - never in
 # ~/.ssh/known_hosts and never resolvable - so the online attempt fails fast and
-# the menu carries exactly [paste / leave / cancel] on every machine, regardless
-# of the operator's real known_hosts.
+# the menu carries exactly [paste / back / save without a pin / cancel] on every
+# machine, regardless of the operator's real known_hosts.
 #
 # local/ftp: N/A - host-key handling is SSH-specific.
 # Docker-managed: self-provisions its sshd (no --ssh needed). SKIPs without Docker.
 
-SCENARIO_NAME="edit ssh offline menu: host changed to an unreachable address -> paste a fingerprint via real inquirer"
-SCENARIO_DESC="sshd pinned via --accept-new-host-key; edit changes host to an unreachable .invalid address -> offline menu over a real PTY -> paste SHA256 -> exit 0, pin = pasted, host updated"
+SCENARIO_NAME="edit ssh offline menu: host changed to an unreachable address -> back, then paste a fingerprint via real inquirer"
+SCENARIO_DESC="sshd pinned via --accept-new-host-key; edit changes host to an unreachable .invalid typo -> offline menu over a real PTY -> back -> second unreachable host -> paste SHA256 -> exit 0, pin = pasted, host = second answer"
 REQUIRES_LOCAL=2
 REQUIRES_SSH=0
 REQUIRES_DOCKER=1
@@ -28,7 +30,7 @@ scenario_run() {
   # A well-formed OpenSSH SHA-256 fingerprint (sha256 of the empty input) - passes
   # isValidFingerprint; deterministic and independent of any real key.
   local pasted="SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU"
-  local newhost="bfs-e2e-offline.invalid"
+  local typohost="bfs-e2e-typo.invalid" newhost="bfs-e2e-offline.invalid"
 
   # Reads a field of the (single) SSH provider's connection config from config.json.
   ssh_cfg_field() {
@@ -61,12 +63,23 @@ scenario_run() {
   docker_volume_rm "$vol"
 
   # -- Interactive edit changing the HOST (identity change) to an unreachable
-  # address -> online attempt fails -> offline menu -> "paste" (option 1, no
-  # known_hosts candidates for the .invalid host) -> paste a SHA256 fingerprint.
+  # address -> online attempt fails -> offline menu. No known_hosts candidates
+  # for an .invalid host, so the menu is [paste / back / save without a pin /
+  # cancel]. The first pass is a typo: "back" (option 2) must collect the fields
+  # again. The second pass names the intended host -> "paste" (option 1) -> paste
+  # a SHA256 fingerprint. The second pass waits for the re-enter notice: its
+  # field labels are already in the output from the first pass.
   local remote="${PV_SSH_REMOTE[2]}"
   local answers
   answers='[
-    {"anchor":"SSH host","value":"'"$newhost"'"},
+    {"anchor":"SSH host","value":"'"$typohost"'"},
+    {"anchor":"Port","value":"'"$port"'"},
+    {"anchor":"Username","value":"bfsuser"},
+    {"anchor":"Authentication method","value":"1"},
+    {"anchor":"Password:","value":"bfspass"},
+    {"anchor":"Base path on server","value":"'"$remote"'"},
+    {"anchor":"Choose how to set","value":"2"},
+    {"after":"Going back to the connection settings","anchor":"SSH host","value":"'"$newhost"'"},
     {"anchor":"Port","value":"'"$port"'"},
     {"anchor":"Username","value":"bfsuser"},
     {"anchor":"Authentication method","value":"1"},
@@ -86,8 +99,9 @@ scenario_run() {
   local fp_after host_after
   fp_after="$(ssh_cfg_field host_key_fingerprint)"
   host_after="$(ssh_cfg_field host)"
-  [ "$fp_after" = "$pasted" ] || _fail "pasted fingerprint not persisted: expected '$pasted', got '$fp_after'"
+  [ "$host_after" != "$typohost" ] || _fail "\"back\" in the offline menu saved the host it was meant to abandon"
   [ "$host_after" = "$newhost" ] || _fail "host not updated by the edit: expected '$newhost', got '$host_after'"
+  [ "$fp_after" = "$pasted" ] || _fail "pasted fingerprint not persisted: expected '$pasted', got '$fp_after'"
 
   return 0
 }

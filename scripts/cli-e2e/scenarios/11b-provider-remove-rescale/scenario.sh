@@ -1,15 +1,17 @@
 # shellcheck shell=bash
 # Provider dropped from the pool with `--strategy remove`: the medium is gone
 # from the config but the stored scheme still demands the old N+K, so every
-# restore is blocked until the operator rescales it. `bfs provider remove`
-# names that one command and nothing else - how the pool comes to match its
-# scheme, not how to rebuild or replace anything - and this proves the command
-# it names is enough to restore bit-for-bit, then that a fresh copy and a prune
-# still work on the smaller pool.
+# restore is blocked until the pool and the scheme match again. `bfs provider
+# remove` names the two commands that do it - a new storage that takes the
+# missing place and keeps the scheme, or a scheme rescaled to the storages left
+# - and nothing about rebuilding or replacing anything. This scenario walks the
+# rescale route and proves it is enough to restore bit-for-bit, then that a
+# fresh copy and a prune still work on the smaller pool; the add route has its
+# own scenario.
 #
 # `remove` is the only strategy that leaves the vault in a self-inconsistent
-# state on purpose (no relocate target, no rebuild), so the one line it prints
-# is load-bearing: it is what gets the operator out of that state.
+# state on purpose (no relocate target, no rebuild), so the line it prints is
+# load-bearing: it is what gets the operator out of that state.
 
 SCENARIO_NAME="provider remove: rescale scheme, restore"
 SCENARIO_DESC="drop p0 (--strategy remove) -> pull blocked by scheme mismatch -> scheme set 2 1 -> restore + healthy re-push"
@@ -41,9 +43,9 @@ scenario_run() {
   # -- The medium leaves the pool ---------------------------------------------
   run_bfs "$vault" provider remove p0 --strategy remove --yes
   assert_ok
-  # One step, and it carries the arithmetic: the scheme has to add up to the
-  # storages that are left. Nothing about pulling, pushing, pruning, replacing
-  # or rebuilding - those are the operator's choices, not the way out of the
+  # Two ways back: a new storage keeps the 3/1 scheme, a rescale has to add up
+  # to the storages that are left. Nothing about pulling, pushing, pruning or
+  # rebuilding - those are the operator's choices, not the way out of the
   # inconsistent state this command leaves behind. Read off what follows the
   # removal: what the command says before it does anything is a different
   # message with its own contract. Both the step and the removal line go to
@@ -51,13 +53,13 @@ scenario_run() {
   # the removal would land after the marker.
   assert_out_contains 'Provider "p0" removed.'
   local epilogue="${BFS_STDOUT#*Provider \"p0\" removed.}" step
-  for step in 'bfs scheme set <N> <K>' 'N + K = 3'; do
+  for step in 'bfs provider add' 'the scheme stays 3/1' 'bfs scheme set <N> <K>' 'N + K = 3'; do
     printf '%s' "$epilogue" | grep -qF -- "$step" || _fail "the step after the removal must carry: $step
 $epilogue"
   done
-  for step in 'bfs pull' 'bfs push' 'bfs prune' 'bfs repair' 'bfs provider add'; do
+  for step in 'bfs pull' 'bfs push' 'bfs prune' 'bfs repair'; do
     if printf '%s' "$epilogue" | grep -qF -- "$step"; then
-      _fail "the step after the removal must name only the scheme command, found: $step
+      _fail "the step after the removal must name only the add and scheme commands, found: $step
 $epilogue"
     fi
   done

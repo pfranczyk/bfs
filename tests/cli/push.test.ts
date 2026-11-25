@@ -4,7 +4,7 @@ import { LockConcurrentActiveError, LockPartialStatePushError, PushCacheCorrupte
 import { setLang } from '../../src/i18n/index.js';
 import type { PushResult } from '../../src/types/index.js';
 import { PushMode, VersionHealth } from '../../src/types/index.js';
-import { captureConsole, runCmd } from './_helpers.js';
+import { captureConsole, runCmd, runCmdExitCode } from './_helpers.js';
 
 function okResult(overrides: Partial<PushResult> = {}): PushResult {
   return { version: 1, file_count: 2, total_size: 100, skipped: [], excluded: [], uploaded_count: 3, failed: [], health: VersionHealth.Healthy, ...overrides };
@@ -162,6 +162,38 @@ describe('push', () => {
     await runCmd(['push', '--cache-dir', '/custom/cache']);
 
     expect(mockPush).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ cacheDir: '/custom/cache' }));
+  });
+
+  // --- --max-ram override ----------------------------------------------------
+  // `push --max-ram` replaces the stored limit for one run. It takes the same
+  // values as `bfs config --max-ram`: a whole number of MiB above zero.
+
+  it.each([
+    ['abc', 'not a number at all'],
+    ['512abc', 'a number with trailing text'],
+    ['-5', 'a negative number'],
+    ['0', 'zero, which push would take as a zero budget'],
+    ['1.5', 'a fraction'],
+    ['1e3', 'a number in exponent notation'],
+    ['', 'an empty value, as from an unset variable'],
+  ])('should refuse --max-ram "%s" (%s) before the push starts', async (value) => {
+    mockPush.mockResolvedValue(okResult());
+
+    const code = await runCmdExitCode(['push', '--max-ram', value]);
+
+    expect(code, 'a refusal that exits 0 cannot be told from a finished push by a script').toBe(1);
+    expect(mockPush).not.toHaveBeenCalled();
+    const all = [...capture.logs, ...capture.errors].join('\n');
+    expect(all).toContain(`--max-ram must be an integer >= 1 (MB), got "${value}".`);
+  });
+
+  it('should pass a whole --max-ram above zero to push (A/B control)', async () => {
+    mockPush.mockResolvedValue(okResult());
+
+    const code = await runCmdExitCode(['push', '--max-ram', '512']);
+
+    expect(code).toBe(0);
+    expect(mockPush).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ maxRamMb: 512 }));
   });
 
   // --- --cwd x cache flows --------------------------------------------------

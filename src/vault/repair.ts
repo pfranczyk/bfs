@@ -219,7 +219,10 @@ async function applyRebuildConfigChange(rootDir: string, config: VaultConfig, pa
  * config, every manifest and the scoped headers are swapped to the new provider.
  * With `--rebuild` the same answers are classified instead: what has to be
  * reconstructed goes to {@link migrateWithRebuild}, and a destination that
- * already holds every in-scope part is a plain relocation. Each pair
+ * already holds every in-scope part is a plain relocation - unless the
+ * destination is already configured (the retry of a rebuild that stopped
+ * halfway), which also goes to {@link migrateWithRebuild}: no global rename,
+ * the source dropped only once no version records it. Each pair
  * independently joins `succeeded_pairs` or `failed_pairs`.
  */
 async function commitMigrationPairs(ctx: CommitContext, rebuild: boolean): Promise<void> {
@@ -234,8 +237,14 @@ async function commitMigrationPairs(ctx: CommitContext, rebuild: boolean): Promi
         continue;
       }
       // Nothing to reconstruct is a relocation, whether or not `--rebuild` was
-      // asked for: every in-scope part is already sound at the destination.
-      if (scan.rebuild.length === 0) await migrateInPlace(ctx, pair, newConfig);
+      // asked for: every in-scope part is already sound at the destination. A
+      // destination already in the configuration is the retry of a rebuild that
+      // stopped halfway, and finishes like one: the in-range versions are
+      // pointed at it and the source goes only once no version records it - a
+      // global rename would take the source away from older versions whose
+      // part still lives there.
+      const resuming = ctx.config.providers.some((p) => p.id === newConfig.id);
+      if (scan.rebuild.length === 0 && !resuming) await migrateInPlace(ctx, pair, newConfig);
       else await migrateWithRebuild({ ctx, pair, newConfig, scan });
       ctx.lock.succeeded_pairs.push({ old_name: pair.oldName, new_name: newConfig.id, new_type: newConfig.type });
     } catch (err) {
@@ -414,7 +423,8 @@ async function migrateInPlace(ctx: CommitContext, pair: RepairPair, newConfig: P
 }
 
 /**
- * Rebuild migration commit: add the new provider, then Reed-Solomon-reconstruct
+ * Rebuild migration commit: add the new provider (a retry finds it already
+ * configured and adds nothing, so there is nothing to roll back), then Reed-Solomon-reconstruct
  * the parts Phase A marked - {@link rebuildVersion} for a manifest that names the
  * pair's source (it swaps the provider in the manifest + location maps),
  * {@link rebuildShardInPlace} for one that already names the destination, where
@@ -444,11 +454,11 @@ async function migrateWithRebuild(options: MigrateWithRebuildOptions): Promise<v
       reconstructed += 1;
     }
   } catch (err) {
-    // A pair that reconstructed nothing leaves the pool the size it was. One
-    // entry too many and the scheme stops matching, which refuses every write
-    // AND the retry of this very command - the recorded name would already be
-    // taken by the half-finished repair. Once a version IS committed the entry
-    // has to stay: its part now lives under that name.
+    // A pair that reconstructed nothing leaves the pool the size it was: one
+    // entry too many and the scheme stops matching, which refuses every backup
+    // command until the rebuild is finished. Once a version IS committed the
+    // entry has to stay - its part now lives under that name - and the retry of
+    // this very command is what finishes it.
     if (reconstructed === 0) {
       await writeConfig(ctx.rootDir, { ...ctx.config, providers: before });
       ctx.config.providers = before;
