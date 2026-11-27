@@ -179,9 +179,11 @@ export const en: Strings = {
   config_cache_default: '(default: %s)',
   config_temp_default: '(default: system temp)',
   config_ram_auto: '(auto: 25% system RAM)',
+  config_ram_invalid_mark: '(not a whole number above zero - push runs with a zero RAM budget)',
 
   // --- push -----------------------------------------------------------------
   push_preparing: 'Preparing push...',
+  push_stored_max_ram_invalid: 'Saved RAM limit (%s MB) is not a whole number above zero - this push runs with a zero RAM budget.',
   push_completed: 'Push completed',
   push_success: 'Backup uploaded to all providers.',
   push_failed: 'Push failed',
@@ -469,6 +471,9 @@ export const en: Strings = {
   vault_ask_decrypt_password: 'Enter decryption password:',
   vault_decrypting: 'Decrypting...',
   vault_push_version_confirm: 'On disk: version %s. Latest: %s. Push will create version %s. Continue?',
+  push_ask_mode_question: 'Create new version v%s or overwrite v%s?',
+  push_ask_mode_new_version: 'New version (v%s)',
+  push_ask_mode_overwrite: 'Overwrite (v%s)',
   push_version_switch_no_operator:
     'This run asks no questions, so it cannot confirm pushing version %s while the latest is %s (this push would create version %s). Re-run with `bfs push --yes` to consent up front, or run `bfs push` at a terminal and answer it there.',
   vault_checking_cached_blob: 'Checking cached backup data against its checksum...',

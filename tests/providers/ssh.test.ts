@@ -9,7 +9,7 @@ import { createSpinnerIo } from '../../src/cli/spinner-io.js';
 import { HostKeyDeclinedError, IdentityDeclinedError, ProviderError, TamperDetectedError, UnsafePathError } from '../../src/core/errors.js';
 import { streamToBuffer } from '../../src/core/hash.js';
 import { buildShard, parseShardHeaderFromStream } from '../../src/core/shard-io.js';
-import { fmtFor } from '../../src/i18n/index.js';
+import { fmtFor, tFor } from '../../src/i18n/index.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
 import { SshProvider } from '../../src/providers/ssh.js';
 import type { CliProviderInput, ConfigureEditContext, ProviderConfig, ProviderIO, RecoverySecret, RemoteRef, ShardHeader, ShardLocation } from '../../src/types/index.js';
@@ -1281,6 +1281,58 @@ describe('SshProvider', () => {
       const config = await p.configureFromFlags({ ...cliInput({ rawArgs: ['--config-file', file] }), offline: true });
 
       expect(config.host_key_fingerprint).toBe(SERVER_FP);
+    });
+
+    // An empty pin is no pin: the connection treats it as none, and so does the
+    // unattended trust-basis guard. It reaches the assembled config from a
+    // settings file (an offline "save without pinning" stores "", and the
+    // operator adds the opt-in next to it) or from an empty --known-host (a
+    // script whose pin variable is unset). Reading "" as a pin skips the capture
+    // and stores a bare opt-in - which every unattended run then refuses.
+    it('should pin the presented fingerprint for accept_new_host_key next to an empty pin from --config-file', async () => {
+      const file = await writeJsonConfig(JSON.stringify({ host: 'sshhost', user: 'sshuser', password: 'p', path: '/backup', accept_new_host_key: true, host_key_fingerprint: '' }));
+      const { io } = scriptIo({ interactive: false });
+      const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: ['--config-file', file] }));
+
+      expect(config.host_key_fingerprint).toBe(SERVER_FP);
+    });
+
+    it('should refuse accept_new_host_key next to an empty pin on an offline edit', async () => {
+      // Nothing is pinned, so the opt-in still needs the capture an offline edit
+      // cannot make - the same refusal as with no pin at all.
+      const file = await writeJsonConfig(JSON.stringify({ host: 'sshhost', user: 'sshuser', password: 'p', path: '/backup', accept_new_host_key: true, host_key_fingerprint: '' }));
+      const { io } = scriptIo({ interactive: false });
+      const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+      const refusal = p.configureFromFlags({ ...cliInput({ rawArgs: ['--config-file', file] }), offline: true });
+
+      await expect(refusal).rejects.toBeInstanceOf(ProviderError);
+      await expect(refusal).rejects.toThrow(tFor('en', 'ssh_accept_new_offline'));
+    });
+
+    // The rule reads the assembled config, not one source: an empty --known-host
+    // must count as no pin just like an empty value from the settings file.
+    const EMPTY_INLINE_PIN = ['--host', 'sshhost', '--user', 'sshuser', '--password', 'p', '--path', '/backup', '--known-host', '', '--accept-new-host-key'];
+
+    it('should pin the presented fingerprint for --accept-new-host-key next to an empty --known-host', async () => {
+      const { io } = scriptIo({ interactive: false });
+      const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+      const config = await p.configureFromFlags(cliInput({ rawArgs: EMPTY_INLINE_PIN }));
+
+      expect(config.host_key_fingerprint).toBe(SERVER_FP);
+    });
+
+    it('should refuse --accept-new-host-key next to an empty --known-host on an offline edit', async () => {
+      const { io } = scriptIo({ interactive: false });
+      const p = new SshProvider({ id: 'stub', type: 'ssh', adapterPackage: null, config: {} }, io);
+
+      const refusal = p.configureFromFlags({ ...cliInput({ rawArgs: EMPTY_INLINE_PIN }), offline: true });
+
+      await expect(refusal).rejects.toBeInstanceOf(ProviderError);
+      await expect(refusal).rejects.toThrow(tFor('en', 'ssh_accept_new_offline'));
     });
 
     // An unattended run that names no basis for trusting the server - no pin,
@@ -2894,6 +2946,41 @@ describe('SshProvider', () => {
       await expect(p.configureInteractiveForEdit(io, ctx)).rejects.toThrow(HostKeyDeclinedError);
       expect(calls.filter((c) => c.kind === 'choose' && isTrustMenu(c.options ?? []))).toHaveLength(1);
       expect(calls.some((c) => c.kind === 'choose' && isOfflineMenu(c.options ?? []))).toBe(false);
+    });
+
+    // Ctrl+C / Ctrl+D at the host-key menu belongs to the command, not to the
+    // edit: the prompt layer's own error has to reach the caller unchanged. Only
+    // a failure to READ the key means the server is unreachable - an interrupted
+    // question about a key already read is not that, so it must not open the
+    // offline menu as if the server had been down.
+    //
+    // The error is a class of its own that merely shares the prompt library's
+    // name: in the published bundle the prompt library's error comes from a
+    // second copy of that library, so `instanceof` against an imported class
+    // would not recognise it there. A fix keyed on that import passes under tsx
+    // and fails for the user; this test refuses it.
+    it('lets a cancelled prompt at the host-key menu through instead of opening the offline menu', async () => {
+      class ExitPromptError extends Error {}
+      const interrupted = new ExitPromptError('User force closed the prompt with SIGINT');
+      const { io, calls } = scriptIo({
+        ask: fieldAsk({ host: NEW_HOST, port: '22', user: EDIT_USER, path: '/backup' }),
+        askSecret: () => 'pw',
+        choose: (_m, o) => {
+          if (isTrustMenu(o)) throw interrupted;
+          return o[0] ?? '';
+        },
+      });
+      const p = editProvider(io);
+      const ctx: ConfigureEditContext = { existingConfig: existingConfig({ host: EXIST_HOST }) };
+
+      const outcome = await p.configureInteractiveForEdit(io, ctx).then(
+        () => null,
+        (err: unknown) => err,
+      );
+
+      expect(calls.some((c) => c.kind === 'choose' && isOfflineMenu(c.options ?? []))).toBe(false);
+      expect(calls.filter((c) => c.kind === 'choose' && isTrustMenu(c.options ?? []))).toHaveLength(1);
+      expect(outcome).toBe(interrupted);
     });
 
     // -- Going back to the prompts -------------------------------------------

@@ -9,7 +9,7 @@ import { fmt } from '../../src/i18n/index.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
 import type { CatalogDrift, ProviderIO } from '../../src/types/index.js';
 import { PushMode, VersionHealth } from '../../src/types/index.js';
-import { readConfig } from '../../src/vault/config.js';
+import { readConfig, writeConfig } from '../../src/vault/config.js';
 import { _computeRamThreshold, _computeStripeSize, _handleCatalogDrift } from '../../src/vault/push-pipeline.js';
 import { recover } from '../../src/vault/recovery.js';
 import { init, pull, push } from '../../src/vault/vault-manager.js';
@@ -506,6 +506,140 @@ describe('RAM budget consistency', () => {
       const stripe = _computeStripeSize({ maxRamMb, N, K, blobSize: HUGE_BLOB });
 
       expect(threshold + encoderPeakStripes(N, K) * stripe).toBeLessThanOrEqual(budget);
+    }
+  });
+});
+
+// Released versions stored `--max-ram` with parseInt and nothing else, and their
+// help offered "0 = auto" - so `max_ram_mb` can hold 0 or a negative number that
+// the input checks refuse. Push keeps taking such a value as the
+// budget it is and leaves config.json alone; what it must stop doing is taking
+// it silently.
+describe('push with a stored RAM limit that is not a whole number above zero', () => {
+  // Over two smallest stripes at 2/1, so the stripe in the manifest tells a zero
+  // budget (the 16 MiB floor) apart from any budget large enough to cover the
+  // whole part (the per-shard payload, just over 20 MiB).
+  const DATA_BYTES = 40 * MIB;
+
+  async function vaultWithStoredRam(maxRamMb: Nullable<number>, data: Buffer): Promise<{ root: string; dirs: string[] }> {
+    const root = await tmp();
+    const dirs = [await tmp(), await tmp(), await tmp()];
+    await fs.writeFile(path.join(root, 'data.bin'), data);
+    await init(root, {
+      vault_name: 'ram',
+      scheme: { data_shards: 2, parity_shards: 1 },
+      encryption: { enabled: false, algorithm: 'aes-256-gcm', kdf: 'argon2id' },
+      providers: dirs.map((d, i) => secretProvider(`p${i}`, d)),
+      push_mode: PushMode.NewVersion,
+      io: mockIO(),
+    });
+    const cfg = await readConfig(root);
+    assert(cfg !== null, 'the fixture vault must have a config');
+    // Uncompressed, so the blob keeps the size the stripe is judged against.
+    await writeConfig(root, { ...cfg, compression: { enabled: false, algorithm: 'deflate' }, max_ram_mb: maxRamMb });
+    return { root, dirs };
+  }
+
+  async function cleanup(root: string, dirs: string[]): Promise<void> {
+    await fs.rm(root, { recursive: true, force: true });
+    for (const d of dirs) await fs.rm(d, { recursive: true, force: true });
+  }
+
+  async function stripeOfVersion(root: string, version: number): Promise<unknown> {
+    const manifest = JSON.parse(await fs.readFile(path.join(root, '.bfs', 'manifests', `v${String(version).padStart(3, '0')}.json`), 'utf-8')) as { rs_stripe_size?: unknown };
+    return manifest.rs_stripe_size;
+  }
+
+  function ramWarnings(logs: ReadonlyArray<{ level: string; message: string }>): string[] {
+    return logs.filter((l) => l.level === 'warn' && /Saved RAM limit/.test(l.message)).map((l) => l.message);
+  }
+
+  it.each([0, -5])('should warn that the stored %i MB is not a whole number above zero, and keep it as a zero budget', async (stored) => {
+    // Plenty of memory: were the stored value read as auto, the budget would
+    // cover the whole part and the stripe would leave the 16 MiB floor.
+    vi.spyOn(os, 'totalmem').mockReturnValue(64 * 1024 * MIB);
+    const { root, dirs } = await vaultWithStoredRam(stored, Buffer.alloc(DATA_BYTES, 0x5a));
+    const { io, logs } = createMockProviderIO();
+
+    try {
+      const result = await push(root, { io });
+
+      expect(result.health, 'the warning must not stop the backup').toBe(VersionHealth.Healthy);
+      expect(await stripeOfVersion(root, 1), 'the stored value must still be the budget, not auto').toBe(MIN_STRIPE);
+      const after = await readConfig(root);
+      expect(after?.max_ram_mb, 'push must not rewrite the operator setting').toBe(stored);
+      expect(ramWarnings(logs)).toEqual([`Saved RAM limit (${stored} MB) is not a whole number above zero - this push runs with a zero RAM budget.`]);
+    } finally {
+      await cleanup(root, dirs);
+    }
+  });
+
+  it('should leave the floor when the same data is pushed with a budget that covers it (A/B control for the stripe)', async () => {
+    // Without this, a stripe of 16 MiB could come from the data alone and the
+    // check above would pin nothing about the budget.
+    const { root, dirs } = await vaultWithStoredRam(4096, Buffer.alloc(DATA_BYTES, 0x5a));
+    const { io } = createMockProviderIO();
+
+    try {
+      await push(root, { io });
+
+      expect(await stripeOfVersion(root, 1)).toBeGreaterThan(MIN_STRIPE);
+    } finally {
+      await cleanup(root, dirs);
+    }
+  });
+
+  it.each([512, null])('should not warn about a stored max_ram_mb of %s (A/B control)', async (stored) => {
+    const { root, dirs } = await vaultWithStoredRam(stored, Buffer.from('hello world'));
+    const { io, logs } = createMockProviderIO();
+
+    try {
+      await push(root, { io });
+
+      expect(ramWarnings(logs)).toEqual([]);
+    } finally {
+      await cleanup(root, dirs);
+    }
+  });
+
+  it('should warn on a resumed push too, since the stored value still sets its stripe', async () => {
+    // A resume packs nothing, but the budget still sizes the stripes it encodes,
+    // so a warning tied to the packing path would leave exactly this run silent.
+    const { root, dirs } = await vaultWithStoredRam(0, Buffer.from('hello world'));
+    const broken = dirs[2];
+    assert(broken !== undefined, 'fixture must have a third medium');
+    try {
+      // A third medium that is a file fails its upload, so the interrupted push
+      // keeps the pending blob - the zero budget sends packing through disk.
+      await fs.rm(broken, { recursive: true, force: true });
+      await fs.writeFile(broken, '', 'utf-8');
+      const partial = await push(root, { io: mockIO() });
+      expect(partial.health, 'the fixture needs an interrupted push to resume').toBe(VersionHealth.Degraded);
+      await fs.rm(broken, { force: true });
+      await fs.mkdir(broken, { recursive: true });
+      const { io, logs } = createMockProviderIO();
+
+      const resumed = await push(root, { io, fromCache: true, mode: PushMode.Overwrite });
+
+      expect(resumed.health).toBe(VersionHealth.Healthy);
+      expect(ramWarnings(logs)).toEqual(['Saved RAM limit (0 MB) is not a whole number above zero - this push runs with a zero RAM budget.']);
+    } finally {
+      await cleanup(root, dirs);
+    }
+  });
+
+  it('should not warn when --max-ram overrides the stored zero for this push', async () => {
+    // The stored value plays no part in this run, so a warning about it would
+    // describe a budget the push is not using.
+    const { root, dirs } = await vaultWithStoredRam(0, Buffer.from('hello world'));
+    const { io, logs } = createMockProviderIO();
+
+    try {
+      await push(root, { io, maxRamMb: 256 });
+
+      expect(ramWarnings(logs)).toEqual([]);
+    } finally {
+      await cleanup(root, dirs);
     }
   });
 });

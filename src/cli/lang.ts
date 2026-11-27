@@ -1,6 +1,45 @@
 import { availableLangs, fmt, isKnownLang, setLang, t } from '../i18n/index.js';
 import { CommandAbort, error, warn } from './ui.js';
 
+const LANG_FLAG = '--lang';
+const LANG_FLAG_EQUALS = `${LANG_FLAG}=`;
+
+/** The language flag read off the command line, and the line without it. */
+export interface LangFlag {
+  /** Whether the flag appeared at all, in either spelling. */
+  readonly given: boolean;
+  /** The value that came with it, verbatim; null when the flag is absent or the spaced spelling ends the line. */
+  readonly value: Nullable<string>;
+  /** The tokens with the flag (and its value) taken out. */
+  readonly rest: string[];
+}
+
+/**
+ * Reads the language flag in either spelling, `--lang <code>` or
+ * `--lang=<code>`, and returns the tokens with it taken out. The flag has to be
+ * settled before the program is built - every description is translated at
+ * that point - so it is read here rather than left to the argument parser, and
+ * removed so nothing reads it a second time. Both spellings go through this one
+ * reader: a spelling it missed would reach the parser, be accepted there and
+ * read by nobody, and the run would carry on in the old language without a
+ * word. Only the first occurrence counts. The value is not validated - an empty
+ * or flag-like one comes back verbatim for {@link resolveLanguage} to judge.
+ *
+ * @param tokens - argv tokens after the program name
+ * @returns whether the flag was given, its raw value, and the remaining tokens
+ */
+export function extractLangFlag(tokens: string[]): LangFlag {
+  const at = tokens.findIndex((token) => token === LANG_FLAG || token.startsWith(LANG_FLAG_EQUALS));
+  if (at === -1) return { given: false, value: null, rest: tokens };
+  const token = tokens[at];
+  if (token !== LANG_FLAG) {
+    return { given: true, value: token.slice(LANG_FLAG_EQUALS.length), rest: tokens.filter((_, i) => i !== at) };
+  }
+  const value = tokens[at + 1] ?? null;
+  const taken = value === null ? 1 : 2;
+  return { given: true, value, rest: tokens.filter((_, i) => i < at || i >= at + taken) };
+}
+
 /**
  * Settles which language the interface runs in, refusing a `--lang` that cannot
  * be honoured. The interface exists in a fixed set of languages, so a value
@@ -17,7 +56,7 @@ import { CommandAbort, error, warn } from './ui.js';
  * the provider registry.
  *
  * @param flagGiven - whether `--lang` appeared at all
- * @param cliLang   - the token that followed it, if any
+ * @param cliLang   - the value that came with it, if any (see {@link extractLangFlag})
  * @param stored    - the language saved in the global settings
  * @returns a language tag the interface can actually render
  * @throws CommandAbort when `--lang` was given with no value (or an empty one),

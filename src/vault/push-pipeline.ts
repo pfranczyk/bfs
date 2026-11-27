@@ -27,7 +27,7 @@ import { providerRegistry } from '../providers/provider.js';
 import type { CatalogDrift, ExcludedEntry, ManifestShard, ProviderConfig, ProviderIO, PushOptions, PushResult, ShardHeader, ShardLocation, StorageProvider, VaultConfig, VaultState, VersionManifest } from '../types/index.js';
 import { PushMode, VersionHealth } from '../types/index.js';
 import { catalogHasDrift, diffCatalog, snapshotCatalog } from './catalog-verify.js';
-import { assertSchemeReady, readConfig } from './config.js';
+import { assertSchemeReady, isZeroRamBudget, readConfig } from './config.js';
 import { splitLocationSecrets } from './location-map.js';
 import type { PushLock, PushLockFailedReason } from './lockfile.js';
 import { acquireCachePushLock, acquirePushLock, pushLockPath, readLock, removeLock, writeLockAtomic } from './lockfile.js';
@@ -648,8 +648,7 @@ async function _resolveTargetVersion(options: TargetVersionOptions): Promise<num
         targetVersion = state.latest_version + 1;
         break;
       }
-      const choice = await io.choose(`Create new version v${state.latest_version + 1} or overwrite v${state.working_version}?`, [`New version (v${state.latest_version + 1})`, `Overwrite (v${state.working_version})`]);
-      targetVersion = choice.startsWith('Overwrite') ? state.working_version : state.latest_version + 1;
+      targetVersion = await _askNewOrOverwrite(io, state);
       break;
     }
     default:
@@ -669,6 +668,20 @@ async function _resolveTargetVersion(options: TargetVersionOptions): Promise<num
     if (!cont) throw new BfsError(t('push_cancelled'));
   }
   return targetVersion;
+}
+
+/**
+ * Asks whether this push creates the next version or overwrites the one on disk.
+ * The menu speaks the interface language, so the pick is matched against the
+ * label built here rather than against fixed English text - a translated
+ * "Overwrite" must still overwrite.
+ */
+async function _askNewOrOverwrite(io: ProviderIO, state: VaultState): Promise<number> {
+  const next = String(state.latest_version + 1);
+  const onDisk = String(state.working_version);
+  const overwrite = fmt('push_ask_mode_overwrite', onDisk);
+  const choice = await io.choose(fmt('push_ask_mode_question', next, onDisk), [fmt('push_ask_mode_new_version', next), overwrite]);
+  return choice === overwrite ? state.working_version : state.latest_version + 1;
 }
 
 interface PushPathsOptions {
@@ -1253,6 +1266,7 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
   const targetVersion = await _resolveTargetVersion({ mode: options.mode, config, state, io: options.io, ...(options.yes === true ? { yes: true } : {}) });
   const lock = await _initPushLock(rootDir, options.fromCache === true, cachePath, targetVersion, config);
   const maxRamMb = options.maxRamMb ?? config.max_ram_mb;
+  _warnStoredZeroRamBudget(options, config);
   const shouldCompress = options.compressOverride !== undefined ? options.compressOverride : (config.compression?.enabled ?? true);
   // Bracket the pack window with two stat snapshots to detect files that change
   // on disk while packing (currency). Skipped for --cache: the blob comes from an
@@ -1331,4 +1345,16 @@ export async function push(rootDir: string, options: PushOptions): Promise<PushR
   const health = _computeHealth(manifestShards.length, N, K);
   await _writePushResults({ rootDir, config, state, targetVersion, file_count, total_size, blob_hash, stripeSize, shouldEncrypt, shouldCompress, manifestShards, health, lock, cachePath, N, K });
   return { version: targetVersion, file_count, total_size, skipped, excluded, uploaded_count: manifestShards.length, failed: lock.failed, health };
+}
+
+/**
+ * Warns when this push takes a stored `max_ram_mb` at or below zero as its
+ * budget. Only the stored value in use counts: an override for this run leaves
+ * it out of play. A resume packs nothing but still sizes its stripes from the
+ * budget, so the warning sits on the shared path rather than on the pack path.
+ */
+function _warnStoredZeroRamBudget(options: PushOptions, config: VaultConfig): void {
+  if (options.maxRamMb === undefined && isZeroRamBudget(config.max_ram_mb)) {
+    options.io.warn(fmt('push_stored_max_ram_invalid', String(config.max_ram_mb)));
+  }
 }

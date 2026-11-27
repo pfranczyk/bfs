@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A RAM limit of 0 (or below) saved by an earlier release is no longer used
+  silently.** Releases before 0.15.0 accepted `bfs config --max-ram 0`, and
+  their help described 0 as "auto", but `bfs push` has always taken a saved 0 as
+  a zero memory budget: the backup is made correctly, only packed through disk
+  and more slowly. Such a value stays in the settings and keeps that
+  effect, but `bfs push` now warns about it on every run that uses it, and
+  `bfs config` with no arguments marks it as not a whole number above zero. A
+  `--max-ram` given to `bfs push` overrides it for that run without the
+  warning.
+
+- **The password typed at the prompt for an older version is checked against
+  every part, not only the first.** When `bfs pull --version N` (or
+  `bfs recovery`) asks for the password of a version, a correct password used to
+  be rejected over and over if the first part read had a damaged key salt, even
+  though the other parts would open with it and are enough to restore the
+  backup; only `--password` worked around it. The typed password now opens the
+  version from any healthy part of this backup. The line saying that the
+  location map came from another part no longer names every storage after a
+  password typed at the prompt: only a storage whose part that password does
+  not open is named, and `bfs recovery` no longer reports such a version as one
+  whose storages disagree.
+
+- **An empty SSH host-key fingerprint next to the consent to accept a new key
+  no longer blocks unattended backups.** A settings file passed with
+  `--config-file` that carried `"host_key_fingerprint": ""` beside
+  `"accept_new_host_key": true` - or an empty `--known-host` beside
+  `--accept-new-host-key` - was read as a pinned key, so the server's key was
+  never captured: unless `~/.ssh/known_hosts` already vouched for the server,
+  `bfs init --ci` refused, and so did every run without an operator. An empty fingerprint now counts as none: the presented key is
+  captured and pinned, and an offline `bfs provider edit --ci` refuses that
+  pair the same way it refuses the consent with no fingerprint at all. Settings
+  already saved with that pair still need an operator, or a fingerprint pinned
+  with `bfs provider edit`.
+
+- **Ctrl+C at the SSH host-key question of `bfs provider edit` ends the
+  command.** When an edit asked the server for its key and the operator pressed
+  Ctrl+C at the question that followed, the edit did not stop: it opened the
+  menu meant for a server it could not reach ("Could not reach ...") and waited
+  there, although the server had just answered. Ctrl+C now ends
+  `bfs provider edit` there like at any other question, and the settings stay
+  as they were.
+
+- **`bfs --lang=<code>` sets the language like `bfs --lang <code>`.** The
+  spelling with `=` was silently ignored: the command ran in the old language,
+  nothing was saved, and an unknown or empty value was not refused. It is now
+  accepted, saved and refused on the same terms as the spaced spelling, and
+  `bfs --lang=<code>` on its own confirms the change instead of opening the
+  interactive prompt. A `--cwd` left without its directory in front of the
+  language flag (`bfs --cwd --lang pl status`) is now refused, instead of taking
+  the next word as the directory and opening the prompt there.
+
+- **The question whether to create a new version or overwrite the current one
+  speaks your language.** With push mode `ask` and a version on disk, `bfs push`
+  asked it in English whatever language the interface was set to. It now
+  follows the interface language like every other question.
+
 ## [0.15.0] - 2026-11-25
 
 ### Added

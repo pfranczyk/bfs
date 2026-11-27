@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { Command } from 'commander';
 import { fmt, t } from '../../i18n/index.js';
 import type { PushMode, VaultConfig } from '../../types/index.js';
-import { readConfig, writeConfig } from '../../vault/config.js';
+import { isZeroRamBudget, readConfig, writeConfig } from '../../vault/config.js';
 import { validateConfigDir } from '../../vault/scratch-dir.js';
 import { resolveCwd } from '../cwd.js';
 import { parseMaxRamFlag } from '../parse-max-ram.js';
@@ -222,11 +222,17 @@ function _settingLines(rootDir: string, config: VaultConfig): Record<SettingKey,
   return {
     'cache-dir': `cache-dir: ${config.cache_dir ?? fmt('config_cache_default', cacheDefault)}`,
     'temp-dir': `temp-dir:  ${config.temp_dir ?? t('config_temp_default')}`,
-    'max-ram': `max-ram:   ${config.max_ram_mb != null ? `${config.max_ram_mb} MB` : t('config_ram_auto')}`,
+    'max-ram': `max-ram:   ${_maxRamValue(config.max_ram_mb)}`,
     'push-mode': `push-mode: ${config.push_mode}`,
     compression: `${t('config_label_compression').padEnd(14)} ${state(config.compression?.enabled)}`,
     encryption: `${t('config_label_encryption').padEnd(14)} ${state(config.encryption?.enabled)}`,
   };
+}
+
+/** Formats the stored RAM limit, marking a value that leaves push no RAM budget. */
+function _maxRamValue(maxRamMb: Nullable<number> | undefined): string {
+  if (maxRamMb == null) return t('config_ram_auto');
+  return isZeroRamBudget(maxRamMb) ? `${maxRamMb} MB ${t('config_ram_invalid_mark')}` : `${maxRamMb} MB`;
 }
 
 /** Prints the vault settings shown by a bare `bfs config`. */

@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { Command } from 'commander';
 import { assertWorkingDirectoryGiven, parseCwdFlag } from './cli/cwd.js';
-import { reportUnusableStoredLanguage, resolveLanguage } from './cli/lang.js';
+import { extractLangFlag, reportUnusableStoredLanguage, resolveLanguage } from './cli/lang.js';
 import { isPromptCancellation } from './cli/prompt.js';
 
 const _require = createRequire(import.meta.url);
@@ -140,14 +140,15 @@ async function main(): Promise<void> {
   // --lang: pre-scan before Commander to set language before buildProgram().
   // buildProgram() registers .description(t('...')) calls, so language must be
   // active before that. Strip --lang from argv to avoid Commander double-parsing.
-  const langIdx = process.argv.indexOf('--lang');
-  const cliLang = langIdx !== -1 ? process.argv[langIdx + 1] : undefined;
-  if (langIdx !== -1) {
-    process.argv.splice(langIdx, cliLang !== undefined ? 2 : 1);
-  }
+  // The line as typed is kept for the --cwd check below: with the language flag
+  // taken out, a --cwd left without its value would take the next token instead.
+  const typedArgs = process.argv.slice(2);
+  const langFlag = extractLangFlag(typedArgs);
+  const cliLang = langFlag.value ?? undefined;
+  process.argv.splice(2, typedArgs.length, ...langFlag.rest);
 
   const settings = await readGlobalSettings();
-  const activeLang = resolveLanguage(langIdx !== -1, cliLang, settings.language);
+  const activeLang = resolveLanguage(langFlag.given, cliLang, settings.language);
   setLang(activeLang);
   providerRegistry.setLang(activeLang);
   reportUnusableStoredLanguage(cliLang, settings.language);
@@ -170,7 +171,7 @@ async function main(): Promise<void> {
   // --version is answered below instead, before Commander ever sees it.
   const argv = process.argv.slice(2);
 
-  assertWorkingDirectoryGiven(argv);
+  assertWorkingDirectoryGiven(typedArgs);
 
   const hasGlobalFlag = argv.some((a) => a === '--help' || a === '-h' || a === '-V');
   const hasSubcommand = nonOptionTokens(argv).length > 0 || hasGlobalFlag;
@@ -182,8 +183,8 @@ async function main(): Promise<void> {
 
   if (!hasSubcommand) {
     // Pre-scan --cwd from argv to set REPL rootDir without full Commander parsing.
-    // assertWorkingDirectoryGiven(argv) above already validated the value (both
-    // spellings) before this point is reached.
+    // assertWorkingDirectoryGiven above already validated the value (both
+    // spellings, on the line as typed) before this point is reached.
     const cwdValue = parseCwdFlag(argv);
     const rootDir = cwdValue ? path.resolve(cwdValue) : process.cwd();
 

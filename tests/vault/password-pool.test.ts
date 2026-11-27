@@ -3,7 +3,7 @@ import { deriveKey, generateSalt } from '../../src/core/crypto.js';
 import { buildShard } from '../../src/core/shard-io.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
 import type { ShardHeader, ShardLocation } from '../../src/types/index.js';
-import { promptForVaultPassword, tryDecryptLocationMap } from '../../src/vault/password-pool.js';
+import { promptForAnyVaultPassword, tryDecryptLocationMap } from '../../src/vault/password-pool.js';
 
 const LOCATIONS: ShardLocation[] = [
   { shard_index: 0, provider_id: 'local-1', provider_type: 'local', adapterPackage: null, connection_config: { path: '/mnt/backup' }, required_inputs: [], remote_path: '/mnt/backup/v/shard_0.bfs.1', shard_hash: 'a'.repeat(64) },
@@ -121,7 +121,7 @@ describe('tryDecryptLocationMap', () => {
   });
 });
 
-describe('promptForVaultPassword', () => {
+describe('promptForAnyVaultPassword', () => {
   let salt: Buffer;
   let correctKey: Buffer;
   let header: ShardHeader;
@@ -138,10 +138,28 @@ describe('promptForVaultPassword', () => {
     const { io } = createMockProviderIO({ [PROMPTS.ask]: 'correct' });
     const pool: string[] = [];
 
-    const result = await promptForVaultPassword(header, headerBytes, pool, io, PROMPTS);
+    const result = await promptForAnyVaultPassword([{ header, headerBytes }], pool, { io, prompts: PROMPTS, keyCache: new Map() });
 
     expect(result?.encKey.equals(correctKey)).toBe(true);
     expect(pool).toContain('correct');
+  });
+
+  it('should accept a typed password that opens a later part when the first one does not', async () => {
+    // The parts of one version share one salt; a first part whose salt rotted
+    // must not turn the correct password into a wrong one.
+    const { io } = createMockProviderIO({ [PROMPTS.ask]: 'correct' });
+    const rotted = makeHeader({ encrypted: true, kdf_salt: generateSalt() });
+
+    const result = await promptForAnyVaultPassword(
+      [
+        { header: rotted, headerBytes: buildShard(rotted, Buffer.from('payload'), correctKey) },
+        { header, headerBytes },
+      ],
+      [],
+      { io, prompts: PROMPTS, keyCache: new Map() },
+    );
+
+    expect(result?.encKey.equals(correctKey)).toBe(true);
   });
 
   it('should still prompt when the IO does not carry the field at all', async () => {
@@ -153,7 +171,7 @@ describe('promptForVaultPassword', () => {
     const bareIo = { ...io };
     delete (bareIo as { interactive?: boolean }).interactive;
 
-    const result = await promptForVaultPassword(header, headerBytes, [], bareIo, PROMPTS);
+    const result = await promptForAnyVaultPassword([{ header, headerBytes }], [], { io: bareIo, prompts: PROMPTS, keyCache: new Map() });
 
     expect(result?.encKey.equals(correctKey)).toBe(true);
   });
@@ -167,7 +185,7 @@ describe('promptForVaultPassword', () => {
     const askSecret = vi.spyOn(io, 'askSecret');
     const pool: string[] = [];
 
-    const result = await promptForVaultPassword(header, headerBytes, pool, io, PROMPTS);
+    const result = await promptForAnyVaultPassword([{ header, headerBytes }], pool, { io, prompts: PROMPTS, keyCache: new Map() });
 
     expect(askSecret).not.toHaveBeenCalled();
     expect(result).toBeNull();

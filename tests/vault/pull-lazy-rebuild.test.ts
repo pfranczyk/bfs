@@ -1,7 +1,11 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Readable } from 'node:stream';
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BfsError } from '../../src/core/errors.js';
+import { parseShardHeaderFromStream } from '../../src/core/shard-io.js';
+import { fmt } from '../../src/i18n/index.js';
 import { LocalFsProvider } from '../../src/providers/local-fs.js';
 import { createMockProviderIO } from '../../src/providers/provider.js';
 import type { ProviderConfig, ProviderIO } from '../../src/types/index.js';
@@ -35,6 +39,57 @@ function localProvider(id: string, dir: string): ProviderConfig {
 
 function markerPath(root: string, version: number): string {
   return path.join(root, '.bfs', 'manifests', `v${String(version).padStart(3, '0')}.json`);
+}
+
+/**
+ * Flips one byte of the KDF salt in a part's header, in place, WITHOUT
+ * recomputing the part's trailing checksum - the shape bit-rot leaves behind.
+ * The header still parses; only the key derived from it is wrong.
+ */
+async function damageSalt(file: string): Promise<void> {
+  const bytes = await fs.readFile(file);
+  const { header, payloadStream } = await parseShardHeaderFromStream(Readable.from(bytes));
+  payloadStream.on('error', () => {}).destroy();
+  assert(header.kdf_salt !== null, `${file} must be an encrypted part carrying a salt`);
+  const at = bytes.indexOf(header.kdf_salt);
+  assert(at >= 0, 'the salt must be found in the part header');
+  const byte = bytes[at];
+  assert(byte !== undefined, 'the salt byte must exist');
+  bytes[at] = byte ^ 0xff;
+  await fs.writeFile(file, bytes);
+}
+
+/** Path of p0's part of version 2 - the first part pull reads. */
+function firstPartOfV2(pdirs: readonly string[]): string {
+  const dir = pdirs[0];
+  assert(dir !== undefined, 'the fixture must have a first medium');
+  return path.join(dir, VAULT_NAME, 'shard_0.bfs.2');
+}
+
+/**
+ * The location-map-from-a-sibling lines in a run. The marker is derived from the
+ * message itself and checked to be non-empty, so a reworded message cannot turn
+ * the checks that expect none into checks that pass on nothing.
+ */
+function siblingLines(logs: ReadonlyArray<{ level: string; message: string }>): string[] {
+  const marker = fmt('recovery_map_from_sibling', '2', '').split(' - ')[0] ?? '';
+  assert(marker.length > 0, 'the sibling-line marker must not be empty');
+  return logs.filter((l) => l.level === 'warn' && l.message.startsWith(marker)).map((l) => l.message);
+}
+
+/** An operator at a terminal typing the given answers in turn, recording each prompt. */
+function interactiveIo(root: string, answers: string[]): { io: ProviderIO; asked: string[]; logs: Array<{ level: string; message: string }> } {
+  const asked: string[] = [];
+  const queue = [...answers];
+  const base = createMockProviderIO({}, root, true);
+  const io: ProviderIO = {
+    ...base.io,
+    askSecret: async (prompt: string): Promise<string> => {
+      asked.push(prompt);
+      return queue.shift() ?? '';
+    },
+  };
+  return { io, asked, logs: base.logs };
 }
 
 describe('pull rebuilding a version that recovery left marked', () => {
@@ -174,6 +229,103 @@ describe('pull rebuilding a version that recovery left marked', () => {
 
     expect(outcome).toMatch(/could not be read/i);
     expect(outcome, 'the password was never the problem here').not.toMatch(/does not open version/i);
+  });
+
+  // The parts of a version share one salt, so a typed password can be judged on
+  // any of them. Judged on the first part alone, a bit-rot in that part's salt
+  // turns the correct password into "wrong" - over and over, with the healthy
+  // siblings that would open sitting right there.
+  it('should accept the correct typed password when the first part has a damaged salt', async () => {
+    await damageSalt(firstPartOfV2(pdirs));
+    const { io: askingIo, asked, logs } = interactiveIo(root, [PW_V2, '']);
+
+    const outcome = await pull(root, { version: 2, force: true, yes: true, io: askingIo }).then(
+      () => 'restored',
+      (err: unknown) => (err instanceof Error ? err.message : String(err)),
+    );
+
+    expect(asked, 'the correct password must open a healthy sibling, not be retried against the damaged part').toEqual([fmt('pull_ask_version_password', '2')]);
+    expect(outcome).toBe('restored');
+    expect(await fs.readFile(path.join(root, 'a.txt'), 'utf-8')).toBe('contents of version two');
+    // The damaged part is the one that could not supply the map - name it, and
+    // only it.
+    expect(siblingLines(logs)).toEqual([fmt('recovery_map_from_sibling', '2', 'p0')]);
+  });
+
+  it('should accept the correct password typed after a mistyped one when the first part has a damaged salt', async () => {
+    // The retry is judged the same way as the first answer: on any part.
+    await damageSalt(firstPartOfV2(pdirs));
+    const { io: askingIo, asked } = interactiveIo(root, ['mistyped', PW_V2, '']);
+
+    const outcome = await pull(root, { version: 2, force: true, yes: true, io: askingIo }).then(
+      () => 'restored',
+      (err: unknown) => (err instanceof Error ? err.message : String(err)),
+    );
+
+    expect(outcome).toBe('restored');
+    expect(asked).toHaveLength(2);
+    expect(asked[0]).toBe(fmt('pull_ask_version_password', '2'));
+    expect(asked[1]).toMatch(/^Wrong password/);
+    expect(await fs.readFile(path.join(root, 'a.txt'), 'utf-8')).toBe('contents of version two');
+  });
+
+  // With no --password the pool is empty, so every part "fails" it before the
+  // prompt - but that says nothing about the parts. A medium is named as unable
+  // to supply the map only when the password that opened the version did not
+  // open its part.
+  it('should not name any medium when the typed password opens the first part', async () => {
+    const { io: askingIo, logs } = interactiveIo(root, [PW_V2]);
+
+    await pull(root, { version: 2, force: true, yes: true, io: askingIo });
+
+    expect(await fs.readFile(path.join(root, 'a.txt'), 'utf-8')).toBe('contents of version two');
+    expect(siblingLines(logs), 'every part is healthy - none of them failed to supply the map').toEqual([]);
+  });
+
+  it('should not name any medium when a wrong --password is followed by the right one at the prompt', async () => {
+    // A non-empty pool that every part refuses says as little about the parts
+    // as an empty one: the password was wrong, not the media.
+    const { io: askingIo, logs } = interactiveIo(root, [PW_V2]);
+
+    await pull(root, { version: 2, password: 'not-the-password', force: true, yes: true, io: askingIo });
+
+    expect(await fs.readFile(path.join(root, 'a.txt'), 'utf-8')).toBe('contents of version two');
+    expect(siblingLines(logs), 'every part is healthy - none of them failed to supply the map').toEqual([]);
+  });
+
+  // A part of another version filed under this version's name (copied by hand,
+  // a sync script) opens with that version's password. Typed at the prompt, that
+  // older password must still read as wrong for this version - not open the
+  // misfiled part and end the command - so the operator can type the right one.
+  it('should not let an older password open a part of another version filed under this name', async () => {
+    const dir = pdirs[2];
+    assert(dir !== undefined, 'the fixture must have a third medium');
+    await fs.copyFile(path.join(dir, VAULT_NAME, 'shard_2.bfs.1'), path.join(dir, VAULT_NAME, 'shard_2.bfs.2'));
+    const { io: askingIo, asked } = interactiveIo(root, [PW_V1, PW_V2]);
+
+    const outcome = await pull(root, { version: 2, force: true, yes: true, io: askingIo }).then(
+      () => 'restored',
+      (err: unknown) => (err instanceof Error ? err.message : String(err)),
+    );
+
+    expect(outcome).toBe('restored');
+    expect(asked).toHaveLength(2);
+    expect(asked[1]).toMatch(/^Wrong password/);
+    expect(await fs.readFile(path.join(root, 'a.txt'), 'utf-8')).toBe('contents of version two');
+  });
+
+  // A wrong password still opens nothing anywhere and is still refused.
+  it('should keep refusing a wrong typed password when the first part has a damaged salt (negative control)', async () => {
+    await damageSalt(firstPartOfV2(pdirs));
+    const { io: askingIo, asked } = interactiveIo(root, ['not-the-password', '']);
+
+    // Refused as a matter of the password, not as unreadable parts.
+    await expect(pull(root, { version: 2, force: true, yes: true, io: askingIo })).rejects.toThrow(new BfsError(`${fmt('pull_version_password_required', '2')} ${fmt('pull_restorable_hint', '1', '1')}`));
+
+    expect(asked).toHaveLength(2);
+    expect(asked[0]).toBe(fmt('pull_ask_version_password', '2'));
+    expect(asked[1]).toMatch(/^Wrong password/);
+    expect(await fs.readFile(markerPath(root, 2), 'utf-8')).toBe('{}');
   });
 
   // Without a marker there is nothing to say the version is out there, and a

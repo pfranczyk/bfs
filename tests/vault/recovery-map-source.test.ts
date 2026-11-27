@@ -22,9 +22,10 @@ import { recover } from '../../src/vault/recovery.js';
 //   * which two shards the per-version consensus actually compares,
 //   * when the operator is asked for a password at all.
 //
-// `rebuildVersionManifest` (src/vault/version-rebuild.ts) collects at most two headers and
-// resolves the map from the FIRST one, so every one of those answers is decided
-// by a single shard today. The CLI (`src/cli/commands/recovery.ts`) hands the
+// `rebuildVersionManifest` (src/vault/version-rebuild.ts) collects the header of
+// every distinct shard and takes the map from the first shard of this backup that
+// opens - with a pooled password or one typed at the prompt - so a damaged or
+// foreign shard ahead of it does not decide any of those answers. The CLI (`src/cli/commands/recovery.ts`) hands the
 // bootstrap provider an id of its own (`bootstrap-${providerType}`) while it
 // points at the SAME medium as one of the map entries, so the two collected
 // headers are routinely two reads of one physical file. Both layouts appear
@@ -307,6 +308,35 @@ describe('recover() choosing which shard supplies a version location map', () =>
       ).toEqual(SLOTS.map((slot) => remotePathFor(slot, 1)));
     });
 
+    it('should refuse a foreign-backup shard opened by a typed password and build the manifest from the shard that opened', async () => {
+      // The same guard on the prompt path: v1 predates a password change, so the
+      // pool opens nothing and the operator types the old password. slot 0 is our
+      // shard with a rotted salt, slot 1 is another backup sealed with the same
+      // password, slot 2 is our honest shard. Judging the typed password on more
+      // than the first shard must not let the foreign map in - and the manifest
+      // must carry the header of the shard whose map actually opened, not the
+      // first one tried.
+      await seedVault({
+        overrides: {
+          '0@1': { password: OTHER_PASSWORD, kdf_salt: wrongSalt(), blob_hash: 'b'.repeat(64) },
+          '1@1': { password: OTHER_PASSWORD, vault_id: FOREIGN_VAULT_ID, location_map: foreignLocationMap(), blob_hash: 'c'.repeat(64) },
+          '2@1': { password: OTHER_PASSWORD },
+        },
+      });
+      const root = await tmp();
+      const { io } = createMockProviderIO({ [fmt('recovery_ask_version_password', '1')]: OTHER_PASSWORD });
+      const bootstrapProvider = buildMediumProvider('p0', 0);
+
+      await recover(root, { vaultName: VAULT_NAME, provider: bootstrapProvider, io, passwords: [PASSWORD] });
+
+      const v1 = await readManifest(root, 1);
+      expect(
+        v1?.shards.map((s) => s.remote_path),
+        'the typed password opens the foreign shard too - its map must never become the source',
+      ).toEqual(SLOTS.map((slot) => remotePathFor(slot, 1)));
+      expect(v1?.blob_hash, 'the manifest must describe the shard whose map opened, not the rotted one tried first').toBe(blobHashFor(1));
+    });
+
     it('should skip a version whose only readable map belongs to a foreign backup', async () => {
       await seedVault({ overrides: { '0@1': { damaged: true }, '1@1': { damaged: true }, '2@1': { vault_id: FOREIGN_VAULT_ID, location_map: foreignLocationMap() } } });
       const root = await tmp();
@@ -426,13 +456,22 @@ describe('recover() choosing which shard supplies a version location map', () =>
       // be asked once for the version, not once per shard inspected.
       await seedVault({ overrides: { '0@1': { password: OTHER_PASSWORD }, '1@1': { password: OTHER_PASSWORD }, '2@1': { password: OTHER_PASSWORD } } });
       const root = await tmp();
-      const { io } = createMockProviderIO({ [fmt('recovery_ask_version_password', '1')]: OTHER_PASSWORD });
+      const { io, logs } = createMockProviderIO({ [fmt('recovery_ask_version_password', '1')]: OTHER_PASSWORD });
       const askSecret = vi.spyOn(io, 'askSecret');
       const bootstrapProvider = buildMediumProvider('p0', 0);
 
       const report = await recover(root, { vaultName: VAULT_NAME, provider: bootstrapProvider, io, passwords: [PASSWORD] });
 
       expect(askSecret.mock.calls.length, 'a version under a different password must produce exactly ONE prompt - one per candidate shard turns a single password change into a prompt storm').toBe(1);
+      // Every part refused the pooled password, but the typed one opened the first
+      // part - so no medium failed to supply the map, and none may be named.
+      const siblingLine = fmt('recovery_map_from_sibling', '1', '').split(' - ')[0] ?? '';
+      expect(siblingLine.length, 'the marker must not be empty, or the check below passes on nothing').toBeGreaterThan(0);
+      expect(
+        logs.filter((l) => l.level === 'warn' && l.message.startsWith(siblingLine)).map((l) => l.message),
+        'intact parts that refused only the old pooled password must not be reported as unable to supply the map',
+      ).toEqual([]);
+      expect(report.versions.find((v) => v.version === 1)?.consensus, 'nothing about the media disagrees - only the password changed').toBe(true);
       expect(
         report.versions.map((v) => v.version).sort((a, b) => a - b),
         'the password the operator supplied must rebuild the version',

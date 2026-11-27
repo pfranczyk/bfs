@@ -48,24 +48,24 @@ export async function tryPooledPasswords(header: ShardHeader, headerBytes: Buffe
 }
 
 /**
- * Prompts the operator for one shard's vault password, retrying until a password
- * opens its map or they submit a blank entry. A successful password is appended
- * to the pool so sibling versions reuse it. Returns null on a blank entry, or
- * without asking at all when the run has nobody to answer (`io.interactive ===
- * false`) - this version then counts as one whose password was not supplied, and
- * the caller carries on with the versions it can open. Does NOT emit the
- * pool-exhausted warning - the caller decides whether and when to warn.
+ * Prompts the operator for the password of ONE version whose parts are all in
+ * hand, trying every typed answer on each part until one opens - so a part whose
+ * own salt rotted does not turn the correct password into "wrong". Retries until
+ * a password opens a part or the operator submits a blank entry; an accepted
+ * password is appended to the pool so sibling versions reuse it. Returns null on
+ * a blank entry, or without asking at all when the run has nobody to answer
+ * (`io.interactive === false`) - the version then counts as one whose password
+ * was not supplied. Does NOT emit the pool-exhausted warning - the caller decides
+ * whether and when to warn.
  *
- * @param header       parsed shard header (read for `encrypted` and `kdf_salt`)
- * @param headerBytes  raw header bytes, re-parsed with each candidate key
+ * @param candidates   the version's sealed parts, in probe order
  * @param passwordPool shared MRU pool, appended on a successful manual attempt
- * @param io           ProviderIO for the interactive prompt
- * @param prompts      localized prompt text (only `ask`/`retry` are used here)
- * @param keyCache     optional (password,salt)->key memo shared across candidates
+ * @param opts         operator channel, localized prompt text (only `ask`/`retry`
+ *                     are used here) and the (password,salt)->key memo
  * @returns the decrypted map, key, and password, or null
  */
-export async function promptForVaultPassword(header: ShardHeader, headerBytes: Buffer, passwordPool: string[], io: ProviderIO, prompts: PasswordPromptText, keyCache?: Map<string, Buffer>): Promise<Nullable<MapDecryptResult>> {
-  return promptAgainstCandidates(new CandidateSet([{ header, headerBytes }], null), passwordPool, io, { prompts, keyCache: keyCache ?? null });
+export async function promptForAnyVaultPassword(candidates: readonly PasswordCandidate[], passwordPool: string[], opts: { io: ProviderIO; prompts: PasswordPromptText; keyCache: Map<string, Buffer> }): Promise<Nullable<MapDecryptResult>> {
+  return promptAgainstCandidates(new CandidateSet([...candidates], null), passwordPool, opts.io, { prompts: opts.prompts, keyCache: opts.keyCache });
 }
 
 /** How {@link tryDecryptAnyLocationMap} asks, caches and widens its search. */

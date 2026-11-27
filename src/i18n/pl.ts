@@ -179,9 +179,11 @@ export const pl: Strings = {
   config_cache_default: '(domyślnie: %s)',
   config_temp_default: '(domyślnie: systemowy temp)',
   config_ram_auto: '(auto: 25% RAM systemu)',
+  config_ram_invalid_mark: '(nie jest liczbą całkowitą większą od zera - push działa z zerowym budżetem RAM)',
 
   // --- push -----------------------------------------------------------------
   push_preparing: 'Przygotowanie push...',
+  push_stored_max_ram_invalid: 'Zapisany limit RAM (%s MB) nie jest liczbą całkowitą większą od zera - ten push działa z zerowym budżetem RAM.',
   push_completed: 'Push zakończony',
   push_success: 'Kopia zapasowa przesłana na wszystkie nośniki.',
   push_failed: 'Push nieudany',
@@ -469,6 +471,9 @@ export const pl: Strings = {
   vault_ask_decrypt_password: 'Podaj hasło deszyfrowania:',
   vault_decrypting: 'Odszyfrowanie...',
   vault_push_version_confirm: 'Na dysku: wersja %s. Najnowsza: %s. Push utworzy wersję %s. Kontynuować?',
+  push_ask_mode_question: 'Utworzyć nową wersję v%s czy nadpisać v%s?',
+  push_ask_mode_new_version: 'Nowa wersja (v%s)',
+  push_ask_mode_overwrite: 'Nadpisz (v%s)',
   push_version_switch_no_operator:
     'Ten przebieg nie zadaje pytań, więc nie potwierdzi wysłania z wersji %s, gdy najnowsza to %s (ten push utworzyłby wersję %s). Uruchom ponownie z `bfs push --yes`, aby wyrazić zgodę z góry, albo `bfs push` przy terminalu i odpowiedz tam.',
   vault_checking_cached_blob: 'Porównuję zbuforowane dane kopii z ich sumą kontrolną...',

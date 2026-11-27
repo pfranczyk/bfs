@@ -396,6 +396,67 @@ export async function suiteF(ctx: SmokeContext): Promise<SuiteResult> {
       }
     }),
   );
+
+  // F20 - the language flag has the same two spellings as --cwd. A spelling
+  // nobody reads exits 0 in the old language and stores nothing, so the
+  // operator has no sign that the flag was dropped. The equals spelling is held
+  // to every answer the spaced one gives: accepted and stored, refused when
+  // unknown, refused as missing when empty - and on its own it confirms the
+  // change and ends, instead of opening the prompt.
+  tests.push(
+    await runTest('F20', 'bfs --lang=<code> sets, stores and refuses like --lang <code>', async () => {
+      const dir = path.join(ctx.sourceDir, 'lang-equals-spelling');
+      await fs.mkdir(dir, { recursive: true });
+      const env: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: dir };
+      const settingsPath = path.join(dir, 'bfs', 'settings.json');
+
+      const set = runBfs(['--lang=pl', 'status'], ctx.vaultDir, undefined, env);
+      const setOut = `${set.stdout ?? ''}${set.stderr ?? ''}`;
+      assert(set.status === 0, `--lang=pl must be accepted, got ${set.status}\n${setOut.slice(0, 300)}`);
+      assert(setOut.includes('Język ustawiony na: pl'), `expected the Polish confirmation: ${setOut.slice(0, 300)}`);
+      assert(setOut.includes('Status kopii zapasowej'), `expected the command to speak Polish: ${setOut.slice(0, 300)}`);
+      const stored = await readJson<{ language: string }>(settingsPath);
+      assert(stored.language === 'pl', `--lang=pl must store the language, got: ${JSON.stringify(stored)}`);
+
+      const unknown = runBfs(['--lang=klingon', 'status'], ctx.vaultDir, undefined, env);
+      const unknownOut = `${unknown.stdout ?? ''}${unknown.stderr ?? ''}`;
+      assert(unknown.status !== 0, `--lang=klingon must not exit 0, got ${unknown.status}\n${unknownOut.slice(0, 300)}`);
+      assert(/^X .*klingon/m.test(unknownOut), `the refusal must name the value it turned away: ${unknownOut.slice(0, 300)}`);
+
+      const empty = runBfs(['--lang=', 'status'], ctx.vaultDir, '', env);
+      const emptyOut = `${empty.stdout ?? ''}${empty.stderr ?? ''}`;
+      assert(empty.status !== 0, `an empty --lang= must not exit 0, got ${empty.status}\n${emptyOut.slice(0, 300)}`);
+      assert(/^X .*--lang/m.test(emptyOut), `the refusal must name the flag: ${emptyOut.slice(0, 300)}`);
+      assert(!/Invalid --lang|Nieprawidłowy --lang/.test(emptyOut), `an empty value must not be worded as an invalid one: ${emptyOut.slice(0, 300)}`);
+
+      const after = await readJson<{ language: string }>(settingsPath);
+      assert(after.language === 'pl', `refused values must leave the stored language alone, got: ${JSON.stringify(after)}`);
+
+      // A directory flag left without its value is refused even when the
+      // language flag stands where its value belongs. Reading the language
+      // flag out of the line must not hand the directory flag the next token
+      // instead.
+      for (const shape of [
+        ['--cwd', '--lang=pl', 'status'],
+        ['--cwd', '--lang', 'pl', 'status'],
+      ]) {
+        const swallowed = runBfs(shape, ctx.vaultDir, '', env);
+        const swallowedOut = `${swallowed.stdout ?? ''}${swallowed.stderr ?? ''}`;
+        assert(swallowed.status !== 0, `--cwd with the language flag in place of its value must not exit 0 (${shape.join(' ')}), got ${swallowed.status}\n${swallowedOut.slice(0, 300)}`);
+        assert(/^X .*--cwd/m.test(swallowedOut), `the refusal must name the directory flag (${shape.join(' ')}): ${swallowedOut.slice(0, 300)}`);
+      }
+
+      // With nothing else on the line the equals spelling confirms and ends, as
+      // the spaced one does; the prompt must not open in its place.
+      const alone = runBfs(['--lang=en'], ctx.vaultDir, 'exit\n', env);
+      const aloneOut = `${alone.stdout ?? ''}${alone.stderr ?? ''}`;
+      assert(alone.status === 0, `--lang=en alone must be accepted, got ${alone.status}\n${aloneOut.slice(0, 300)}`);
+      assert(aloneOut.includes('Language set to: en'), `expected the English confirmation: ${aloneOut.slice(0, 300)}`);
+      assert(!aloneOut.includes('BFS - Backup File System') && !aloneOut.includes('Goodbye') && !aloneOut.includes('Do widzenia'), `--lang=en alone must not open the prompt: ${aloneOut.slice(0, 300)}`);
+      const final = await readJson<{ language: string }>(settingsPath);
+      assert(final.language === 'en', `--lang=en alone must store the language, got: ${JSON.stringify(final)}`);
+    }),
+  );
   return { name: 'Suite F - Language and working-directory flags', tests };
 }
 

@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { tFor } from '../../src/i18n/index.js';
+import { setLang, tFor } from '../../src/i18n/index.js';
 import { captureConsole, makeConfig, runCmd, runCmdExitCode } from './_helpers.js';
 
 vi.mock('../../src/vault/config.js', async (importOriginal) => {
@@ -302,6 +302,50 @@ describe('config', () => {
 
     expect(description).toBe(expected);
     expect(description, 'help must not advise a value the command refuses').not.toMatch(/\b0\b/);
+  });
+
+  // Released versions stored `--max-ram` with parseInt alone and offered
+  // "0 = auto", so config.json may hold 0 or a negative number. Listed as a bare
+  // "0 MB" it reads like any other setting, while push takes it as a zero budget.
+  it.each([
+    [0, 'en', 'max-ram:   0 MB (not a whole number above zero - push runs with a zero RAM budget)'],
+    [-5, 'en', 'max-ram:   -5 MB (not a whole number above zero - push runs with a zero RAM budget)'],
+    [0, 'pl', 'max-ram:   0 MB (nie jest liczbą całkowitą większą od zera - push działa z zerowym budżetem RAM)'],
+  ])('should mark a stored max_ram_mb of %i as invalid when listing settings (%s)', async (stored, lang, expected) => {
+    mockReadConfig.mockResolvedValue(makeConfig({ max_ram_mb: stored }) as never);
+    setLang(lang);
+
+    try {
+      const result = await runCmd(['config']);
+
+      expect(result).toBe('ok');
+      // The whole line, so nothing can be appended after the mark.
+      expect(capture.logs.map((l) => l.trim())).toContain(expected);
+      expect(mockWriteConfig, 'listing settings must not rewrite the stored value').not.toHaveBeenCalled();
+    } finally {
+      setLang('en');
+    }
+  });
+
+  it('should list a stored whole max_ram_mb above zero without a mark (A/B control)', async () => {
+    mockReadConfig.mockResolvedValue(makeConfig({ max_ram_mb: 1024 }) as never);
+
+    await runCmd(['config']);
+
+    const all = capture.logs.join('\n');
+    expect(all).toMatch(/max-ram:\s+1024 MB$/m);
+    expect(all).not.toContain('not a whole number above zero');
+  });
+
+  it('should list an unset max_ram_mb as auto without a mark (A/B control)', async () => {
+    // The most common state, and a separate branch from a stored number.
+    mockReadConfig.mockResolvedValue(makeConfig({ max_ram_mb: null }) as never);
+
+    await runCmd(['config']);
+
+    const all = capture.logs.join('\n');
+    expect(all).toMatch(/max-ram:\s+\(auto[^\n]*\)$/m);
+    expect(all).not.toContain('not a whole number above zero');
   });
 
   it('should bring --max-ram back to auto with the bare flag', async () => {

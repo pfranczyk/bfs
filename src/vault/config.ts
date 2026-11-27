@@ -41,6 +41,23 @@ export async function writeConfig(rootDir: string, config: VaultConfig): Promise
 }
 
 /**
+ * Tells whether a stored `max_ram_mb` leaves push no RAM budget at all. Earlier
+ * releases stored `--max-ram` through parseInt alone and offered 0 as auto, so
+ * the file may hold 0 or a negative number that `--max-ram` refuses on input.
+ * Push still takes such a value as the budget it is - zero - and the value is
+ * left in place; this tells such a value apart so it can be named.
+ *
+ * Only values at or below zero qualify: a positive fraction typed in by hand
+ * is a real budget, and calling it zero would be false.
+ *
+ * @param maxRamMb - `max_ram_mb` as read from config.json
+ * @returns true when the value is a number at or below zero
+ */
+export function isZeroRamBudget(maxRamMb: Nullable<number> | undefined): boolean {
+  return maxRamMb != null && maxRamMb <= 0;
+}
+
+/**
  * Extracts the backup name from raw config bytes, or null when the content does
  * not yield one. Every way of failing collapses to "name unavailable" rather
  * than propagating a parser error - the callers decide from it whether the file

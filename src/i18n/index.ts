@@ -218,9 +218,12 @@ export interface Strings {
   config_cache_default: string;
   config_temp_default: string;
   config_ram_auto: string;
+  config_ram_invalid_mark: string;
 
   // --- push -----------------------------------------------------------------
   push_preparing: string;
+  /** %s = max_ram_mb stored in config.json (0 or below) */
+  push_stored_max_ram_invalid: string;
   push_completed: string;
   push_success: string;
   push_failed: string;
@@ -592,6 +595,12 @@ export interface Strings {
   vault_decrypting: string;
   /** %s = working_version, %s = latest_version, %s = targetVersion */
   vault_push_version_confirm: string;
+  /** %s = next version (latest_version + 1), %s = working_version */
+  push_ask_mode_question: string;
+  /** %s = next version (latest_version + 1) */
+  push_ask_mode_new_version: string;
+  /** %s = working_version */
+  push_ask_mode_overwrite: string;
   /** %s = working_version, %s = latest_version, %s = targetVersion */
   push_version_switch_no_operator: string;
   vault_checking_cached_blob: string;

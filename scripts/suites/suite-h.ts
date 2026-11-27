@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { assert, runBfs, runTest } from '../smoke-runner.js';
 import type { SmokeContext, SuiteResult, TestResult } from '../smoke-types.js';
@@ -26,6 +27,10 @@ import { readJson } from '../smoke-vault.js';
  *   lists what was set; one invalid value refuses the whole command (H16)
  * - bfs config / bfs push --max-ram refuse anything but a whole number above
  *   zero with exit 1, leaving config.json untouched (H17)
+ * - a stored max_ram_mb of 0 or below: push warns and still backs up, bfs config
+ *   marks the value, config.json stays as it was (H18)
+ * - under push_mode ask, the overwrite question speaks the interface language,
+ *   quoted by the refusal of a run with no terminal (H19)
  */
 export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
   const tests: TestResult[] = [];
@@ -356,6 +361,110 @@ export async function suiteH(ctx: SmokeContext): Promise<SuiteResult> {
       } finally {
         // The vault is shared by the suites: leave it as it was found.
         await fs.writeFile(configPath, original);
+      }
+    }),
+  );
+
+  // Released versions stored `--max-ram` with parseInt alone and offered
+  // "0 = auto", so config.json may hold 0 or a negative number. Push keeps taking
+  // it as the zero budget it is and leaves the file alone, but says so - and
+  // `bfs config` marks it instead of listing it like any other setting.
+  tests.push(
+    await runTest('H18', 'stored max_ram_mb 0 / negative: push warns and still backs up, bfs config marks it, config.json untouched', async () => {
+      // Its own vault: every case here adds a version, and the shared vault's
+      // version count is read by the suites that follow.
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-smoke-h18-'));
+      const vaultDir = path.join(root, 'vault');
+      const providers = ['p1', 'p2', 'p3'].flatMap((id) => ['--provider', `local:${id} --path ${path.join(root, id)}`]);
+      await fs.mkdir(vaultDir);
+      await fs.writeFile(path.join(vaultDir, 'hello.txt'), 'hello world');
+      const configPath = path.join(vaultDir, '.bfs', 'config.json');
+      // Its own language store too: a run with --lang records the language, and
+      // the shared store must not carry Polish into the suites that follow.
+      const env: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: path.join(root, 'xdg') };
+      try {
+        const initRun = runBfs(['--lang', 'en', 'init', 'h18', '--ci', '--no-enc', '--data-shards', '2', '--parity-shards', '1', ...providers], vaultDir, undefined, env);
+        assert(initRun.status === 0, `init: exit ${initRun.status ?? 'null'}\n${(initRun.stdout + initRun.stderr).slice(0, 600)}`);
+        const original = await fs.readFile(configPath, 'utf8');
+        for (const stored of [0, -5]) {
+          const cfg = JSON.parse(original) as Record<string, unknown>;
+          cfg.max_ram_mb = stored;
+          const seeded = JSON.stringify(cfg, null, 2);
+          await fs.writeFile(configPath, seeded);
+
+          const push = runBfs(['--lang', 'en', 'push', '--new'], vaultDir, undefined, env);
+          const pushOut = push.stdout + push.stderr;
+          assert(push.status === 0, `push with stored ${stored}: exit ${push.status ?? 'null'}\n${pushOut.slice(0, 600)}`);
+          assert(pushOut.includes(`Saved RAM limit (${stored} MB) is not a whole number above zero - this push runs with a zero RAM budget.`), `push with stored ${stored}: expected the warning in: ${pushOut.slice(0, 600)}`);
+          const afterPush = await fs.readFile(configPath, 'utf8');
+          assert(afterPush === seeded, `push must leave config.json byte-identical, got: ${afterPush.slice(0, 400)}`);
+
+          const list = runBfs(['--lang', 'en', 'config'], vaultDir, undefined, env);
+          const listOut = list.stdout + list.stderr;
+          assert(list.status === 0, `config with stored ${stored}: exit ${list.status ?? 'null'}\n${listOut.slice(0, 400)}`);
+          assert(listOut.includes(`max-ram:   ${stored} MB (not a whole number above zero - push runs with a zero RAM budget)`), `config with stored ${stored}: expected the marked line in: ${listOut.slice(0, 400)}`);
+          const afterList = await fs.readFile(configPath, 'utf8');
+          assert(afterList === seeded, `listing settings must leave config.json byte-identical, got: ${afterList.slice(0, 400)}`);
+        }
+
+        // A/B control: a whole number above zero is pushed without a warning.
+        const cfg = JSON.parse(original) as Record<string, unknown>;
+        cfg.max_ram_mb = 512;
+        await fs.writeFile(configPath, JSON.stringify(cfg, null, 2));
+        const okPush = runBfs(['--lang', 'en', 'push', '--new'], vaultDir, undefined, env);
+        const okOut = okPush.stdout + okPush.stderr;
+        assert(okPush.status === 0, `push with stored 512: exit ${okPush.status ?? 'null'}\n${okOut.slice(0, 400)}`);
+        assert(!okOut.includes('Saved RAM limit'), `a valid stored value must not be warned about: ${okOut.slice(0, 400)}`);
+
+        cfg.max_ram_mb = -5;
+        await fs.writeFile(configPath, JSON.stringify(cfg, null, 2));
+        const pl = runBfs(['--lang', 'pl', 'config'], vaultDir, undefined, env);
+        const plOut = pl.stdout + pl.stderr;
+        assert(pl.status === 0, `config (pl): exit ${pl.status ?? 'null'}\n${plOut.slice(0, 400)}`);
+        assert(plOut.includes('max-ram:   -5 MB (nie jest liczbą całkowitą większą od zera - push działa z zerowym budżetem RAM)'), `expected the Polish marked line in: ${plOut.slice(0, 400)}`);
+        const plPush = runBfs(['--lang', 'pl', 'push', '--new'], vaultDir, undefined, env);
+        const plPushOut = plPush.stdout + plPush.stderr;
+        assert(plPush.status === 0, `push (pl): exit ${plPush.status ?? 'null'}\n${plPushOut.slice(0, 600)}`);
+        assert(plPushOut.includes('Zapisany limit RAM (-5 MB) nie jest liczbą całkowitą większą od zera - ten push działa z zerowym budżetem RAM.'), `expected the Polish warning in: ${plPushOut.slice(0, 600)}`);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    }),
+  );
+
+  // Under push_mode=ask the overwrite question speaks the interface language. A
+  // run with no terminal cannot answer a menu, so it refuses and quotes the
+  // question - which shows the language it was asked in.
+  tests.push(
+    await runTest('H19', 'push_mode ask: the overwrite question speaks the interface language (EN + PL)', async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bfs-smoke-h19-'));
+      const vaultDir = path.join(root, 'vault');
+      const providers = ['p1', 'p2', 'p3'].flatMap((id) => ['--provider', `local:${id} --path ${path.join(root, id)}`]);
+      await fs.mkdir(vaultDir);
+      await fs.writeFile(path.join(vaultDir, 'hello.txt'), 'hello world');
+      // Its own language store: a run with --lang records the language.
+      const env: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: path.join(root, 'xdg') };
+      try {
+        const initRun = runBfs(['--lang', 'en', 'init', 'h19', '--ci', '--no-enc', '--push-mode', 'ask', '--data-shards', '2', '--parity-shards', '1', ...providers], vaultDir, undefined, env);
+        assert(initRun.status === 0, `init: exit ${initRun.status ?? 'null'}\n${(initRun.stdout + initRun.stderr).slice(0, 600)}`);
+        // The first push has nothing to overwrite, so it asks nothing.
+        const first = runBfs(['--lang', 'en', 'push'], vaultDir, undefined, env);
+        assert(first.status === 0, `first push: exit ${first.status ?? 'null'}\n${(first.stdout + first.stderr).slice(0, 600)}`);
+
+        const en = runBfs(['--lang', 'en', 'push'], vaultDir, undefined, env);
+        const enOut = en.stdout + en.stderr;
+        assert(en.status === 1, `push (en) with no terminal must refuse the menu with exit 1, got exit ${en.status ?? 'null'}`);
+        assert(enOut.includes('This run asks no questions'), `expected the English refusal in: ${enOut.slice(0, 600)}`);
+        assert(enOut.includes('Create new version v2 or overwrite v1?'), `expected the English question in: ${enOut.slice(0, 600)}`);
+
+        const pl = runBfs(['--lang', 'pl', 'push'], vaultDir, undefined, env);
+        const plOut = pl.stdout + pl.stderr;
+        assert(pl.status === 1, `push (pl) with no terminal must refuse the menu with exit 1, got exit ${pl.status ?? 'null'}`);
+        assert(plOut.includes('Ten przebieg nie zadaje pytań'), `expected the Polish refusal in: ${plOut.slice(0, 600)}`);
+        assert(plOut.includes('Utworzyć nową wersję v2 czy nadpisać v1?'), `expected the Polish question in: ${plOut.slice(0, 600)}`);
+        assert(!plOut.includes('Create new version'), `the question must not be asked in English under --lang pl: ${plOut.slice(0, 600)}`);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
       }
     }),
   );

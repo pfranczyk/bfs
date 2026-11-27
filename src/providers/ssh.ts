@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable, type Writable } from 'node:stream';
 import { Client, type ConnectConfig, type FileEntry, type SFTPWrapper } from 'ssh2';
-import { ConfigureRestartRequested, HostKeyDeclinedError, ProviderError, TamperDetectedError } from '../core/errors.js';
+import { HostKeyDeclinedError, ProviderError, TamperDetectedError } from '../core/errors.js';
 import { assertSafeFilename, assertSafeVaultName, isSafeFilename } from '../core/fs-utils.js';
 import { hashBuffer, SHA256_BYTES, streamToBuffer } from '../core/hash.js';
 import { buildShardHeaderFromBytes, computeShardHeaderSize, SHARD_HEADER_READ_BYTES, sidecarFilename } from '../core/shard-io.js';
@@ -77,6 +77,16 @@ const FINGERPRINT_RE = /^SHA256:[A-Za-z0-9+/]{43}=*$/;
 /** True when `value` is a well-formed OpenSSH SHA-256 host-key fingerprint. */
 function isValidFingerprint(value: string): boolean {
   return FINGERPRINT_RE.test(value.trim());
+}
+
+/**
+ * True when the assembled config carries a host-key pin. An empty string is no
+ * pin - the connection ladder treats it as none, and an offline "save without
+ * pinning" stores exactly that - so every decision about capturing or requiring
+ * a pin must read it the same way.
+ */
+function hasHostKeyPin(config: Record<string, unknown>): boolean {
+  return typeof config.host_key_fingerprint === 'string' && config.host_key_fingerprint.length > 0;
 }
 
 /**
@@ -341,7 +351,7 @@ export class SshProvider implements StorageProvider {
    * a `known_hosts` trust line; then the opt-in; and only with none of those,
    * interactive TOFU (or a refusal when there is nobody to ask). Used by the
    * runtime connection, where the answer is yes or no: there are no settings
-   * prompts to go back to. The configure-time decision is `captureHostKey`.
+   * prompts to go back to. The configure-time decision is `decideHostKey`.
    *
    * The opt-in read back from the saved config without a pin is not consent -
    * it would be spent again on every run, trusting any key at that address - so
@@ -545,9 +555,10 @@ export class SshProvider implements StorageProvider {
   /**
    * Reads the server's host key and decides, while the connection settings are
    * being collected, whether to pin it. Returns the accepted fingerprint. Used by
-   * `configureInteractive`, by `configureInteractiveForEdit`, and by the
-   * `--accept-new-host-key` branch of `configureFromFlags`, so the pin lands in
-   * the config `bfs init` / `bfs provider add` / `bfs provider edit` persists.
+   * `configureInteractive` and by the `--accept-new-host-key` branch of
+   * `configureFromFlags`, so the pin lands in the config `bfs init` /
+   * `bfs provider add` persists; the edit flow reads and decides in two steps
+   * (`readHostKey`, `decideHostKey`) because it reacts to the read alone.
    * `acceptNew` carries the current invocation's `--accept-new-host-key`
    * opt-in, which settles the decision without a question.
    *
@@ -559,12 +570,26 @@ export class SshProvider implements StorageProvider {
    * prompts, or cancel.
    *
    * @throws HostKeyDeclinedError when the operator cancels, nobody can answer,
-   *   or the key is `@revoked` - the edit flow relies on that type to tell a
-   *   deliberate refusal from an unreachable server; ConfigureRestartRequested
-   *   when the operator goes back; ProviderError when the key cannot be read
+   *   or the key is `@revoked`; ConfigureRestartRequested when the operator goes
+   *   back; ProviderError when the key cannot be read
    */
   private async captureHostKey(io: ProviderIO, host: string, port: number, user: string, acceptNew: boolean): Promise<string> {
     const key = await this.readHostKey(io, { host, port, user });
+    return this.decideHostKey(io, { host, port, user }, key, acceptNew);
+  }
+
+  /**
+   * The decision half of `captureHostKey`, for a key already read: walks the
+   * trust ladder and returns the accepted fingerprint. Kept apart from the read
+   * so a caller can tell an unreachable server from anything that happens while
+   * the operator is being asked - a cancelled prompt passes through untouched.
+   *
+   * @throws HostKeyDeclinedError when the operator cancels, nobody can answer,
+   *   or the key is `@revoked`; ConfigureRestartRequested when the operator goes
+   *   back; whatever the prompt layer throws when the question is interrupted
+   */
+  private async decideHostKey(io: ProviderIO, server: { host: string; port: number; user: string }, key: Buffer, acceptNew: boolean): Promise<string> {
+    const { host, port, user } = server;
     const fp = sshFingerprint(key);
     const target = `${user}@${host}:${port}`;
     const declined = (): HostKeyDeclinedError => new HostKeyDeclinedError(fmtFor(io.lang, 'ssh_host_key_declined', target));
@@ -1265,15 +1290,16 @@ export class SshProvider implements StorageProvider {
 
     // New (or never-pinned) server identity: try the medium first for a live TOFU.
     io.info(fmtFor(io.lang, 'ssh_edit_connecting', `${user}@${host}:${port}`));
+    // Only failing to read the key means the server is unreachable. The decision
+    // stays outside the try, so a refusal, a request to go back and an
+    // interrupted prompt all reach the caller instead of the offline menu.
+    let key: Buffer;
     try {
-      const fingerprint = await this.captureHostKey(io, host, port, user, false);
-      return build(fingerprint);
-    } catch (err) {
-      // A deliberate refusal (cancelled / @revoked) aborts the edit and a request
-      // to go back restarts it; only an unreachable server reaches the offline menu.
-      if (err instanceof HostKeyDeclinedError || err instanceof ConfigureRestartRequested) throw err;
+      key = await this.readHostKey(io, { host, port, user });
+    } catch {
       return build(await this.offlineHostKeyMenu(io, host, port));
     }
+    return build(await this.decideHostKey(io, { host, port, user }, key, false));
   }
 
   /**
@@ -1434,7 +1460,7 @@ export class SshProvider implements StorageProvider {
     // every unattended run would then refuse. The opt-in counts however it
     // arrived, from the flag or from --config-file; with a pin beside it there is
     // nothing to capture, so nothing to refuse.
-    if (config.accept_new_host_key === true && input.offline === true && typeof config.host_key_fingerprint !== 'string') {
+    if (config.accept_new_host_key === true && input.offline === true && !hasHostKeyPin(config)) {
       throw new ProviderError(tFor(this.io.lang, 'ssh_accept_new_offline'));
     }
 
@@ -1477,7 +1503,7 @@ export class SshProvider implements StorageProvider {
     // opt-in "blind" accepts whatever stands at that address - and skipping it
     // would store the opt-in with a null pin, which the runtime ladder refuses
     // without an operator.
-    if (config.accept_new_host_key === true && typeof config.host_key_fingerprint !== 'string') {
+    if (config.accept_new_host_key === true && !hasHostKeyPin(config)) {
       const host = config.host as string;
       const port = config.port as number;
       const user = typeof config.user === 'string' ? config.user : '';
@@ -1499,7 +1525,7 @@ export class SshProvider implements StorageProvider {
    */
   private async assertUnattendedTrustBasis(config: Record<string, unknown>, input: CliProviderInput): Promise<void> {
     if (input.offline === true || this.io.interactive !== false) return;
-    if (typeof config.host_key_fingerprint === 'string' && config.host_key_fingerprint.length > 0) return;
+    if (hasHostKeyPin(config)) return;
     if (config.accept_new_host_key === true) return;
     const host = config.host as string;
     const port = config.port as number;

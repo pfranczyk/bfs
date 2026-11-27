@@ -70,6 +70,7 @@ export async function suiteQ(): Promise<SuiteResult> {
     tests.push(skipTest('Q6', 'bfs verify --debug - connection chatter visible on stderr', SKIP_REASON));
     tests.push(skipTest('Q7', 'SSH key-auth - upload/download roundtrip via private key', SKIP_REASON));
     tests.push(skipTest('Q8', 'bfs provider edit --accept-new-host-key on ssh -> refused offline', SKIP_REASON));
+    tests.push(skipTest('Q8b', 'bfs provider edit --known-host "" --accept-new-host-key on ssh -> refused offline', SKIP_REASON));
     tests.push(skipTest('Q9', 'bfs provider edit --known-host pins offline (no server contact)', SKIP_REASON));
     return { name: 'Suite Q - SSH/SFTP provider', tests };
   }
@@ -277,6 +278,27 @@ export async function suiteQ(): Promise<SuiteResult> {
         const after = await readJson<{ providers: Array<{ id: string; config: Record<string, unknown> }> }>(path.join(vaultDir, '.bfs', 'config.json'));
         const ssh1After = after.providers.find((p) => p.id === 'ssh1');
         assert(JSON.stringify(ssh1After) === JSON.stringify(ssh1Before), 'ssh1 config must be unchanged after a refused edit');
+      }),
+    );
+
+    // Q8b - an empty --known-host is no pin, so next to --accept-new-host-key the
+    // offline edit refuses exactly as in Q8: the opt-in still needs a capture
+    // the edit cannot make. Read as a pin, "" would let the edit store a bare
+    // opt-in that every unattended run then refuses.
+    tests.push(
+      await runTest('Q8b', 'bfs provider edit --known-host "" --accept-new-host-key on ssh -> refused offline', async () => {
+        const configPath = path.join(vaultDir, '.bfs', 'config.json');
+        const before = await fs.readFile(configPath, 'utf8');
+
+        const r = runBfs(
+          ['provider', 'edit', 'ssh1', '--ci', '--host', SSH_HOST, '--port', String(SSH_PORT), '--user', SSH_USER, '--password', SSH_PASSWORD, '--path', REMOTE_PATHS[0], '--known-host', '', '--accept-new-host-key'],
+          vaultDir,
+        );
+        const combined = r.stdout + r.stderr;
+        assert(r.status === 1, `expected exit 1 (offline refusal), got ${r.status ?? 'null'}\n${combined}`);
+        assert(combined.includes('bfs provider edit --ci'), `refusal must name the offline command, got:\n${combined}`);
+        const after = await fs.readFile(configPath, 'utf8');
+        assert(after === before, 'config.json must be byte-identical after a refused edit');
       }),
     );
 

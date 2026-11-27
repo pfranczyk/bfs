@@ -5,7 +5,7 @@ import type { ManifestShard, ProviderIO, ShardHeader, ShardLocation, StorageProv
 import { VersionHealth } from '../types/index.js';
 import { parseVersionFromFilename } from './bootstrap.js';
 import { shardHeaderConsensusMismatch } from './consensus.js';
-import { promptForVaultPassword, tryPooledPasswords } from './password-pool.js';
+import { promptForAnyVaultPassword, tryPooledPasswords } from './password-pool.js';
 
 // --- Rebuilding one version's manifest from the parts on the storage ---------
 //
@@ -78,7 +78,7 @@ export async function rebuildVersionManifest(version: number, entries: readonly 
   // real sibling. Collecting every distinct shard (not just two) lets map
   // resolution fall through a damaged primary to a healthy sibling. Providers MUST
   // honor `downloadHeader` and avoid pulling the full payload over the wire.
-  const collected: Array<{ header: ShardHeader; headerBytes: Buffer; providerId: string; shardIndex: number }> = [];
+  const collected: CollectedShard[] = [];
   const seenShardIndices = new Set<number>();
   for (const entry of entries) {
     if (seenShardIndices.has(entry.shardIndex)) continue;
@@ -106,8 +106,8 @@ export async function rebuildVersionManifest(version: number, entries: readonly 
   // memoize derived keys across candidates to keep Argon2id to one pass per pool
   // password.
   const keyCache = new Map<string, Buffer>();
-  let source: Nullable<{ header: ShardHeader; shardIndex: number; location_map: ShardLocation[] }> = null;
-  const failedProviderIds: string[] = [];
+  let source: Nullable<MapSource> = null;
+  let failedProviderIds: string[] = [];
   let sawEncryptedCandidate = false;
 
   for (const c of collected) {
@@ -119,6 +119,8 @@ export async function rebuildVersionManifest(version: number, entries: readonly 
         source = { header: c.header, shardIndex: c.shardIndex, location_map: resolved.location_map };
         break;
       }
+      // Every pooled password failed here, the one that opens a later candidate
+      // included - so this medium did fail to supply the map.
       failedProviderIds.push(c.providerId);
     } else {
       source = { header: c.header, shardIndex: c.shardIndex, location_map: c.header.location_map };
@@ -128,27 +130,12 @@ export async function rebuildVersionManifest(version: number, entries: readonly 
 
   // Encrypted, and no pooled password opened any candidate: the pool is genuinely
   // exhausted (a version predating a password change, or every candidate damaged).
-  // Warn and prompt ONCE per version - on the first encrypted candidate with a
-  // matching vault_id - never once per candidate shard.
+  // Warn and prompt ONCE per version, never once per candidate shard.
   if (!source && sawEncryptedCandidate) {
-    const promptTarget = collected.find((c) => c.header.vault_id === vaultId && c.header.encrypted);
-    if (promptTarget) {
-      if (passwordPool.length > 0) io.warn(fmt('recovery_pool_password_failed', String(version)));
-      const resolved = await promptForVaultPassword(
-        promptTarget.header,
-        promptTarget.headerBytes,
-        passwordPool,
-        io,
-        {
-          poolExhausted: fmt('recovery_pool_password_failed', String(version)),
-          // "Leave blank to skip" is true only where a blank answer moves on to
-          // the next version. In `pull` it ends the command, so it is not said.
-          ask: fmt(caller === 'pull' ? 'pull_ask_version_password' : 'recovery_ask_version_password', String(version)),
-          retry: fmt('recovery_wrong_password_retry', String(version)),
-        },
-        keyCache,
-      );
-      if (resolved) source = { header: promptTarget.header, shardIndex: promptTarget.shardIndex, location_map: resolved.location_map };
+    const prompted = await resolveMapByPrompt(version, collected, { vaultId, passwordPool, caller, io, keyCache });
+    if (prompted) {
+      source = prompted.source;
+      failedProviderIds = prompted.failedProviderIds;
     }
   }
 
@@ -228,6 +215,64 @@ export async function rebuildVersionManifest(version: number, entries: readonly 
     if (sourceMeta.encrypted) manifest.encrypted_per_shard = true;
   }
   return { outcome: 'recovered', manifest, consensusOk };
+}
+
+/** The shard a version's location map was taken from, and the map it yielded. */
+interface MapSource {
+  readonly header: ShardHeader;
+  readonly shardIndex: number;
+  readonly location_map: ShardLocation[];
+}
+
+/** One collected part: its parsed header, the raw bytes, and where it was read. */
+interface CollectedShard {
+  readonly header: ShardHeader;
+  readonly headerBytes: Buffer;
+  readonly providerId: string;
+  readonly shardIndex: number;
+}
+
+/**
+ * Asks the operator for the version's password once, and judges every answer on
+ * all of OUR sealed parts - the parts of one version share one salt, so a part
+ * whose own salt rotted must not turn the correct password into "wrong". The map
+ * then comes from the first of our parts the accepted password opens, and only
+ * the parts before it that this password does not open are named as unable to
+ * supply it: having refused an empty or a wrong pool says nothing about a part.
+ * A part of another backup, or one filed under another version or index, is
+ * never tried, so neither a foreign map sealed with the same password nor an
+ * older password of this backup can become the source.
+ */
+async function resolveMapByPrompt(
+  version: number,
+  collected: readonly CollectedShard[],
+  ctx: { vaultId: string; passwordPool: string[]; caller: VersionRebuildCaller; io: ProviderIO; keyCache: Map<string, Buffer> },
+): Promise<Nullable<{ source: MapSource; failedProviderIds: string[] }>> {
+  const { passwordPool, io, keyCache } = ctx;
+  // Only parts filed where they belong: one of another version or index under
+  // this name would let an answer that opens it stand in for this version's
+  // password, and end in a refusal instead of another try.
+  const ours = collected.filter((c) => c.header.vault_id === ctx.vaultId && c.header.encrypted && c.header.version === version && c.header.shard_index === c.shardIndex);
+  if (ours.length === 0) return null;
+  if (passwordPool.length > 0) io.warn(fmt('recovery_pool_password_failed', String(version)));
+  const prompts = {
+    poolExhausted: fmt('recovery_pool_password_failed', String(version)),
+    // "Leave blank to skip" is true only where a blank answer moves on to the
+    // next version. In `pull` it ends the command, so it is not said.
+    ask: fmt(ctx.caller === 'pull' ? 'pull_ask_version_password' : 'recovery_ask_version_password', String(version)),
+    retry: fmt('recovery_wrong_password_retry', String(version)),
+  };
+  const accepted = await promptForAnyVaultPassword(ours, passwordPool, { io, prompts, keyCache });
+  if (!accepted) return null;
+  // Keys are memoized per (password, salt), so walking the parts again with the
+  // accepted password costs a derivation only for a salt not seen yet.
+  const failedProviderIds: string[] = [];
+  for (const c of ours) {
+    const opened = await tryPooledPasswords(c.header, c.headerBytes, [accepted.password], keyCache);
+    if (opened) return { source: { header: c.header, shardIndex: c.shardIndex, location_map: opened.location_map }, failedProviderIds };
+    failedProviderIds.push(c.providerId);
+  }
+  return null;
 }
 
 /**
